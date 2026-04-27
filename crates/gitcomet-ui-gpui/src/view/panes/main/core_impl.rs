@@ -1003,6 +1003,7 @@ impl MainPaneView {
             diff_horizontal_min_width: px(0.0),
             diff_cache_repo_id: None,
             diff_cache_rev: 0,
+            diff_cache_content_signature: None,
             diff_cache_target: None,
             diff_cache: Vec::new(),
             diff_row_provider: None,
@@ -1023,9 +1024,11 @@ impl MainPaneView {
             diff_visible_indices: Vec::new(),
             diff_visible_inline_map: None,
             collapsed_diff_hunks: Vec::new(),
+            collapsed_diff_hunk_ix_by_src_ix: HashMap::default(),
             collapsed_diff_reveals: HashMap::default(),
             collapsed_diff_visible_rows: Vec::new(),
             collapsed_diff_hunk_visible_indices: Vec::new(),
+            collapsed_diff_header_display_cache: HashMap::default(),
             diff_visible_cache_len: 0,
             diff_visible_view: DiffViewMode::Split,
             diff_visible_is_file_view: false,
@@ -2759,31 +2762,23 @@ impl MainPaneView {
 
     pub(in crate::view) fn reset_collapsed_diff_projection(&mut self, clear_reveals: bool) {
         self.collapsed_diff_hunks.clear();
+        self.collapsed_diff_hunk_ix_by_src_ix.clear();
         if clear_reveals {
             self.collapsed_diff_reveals.clear();
         }
         self.collapsed_diff_visible_rows.clear();
         self.collapsed_diff_hunk_visible_indices.clear();
+        self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
         self.diff_visible_cache_projection_rev = u64::MAX;
     }
 
-    pub(in crate::view) fn adjust_diff_scroll_for_inserted_rows(
-        &mut self,
-        inserted_rows: usize,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if inserted_rows == 0 {
-            return;
-        }
-        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let delta =
-            crate::ui_scale::design_px_from_percent(20.0, ui_scale_percent) * inserted_rows as f32;
-        let handle = self.diff_scroll.0.borrow().base_handle.clone();
-        let max_offset = handle.max_offset();
-        let current = handle.offset();
-        let new_y = (current.y - delta).max(-max_offset.y.max(px(0.0)));
-        handle.set_offset(point(current.x, new_y));
+    pub(in crate::view) fn invalidate_collapsed_diff_visible_projection(&mut self) {
+        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_hunk_visible_indices.clear();
+        self.collapsed_diff_header_display_cache.clear();
+        self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+        self.diff_visible_cache_projection_rev = u64::MAX;
     }
 
     // Apply the mode inside the pane first, then sync the root preference
@@ -3546,8 +3541,9 @@ impl MainPaneView {
                 return Vec::new();
             };
             match row {
-                CollapsedDiffVisibleRow::FileHeader { src_ix }
-                | CollapsedDiffVisibleRow::HunkHeader { src_ix } => return vec![src_ix],
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    return row.header_action_src_ix().into_iter().collect();
+                }
                 CollapsedDiffVisibleRow::FileRow { row_ix } => {
                     let Some(abs) = self.file_diff_cache_path.as_ref() else {
                         return Vec::new();

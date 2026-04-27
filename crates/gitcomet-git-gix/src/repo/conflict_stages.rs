@@ -21,7 +21,7 @@ fn gix_index_stage_from_u8(stage: u8) -> Option<gix::index::entry::Stage> {
     }
 }
 
-fn gix_index_stage_object_id_optional(
+pub(super) fn gix_index_stage_object_id_optional(
     repo: &gix::Repository,
     path: &Path,
     stage: u8,

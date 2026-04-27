@@ -25,6 +25,7 @@ const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
 const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 44.0;
+const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 
@@ -1439,7 +1440,7 @@ fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixels {
 }
 
 fn px_2(window: &Window) -> Pixels {
-    window.rem_size() * 0.5
+    crate::ui_scale::design_px_from_window(DIFF_ROW_HORIZONTAL_PADDING_PX, window)
 }
 
 fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
@@ -1448,6 +1449,25 @@ fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
 
 fn diff_row_height(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+pub(super) fn diff_row_horizontal_padding(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_ROW_HORIZONTAL_PADDING_PX, ui_scale_percent)
+}
+
+pub(super) fn diff_gutter_total_width(ui_scale_percent: u32) -> Pixels {
+    gutter_cell_total_width(
+        diff_row_horizontal_padding(ui_scale_percent),
+        ui_scale_percent,
+    )
+}
+
+pub(super) fn diff_single_column_text_start(ui_scale_percent: u32) -> Pixels {
+    diff_gutter_total_width(ui_scale_percent) + diff_row_horizontal_padding(ui_scale_percent)
+}
+
+pub(super) fn diff_inline_text_start(ui_scale_percent: u32) -> Pixels {
+    diff_gutter_total_width(ui_scale_percent) * 2.0 + diff_row_horizontal_padding(ui_scale_percent)
 }
 
 fn gutter_cell_total_width(pad: Pixels, ui_scale_percent: u32) -> Pixels {

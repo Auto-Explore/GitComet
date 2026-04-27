@@ -124,7 +124,7 @@ use diff_utils::{
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
-    scrollbar_markers_from_flags,
+    scrollbar_markers_from_flags, scrollbar_markers_from_visible_ranges,
 };
 use mod_helpers::*;
 pub use mod_helpers::{

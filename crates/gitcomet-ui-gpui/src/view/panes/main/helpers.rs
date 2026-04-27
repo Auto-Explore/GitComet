@@ -3,6 +3,30 @@ use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
 
+const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
+const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
+const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
+
+#[inline]
+fn scaled_diff_px(value: f32, ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn diff_row_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
+    scaled_diff_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn diff_file_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
+    scaled_diff_px(DIFF_FILE_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
+    scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
 #[derive(Default)]
 pub(super) struct ResolvedOutputSyntaxState {
     /// Fallback highlights used when full-document syntax is unsupported.
@@ -2144,9 +2168,13 @@ pub(in crate::view) struct PreparedSyntaxDocumentKey {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::view) struct CollapsedDiffRevealState {
-    pub(in crate::view) up_lines: usize,
-    pub(in crate::view) down_lines: usize,
+pub(in crate::view) enum CollapsedDiffExpansionKind {
+    #[default]
+    None,
+    Up,
+    Down,
+    Both,
+    Short,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2154,27 +2182,56 @@ pub(in crate::view) struct CollapsedDiffHunk {
     pub(in crate::view) src_ix: usize,
     pub(in crate::view) base_row_start: usize,
     pub(in crate::view) base_row_end_exclusive: usize,
+    pub(in crate::view) has_additions: bool,
+    pub(in crate::view) has_removals: bool,
+    pub(in crate::view) reveal_up_lines: usize,
+    pub(in crate::view) reveal_down_lines: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffReveal {
+    pub(in crate::view) up_lines: usize,
+    pub(in crate::view) down_lines: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum CollapsedDiffVisibleRow {
-    FileHeader { src_ix: usize },
-    HunkHeader { src_ix: usize },
-    FileRow { row_ix: usize },
+    HunkHeader {
+        src_ix: usize,
+        expansion_kind: CollapsedDiffExpansionKind,
+        display_src_ix: Option<usize>,
+    },
+    FileRow {
+        row_ix: usize,
+    },
 }
 
 impl CollapsedDiffVisibleRow {
-    pub(in crate::view) const fn src_ix(self) -> Option<usize> {
+    pub(in crate::view) const fn row_ix(self) -> Option<usize> {
         match self {
-            Self::FileHeader { src_ix } | Self::HunkHeader { src_ix } => Some(src_ix),
+            Self::FileRow { row_ix } => Some(row_ix),
+            Self::HunkHeader { .. } => None,
+        }
+    }
+
+    pub(in crate::view) const fn expansion_kind(self) -> Option<CollapsedDiffExpansionKind> {
+        match self {
+            Self::HunkHeader { expansion_kind, .. } => Some(expansion_kind),
             Self::FileRow { .. } => None,
         }
     }
 
-    pub(in crate::view) const fn row_ix(self) -> Option<usize> {
+    pub(in crate::view) const fn header_display_src_ix(self) -> Option<usize> {
         match self {
-            Self::FileRow { row_ix } => Some(row_ix),
-            Self::FileHeader { .. } | Self::HunkHeader { .. } => None,
+            Self::HunkHeader { display_src_ix, .. } => display_src_ix,
+            Self::FileRow { .. } => None,
+        }
+    }
+
+    pub(in crate::view) const fn header_action_src_ix(self) -> Option<usize> {
+        match self {
+            Self::HunkHeader { src_ix, .. } => Some(src_ix),
+            Self::FileRow { .. } => None,
         }
     }
 }
@@ -2211,6 +2268,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_horizontal_min_width: Pixels,
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) diff_cache_rev: u64,
+    pub(in crate::view) diff_cache_content_signature: Option<u64>,
     pub(in crate::view) diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) diff_cache: Vec<AnnotatedDiffLine>,
     pub(in crate::view) diff_row_provider: Option<Arc<super::diff_cache::PagedPatchDiffRows>>,
@@ -2232,9 +2290,11 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_visible_indices: Vec<usize>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
     pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
-    pub(in crate::view) collapsed_diff_reveals: HashMap<usize, CollapsedDiffRevealState>,
+    pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: HashMap<usize, usize>,
+    pub(in crate::view) collapsed_diff_reveals: HashMap<usize, CollapsedDiffReveal>,
     pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
     pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
+    pub(in crate::view) collapsed_diff_header_display_cache: HashMap<usize, SharedString>,
     pub(in crate::view) diff_visible_cache_len: usize,
     pub(in crate::view) diff_visible_view: DiffViewMode,
     pub(in crate::view) diff_visible_is_file_view: bool,

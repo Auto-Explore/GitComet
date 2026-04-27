@@ -1,7 +1,7 @@
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy};
 use gitcomet_core::domain::{
     CommitId, DiffArea, DiffLineKind, DiffPreviewTextSide, DiffTarget, FileConflictKind,
-    FileStatusKind,
+    FileDiffText, FileDiffTextSource, FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::ConflictSide;
@@ -18,6 +18,30 @@ use std::thread;
 use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::{fs::Permissions, os::unix::fs::PermissionsExt};
+
+fn read_file_diff_text_source(source: Option<&FileDiffTextSource>) -> Option<String> {
+    source.map(|source| {
+        fs::read_to_string(&source.path).unwrap_or_else(|err| {
+            panic!(
+                "read file diff text source '{}': {err}",
+                source.path.display()
+            )
+        })
+    })
+}
+
+fn assert_file_diff_text_sources(diff: &FileDiffText, old: Option<&str>, new: Option<&str>) {
+    assert_eq!(diff.old.as_deref(), None);
+    assert_eq!(diff.new.as_deref(), None);
+    assert_eq!(
+        read_file_diff_text_source(diff.old_source.as_ref()).as_deref(),
+        old
+    );
+    assert_eq!(
+        read_file_diff_text_source(diff.new_source.as_ref()).as_deref(),
+        new
+    );
+}
 
 struct TestGitEnv {
     _root: tempfile::TempDir,
@@ -1173,8 +1197,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         .unwrap()
         .expect("file diff for unstaged changes");
     assert_eq!(unstaged.path, PathBuf::from("a.txt"));
-    assert_eq!(unstaged.old.as_deref(), Some("one\n"));
-    assert_eq!(unstaged.new.as_deref(), Some("one\ntwo\n"));
+    assert_file_diff_text_sources(&unstaged, Some("one\n"), Some("one\ntwo\n"));
 
     run_git(repo, &["add", "a.txt"]);
 
@@ -1185,8 +1208,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         })
         .unwrap()
         .expect("file diff for staged changes");
-    assert_eq!(staged.old.as_deref(), Some("one\n"));
-    assert_eq!(staged.new.as_deref(), Some("one\ntwo\n"));
+    assert_file_diff_text_sources(&staged, Some("one\n"), Some("one\ntwo\n"));
 
     run_git(
         repo,
@@ -1208,8 +1230,7 @@ fn diff_file_text_reports_old_and_new_for_working_tree_and_commits() {
         })
         .unwrap()
         .expect("file diff for commit");
-    assert_eq!(commit.old.as_deref(), Some("one\n"));
-    assert_eq!(commit.new.as_deref(), Some("one\ntwo\n"));
+    assert_file_diff_text_sources(&commit, Some("one\n"), Some("one\ntwo\n"));
 }
 
 #[test]
@@ -1245,12 +1266,7 @@ fn diff_file_text_unstaged_uses_git_normalized_worktree_content() {
         .unwrap()
         .expect("file diff for unstaged crlf-only change");
 
-    assert_eq!(diff.old.as_deref(), Some("one\ntwo\n"));
-    assert_eq!(
-        diff.new.as_deref(),
-        Some("one\ntwo\n"),
-        "expected worktree text to match Git-normalized staged content"
-    );
+    assert_file_diff_text_sources(&diff, Some("one\ntwo\n"), Some("one\ntwo\n"));
 }
 
 #[test]
@@ -1288,8 +1304,7 @@ fn diff_file_text_root_commit_has_no_parent_side() {
         })
         .unwrap()
         .expect("file diff for root commit");
-    assert_eq!(commit.old.as_deref(), None);
-    assert_eq!(commit.new.as_deref(), Some("one\n"));
+    assert_file_diff_text_sources(&commit, None, Some("one\n"));
 }
 
 #[test]
@@ -1328,8 +1343,7 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
         .unwrap()
         .expect("file diff for staged added file");
     assert_eq!(added.path, PathBuf::from("b.txt"));
-    assert_eq!(added.old.as_deref(), None);
-    assert_eq!(added.new.as_deref(), Some("new\n"));
+    assert_file_diff_text_sources(&added, None, Some("new\n"));
 
     let deleted = opened
         .diff_file_text(&DiffTarget::WorkingTree {
@@ -1339,8 +1353,7 @@ fn diff_file_text_staged_add_and_delete_report_missing_sides() {
         .unwrap()
         .expect("file diff for staged deleted file");
     assert_eq!(deleted.path, PathBuf::from("a.txt"));
-    assert_eq!(deleted.old.as_deref(), Some("one\n"));
-    assert_eq!(deleted.new.as_deref(), None);
+    assert_file_diff_text_sources(&deleted, Some("one\n"), None);
 }
 
 #[test]
@@ -2158,8 +2171,7 @@ fn diff_working_tree_with_absolute_file_path_reads_current_file() {
         })
         .unwrap()
         .expect("text diff for absolute path");
-    assert_eq!(text.old, None);
-    assert_eq!(text.new.as_deref(), Some("one\ntwo\n"));
+    assert_file_diff_text_sources(&text, Some("one\n"), Some("one\ntwo\n"));
 
     let image = opened
         .diff_file_image(&DiffTarget::WorkingTree {
@@ -2191,8 +2203,7 @@ fn staged_diff_for_unmerged_conflict_prefers_ours_for_text_and_image() {
         })
         .unwrap()
         .expect("staged text diff for conflict");
-    assert_eq!(text.old.as_deref(), Some("ours\n"));
-    assert_eq!(text.new.as_deref(), Some("ours\n"));
+    assert_file_diff_text_sources(&text, Some("ours\n"), Some("ours\n"));
 
     let image = opened
         .diff_file_image(&DiffTarget::WorkingTree {
@@ -2238,8 +2249,7 @@ fn diff_commit_with_unknown_revision_and_outside_conflict_path_are_handled() {
         .diff_file_text(&unknown_target)
         .unwrap()
         .expect("text diff object for unknown revision");
-    assert_eq!(text.old, None);
-    assert_eq!(text.new, None);
+    assert_file_diff_text_sources(&text, None, None);
 
     let image = opened
         .diff_file_image(&unknown_target)
@@ -2313,8 +2323,7 @@ fn diff_file_text_uses_ours_and_theirs_for_conflicted_paths() {
         })
         .unwrap()
         .expect("file diff for conflicted changes");
-    assert_eq!(diff.old.as_deref(), Some("ours\n"));
-    assert_eq!(diff.new.as_deref(), Some("theirs\n"));
+    assert_file_diff_text_sources(&diff, Some("ours\n"), Some("theirs\n"));
 
     let session = opened
         .conflict_session(Path::new("a.txt"))
@@ -3109,8 +3118,7 @@ fn diff_file_text_handles_modify_delete_conflicts() {
         })
         .unwrap()
         .expect("file diff for conflicted changes");
-    assert_eq!(diff.old, None);
-    assert_eq!(diff.new.as_deref(), Some("theirs\n"));
+    assert_file_diff_text_sources(&diff, None, Some("theirs\n"));
 }
 
 #[test]

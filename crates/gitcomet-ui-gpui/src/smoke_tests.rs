@@ -1445,6 +1445,10 @@ fn debug_selector(prefix: &str, ix: usize) -> &'static str {
     Box::leak(format!("{prefix}_{ix}").into_boxed_str())
 }
 
+fn branch_menu_indicator_selector(repo_id: RepoId, ix: usize) -> &'static str {
+    Box::leak(format!("branch_menu_indicator_{}_{}", repo_id.0, ix).into_boxed_str())
+}
+
 fn wait_for_repo_count(store: &AppStore, expected: usize) -> Arc<gitcomet_state::model::AppState> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -2069,6 +2073,78 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
                 .active_repo
                 .and_then(|active_repo| snapshot.repos.iter().find(|repo| repo.id == active_repo))
                 .is_some_and(|repo| repo.spec.workdir == linked_repo)
+    });
+}
+
+#[gpui::test]
+fn branch_worktree_badge_keeps_branch_menu_hamburger_clickable(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_branch_worktree_menu_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let badge_bounds = cx
+        .debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        .expect("expected branch worktree badge bounds");
+    let menu_selector = branch_menu_indicator_selector(repo_id, badge_ix);
+    let menu_bounds = cx
+        .debug_bounds(menu_selector)
+        .expect("expected branch menu indicator bounds");
+
+    assert!(
+        badge_bounds.right() <= menu_bounds.left(),
+        "expected branch menu indicator to stay to the right of the worktree badge"
+    );
+
+    let menu_center = menu_bounds.center();
+    cx.simulate_mouse_move(menu_center, None, Modifiers::default());
+    cx.run_until_parked();
+    sync_view_for_tests(cx, &view);
+
+    cx.simulate_mouse_down(menu_center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(menu_center, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+    sync_view_for_tests(cx, &view);
+
+    cx.update(|_window, app| {
+        assert!(
+            crate::view::test_support::popover_is_open(view.read(app), app),
+            "expected branch menu hamburger to open a popover even with a worktree badge"
+        );
     });
 }
 

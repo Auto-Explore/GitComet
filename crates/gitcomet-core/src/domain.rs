@@ -425,8 +425,46 @@ impl From<SharedLineText> for Arc<str> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffTextSource {
+    pub path: PathBuf,
+    pub identity: Arc<str>,
+}
+
+impl FileDiffTextSource {
+    pub fn new(path: PathBuf) -> Self {
+        let identity = Self::filesystem_identity(&path);
+        Self { path, identity }
+    }
+
+    pub fn with_identity(path: PathBuf, identity: impl Into<Arc<str>>) -> Self {
+        Self {
+            path,
+            identity: identity.into(),
+        }
+    }
+
+    fn filesystem_identity(path: &std::path::Path) -> Arc<str> {
+        let mut hasher = FxHasher::default();
+        path.hash(&mut hasher);
+        if let Ok(metadata) = std::fs::metadata(path) {
+            metadata.len().hash(&mut hasher);
+            metadata.is_file().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified()
+                && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+            {
+                duration.as_secs().hash(&mut hasher);
+                duration.subsec_nanos().hash(&mut hasher);
+            }
+        }
+        Arc::from(format!("{:016x}", hasher.finish()))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffText {
     pub path: PathBuf,
+    pub old_source: Option<FileDiffTextSource>,
+    pub new_source: Option<FileDiffTextSource>,
     pub old: Option<Arc<str>>,
     pub new: Option<Arc<str>>,
     content_signature: u64,
@@ -439,11 +477,35 @@ impl FileDiffText {
 
     pub fn new_shared(path: PathBuf, old: Option<Arc<str>>, new: Option<Arc<str>>) -> Self {
         let content_signature =
-            Self::content_signature_for_parts(&path, old.as_deref(), new.as_deref());
+            Self::content_signature_for_parts(&path, None, None, old.as_deref(), new.as_deref());
         Self {
             path,
+            old_source: None,
+            new_source: None,
             old,
             new,
+            content_signature,
+        }
+    }
+
+    pub fn new_sources(
+        path: PathBuf,
+        old_source: Option<FileDiffTextSource>,
+        new_source: Option<FileDiffTextSource>,
+    ) -> Self {
+        let content_signature = Self::content_signature_for_parts(
+            &path,
+            old_source.as_ref(),
+            new_source.as_ref(),
+            None,
+            None,
+        );
+        Self {
+            path,
+            old_source,
+            new_source,
+            old: None,
+            new: None,
             content_signature,
         }
     }
@@ -454,11 +516,19 @@ impl FileDiffText {
 
     fn content_signature_for_parts(
         path: &std::path::Path,
+        old_source: Option<&FileDiffTextSource>,
+        new_source: Option<&FileDiffTextSource>,
         old: Option<&str>,
         new: Option<&str>,
     ) -> u64 {
         let mut hasher = FxHasher::default();
         path.hash(&mut hasher);
+        old_source
+            .map(|source| (&source.path, &source.identity))
+            .hash(&mut hasher);
+        new_source
+            .map(|source| (&source.path, &source.identity))
+            .hash(&mut hasher);
         old.hash(&mut hasher);
         new.hash(&mut hasher);
         hasher.finish()

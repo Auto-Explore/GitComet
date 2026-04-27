@@ -333,7 +333,7 @@ impl MainPaneView {
                         self.ensure_diff_visible_indices();
                         self.maybe_autoscroll_diff_to_first_change();
 
-                        if self.diff_word_wrap {
+                        if self.diff_word_wrap && !self.is_file_diff_view_active() {
                             self.ensure_file_diff_inline_text_materialized();
                             let raw = self.file_diff_inline_text.clone();
                             self.diff_raw_input.update(cx, |input, cx| {
@@ -472,6 +472,24 @@ impl MainPaneView {
                                     let (_, min_col_w) = diff_split_drag_params(main_w);
                                     let (left_w, right_w) =
                                         diff_split_column_widths(main_w, self.diff_split_ratio);
+                                    let collapsed_file_stat = self
+                                        .is_collapsed_diff_projection_active()
+                                        .then(|| self.collapsed_diff_total_file_stat())
+                                        .flatten();
+                                    let left_header = Self::split_column_header_label(
+                                        theme,
+                                        "A (local / before)",
+                                        collapsed_file_stat.map(|(_, removed)| removed),
+                                        '-',
+                                        theme.colors.diff_remove_text,
+                                    );
+                                    let right_header = Self::split_column_header_label(
+                                        theme,
+                                        "B (remote / after)",
+                                        collapsed_file_stat.map(|(added, _)| added),
+                                        '+',
+                                        theme.colors.diff_add_text,
+                                    );
 
                                     let resize_handle = |id: &'static str| {
                                         div()
@@ -610,7 +628,7 @@ impl MainPaneView {
                                                 .px_2()
                                                 .overflow_hidden()
                                                 .whitespace_nowrap()
-                                                .child("A (local / before)"),
+                                                .child(left_header),
                                         )
                                         .child(resize_handle("diff_split_resize_handle_header"))
                                         .child(
@@ -620,7 +638,7 @@ impl MainPaneView {
                                                 .px_2()
                                                 .overflow_hidden()
                                                 .whitespace_nowrap()
-                                                .child("B (remote / after)"),
+                                                .child(right_header),
                                         );
 
                                     div()

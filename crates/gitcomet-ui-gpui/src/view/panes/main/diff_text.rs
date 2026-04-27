@@ -439,8 +439,7 @@ impl MainPaneView {
                 return fallback;
             };
             match row {
-                CollapsedDiffVisibleRow::FileHeader { src_ix }
-                | CollapsedDiffVisibleRow::HunkHeader { src_ix } => {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
                     if self.diff_view == DiffViewMode::Inline && region != DiffTextRegion::Inline {
                         return fallback;
                     }
@@ -452,12 +451,9 @@ impl MainPaneView {
                     {
                         return fallback;
                     }
-                    if let Some(display) = self.diff_header_display_cache.get(&src_ix) {
-                        return display.clone();
-                    }
-                    return self
-                        .patch_diff_row(src_ix)
-                        .map(|line| expand_tabs(line.text.as_ref()))
+                    return row
+                        .header_display_src_ix()
+                        .and_then(|src_ix| self.collapsed_diff_hunk_header_display(src_ix))
                         .unwrap_or(fallback);
                 }
                 CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
@@ -628,8 +624,7 @@ impl MainPaneView {
                 return 0;
             };
             match row {
-                CollapsedDiffVisibleRow::FileHeader { src_ix }
-                | CollapsedDiffVisibleRow::HunkHeader { src_ix } => {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
                     if self.diff_view == DiffViewMode::Inline && region != DiffTextRegion::Inline {
                         return 0;
                     }
@@ -641,12 +636,12 @@ impl MainPaneView {
                     {
                         return 0;
                     }
-                    if let Some(display) = self.diff_header_display_cache.get(&src_ix) {
-                        return display.len();
-                    }
-                    return self
-                        .patch_diff_row(src_ix)
-                        .map(|line| display_len(line.text.as_ref()))
+                    return row
+                        .header_display_src_ix()
+                        .and_then(|src_ix| {
+                            self.collapsed_diff_hunk_header_display(src_ix)
+                                .map(|display| display_len(display.as_ref()))
+                        })
                         .unwrap_or(0);
                 }
                 CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {

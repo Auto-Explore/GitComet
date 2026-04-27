@@ -1,4 +1,5 @@
 use super::*;
+use std::io::Read;
 
 pub(super) fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
     let total_len = lines
@@ -20,23 +21,8 @@ fn prefixed_inline_text(prefix: char, line: &str) -> gitcomet_core::domain::Shar
     text.into()
 }
 
-fn append_prefixed_inline_text(target: &mut String, prefix: char, line: &str) {
-    target.push(prefix);
-    target.push_str(line);
-    target.push('\n');
-}
-
 pub(super) fn file_diff_text_signature(file: &gitcomet_core::domain::FileDiffText) -> u64 {
     file.content_signature()
-}
-
-fn build_file_diff_document_source(text: Option<&Arc<str>>) -> (SharedString, Arc<[usize]>) {
-    let text = match text {
-        Some(text) if !text.is_empty() => SharedString::from(Arc::clone(text)),
-        _ => SharedString::default(),
-    };
-    let line_starts = Arc::from(build_line_starts(text.as_ref()));
-    (text, line_starts)
 }
 
 fn file_diff_lines_from_starts<'a>(text: &'a str, line_starts: &[usize]) -> Vec<&'a str> {
@@ -178,6 +164,217 @@ fn line_byte_range(text: &str, line_starts: &[usize], line_ix: usize) -> std::op
     start..end
 }
 
+const FILE_DIFF_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Debug)]
+enum IndexedFileDiffContent {
+    Empty,
+    Shared(Arc<str>),
+    File(Arc<std::path::PathBuf>),
+}
+
+#[derive(Clone, Debug)]
+struct IndexedFileDiffSource {
+    content: IndexedFileDiffContent,
+    source_len: usize,
+    line_starts: Arc<[usize]>,
+    line_flags: Arc<[u8]>,
+}
+
+impl IndexedFileDiffSource {
+    fn empty() -> Self {
+        Self {
+            content: IndexedFileDiffContent::Empty,
+            source_len: 0,
+            line_starts: Arc::default(),
+            line_flags: Arc::default(),
+        }
+    }
+
+    fn from_shared(text: Option<&Arc<str>>) -> Self {
+        let Some(text) = text.filter(|text| !text.is_empty()) else {
+            return Self::empty();
+        };
+        let line_starts: Arc<[usize]> = Arc::from(build_line_starts(text.as_ref()));
+        let line_count = file_diff_line_count_from_starts(text.len(), line_starts.as_ref());
+        let mut line_flags = Vec::with_capacity(line_count);
+        for line_ix in 0..line_count {
+            let range = line_byte_range(text.as_ref(), line_starts.as_ref(), line_ix);
+            line_flags.push(preview_line_flags_for_text(
+                text.get(range).unwrap_or_default(),
+            ));
+        }
+        Self {
+            content: IndexedFileDiffContent::Shared(Arc::clone(text)),
+            source_len: text.len(),
+            line_starts,
+            line_flags: Arc::from(line_flags),
+        }
+    }
+
+    fn from_file(path: &std::path::Path) -> Result<Self, String> {
+        let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+        if metadata.is_dir() {
+            return Err("file diff source is a directory".to_string());
+        }
+
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut reader = std::io::BufReader::with_capacity(FILE_DIFF_INDEX_SCAN_BUFFER_BYTES, file);
+        let source_len_hint = usize::try_from(metadata.len()).unwrap_or(0);
+        let mut line_starts =
+            Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
+        let mut line_flags =
+            Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
+        let mut validation_buffer =
+            Vec::with_capacity(FILE_DIFF_INDEX_SCAN_BUFFER_BYTES.saturating_add(4));
+        let mut utf8_tail = Vec::with_capacity(4);
+        let mut scan_buffer = vec![0u8; FILE_DIFF_INDEX_SCAN_BUFFER_BYTES];
+        let mut source_len = 0usize;
+        let mut line_ascii_only = true;
+        let mut line_has_tabs = false;
+        let mut ended_with_newline = false;
+
+        if source_len_hint > 0 {
+            line_starts.push(0);
+        }
+
+        loop {
+            let read_len = reader
+                .read(scan_buffer.as_mut_slice())
+                .map_err(|e| e.to_string())?;
+            if read_len == 0 {
+                break;
+            }
+            if source_len == 0 && line_starts.is_empty() {
+                line_starts.push(0);
+            }
+            let chunk = &scan_buffer[..read_len];
+            validate_file_diff_utf8_chunk_streaming(&mut utf8_tail, &mut validation_buffer, chunk)?;
+
+            for &byte in chunk {
+                ended_with_newline = byte == b'\n';
+                if byte == b'\n' {
+                    line_flags.push(preview_line_flags_from_bools(
+                        line_ascii_only,
+                        line_has_tabs,
+                    ));
+                    source_len = source_len.saturating_add(1);
+                    line_starts.push(source_len);
+                    line_ascii_only = true;
+                    line_has_tabs = false;
+                    continue;
+                }
+
+                if !byte.is_ascii() {
+                    line_ascii_only = false;
+                }
+                if byte == b'\t' {
+                    line_has_tabs = true;
+                }
+                source_len = source_len.saturating_add(1);
+            }
+        }
+
+        if !utf8_tail.is_empty() {
+            return Err("file diff source is not valid UTF-8".to_string());
+        }
+        if source_len > 0 && !ended_with_newline {
+            line_flags.push(preview_line_flags_from_bools(
+                line_ascii_only,
+                line_has_tabs,
+            ));
+        }
+
+        Ok(Self {
+            content: IndexedFileDiffContent::File(Arc::new(path.to_path_buf())),
+            source_len,
+            line_starts: Arc::from(line_starts),
+            line_flags: Arc::from(line_flags),
+        })
+    }
+
+    fn line_count(&self) -> usize {
+        self.line_flags.len()
+    }
+
+    fn line_byte_range(&self, line_ix: usize) -> Option<std::ops::Range<usize>> {
+        if line_ix >= self.line_count() {
+            return None;
+        }
+        let start = self
+            .line_starts
+            .get(line_ix)
+            .copied()
+            .unwrap_or(self.source_len)
+            .min(self.source_len);
+        let end = self
+            .line_starts
+            .get(line_ix.saturating_add(1))
+            .copied()
+            .map(|next| next.saturating_sub(1))
+            .unwrap_or(self.source_len)
+            .min(self.source_len)
+            .max(start);
+        Some(start..end)
+    }
+
+    fn line_text(&self, line_ix: usize) -> Option<gitcomet_core::file_diff::FileDiffLineText> {
+        let range = self.line_byte_range(line_ix)?;
+        let flags = self.line_flags.get(line_ix).copied().unwrap_or_default();
+        match &self.content {
+            IndexedFileDiffContent::Empty => None,
+            IndexedFileDiffContent::Shared(text) => Some(
+                gitcomet_core::file_diff::FileDiffLineText::shared_slice(Arc::clone(text), range),
+            ),
+            IndexedFileDiffContent::File(path) => {
+                Some(gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                    Arc::clone(path),
+                    range,
+                    preview_line_is_ascii_without_loading(flags),
+                    preview_line_has_tabs_without_loading(flags),
+                ))
+            }
+        }
+    }
+}
+
+fn file_diff_line_count_from_starts(source_len: usize, line_starts: &[usize]) -> usize {
+    if source_len == 0 {
+        return 0;
+    }
+    line_starts
+        .len()
+        .saturating_sub(usize::from(line_starts.last().copied() == Some(source_len)))
+}
+
+fn validate_file_diff_utf8_chunk_streaming(
+    utf8_tail: &mut Vec<u8>,
+    validation_buffer: &mut Vec<u8>,
+    chunk: &[u8],
+) -> Result<(), String> {
+    validation_buffer.clear();
+    if !utf8_tail.is_empty() {
+        validation_buffer.extend_from_slice(utf8_tail.as_slice());
+    }
+    validation_buffer.extend_from_slice(chunk);
+
+    match std::str::from_utf8(validation_buffer.as_slice()) {
+        Ok(_) => {
+            utf8_tail.clear();
+            Ok(())
+        }
+        Err(error) => {
+            if error.error_len().is_some() {
+                return Err("file diff source is not valid UTF-8".to_string());
+            }
+            let valid_up_to = error.valid_up_to();
+            utf8_tail.clear();
+            utf8_tail.extend_from_slice(&validation_buffer[valid_up_to..]);
+            Ok(())
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct InlineFileDiffRowRenderData {
     pub(in crate::view) kind: gitcomet_core::domain::DiffLineKind,
@@ -281,31 +478,21 @@ impl StreamedFileDiffRunStarts {
 #[derive(Debug)]
 struct StreamedFileDiffSource {
     plan: Arc<gitcomet_core::file_diff::FileDiffPlan>,
-    old_text: SharedString,
-    old_text_arc: Arc<str>,
-    old_line_starts: Arc<[usize]>,
-    new_text: SharedString,
-    new_text_arc: Arc<str>,
-    new_line_starts: Arc<[usize]>,
+    old_source: IndexedFileDiffSource,
+    new_source: IndexedFileDiffSource,
     run_starts: std::sync::OnceLock<StreamedFileDiffRunStarts>,
 }
 
 impl StreamedFileDiffSource {
     fn new(
         plan: Arc<gitcomet_core::file_diff::FileDiffPlan>,
-        old_text: SharedString,
-        old_line_starts: Arc<[usize]>,
-        new_text: SharedString,
-        new_line_starts: Arc<[usize]>,
+        old_source: IndexedFileDiffSource,
+        new_source: IndexedFileDiffSource,
     ) -> Self {
         Self {
             plan,
-            old_text_arc: old_text.clone().into(),
-            old_text,
-            old_line_starts,
-            new_text_arc: new_text.clone().into(),
-            new_text,
-            new_line_starts,
+            old_source,
+            new_source,
             run_starts: std::sync::OnceLock::new(),
         }
     }
@@ -331,44 +518,16 @@ impl StreamedFileDiffSource {
         self.plan.inline_row_count
     }
 
-    fn old_line_text(&self, line_ix: usize) -> &str {
-        rows::resolved_output_line_text(
-            self.old_text.as_ref(),
-            self.old_line_starts.as_ref(),
-            line_ix,
-        )
-    }
-
-    fn new_line_text(&self, line_ix: usize) -> &str {
-        rows::resolved_output_line_text(
-            self.new_text.as_ref(),
-            self.new_line_starts.as_ref(),
-            line_ix,
-        )
-    }
-
     fn old_line_shared_text(&self, line_ix: usize) -> gitcomet_core::file_diff::FileDiffLineText {
-        let range = line_byte_range(
-            self.old_text_arc.as_ref(),
-            self.old_line_starts.as_ref(),
-            line_ix,
-        );
-        gitcomet_core::file_diff::FileDiffLineText::shared_slice(
-            Arc::clone(&self.old_text_arc),
-            range,
-        )
+        self.old_source
+            .line_text(line_ix)
+            .unwrap_or_else(|| gitcomet_core::file_diff::FileDiffLineText::from(""))
     }
 
     fn new_line_shared_text(&self, line_ix: usize) -> gitcomet_core::file_diff::FileDiffLineText {
-        let range = line_byte_range(
-            self.new_text_arc.as_ref(),
-            self.new_line_starts.as_ref(),
-            line_ix,
-        );
-        gitcomet_core::file_diff::FileDiffLineText::shared_slice(
-            Arc::clone(&self.new_text_arc),
-            range,
-        )
+        self.new_source
+            .line_text(line_ix)
+            .unwrap_or_else(|| gitcomet_core::file_diff::FileDiffLineText::from(""))
     }
 
     fn locate_run(starts: &[usize], total_len: usize, row_ix: usize) -> Option<(usize, usize)> {
@@ -394,13 +553,12 @@ impl StreamedFileDiffSource {
             } => {
                 let old_ix = old_start.saturating_add(local_ix);
                 let new_ix = new_start.saturating_add(local_ix);
-                let text = self.old_line_shared_text(old_ix);
                 FileDiffRow {
                     kind: gitcomet_core::file_diff::FileDiffRowKind::Context,
                     old_line: line_number(old_ix),
                     new_line: line_number(new_ix),
-                    old: Some(text.clone()),
-                    new: Some(text),
+                    old: Some(self.old_line_shared_text(old_ix)),
+                    new: Some(self.new_line_shared_text(new_ix)),
                     eof_newline: None,
                 }
             }
@@ -465,27 +623,30 @@ impl StreamedFileDiffSource {
             } => {
                 let old_ix = old_start.saturating_add(local_ix);
                 let new_ix = new_start.saturating_add(local_ix);
+                let text = self.new_line_shared_text(new_ix);
                 Some(AnnotatedDiffLine {
                     kind: gitcomet_core::domain::DiffLineKind::Context,
-                    text: prefixed_inline_text(' ', self.old_line_text(old_ix)),
+                    text: prefixed_inline_text(' ', text.as_ref()),
                     old_line: line_number(old_ix),
                     new_line: line_number(new_ix),
                 })
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, .. } => {
                 let old_ix = old_start.saturating_add(local_ix);
+                let text = self.old_line_shared_text(old_ix);
                 Some(AnnotatedDiffLine {
                     kind: gitcomet_core::domain::DiffLineKind::Remove,
-                    text: prefixed_inline_text('-', self.old_line_text(old_ix)),
+                    text: prefixed_inline_text('-', text.as_ref()),
                     old_line: line_number(old_ix),
                     new_line: None,
                 })
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, .. } => {
                 let new_ix = new_start.saturating_add(local_ix);
+                let text = self.new_line_shared_text(new_ix);
                 Some(AnnotatedDiffLine {
                     kind: gitcomet_core::domain::DiffLineKind::Add,
-                    text: prefixed_inline_text('+', self.new_line_text(new_ix)),
+                    text: prefixed_inline_text('+', text.as_ref()),
                     old_line: None,
                     new_line: line_number(new_ix),
                 })
@@ -499,16 +660,18 @@ impl StreamedFileDiffSource {
                 let old_ix = old_start.saturating_add(pair_ix);
                 let new_ix = new_start.saturating_add(pair_ix);
                 if local_ix % 2 == 0 {
+                    let text = self.old_line_shared_text(old_ix);
                     Some(AnnotatedDiffLine {
                         kind: gitcomet_core::domain::DiffLineKind::Remove,
-                        text: prefixed_inline_text('-', self.old_line_text(old_ix)),
+                        text: prefixed_inline_text('-', text.as_ref()),
                         old_line: line_number(old_ix),
                         new_line: None,
                     })
                 } else {
+                    let text = self.new_line_shared_text(new_ix);
                     Some(AnnotatedDiffLine {
                         kind: gitcomet_core::domain::DiffLineKind::Add,
-                        text: prefixed_inline_text('+', self.new_line_text(new_ix)),
+                        text: prefixed_inline_text('+', text.as_ref()),
                         old_line: None,
                         new_line: line_number(new_ix),
                     })
@@ -536,7 +699,7 @@ impl StreamedFileDiffSource {
                     kind: gitcomet_core::domain::DiffLineKind::Context,
                     old_line: line_number(old_ix),
                     new_line: line_number(new_ix),
-                    text: self.old_line_shared_text(old_ix),
+                    text: self.new_line_shared_text(new_ix),
                 })
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, .. } => {
@@ -584,7 +747,13 @@ impl StreamedFileDiffSource {
         }
     }
 
-    fn split_modify_pair_texts(&self, row_ix: usize) -> Option<(&str, &str)> {
+    fn split_modify_pair_texts(
+        &self,
+        row_ix: usize,
+    ) -> Option<(
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::file_diff::FileDiffLineText,
+    )> {
         let (run_ix, local_ix) =
             Self::locate_run(self.split_run_starts(), self.plan.row_count, row_ix)?;
         let gitcomet_core::file_diff::FileDiffPlanRun::Modify {
@@ -597,10 +766,19 @@ impl StreamedFileDiffSource {
         };
         let old_ix = old_start.saturating_add(local_ix);
         let new_ix = new_start.saturating_add(local_ix);
-        Some((self.old_line_text(old_ix), self.new_line_text(new_ix)))
+        Some((
+            self.old_line_shared_text(old_ix),
+            self.new_line_shared_text(new_ix),
+        ))
     }
 
-    fn split_row_texts(&self, row_ix: usize) -> Option<(Option<&str>, Option<&str>)> {
+    fn split_row_texts(
+        &self,
+        row_ix: usize,
+    ) -> Option<(
+        Option<gitcomet_core::file_diff::FileDiffLineText>,
+        Option<gitcomet_core::file_diff::FileDiffLineText>,
+    )> {
         let (run_ix, local_ix) =
             Self::locate_run(self.split_run_starts(), self.plan.row_count, row_ix)?;
         let run = self.plan.runs.get(run_ix)?;
@@ -613,17 +791,17 @@ impl StreamedFileDiffSource {
                 let old_ix = old_start.saturating_add(local_ix);
                 let new_ix = new_start.saturating_add(local_ix);
                 Some((
-                    Some(self.old_line_text(old_ix)),
-                    Some(self.new_line_text(new_ix)),
+                    Some(self.old_line_shared_text(old_ix)),
+                    Some(self.new_line_shared_text(new_ix)),
                 ))
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, .. } => {
                 let old_ix = old_start.saturating_add(local_ix);
-                Some((Some(self.old_line_text(old_ix)), None))
+                Some((Some(self.old_line_shared_text(old_ix)), None))
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, .. } => {
                 let new_ix = new_start.saturating_add(local_ix);
-                Some((None, Some(self.new_line_text(new_ix))))
+                Some((None, Some(self.new_line_shared_text(new_ix))))
             }
             gitcomet_core::file_diff::FileDiffPlanRun::Modify {
                 old_start,
@@ -633,8 +811,8 @@ impl StreamedFileDiffSource {
                 let old_ix = old_start.saturating_add(local_ix);
                 let new_ix = new_start.saturating_add(local_ix);
                 Some((
-                    Some(self.old_line_text(old_ix)),
-                    Some(self.new_line_text(new_ix)),
+                    Some(self.old_line_shared_text(old_ix)),
+                    Some(self.new_line_shared_text(new_ix)),
                 ))
             }
         }
@@ -643,7 +821,11 @@ impl StreamedFileDiffSource {
     fn inline_modify_pair_texts(
         &self,
         inline_ix: usize,
-    ) -> Option<(&str, &str, gitcomet_core::domain::DiffLineKind)> {
+    ) -> Option<(
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::domain::DiffLineKind,
+    )> {
         let (run_ix, local_ix) = Self::locate_run(
             self.inline_run_starts(),
             self.plan.inline_row_count,
@@ -665,7 +847,11 @@ impl StreamedFileDiffSource {
         };
         let old_ix = old_start.saturating_add(pair_ix);
         let new_ix = new_start.saturating_add(pair_ix);
-        Some((self.old_line_text(old_ix), self.new_line_text(new_ix), kind))
+        Some((
+            self.old_line_shared_text(old_ix),
+            self.new_line_shared_text(new_ix),
+            kind,
+        ))
     }
 
     fn change_visible_indices_for_runs(&self, inline: bool) -> Vec<usize> {
@@ -733,63 +919,7 @@ impl StreamedFileDiffSource {
     }
 
     fn build_inline_text(&self) -> SharedString {
-        let mut text = String::with_capacity(
-            self.old_text
-                .len()
-                .saturating_add(self.new_text.len())
-                .saturating_add(self.inline_len().saturating_mul(2)),
-        );
-
-        for run in &self.plan.runs {
-            match *run {
-                gitcomet_core::file_diff::FileDiffPlanRun::Context { old_start, len, .. } => {
-                    for offset in 0..len {
-                        append_prefixed_inline_text(
-                            &mut text,
-                            ' ',
-                            self.old_line_text(old_start.saturating_add(offset)),
-                        );
-                    }
-                }
-                gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, len } => {
-                    for offset in 0..len {
-                        append_prefixed_inline_text(
-                            &mut text,
-                            '-',
-                            self.old_line_text(old_start.saturating_add(offset)),
-                        );
-                    }
-                }
-                gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, len } => {
-                    for offset in 0..len {
-                        append_prefixed_inline_text(
-                            &mut text,
-                            '+',
-                            self.new_line_text(new_start.saturating_add(offset)),
-                        );
-                    }
-                }
-                gitcomet_core::file_diff::FileDiffPlanRun::Modify {
-                    old_start,
-                    new_start,
-                    len,
-                } => {
-                    for offset in 0..len {
-                        append_prefixed_inline_text(
-                            &mut text,
-                            '-',
-                            self.old_line_text(old_start.saturating_add(offset)),
-                        );
-                        append_prefixed_inline_text(
-                            &mut text,
-                            '+',
-                            self.new_line_text(new_start.saturating_add(offset)),
-                        );
-                    }
-                }
-            }
-        }
-        SharedString::from(text)
+        SharedString::default()
     }
 }
 
@@ -959,14 +1089,23 @@ impl PagedFileDiffRows {
         self.source.split_scrollbar_markers()
     }
 
-    pub(in crate::view) fn modify_pair_texts(&self, row_ix: usize) -> Option<(&str, &str)> {
+    pub(in crate::view) fn modify_pair_texts(
+        &self,
+        row_ix: usize,
+    ) -> Option<(
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::file_diff::FileDiffLineText,
+    )> {
         self.source.split_modify_pair_texts(row_ix)
     }
 
     pub(in crate::view) fn split_row_texts(
         &self,
         row_ix: usize,
-    ) -> Option<(Option<&str>, Option<&str>)> {
+    ) -> Option<(
+        Option<gitcomet_core::file_diff::FileDiffLineText>,
+        Option<gitcomet_core::file_diff::FileDiffLineText>,
+    )> {
         self.source.split_row_texts(row_ix)
     }
 }
@@ -1064,7 +1203,11 @@ impl PagedFileDiffInlineRows {
     pub(in crate::view) fn modify_pair_texts(
         &self,
         inline_ix: usize,
-    ) -> Option<(&str, &str, gitcomet_core::domain::DiffLineKind)> {
+    ) -> Option<(
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::domain::DiffLineKind,
+    )> {
         self.source.inline_modify_pair_texts(inline_ix)
     }
 
@@ -1106,6 +1249,260 @@ impl gitcomet_core::domain::DiffRowProvider for PagedFileDiffInlineRows {
     }
 }
 
+fn file_diff_source_text(source: &IndexedFileDiffSource) -> SharedString {
+    match &source.content {
+        IndexedFileDiffContent::Shared(text) => SharedString::from(Arc::clone(text)),
+        IndexedFileDiffContent::Empty | IndexedFileDiffContent::File(_) => SharedString::default(),
+    }
+}
+
+fn index_file_diff_side(
+    source: Option<&gitcomet_core::domain::FileDiffTextSource>,
+    legacy_text: Option<&Arc<str>>,
+) -> IndexedFileDiffSource {
+    if let Some(source) = source {
+        return IndexedFileDiffSource::from_file(&source.path)
+            .unwrap_or_else(|_| IndexedFileDiffSource::empty());
+    }
+    IndexedFileDiffSource::from_shared(legacy_text)
+}
+
+fn file_diff_plan_from_runs(
+    runs: Vec<gitcomet_core::file_diff::FileDiffPlanRun>,
+) -> gitcomet_core::file_diff::FileDiffPlan {
+    let row_count = runs.iter().map(|run| run.row_len()).sum();
+    let inline_row_count = runs.iter().map(|run| run.inline_row_len()).sum();
+    gitcomet_core::file_diff::FileDiffPlan {
+        runs,
+        row_count,
+        inline_row_count,
+        eof_newline: None,
+    }
+}
+
+fn push_file_diff_plan_run(
+    runs: &mut Vec<gitcomet_core::file_diff::FileDiffPlanRun>,
+    run: gitcomet_core::file_diff::FileDiffPlanRun,
+) {
+    if run.row_len() == 0 {
+        return;
+    }
+    runs.push(run);
+}
+
+fn push_aligned_file_diff_span(
+    runs: &mut Vec<gitcomet_core::file_diff::FileDiffPlanRun>,
+    old_start: usize,
+    new_start: usize,
+    old_len: usize,
+    new_len: usize,
+) {
+    let context_len = old_len.min(new_len);
+    push_file_diff_plan_run(
+        runs,
+        gitcomet_core::file_diff::FileDiffPlanRun::Context {
+            old_start,
+            new_start,
+            len: context_len,
+        },
+    );
+    if old_len > context_len {
+        push_file_diff_plan_run(
+            runs,
+            gitcomet_core::file_diff::FileDiffPlanRun::Remove {
+                old_start: old_start.saturating_add(context_len),
+                len: old_len.saturating_sub(context_len),
+            },
+        );
+    }
+    if new_len > context_len {
+        push_file_diff_plan_run(
+            runs,
+            gitcomet_core::file_diff::FileDiffPlanRun::Add {
+                new_start: new_start.saturating_add(context_len),
+                len: new_len.saturating_sub(context_len),
+            },
+        );
+    }
+}
+
+fn push_file_diff_change_block(
+    runs: &mut Vec<gitcomet_core::file_diff::FileDiffPlanRun>,
+    old_start: Option<usize>,
+    old_len: usize,
+    new_start: Option<usize>,
+    new_len: usize,
+) {
+    let pair_len = old_len.min(new_len);
+    if pair_len > 0 {
+        push_file_diff_plan_run(
+            runs,
+            gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+                old_start: old_start.unwrap_or_default(),
+                new_start: new_start.unwrap_or_default(),
+                len: pair_len,
+            },
+        );
+    }
+    if old_len > pair_len {
+        push_file_diff_plan_run(
+            runs,
+            gitcomet_core::file_diff::FileDiffPlanRun::Remove {
+                old_start: old_start.unwrap_or_default().saturating_add(pair_len),
+                len: old_len.saturating_sub(pair_len),
+            },
+        );
+    }
+    if new_len > pair_len {
+        push_file_diff_plan_run(
+            runs,
+            gitcomet_core::file_diff::FileDiffPlanRun::Add {
+                new_start: new_start.unwrap_or_default().saturating_add(pair_len),
+                len: new_len.saturating_sub(pair_len),
+            },
+        );
+    }
+}
+
+fn parse_unified_hunk_range(part: &str) -> Option<(usize, usize)> {
+    let mut pieces = part.split(',');
+    let start = pieces.next()?.parse::<usize>().ok()?;
+    let len = pieces
+        .next()
+        .map(str::parse::<usize>)
+        .transpose()
+        .ok()?
+        .unwrap_or(1);
+    Some((start.saturating_sub(1), len))
+}
+
+fn parse_unified_hunk_header(text: &str) -> Option<(usize, usize, usize, usize)> {
+    let body = text.strip_prefix("@@")?.trim_start();
+    let body = body.split("@@").next()?.trim();
+    let mut parts = body.split_whitespace();
+    let (old_start, old_len) = parse_unified_hunk_range(parts.next()?.strip_prefix('-')?)?;
+    let (new_start, new_len) = parse_unified_hunk_range(parts.next()?.strip_prefix('+')?)?;
+    Some((old_start, old_len, new_start, new_len))
+}
+
+fn build_file_diff_plan_from_patch(
+    diff: &gitcomet_core::domain::Diff,
+    old_line_count: usize,
+    new_line_count: usize,
+) -> gitcomet_core::file_diff::FileDiffPlan {
+    let mut runs = Vec::new();
+    let mut old_cursor = 0usize;
+    let mut new_cursor = 0usize;
+    let mut ix = 0usize;
+
+    while ix < diff.lines.len() {
+        let line = &diff.lines[ix];
+        if !matches!(line.kind, gitcomet_core::domain::DiffLineKind::Hunk) {
+            ix += 1;
+            continue;
+        }
+        let Some((hunk_old_start, _hunk_old_len, hunk_new_start, _hunk_new_len)) =
+            parse_unified_hunk_header(line.text.as_ref())
+        else {
+            ix += 1;
+            continue;
+        };
+
+        push_aligned_file_diff_span(
+            &mut runs,
+            old_cursor,
+            new_cursor,
+            hunk_old_start.saturating_sub(old_cursor),
+            hunk_new_start.saturating_sub(new_cursor),
+        );
+
+        let mut old_ix = hunk_old_start;
+        let mut new_ix = hunk_new_start;
+        let mut pending_old_start = None;
+        let mut pending_old_len = 0usize;
+        let mut pending_new_start = None;
+        let mut pending_new_len = 0usize;
+        ix += 1;
+
+        while ix < diff.lines.len() {
+            let line = &diff.lines[ix];
+            if matches!(
+                line.kind,
+                gitcomet_core::domain::DiffLineKind::Hunk
+                    | gitcomet_core::domain::DiffLineKind::Header
+            ) {
+                break;
+            }
+
+            if line.text.as_ref().starts_with("\\ No newline") {
+                ix += 1;
+                continue;
+            }
+
+            match line.kind {
+                gitcomet_core::domain::DiffLineKind::Context => {
+                    push_file_diff_change_block(
+                        &mut runs,
+                        pending_old_start.take(),
+                        pending_old_len,
+                        pending_new_start.take(),
+                        pending_new_len,
+                    );
+                    pending_old_len = 0;
+                    pending_new_len = 0;
+                    push_file_diff_plan_run(
+                        &mut runs,
+                        gitcomet_core::file_diff::FileDiffPlanRun::Context {
+                            old_start: old_ix,
+                            new_start: new_ix,
+                            len: 1,
+                        },
+                    );
+                    old_ix = old_ix.saturating_add(1);
+                    new_ix = new_ix.saturating_add(1);
+                }
+                gitcomet_core::domain::DiffLineKind::Remove => {
+                    if pending_old_start.is_none() {
+                        pending_old_start = Some(old_ix);
+                    }
+                    pending_old_len = pending_old_len.saturating_add(1);
+                    old_ix = old_ix.saturating_add(1);
+                }
+                gitcomet_core::domain::DiffLineKind::Add => {
+                    if pending_new_start.is_none() {
+                        pending_new_start = Some(new_ix);
+                    }
+                    pending_new_len = pending_new_len.saturating_add(1);
+                    new_ix = new_ix.saturating_add(1);
+                }
+                gitcomet_core::domain::DiffLineKind::Header
+                | gitcomet_core::domain::DiffLineKind::Hunk => {}
+            }
+            ix += 1;
+        }
+
+        push_file_diff_change_block(
+            &mut runs,
+            pending_old_start,
+            pending_old_len,
+            pending_new_start,
+            pending_new_len,
+        );
+        old_cursor = old_ix;
+        new_cursor = new_ix;
+    }
+
+    push_aligned_file_diff_span(
+        &mut runs,
+        old_cursor,
+        new_cursor,
+        old_line_count.saturating_sub(old_cursor),
+        new_line_count.saturating_sub(new_cursor),
+    );
+
+    file_diff_plan_from_runs(runs)
+}
+
 #[derive(Debug)]
 pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) file_path: Option<std::path::PathBuf>,
@@ -1127,22 +1524,41 @@ pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) inline_rows: Vec<AnnotatedDiffLine>,
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn build_file_diff_cache_rebuild(
     file: &gitcomet_core::domain::FileDiffText,
     workdir: &std::path::Path,
 ) -> FileDiffCacheRebuild {
-    let (old_text, old_line_starts) = build_file_diff_document_source(file.old.as_ref());
-    let (new_text, new_line_starts) = build_file_diff_document_source(file.new.as_ref());
-    let plan = Arc::new(build_file_diff_plan_from_document_sources(
-        &old_text,
-        old_line_starts.as_ref(),
-        &new_text,
-        new_line_starts.as_ref(),
-    ));
-    let old_line_count =
-        file_diff_lines_from_starts(old_text.as_ref(), old_line_starts.as_ref()).len();
-    let new_line_count =
-        file_diff_lines_from_starts(new_text.as_ref(), new_line_starts.as_ref()).len();
+    build_file_diff_cache_rebuild_with_patch(file, workdir, None)
+}
+
+pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
+    file: &gitcomet_core::domain::FileDiffText,
+    workdir: &std::path::Path,
+    patch_diff: Option<&gitcomet_core::domain::Diff>,
+) -> FileDiffCacheRebuild {
+    let old_source = index_file_diff_side(file.old_source.as_ref(), file.old.as_ref());
+    let new_source = index_file_diff_side(file.new_source.as_ref(), file.new.as_ref());
+    let old_text = file_diff_source_text(&old_source);
+    let new_text = file_diff_source_text(&new_source);
+    let old_line_starts = Arc::clone(&old_source.line_starts);
+    let new_line_starts = Arc::clone(&new_source.line_starts);
+    let old_line_count = old_source.line_count();
+    let new_line_count = new_source.line_count();
+    let plan = Arc::new(if let Some(patch_diff) = patch_diff {
+        build_file_diff_plan_from_patch(patch_diff, old_line_count, new_line_count)
+    } else if file.old.is_some() || file.new.is_some() {
+        build_file_diff_plan_from_document_sources(
+            &old_text,
+            old_line_starts.as_ref(),
+            &new_text,
+            new_line_starts.as_ref(),
+        )
+    } else {
+        let mut runs = Vec::new();
+        push_aligned_file_diff_span(&mut runs, 0, 0, old_line_count, new_line_count);
+        file_diff_plan_from_runs(runs)
+    });
     let (old_line_to_row, new_line_to_row) = gitcomet_core::file_diff::plan_line_to_row_maps(
         plan.as_ref(),
         old_line_count,
@@ -1152,10 +1568,8 @@ pub(in crate::view) fn build_file_diff_cache_rebuild(
         plan_line_to_inline_row_maps(plan.as_ref(), old_line_count, new_line_count);
     let source = Arc::new(StreamedFileDiffSource::new(
         Arc::clone(&plan),
-        old_text.clone(),
-        Arc::clone(&old_line_starts),
-        new_text.clone(),
-        Arc::clone(&new_line_starts),
+        old_source,
+        new_source,
     ));
     let row_provider = Arc::new(PagedFileDiffRows::new(
         Arc::clone(&source),
@@ -1214,21 +1628,17 @@ mod tests {
     fn streamed_file_diff_source_for_test(old: &str, new: &str) -> Arc<StreamedFileDiffSource> {
         let old_text_arc = Arc::<str>::from(old);
         let new_text_arc = Arc::<str>::from(new);
-        let (old_text, old_line_starts) = build_file_diff_document_source(Some(&old_text_arc));
-        let (new_text, new_line_starts) = build_file_diff_document_source(Some(&new_text_arc));
+        let old_source = IndexedFileDiffSource::from_shared(Some(&old_text_arc));
+        let new_source = IndexedFileDiffSource::from_shared(Some(&new_text_arc));
+        let old_text = file_diff_source_text(&old_source);
+        let new_text = file_diff_source_text(&new_source);
         let plan = Arc::new(build_file_diff_plan_from_document_sources(
             &old_text,
-            old_line_starts.as_ref(),
+            old_source.line_starts.as_ref(),
             &new_text,
-            new_line_starts.as_ref(),
+            new_source.line_starts.as_ref(),
         ));
-        Arc::new(StreamedFileDiffSource::new(
-            plan,
-            old_text,
-            old_line_starts,
-            new_text,
-            new_line_starts,
-        ))
+        Arc::new(StreamedFileDiffSource::new(plan, old_source, new_source))
     }
 
     fn prepare_test_document(

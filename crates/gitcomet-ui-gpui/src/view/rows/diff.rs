@@ -1,31 +1,246 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
-use crate::view::panes::main::CollapsedDiffVisibleRow;
+use crate::view::panes::main::{
+    CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
+};
 use crate::view::panes::main::{
     VersionedCachedDiffStyledText, versioned_query_cached_diff_styled_text_is_current,
 };
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
 
-const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
-const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
-const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
+const COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_shell";
+const COLLAPSED_DIFF_INLINE_HUNK_GUTTER_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_gutter";
+const COLLAPSED_DIFF_INLINE_HUNK_UP_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_up";
+const COLLAPSED_DIFF_INLINE_HUNK_DOWN_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_down";
+const COLLAPSED_DIFF_INLINE_HUNK_SHORT_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_short";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHELL_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_shell";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_GUTTER_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_gutter";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_UP_DEBUG_SELECTOR: &str = "collapsed_diff_split_left_hunk_up";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_DOWN_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_down";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHORT_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_short";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHELL_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_shell";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_GUTTER_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_gutter";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_UP_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_up";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_DOWN_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_down";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHORT_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_short";
 
-fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
-    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CollapsedHunkRevealAction {
+    Up,
+    Down,
+    DownBefore,
+    Short,
 }
 
 fn diff_row_height(ui_scale_percent: u32) -> Pixels {
-    diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+    crate::view::panes::main::diff_row_height_for_ui_scale(ui_scale_percent)
 }
 
 fn diff_file_header_height(ui_scale_percent: u32) -> Pixels {
-    diff_scaled_px(DIFF_FILE_HEADER_HEIGHT_PX, ui_scale_percent)
+    crate::view::panes::main::diff_file_header_height_for_ui_scale(ui_scale_percent)
 }
 
 fn diff_hunk_header_height(ui_scale_percent: u32) -> Pixels {
-    diff_scaled_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
+    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(ui_scale_percent)
+}
+
+fn collapsed_hunk_shell_width(
+    handle: &gpui::UniformListScrollHandle,
+    fallback_width: Pixels,
+) -> Pixels {
+    let width = handle
+        .0
+        .borrow()
+        .base_handle
+        .bounds()
+        .size
+        .width
+        .max(px(0.0));
+    if width > px(0.0) {
+        width
+    } else {
+        fallback_width.max(px(0.0))
+    }
+}
+
+fn scroll_pinned_hunk_shell(
+    scroll_handle: gpui::UniformListScrollHandle,
+    child: AnyElement,
+) -> ScrollPinnedHunkShell {
+    ScrollPinnedHunkShell {
+        child,
+        scroll_handle,
+    }
+}
+
+fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.text_muted,
+        if theme.is_dark { 0.14 } else { 0.10 },
+    )
+}
+
+fn collapsed_hunk_header_selected_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
+}
+
+fn collapsed_inline_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+    collapsed_hunk_header_bg(theme)
+}
+
+fn collapsed_inline_hunk_fg(theme: AppTheme, hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+    match hunk.map(|hunk| (hunk.has_removals, hunk.has_additions)) {
+        Some((true, false)) => theme.colors.diff_remove_text,
+        Some((false, true)) => theme.colors.diff_add_text,
+        Some((true, true)) => theme.colors.text,
+        Some((false, false)) | None => theme.colors.text_muted,
+    }
+}
+
+fn collapsed_split_hunk_bg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
+    collapsed_hunk_header_bg(theme)
+}
+
+fn collapsed_split_hunk_fg(theme: AppTheme, column: PatchSplitColumn) -> gpui::Rgba {
+    match column {
+        PatchSplitColumn::Left => theme.colors.diff_remove_text,
+        PatchSplitColumn::Right => theme.colors.diff_add_text,
+    }
+}
+
+fn collapsed_hunk_reveal_button(
+    id: impl Into<gpui::ElementId>,
+    debug_selector: &'static str,
+    theme: AppTheme,
+    enabled: bool,
+    icon: &'static str,
+    tooltip: &'static str,
+    icon_color: gpui::Rgba,
+    action: CollapsedHunkRevealAction,
+    src_ix: usize,
+    cx: &mut gpui::Context<MainPaneView>,
+) -> AnyElement {
+    let mut button = div()
+        .id(id)
+        .debug_selector(move || debug_selector.to_string())
+        .w(px(18.0))
+        .h(px(18.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.radii.row));
+
+    if enabled {
+        button = button
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+            .active(move |s| s.bg(theme.colors.active))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                }),
+            )
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                cx.stop_propagation();
+                match action {
+                    CollapsedHunkRevealAction::Up => {
+                        this.collapsed_diff_reveal_hunk_up(src_ix, cx);
+                    }
+                    CollapsedHunkRevealAction::Down => {
+                        this.collapsed_diff_reveal_hunk_down(src_ix, cx);
+                    }
+                    CollapsedHunkRevealAction::DownBefore => {
+                        this.collapsed_diff_reveal_hunk_down_before(src_ix, cx);
+                    }
+                    CollapsedHunkRevealAction::Short => {
+                        this.collapsed_diff_reveal_hunk_short(src_ix, cx);
+                    }
+                }
+            }));
+    }
+
+    button
+        .child(svg_icon(icon, icon_color, px(10.0)))
+        .gitcomet_tooltip(theme, tooltip.into())
+        .into_any_element()
+}
+
+struct ScrollPinnedHunkShell {
+    child: AnyElement,
+    scroll_handle: gpui::UniformListScrollHandle,
+}
+
+impl gpui::IntoElement for ScrollPinnedHunkShell {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for ScrollPinnedHunkShell {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> Self::PrepaintState {
+        let scroll_x = -self.scroll_handle.0.borrow().base_handle.offset().x;
+        self.child.prepaint_at(
+            gpui::point(bounds.origin.x + scroll_x, bounds.origin.y),
+            window,
+            cx,
+        );
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        _bounds: gpui::Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint_state: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        self.child.paint(window, cx);
+    }
 }
 
 /// Returns the word-highlight color for a diff line kind.
@@ -195,10 +410,8 @@ impl MainPaneView {
             let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
             let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
             let syntax_mode = this.patch_diff_syntax_mode();
-            let header_cache_base = this
-                .file_diff_inline_row_len()
-                .max(this.file_diff_split_row_len().saturating_mul(2))
-                .saturating_add(1);
+            let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
+            let pinned_hunk_shell_scroll = this.diff_scroll.clone();
 
             return range
                 .map(|visible_ix| {
@@ -214,29 +427,19 @@ impl MainPaneView {
                     };
 
                     match row {
-                        CollapsedDiffVisibleRow::FileHeader { src_ix }
-                        | CollapsedDiffVisibleRow::HunkHeader { src_ix } => {
-                            let click_kind = match row {
-                                CollapsedDiffVisibleRow::FileHeader { .. } => {
-                                    DiffClickKind::FileHeader
-                                }
-                                CollapsedDiffVisibleRow::HunkHeader { .. } => {
-                                    DiffClickKind::HunkHeader
-                                }
-                                CollapsedDiffVisibleRow::FileRow { .. } => unreachable!(),
-                            };
-                            let display = this
-                                .diff_header_display_cache
-                                .get(&src_ix)
-                                .cloned()
-                                .or_else(|| {
-                                    this.patch_diff_row(src_ix)
-                                        .map(|line| SharedString::from(line.text.as_ref().to_owned()))
+                        CollapsedDiffVisibleRow::HunkHeader { src_ix, .. } => {
+                            let display_src_ix = row.header_display_src_ix();
+                            let expansion_kind = row
+                                .expansion_kind()
+                                .unwrap_or(CollapsedDiffExpansionKind::None);
+                            let display = display_src_ix
+                                .and_then(|display_src_ix| {
+                                    this.collapsed_diff_hunk_header_display(display_src_ix)
                                 })
                                 .unwrap_or_default();
-                            let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
-                            let header_key = header_cache_base.saturating_add(src_ix);
+                            let header_key: Option<usize> = None;
                             if !query.is_empty()
+                                && let Some(header_key) = header_key
                                 && this.diff_text_segments_cache_get(header_key, 0).is_none()
                             {
                                 let computed = build_cached_diff_styled_text(
@@ -250,28 +453,32 @@ impl MainPaneView {
                                 );
                                 this.diff_text_segments_cache_set(header_key, 0, computed);
                             }
-                            let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                            let context_menu_active = display_src_ix.is_some()
                                 && this.active_repo_id().is_some_and(|repo_id| {
                                     let invoker: SharedString =
                                         format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                                 });
-                            let hidden_up = if click_kind == DiffClickKind::HunkHeader {
-                                this.collapsed_diff_hidden_up_rows(src_ix)
-                            } else {
-                                0
+                            let hidden_rows = match expansion_kind {
+                                CollapsedDiffExpansionKind::Down => {
+                                    this.collapsed_diff_hidden_down_rows(src_ix)
+                                }
+                                CollapsedDiffExpansionKind::Up
+                                | CollapsedDiffExpansionKind::Both
+                                | CollapsedDiffExpansionKind::Short => {
+                                    this.collapsed_diff_hidden_up_rows(src_ix)
+                                }
+                                CollapsedDiffExpansionKind::None => 0,
                             };
-                            let hidden_down = if click_kind == DiffClickKind::HunkHeader {
-                                this.collapsed_diff_hidden_down_rows(src_ix)
-                            } else {
-                                0
-                            };
+                            let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
                             let styled = if !query.is_empty() {
-                                this.diff_text_segments_cache_get_for_query(
-                                    header_key,
-                                    query.as_ref(),
-                                    0,
-                                )
+                                header_key.and_then(|header_key| {
+                                    this.diff_text_segments_cache_get_for_query(
+                                        header_key,
+                                        query.as_ref(),
+                                        0,
+                                    )
+                                })
                             } else {
                                 None
                             };
@@ -280,16 +487,19 @@ impl MainPaneView {
                                 theme,
                                 ui_scale_percent,
                                 visible_ix,
-                                click_kind,
+                                DiffClickKind::HunkHeader,
                                 selected,
                                 min_width,
-                                file_stat,
+                                pinned_hunk_shell_width,
+                                pinned_hunk_shell_scroll.clone(),
+                                collapsed_hunk,
+                                None,
                                 display,
                                 styled,
                                 context_menu_active,
                                 src_ix,
-                                hidden_up,
-                                hidden_down,
+                                expansion_kind,
+                                hidden_rows,
                                 cx,
                             )
                         }
@@ -297,7 +507,8 @@ impl MainPaneView {
                             let row_word_ranges = this
                                 .file_diff_inline_modify_pair_texts(row_ix)
                                 .map(|(old, new, kind)| {
-                                    let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                                    let (old_ranges, new_ranges) =
+                                        capped_word_diff_ranges(old.as_ref(), new.as_ref());
                                     match kind {
                                         DiffLineKind::Remove => old_ranges,
                                         DiffLineKind::Add => new_ranges,
@@ -600,7 +811,8 @@ impl MainPaneView {
                     let row_word_ranges = this
                         .file_diff_inline_modify_pair_texts(inline_ix)
                         .map(|(old, new, kind)| {
-                            let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                            let (old_ranges, new_ranges) =
+                                capped_word_diff_ranges(old.as_ref(), new.as_ref());
                             match kind {
                                 DiffLineKind::Remove => old_ranges,
                                 DiffLineKind::Add => new_ranges,
@@ -995,10 +1207,16 @@ impl MainPaneView {
             } else {
                 Arc::clone(&this.file_diff_new_line_starts)
             };
-            let header_cache_base = this
-                .file_diff_inline_row_len()
-                .max(this.file_diff_split_row_len().saturating_mul(2))
-                .saturating_add(1);
+            let pinned_hunk_shell_width = if is_left {
+                collapsed_hunk_shell_width(&this.diff_scroll, min_width)
+            } else {
+                collapsed_hunk_shell_width(&this.diff_split_right_scroll, min_width)
+            };
+            let pinned_hunk_shell_scroll = if is_left {
+                this.diff_scroll.clone()
+            } else {
+                this.diff_split_right_scroll.clone()
+            };
 
             return range
                 .map(|visible_ix| {
@@ -1010,29 +1228,19 @@ impl MainPaneView {
                     };
 
                     match visible_row {
-                        CollapsedDiffVisibleRow::FileHeader { src_ix }
-                        | CollapsedDiffVisibleRow::HunkHeader { src_ix } => {
-                            let click_kind = match visible_row {
-                                CollapsedDiffVisibleRow::FileHeader { .. } => {
-                                    DiffClickKind::FileHeader
-                                }
-                                CollapsedDiffVisibleRow::HunkHeader { .. } => {
-                                    DiffClickKind::HunkHeader
-                                }
-                                CollapsedDiffVisibleRow::FileRow { .. } => unreachable!(),
-                            };
-                            let display = this
-                                .diff_header_display_cache
-                                .get(&src_ix)
-                                .cloned()
-                                .or_else(|| {
-                                    this.patch_diff_row(src_ix)
-                                        .map(|line| SharedString::from(line.text.as_ref().to_owned()))
+                        CollapsedDiffVisibleRow::HunkHeader { src_ix, .. } => {
+                            let display_src_ix = visible_row.header_display_src_ix();
+                            let expansion_kind = visible_row
+                                .expansion_kind()
+                                .unwrap_or(CollapsedDiffExpansionKind::None);
+                            let display = display_src_ix
+                                .and_then(|display_src_ix| {
+                                    this.collapsed_diff_hunk_header_display(display_src_ix)
                                 })
                                 .unwrap_or_default();
-                            let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
-                            let header_key = header_cache_base.saturating_add(src_ix);
+                            let header_key: Option<usize> = None;
                             if !query.is_empty()
+                                && let Some(header_key) = header_key
                                 && this.diff_text_segments_cache_get(header_key, 0).is_none()
                             {
                                 let computed = build_cached_diff_styled_text(
@@ -1046,28 +1254,31 @@ impl MainPaneView {
                                 );
                                 this.diff_text_segments_cache_set(header_key, 0, computed);
                             }
-                            let context_menu_active = click_kind == DiffClickKind::HunkHeader
+                            let context_menu_active = display_src_ix.is_some()
                                 && this.active_repo_id().is_some_and(|repo_id| {
                                     let invoker: SharedString =
                                         format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
                                     this.active_context_menu_invoker.as_ref() == Some(&invoker)
                                 });
-                            let hidden_up = if click_kind == DiffClickKind::HunkHeader {
-                                this.collapsed_diff_hidden_up_rows(src_ix)
-                            } else {
-                                0
-                            };
-                            let hidden_down = if click_kind == DiffClickKind::HunkHeader {
-                                this.collapsed_diff_hidden_down_rows(src_ix)
-                            } else {
-                                0
+                            let hidden_rows = match expansion_kind {
+                                CollapsedDiffExpansionKind::Down => {
+                                    this.collapsed_diff_hidden_down_rows(src_ix)
+                                }
+                                CollapsedDiffExpansionKind::Up
+                                | CollapsedDiffExpansionKind::Both
+                                | CollapsedDiffExpansionKind::Short => {
+                                    this.collapsed_diff_hidden_up_rows(src_ix)
+                                }
+                                CollapsedDiffExpansionKind::None => 0,
                             };
                             let styled = if !query.is_empty() {
-                                this.diff_text_segments_cache_get_for_query(
-                                    header_key,
-                                    query.as_ref(),
-                                    0,
-                                )
+                                header_key.and_then(|header_key| {
+                                    this.diff_text_segments_cache_get_for_query(
+                                        header_key,
+                                        query.as_ref(),
+                                        0,
+                                    )
+                                })
                             } else {
                                 None
                             };
@@ -1077,16 +1288,18 @@ impl MainPaneView {
                                 ui_scale_percent,
                                 column,
                                 visible_ix,
-                                click_kind,
+                                DiffClickKind::HunkHeader,
                                 selected,
                                 min_width,
-                                file_stat,
+                                pinned_hunk_shell_width,
+                                pinned_hunk_shell_scroll.clone(),
+                                None,
                                 display,
                                 styled,
                                 context_menu_active,
                                 src_ix,
-                                hidden_up,
-                                hidden_down,
+                                expansion_kind,
+                                hidden_rows,
                                 cx,
                             )
                         }
@@ -1097,7 +1310,8 @@ impl MainPaneView {
                             let row_word_ranges = this
                                 .file_diff_split_modify_pair_texts(row_ix)
                                 .map(|(old, new)| {
-                                    let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                                    let (old_ranges, new_ranges) =
+                                        capped_word_diff_ranges(old.as_ref(), new.as_ref());
                                     if is_left {
                                         old_ranges
                                     } else {
@@ -1231,7 +1445,8 @@ impl MainPaneView {
                     let row_word_ranges = this
                         .file_diff_split_modify_pair_texts(row_ix)
                         .map(|(old, new)| {
-                            let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
+                            let (old_ranges, new_ranges) =
+                                capped_word_diff_ranges(old.as_ref(), new.as_ref());
                             if is_left {
                                 old_ranges
                             } else {
@@ -1735,13 +1950,16 @@ fn collapsed_inline_header_row(
     click_kind: DiffClickKind,
     selected: bool,
     min_width: Pixels,
+    pinned_hunk_shell_width: Pixels,
+    pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
+    collapsed_hunk: Option<CollapsedDiffHunk>,
     file_stat: Option<(usize, usize)>,
     display: SharedString,
     styled: Option<&CachedDiffStyledText>,
     context_menu_active: bool,
     src_ix: usize,
-    hidden_up: usize,
-    hidden_down: usize,
+    expansion_kind: CollapsedDiffExpansionKind,
+    hidden_rows: usize,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     match click_kind {
@@ -1784,6 +2002,9 @@ fn collapsed_inline_header_row(
             row.into_any_element()
         }
         DiffClickKind::HunkHeader => {
+            let gutter_w = diff_canvas::diff_inline_text_start(ui_scale_percent);
+            let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
+            let text_color = collapsed_inline_hunk_fg(theme, collapsed_hunk);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if this.is_inline_submodule_diff_active() {
@@ -1802,126 +2023,154 @@ fn collapsed_inline_header_row(
                     cx,
                 );
             });
-            let up_color = if hidden_up > 0 {
-                theme.colors.text_muted
+            let button_color = if hidden_rows > 0 {
+                text_color
             } else {
-                with_alpha(theme.colors.text_muted, 0.45)
+                with_alpha(text_color, 0.45)
             };
-            let down_color = if hidden_down > 0 {
-                theme.colors.text_muted
-            } else {
-                with_alpha(theme.colors.text_muted, 0.45)
+            let controls = match expansion_kind {
+                CollapsedDiffExpansionKind::Up => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_up", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_UP_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealAction::Up,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Down => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_down", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_DOWN_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealAction::Down,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Both => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_down", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_DOWN_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealAction::DownBefore,
+                        src_ix,
+                        cx,
+                    ))
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_up", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_UP_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealAction::Up,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Short => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_short", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_SHORT_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/plus.svg",
+                        "Show hidden lines",
+                        button_color,
+                        CollapsedHunkRevealAction::Short,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::None => div().into_any_element(),
             };
 
             let mut row = div()
                 .id(("collapsed_diff_hunk_hdr", visible_ix))
+                .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
                 .h(diff_hunk_header_height(ui_scale_percent))
-                .w_full()
-                .min_w(min_width)
+                .w(pinned_hunk_shell_width)
+                .min_w(px(0.0))
+                .relative()
+                .overflow_hidden()
                 .flex()
                 .items_center()
-                .gap_1()
-                .px_2()
-                .bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.10 } else { 0.07 },
-                ))
-                .border_b_1()
-                .border_color(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.28 } else { 0.22 },
-                ))
+                .bg(collapsed_inline_hunk_bg(theme, collapsed_hunk))
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(text_color);
+            row = row
+                .child(
+                    div()
+                        .debug_selector(|| {
+                            COLLAPSED_DIFF_INLINE_HUNK_GUTTER_DEBUG_SELECTOR.to_string()
+                        })
+                        .w(gutter_w)
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(controls),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
+                        .pr(trailing_pad)
+                        .overflow_hidden()
                         .child(selectable_cached_diff_text(
                             visible_ix,
                             DiffTextRegion::Inline,
                             DiffClickKind::HunkHeader,
-                            theme.colors.text_muted,
+                            text_color,
                             styled,
                             display,
                             cx,
                         )),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .id(("collapsed_diff_hunk_up", visible_ix))
-                                .w(px(18.0))
-                                .h(px(18.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(theme.radii.row))
-                                .when(hidden_up > 0, |this| {
-                                    this.cursor(CursorStyle::PointingHand)
-                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-                                        .active(move |s| s.bg(theme.colors.active))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                                this.collapsed_diff_reveal_hunk_up(src_ix, cx);
-                                            },
-                                        ))
-                                })
-                                .child(svg_icon("icons/arrow_up.svg", up_color, px(10.0))),
-                        )
-                        .child(
-                            div()
-                                .id(("collapsed_diff_hunk_down", visible_ix))
-                                .w(px(18.0))
-                                .h(px(18.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(theme.radii.row))
-                                .when(hidden_down > 0, |this| {
-                                    this.cursor(CursorStyle::PointingHand)
-                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-                                        .active(move |s| s.bg(theme.colors.active))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                                this.collapsed_diff_reveal_hunk_down(src_ix, cx);
-                                            },
-                                        ))
-                                })
-                                .child(svg_icon("icons/arrow_down.svg", down_color, px(10.0))),
-                        ),
-                )
                 .on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.14 } else { 0.10 },
-                ));
+                row = row.bg(collapsed_hunk_header_selected_bg(theme));
             }
             if context_menu_active {
                 row = row.bg(theme.colors.active);
             }
 
-            row.into_any_element()
+            div()
+                .h(diff_hunk_header_height(ui_scale_percent))
+                .min_w(min_width)
+                .child(scroll_pinned_hunk_shell(
+                    pinned_hunk_shell_scroll,
+                    row.into_any_element(),
+                ))
+                .into_any_element()
         }
         DiffClickKind::Line => diff_placeholder_row(
             ("collapsed_diff_invalid", visible_ix),
@@ -2162,13 +2411,15 @@ fn collapsed_split_header_row(
     click_kind: DiffClickKind,
     selected: bool,
     min_width: Pixels,
+    pinned_hunk_shell_width: Pixels,
+    pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
     file_stat: Option<(usize, usize)>,
     display: SharedString,
     styled: Option<&CachedDiffStyledText>,
     context_menu_active: bool,
     src_ix: usize,
-    hidden_up: usize,
-    hidden_down: usize,
+    expansion_kind: CollapsedDiffExpansionKind,
+    hidden_rows: usize,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let region = match column {
@@ -2222,6 +2473,43 @@ fn collapsed_split_header_row(
             row.into_any_element()
         }
         DiffClickKind::HunkHeader => {
+            let gutter_w = diff_canvas::diff_single_column_text_start(ui_scale_percent);
+            let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
+            let text_color = collapsed_split_hunk_fg(theme, column);
+            let (
+                row_id,
+                shell_debug_selector,
+                gutter_debug_selector,
+                up_id,
+                up_debug_selector,
+                down_id,
+                down_debug_selector,
+                short_id,
+                short_debug_selector,
+            ) = match column {
+                PatchSplitColumn::Left => (
+                    "collapsed_diff_split_left_hunk_hdr",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHELL_DEBUG_SELECTOR,
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_GUTTER_DEBUG_SELECTOR,
+                    "collapsed_diff_split_left_hunk_up",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_UP_DEBUG_SELECTOR,
+                    "collapsed_diff_split_left_hunk_down",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_DOWN_DEBUG_SELECTOR,
+                    "collapsed_diff_split_left_hunk_short",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHORT_DEBUG_SELECTOR,
+                ),
+                PatchSplitColumn::Right => (
+                    "collapsed_diff_split_right_hunk_hdr",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHELL_DEBUG_SELECTOR,
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_GUTTER_DEBUG_SELECTOR,
+                    "collapsed_diff_split_right_hunk_up",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_UP_DEBUG_SELECTOR,
+                    "collapsed_diff_split_right_hunk_down",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_DOWN_DEBUG_SELECTOR,
+                    "collapsed_diff_split_right_hunk_short",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHORT_DEBUG_SELECTOR,
+                ),
+            };
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
                 if this.is_inline_submodule_diff_active() {
@@ -2240,152 +2528,151 @@ fn collapsed_split_header_row(
                     cx,
                 );
             });
-            let up_color = if hidden_up > 0 {
-                theme.colors.text_muted
+            let button_color = if hidden_rows > 0 {
+                text_color
             } else {
-                with_alpha(theme.colors.text_muted, 0.45)
+                with_alpha(text_color, 0.45)
             };
-            let down_color = if hidden_down > 0 {
-                theme.colors.text_muted
-            } else {
-                with_alpha(theme.colors.text_muted, 0.45)
+            let controls = match expansion_kind {
+                CollapsedDiffExpansionKind::Up => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (up_id, visible_ix),
+                        up_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealAction::Up,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Down => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (down_id, visible_ix),
+                        down_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealAction::Down,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Both => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (down_id, visible_ix),
+                        down_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealAction::DownBefore,
+                        src_ix,
+                        cx,
+                    ))
+                    .child(collapsed_hunk_reveal_button(
+                        (up_id, visible_ix),
+                        up_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealAction::Up,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Short => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (short_id, visible_ix),
+                        short_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/plus.svg",
+                        "Show hidden lines",
+                        button_color,
+                        CollapsedHunkRevealAction::Short,
+                        src_ix,
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::None => div().into_any_element(),
             };
 
             let mut row = div()
-                .id((
-                    match column {
-                        PatchSplitColumn::Left => "collapsed_diff_split_left_hunk_hdr",
-                        PatchSplitColumn::Right => "collapsed_diff_split_right_hunk_hdr",
-                    },
-                    visible_ix,
-                ))
+                .id((row_id, visible_ix))
+                .debug_selector(move || shell_debug_selector.to_string())
                 .h(diff_hunk_header_height(ui_scale_percent))
-                .w_full()
-                .min_w(min_width)
+                .w(pinned_hunk_shell_width)
+                .min_w(px(0.0))
+                .relative()
+                .overflow_hidden()
                 .flex()
                 .items_center()
-                .gap_1()
-                .px_2()
-                .bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.10 } else { 0.07 },
-                ))
-                .border_b_1()
-                .border_color(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.28 } else { 0.22 },
-                ))
+                .bg(collapsed_split_hunk_bg(theme, column))
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(text_color)
+                .child(
+                    div()
+                        .debug_selector(move || gutter_debug_selector.to_string())
+                        .w(gutter_w)
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(controls),
+                )
                 .child(
                     div()
                         .flex_1()
                         .min_w(px(0.0))
+                        .pr(trailing_pad)
+                        .overflow_hidden()
                         .child(selectable_cached_diff_text(
                             visible_ix,
                             region,
                             DiffClickKind::HunkHeader,
-                            theme.colors.text_muted,
+                            text_color,
                             styled,
                             display,
                             cx,
                         )),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_0p5()
-                        .child(
-                            div()
-                                .id((
-                                    match column {
-                                        PatchSplitColumn::Left => {
-                                            "collapsed_diff_split_left_hunk_up"
-                                        }
-                                        PatchSplitColumn::Right => {
-                                            "collapsed_diff_split_right_hunk_up"
-                                        }
-                                    },
-                                    visible_ix,
-                                ))
-                                .w(px(18.0))
-                                .h(px(18.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(theme.radii.row))
-                                .when(hidden_up > 0, |this| {
-                                    this.cursor(CursorStyle::PointingHand)
-                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-                                        .active(move |s| s.bg(theme.colors.active))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                                this.collapsed_diff_reveal_hunk_up(src_ix, cx);
-                                            },
-                                        ))
-                                })
-                                .child(svg_icon("icons/arrow_up.svg", up_color, px(10.0))),
-                        )
-                        .child(
-                            div()
-                                .id((
-                                    match column {
-                                        PatchSplitColumn::Left => {
-                                            "collapsed_diff_split_left_hunk_down"
-                                        }
-                                        PatchSplitColumn::Right => {
-                                            "collapsed_diff_split_right_hunk_down"
-                                        }
-                                    },
-                                    visible_ix,
-                                ))
-                                .w(px(18.0))
-                                .h(px(18.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(theme.radii.row))
-                                .when(hidden_down > 0, |this| {
-                                    this.cursor(CursorStyle::PointingHand)
-                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-                                        .active(move |s| s.bg(theme.colors.active))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                            }),
-                                        )
-                                        .on_click(cx.listener(
-                                            move |this, _e: &ClickEvent, _w, cx| {
-                                                cx.stop_propagation();
-                                                this.collapsed_diff_reveal_hunk_down(src_ix, cx);
-                                            },
-                                        ))
-                                })
-                                .child(svg_icon("icons/arrow_down.svg", down_color, px(10.0))),
-                        ),
-                )
                 .on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.14 } else { 0.10 },
-                ));
+                row = row.bg(collapsed_hunk_header_selected_bg(theme));
             }
             if context_menu_active {
                 row = row.bg(theme.colors.active);
             }
 
-            row.into_any_element()
+            div()
+                .h(diff_hunk_header_height(ui_scale_percent))
+                .min_w(min_width)
+                .child(scroll_pinned_hunk_shell(
+                    pinned_hunk_shell_scroll,
+                    row.into_any_element(),
+                ))
+                .into_any_element()
         }
         DiffClickKind::Line => diff_placeholder_row(
             (
@@ -2459,4 +2746,52 @@ fn patch_split_meta_row(
     }
 
     row.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collapsed_hunk(has_removals: bool, has_additions: bool) -> CollapsedDiffHunk {
+        CollapsedDiffHunk {
+            src_ix: 0,
+            base_row_start: 0,
+            base_row_end_exclusive: 1,
+            has_additions,
+            has_removals,
+            reveal_up_lines: 0,
+            reveal_down_lines: 0,
+        }
+    }
+
+    #[test]
+    fn collapsed_hunk_header_backgrounds_stay_neutral() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let neutral = collapsed_hunk_header_bg(theme);
+
+            assert_eq!(
+                collapsed_inline_hunk_bg(theme, Some(collapsed_hunk(true, false))),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(theme, Some(collapsed_hunk(false, true))),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(theme, Some(collapsed_hunk(true, true))),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(theme, PatchSplitColumn::Left),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(theme, PatchSplitColumn::Right),
+                neutral
+            );
+
+            assert_ne!(neutral, theme.colors.diff_remove_bg);
+            assert_ne!(neutral, theme.colors.diff_add_bg);
+        }
+    }
 }

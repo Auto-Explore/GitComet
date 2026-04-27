@@ -401,15 +401,18 @@ impl MainPaneView {
 
     pub(in crate::view) fn patch_hunk_entries(&self) -> Vec<(usize, usize)> {
         if self.is_collapsed_diff_projection_active() {
+            debug_assert_eq!(
+                self.collapsed_diff_hunk_visible_indices.len(),
+                self.collapsed_diff_hunks.len()
+            );
             return self
                 .collapsed_diff_hunk_visible_indices
                 .iter()
-                .filter_map(|&visible_ix| {
-                    self.collapsed_visible_row(visible_ix).and_then(|row| {
-                        row.src_ix()
-                            .filter(|_| matches!(row, CollapsedDiffVisibleRow::HunkHeader { .. }))
-                            .map(|src_ix| (visible_ix, src_ix))
-                    })
+                .enumerate()
+                .filter_map(|(hunk_ix, &visible_ix)| {
+                    self.collapsed_diff_hunks
+                        .get(hunk_ix)
+                        .map(|hunk| (visible_ix, hunk.src_ix))
                 })
                 .collect();
         }

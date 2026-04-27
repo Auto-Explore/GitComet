@@ -3241,6 +3241,24 @@ impl MainPaneView {
                                                 main_w,
                                                 self.diff_split_ratio,
                                             );
+                                            let collapsed_file_stat = self
+                                                .is_collapsed_diff_projection_active()
+                                                .then(|| self.collapsed_diff_total_file_stat())
+                                                .flatten();
+                                            let left_header = Self::split_column_header_label(
+                                                theme,
+                                                "A (local / before)",
+                                                collapsed_file_stat.map(|(_, removed)| removed),
+                                                '-',
+                                                theme.colors.diff_remove_text,
+                                            );
+                                            let right_header = Self::split_column_header_label(
+                                                theme,
+                                                "B (remote / after)",
+                                                collapsed_file_stat.map(|(added, _)| added),
+                                                '+',
+                                                theme.colors.diff_add_text,
+                                            );
 
                                             let resize_handle = |id: &'static str| {
                                                 div()
@@ -3372,7 +3390,7 @@ impl MainPaneView {
                                                         .px_2()
                                                         .overflow_hidden()
                                                         .whitespace_nowrap()
-                                                        .child("A (local / before)"),
+                                                        .child(left_header),
                                                 )
                                                 .child(resize_handle(
                                                     "diff_split_resize_handle_header",
@@ -3384,7 +3402,7 @@ impl MainPaneView {
                                                         .px_2()
                                                         .overflow_hidden()
                                                         .whitespace_nowrap()
-                                                        .child("B (remote / after)"),
+                                                        .child(right_header),
                                                 );
 
                                             div()

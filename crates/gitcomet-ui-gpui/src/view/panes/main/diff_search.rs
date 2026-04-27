@@ -669,7 +669,12 @@ impl MainPaneView {
         let Some((left, right)) = provider.split_row_texts(mapped_ix) else {
             return false;
         };
-        diff_search_split_row_texts_match_query(query, left, right, expanded_tabs)
+        diff_search_split_row_texts_match_query(
+            query,
+            left.as_ref().map(|text| text.as_ref()),
+            right.as_ref().map(|text| text.as_ref()),
+            expanded_tabs,
+        )
     }
 
     fn diff_search_file_diff_inline_visible_row_matches_query(

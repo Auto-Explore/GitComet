@@ -277,8 +277,10 @@ impl SidebarPaneView {
         );
         let context_menu_indicator =
             |id: SharedString, row_group: SharedString, visible: bool, menu_active: bool| {
+                let debug_id = id.clone();
                 div()
                     .id(id)
+                    .debug_selector(move || debug_id.as_ref().to_owned())
                     .absolute()
                     .right(scaled_px(CONTEXT_MENU_INDICATOR_RIGHT_PX))
                     .top_0()
@@ -1529,7 +1531,7 @@ impl SidebarPaneView {
                     let has_worktree = workspace_badge_path.is_some();
                     let has_active_workspace = active_workspace_path.is_some();
                     let show_workspace_badge = has_worktree;
-                    let show_branch_context_menu_indicator = !has_worktree;
+                    let show_branch_context_menu_indicator = true;
                     let workspace_row_menu_invoker: Option<SharedString> =
                         workspace_badge_path.as_ref().map(|path| {
                             format!("worktree_menu_{}_{}", repo_id.0, path.display()).into()
@@ -1540,7 +1542,7 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let full_name_for_indicator: SharedString = name.clone();
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
-                    let branch_has_right_metadata = has_active_workspace
+                    let branch_has_right_metadata = show_workspace_badge
                         || (is_upstream
                         && section == BranchSection::Remote)
                         || divergence_behind.is_some()

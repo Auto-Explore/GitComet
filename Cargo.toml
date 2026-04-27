@@ -43,9 +43,9 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
-gix = { version = "0.81.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-# Load gpui-ce directly from GitHub at commit 1679dc543d880e6562d84afe316a1b192a064b08.
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1679dc543d880e6562d84afe316a1b192a064b08" }
+gix = { version = "0.82.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+# Load gpui-ce directly from GitHub at commit 56ba3905bf59c970194f4bd4d3fad7a8969d8ec2.
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "56ba3905bf59c970194f4bd4d3fad7a8969d8ec2" }
 image = "0.25.10"
 lru = "0.17"
 memchr = "2.8.0"
@@ -75,7 +75,7 @@ tree-sitter-c = "0.24.2"
 tree-sitter-c-sharp = "0.23.5"
 tree-sitter-cpp = "0.23.4"
 tree-sitter-css = "0.25.0"
-tree-sitter-dart = "0.1.0"
+tree-sitter-dart = "0.2.0"
 tree-sitter-diff = "0.1.0"
 tree-sitter-fsharp = "0.3.0"
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
