@@ -145,33 +145,24 @@ impl TruncatedText {
             .child(element);
 
         match (root_id, tooltip_host, truncated) {
-            (Some(root_id), Some(tooltip_host), Some(truncated)) => {
-                root
-                    .id(root_id)
-                    .on_hover(cx.listener(move |_this, hovering: &bool, _window, cx| {
-                        if *hovering {
-                            if truncated.get() {
-                                let _ = tooltip_host.update(cx, |host, cx| {
-                                    host.set_tooltip_text_if_changed(
-                                        Some(tooltip_text.clone()),
-                                        cx,
-                                    );
-                                });
-                            }
-                        } else {
+            (Some(root_id), Some(tooltip_host), Some(truncated)) => root
+                .id(root_id)
+                .on_hover(cx.listener(move |_this, hovering: &bool, _window, cx| {
+                    if *hovering {
+                        if truncated.get() {
                             let _ = tooltip_host.update(cx, |host, cx| {
-                                host.clear_tooltip_if_matches(&tooltip_text, cx);
+                                host.set_tooltip_text_if_changed(Some(tooltip_text.clone()), cx);
                             });
                         }
-                    }))
-                    .into_any_element()
-            }
-            (Some(root_id), _, _) => {
-                root.id(root_id).into_any_element()
-            }
-            _ => {
-                root.into_any_element()
-            }
+                    } else {
+                        let _ = tooltip_host.update(cx, |host, cx| {
+                            host.clear_tooltip_if_matches(&tooltip_text, cx);
+                        });
+                    }
+                }))
+                .into_any_element(),
+            (Some(root_id), _, _) => root.id(root_id).into_any_element(),
+            _ => root.into_any_element(),
         }
     }
 }

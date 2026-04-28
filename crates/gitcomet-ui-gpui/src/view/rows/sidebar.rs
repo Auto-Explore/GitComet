@@ -931,18 +931,20 @@ impl SidebarPaneView {
                                                 .whitespace_nowrap();
                                             prefix.style().flex_shrink = Some(1.0);
                                             label
-                                                .child(prefix.child(
-                                                    components::TruncatedText::new(branch)
-                                                        .id(("worktree_branch_text", ix))
-                                                        .full_text_tooltip(tooltip_host)
-                                                        .render(cx),
-                                                ))
-                                            .child(
-                                                div()
-                                                    .flex_shrink_0()
-                                                    .whitespace_nowrap()
-                                                    .child("  "),
-                                            )
+                                                .child(
+                                                    prefix.child(
+                                                        components::TruncatedText::new(branch)
+                                                            .id(("worktree_branch_text", ix))
+                                                            .full_text_tooltip(tooltip_host)
+                                                            .render(cx),
+                                                    ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .whitespace_nowrap()
+                                                        .child("  "),
+                                                )
                                         })
                                         .when(branch.is_none() && detached, |label| {
                                             let tooltip_host = detached_tooltip_host.clone();
@@ -955,31 +957,30 @@ impl SidebarPaneView {
                                                 .whitespace_nowrap();
                                             prefix.style().flex_shrink = Some(1.0);
                                             label
-                                                .child(prefix.child(
-                                                    components::TruncatedText::new("(detached)")
+                                                .child(
+                                                    prefix.child(
+                                                        components::TruncatedText::new(
+                                                            "(detached)",
+                                                        )
                                                         .id(("worktree_branch_text", ix))
                                                         .full_text_tooltip(tooltip_host)
                                                         .render(cx),
-                                                ))
-                                            .child(
-                                                div()
-                                                    .flex_shrink_0()
-                                                    .whitespace_nowrap()
-                                                    .child("  "),
-                                            )
+                                                    ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .whitespace_nowrap()
+                                                        .child("  "),
+                                                )
                                         })
                                         .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w(px(0.0))
-                                                .child(
-                                                    components::TruncatedText::path(
-                                                        path_label.clone(),
-                                                    )
+                                            div().flex_1().min_w(px(0.0)).child(
+                                                components::TruncatedText::path(path_label.clone())
                                                     .id(("worktree_path_text", ix))
                                                     .full_text_tooltip(this.tooltip_host.clone())
                                                     .render(cx),
-                                                ),
+                                            ),
                                         ),
                                 ),
                         )
