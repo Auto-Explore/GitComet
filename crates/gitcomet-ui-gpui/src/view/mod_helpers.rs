@@ -550,16 +550,33 @@ pub(super) struct ToastState {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ToastAction {
-    OpenUrl { url: String, label: String },
-    OpenUserSurvey { url: String, label: String },
-    PostponeUserSurvey { label: String },
+    OpenUrl {
+        url: String,
+        label: String,
+    },
+    OpenSurvey {
+        survey_id: String,
+        survey_name: String,
+        url: String,
+        label: String,
+    },
+    PostponeSurvey {
+        survey_id: String,
+        survey_name: String,
+        postpone_seconds: u64,
+        label: String,
+    },
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(super) enum ToastDismissBehavior {
     #[default]
     Remove,
-    PostponeUserSurvey,
+    PostponeSurvey {
+        survey_id: String,
+        survey_name: String,
+        postpone_seconds: u64,
+    },
 }
 
 #[derive(Clone, Debug)]

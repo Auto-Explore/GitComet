@@ -146,11 +146,12 @@ struct UiSessionFile {
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
-    user_survey_prompt: Option<UserSurveyPromptSession>,
+    survey_prompt: Option<SurveyPromptSession>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-struct UserSurveyPromptSession {
+struct SurveyPromptSession {
+    survey_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     opened_at_unix_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,7 +166,6 @@ const MAX_RECENT_REPOS: usize = 15;
 const DEFAULT_UI_SCALE_PERCENT: u32 = 100;
 const MIN_UI_SCALE_PERCENT: u32 = 80;
 const MAX_UI_SCALE_PERCENT: u32 = 200;
-const USER_SURVEY_PROMPT_POSTPONE_SECONDS: u64 = 60 * 60 * 24 * 7;
 #[cfg(unix)]
 const SESSION_PATH_BYTES_PREFIX: &str = "gitcomet-path-bytes:";
 #[cfg(windows)]
@@ -861,15 +861,16 @@ pub fn persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
     persist_to_path(session_file_path, &file)
 }
 
-pub fn should_show_user_survey_prompt() -> bool {
+pub fn should_show_survey_prompt(survey_id: &str) -> bool {
     let Some(session_file_path) = default_session_file_path() else {
         return false;
     };
-    should_show_user_survey_prompt_from_path(&session_file_path, current_unix_seconds())
+    should_show_survey_prompt_from_path(&session_file_path, survey_id, current_unix_seconds())
 }
 
-pub fn should_show_user_survey_prompt_from_path(
+pub fn should_show_survey_prompt_from_path(
     session_file_path: &Path,
+    survey_id: &str,
     now_unix_seconds: u64,
 ) -> bool {
     let Some(file) = load_file(session_file_path) else {
@@ -879,9 +880,12 @@ pub fn should_show_user_survey_prompt_from_path(
         return false;
     }
 
-    let Some(prompt) = file.user_survey_prompt else {
+    let Some(prompt) = file.survey_prompt else {
         return true;
     };
+    if prompt.survey_id != survey_id {
+        return true;
+    }
     if prompt.opened_at_unix_seconds.is_some() {
         return false;
     }
@@ -891,20 +895,22 @@ pub fn should_show_user_survey_prompt_from_path(
         .is_none_or(|postponed_until| postponed_until <= now_unix_seconds)
 }
 
-pub fn persist_user_survey_prompt_opened() -> io::Result<()> {
+pub fn persist_survey_prompt_opened(survey_id: &str) -> io::Result<()> {
     let Some(session_file_path) = default_session_file_path() else {
         return Ok(());
     };
-    persist_user_survey_prompt_opened_to_path(&session_file_path, current_unix_seconds())
+    persist_survey_prompt_opened_to_path(&session_file_path, survey_id, current_unix_seconds())
 }
 
-pub fn persist_user_survey_prompt_opened_to_path(
+pub fn persist_survey_prompt_opened_to_path(
     session_file_path: &Path,
+    survey_id: &str,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
     let mut file = load_file(session_file_path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
-    file.user_survey_prompt = Some(UserSurveyPromptSession {
+    file.survey_prompt = Some(SurveyPromptSession {
+        survey_id: survey_id.to_string(),
         opened_at_unix_seconds: Some(now_unix_seconds),
         postponed_until_unix_seconds: None,
     });
@@ -912,24 +918,30 @@ pub fn persist_user_survey_prompt_opened_to_path(
     persist_to_path(session_file_path, &file)
 }
 
-pub fn persist_user_survey_prompt_postponed() -> io::Result<()> {
+pub fn persist_survey_prompt_postponed(survey_id: &str, postpone_seconds: u64) -> io::Result<()> {
     let Some(session_file_path) = default_session_file_path() else {
         return Ok(());
     };
-    persist_user_survey_prompt_postponed_to_path(&session_file_path, current_unix_seconds())
+    persist_survey_prompt_postponed_to_path(
+        &session_file_path,
+        survey_id,
+        postpone_seconds,
+        current_unix_seconds(),
+    )
 }
 
-pub fn persist_user_survey_prompt_postponed_to_path(
+pub fn persist_survey_prompt_postponed_to_path(
     session_file_path: &Path,
+    survey_id: &str,
+    postpone_seconds: u64,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
     let mut file = load_file(session_file_path).unwrap_or_default();
     file.version = CURRENT_SESSION_FILE_VERSION;
-    file.user_survey_prompt = Some(UserSurveyPromptSession {
+    file.survey_prompt = Some(SurveyPromptSession {
+        survey_id: survey_id.to_string(),
         opened_at_unix_seconds: None,
-        postponed_until_unix_seconds: Some(
-            now_unix_seconds.saturating_add(USER_SURVEY_PROMPT_POSTPONE_SECONDS),
-        ),
+        postponed_until_unix_seconds: Some(now_unix_seconds.saturating_add(postpone_seconds)),
     });
 
     persist_to_path(session_file_path, &file)
@@ -1655,24 +1667,28 @@ mod tests {
     }
 
     #[test]
-    fn user_survey_prompt_requires_meaningful_session_data() {
-        let dir = unique_session_test_dir("user-survey-empty-session");
+    fn survey_prompt_requires_meaningful_session_data() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        let dir = unique_session_test_dir("survey-empty-session");
         let session_file = dir.join("session.json");
 
-        assert!(!should_show_user_survey_prompt_from_path(
+        assert!(!should_show_survey_prompt_from_path(
             &session_file,
+            SURVEY_ID,
             100
         ));
 
         fs::write(&session_file, b"{not-json").expect("write malformed session");
-        assert!(!should_show_user_survey_prompt_from_path(
+        assert!(!should_show_survey_prompt_from_path(
             &session_file,
+            SURVEY_ID,
             100
         ));
 
         fs::write(&session_file, br#"{"version":3}"#).expect("write version-only session");
-        assert!(!should_show_user_survey_prompt_from_path(
+        assert!(!should_show_survey_prompt_from_path(
             &session_file,
+            SURVEY_ID,
             100
         ));
 
@@ -1680,7 +1696,8 @@ mod tests {
             &session_file,
             &UiSessionFile {
                 version: CURRENT_SESSION_FILE_VERSION,
-                user_survey_prompt: Some(UserSurveyPromptSession {
+                survey_prompt: Some(SurveyPromptSession {
+                    survey_id: SURVEY_ID.to_string(),
                     opened_at_unix_seconds: None,
                     postponed_until_unix_seconds: Some(50),
                 }),
@@ -1688,15 +1705,19 @@ mod tests {
             },
         )
         .expect("persist survey-only session");
-        assert!(!should_show_user_survey_prompt_from_path(
+        assert!(!should_show_survey_prompt_from_path(
             &session_file,
+            SURVEY_ID,
             100
         ));
     }
 
     #[test]
-    fn user_survey_prompt_respects_opened_and_postponed_state() {
-        let dir = unique_session_test_dir("user-survey-prompt-state");
+    fn survey_prompt_respects_id_opened_and_postponed_state() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        const NEXT_SURVEY_ID: &str = "gitcomet_user_survey_2026_05";
+        const POSTPONE_SECONDS: u64 = 60 * 60 * 24 * 7;
+        let dir = unique_session_test_dir("survey-prompt-state");
         let session_file = dir.join("session.json");
 
         persist_to_path(
@@ -1708,58 +1729,88 @@ mod tests {
             },
         )
         .expect("persist eligible session");
-        assert!(should_show_user_survey_prompt_from_path(&session_file, 100));
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            SURVEY_ID,
+            100
+        ));
 
-        persist_user_survey_prompt_postponed_to_path(&session_file, 100)
+        persist_survey_prompt_postponed_to_path(&session_file, SURVEY_ID, POSTPONE_SECONDS, 100)
             .expect("persist postponed survey");
         let postponed_json: serde_json::Value =
             serde_json::from_slice(&fs::read(&session_file).expect("read postponed session"))
                 .expect("postponed session json parses");
         assert_eq!(
             postponed_json
-                .pointer("/user_survey_prompt/postponed_until_unix_seconds")
+                .pointer("/survey_prompt/survey_id")
+                .and_then(|value| value.as_str()),
+            Some(SURVEY_ID)
+        );
+        assert_eq!(
+            postponed_json
+                .pointer("/survey_prompt/postponed_until_unix_seconds")
                 .and_then(|value| value.as_u64()),
-            Some(100 + USER_SURVEY_PROMPT_POSTPONE_SECONDS)
+            Some(100 + POSTPONE_SECONDS)
         );
         assert!(
             postponed_json
-                .pointer("/user_survey_prompt/opened_at_unix_seconds")
+                .pointer("/survey_prompt/opened_at_unix_seconds")
                 .is_none()
         );
-        assert!(!should_show_user_survey_prompt_from_path(
+        assert!(!should_show_survey_prompt_from_path(
             &session_file,
-            100 + USER_SURVEY_PROMPT_POSTPONE_SECONDS - 1
+            SURVEY_ID,
+            100 + POSTPONE_SECONDS - 1
         ));
-        assert!(should_show_user_survey_prompt_from_path(
+        assert!(should_show_survey_prompt_from_path(
             &session_file,
-            100 + USER_SURVEY_PROMPT_POSTPONE_SECONDS
+            SURVEY_ID,
+            100 + POSTPONE_SECONDS
+        ));
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            NEXT_SURVEY_ID,
+            100
         ));
 
-        persist_user_survey_prompt_opened_to_path(&session_file, 200)
+        persist_survey_prompt_opened_to_path(&session_file, SURVEY_ID, 200)
             .expect("persist opened survey");
         let opened_json: serde_json::Value =
             serde_json::from_slice(&fs::read(&session_file).expect("read opened session"))
                 .expect("opened session json parses");
         assert_eq!(
             opened_json
-                .pointer("/user_survey_prompt/opened_at_unix_seconds")
+                .pointer("/survey_prompt/survey_id")
+                .and_then(|value| value.as_str()),
+            Some(SURVEY_ID)
+        );
+        assert_eq!(
+            opened_json
+                .pointer("/survey_prompt/opened_at_unix_seconds")
                 .and_then(|value| value.as_u64()),
             Some(200)
         );
         assert!(
             opened_json
-                .pointer("/user_survey_prompt/postponed_until_unix_seconds")
+                .pointer("/survey_prompt/postponed_until_unix_seconds")
                 .is_none()
         );
-        assert!(!should_show_user_survey_prompt_from_path(
+        assert!(!should_show_survey_prompt_from_path(
             &session_file,
+            SURVEY_ID,
+            300
+        ));
+        assert!(should_show_survey_prompt_from_path(
+            &session_file,
+            NEXT_SURVEY_ID,
             300
         ));
     }
 
     #[test]
-    fn user_survey_prompt_persistence_preserves_existing_session_fields() {
-        let dir = unique_session_test_dir("user-survey-preserves-session");
+    fn survey_prompt_persistence_preserves_existing_session_fields() {
+        const SURVEY_ID: &str = "gitcomet_user_survey_2026_04";
+        let dir = unique_session_test_dir("survey-preserves-session");
         let session_file = dir.join("session.json");
         let repo = dir.join("repo");
 
@@ -1780,7 +1831,7 @@ mod tests {
         )
         .expect("seed session file");
 
-        persist_user_survey_prompt_opened_to_path(&session_file, 123)
+        persist_survey_prompt_opened_to_path(&session_file, SURVEY_ID, 123)
             .expect("persist survey opened");
 
         let file = load_file(&session_file).expect("load session file");
@@ -1797,8 +1848,9 @@ mod tests {
             Some(&HistoryScopeSetting::AllBranches)
         );
         assert_eq!(
-            file.user_survey_prompt,
-            Some(UserSurveyPromptSession {
+            file.survey_prompt,
+            Some(SurveyPromptSession {
+                survey_id: SURVEY_ID.to_string(),
                 opened_at_unix_seconds: Some(123),
                 postponed_until_unix_seconds: None,
             })
