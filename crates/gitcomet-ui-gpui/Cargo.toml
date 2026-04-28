@@ -129,6 +129,7 @@ url = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }
+x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.33"

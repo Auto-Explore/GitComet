@@ -109,6 +109,7 @@ unicode-segmentation = "1.13.2"
 url = "2.5.8"
 windows = "0.62.2"
 wayland-client = "0.31.14"
+x11-clipboard = "0.9.3"
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
 
 [workspace.lints.rust]

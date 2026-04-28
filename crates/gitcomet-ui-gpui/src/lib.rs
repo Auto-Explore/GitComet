@@ -1,6 +1,7 @@
 mod app;
 mod assets;
 mod bundled_fonts;
+mod clipboard;
 pub mod focused_diff;
 mod font_preferences;
 mod kit;

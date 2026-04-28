@@ -895,7 +895,7 @@ impl MainPaneView {
         let Some(text) = self.selected_diff_text_string() else {
             return;
         };
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        crate::clipboard::write_text(cx, text);
     }
 
     pub(in super::super::super) fn copy_diff_text_for_context_menu_to_clipboard(
@@ -910,7 +910,7 @@ impl MainPaneView {
         else {
             return;
         };
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        crate::clipboard::write_text(cx, text);
     }
 
     pub(in super::super::super) fn open_diff_editor_context_menu(
