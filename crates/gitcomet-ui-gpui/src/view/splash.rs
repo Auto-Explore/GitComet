@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/splash_backdrop.png"));
+const PANE_TOGGLE_EDGE_INSET_PX: f32 = 3.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 struct SplashInteractiveColors {
@@ -839,25 +840,29 @@ impl GitCometView {
                                     d.child(self.sidebar_pane.clone())
                                 })
                                 .child(
-                                    div().absolute().bottom(px(6.0)).right(px(6.0)).child(
-                                        components::Button::new("sidebar_toggle", "")
-                                            .start_slot(svg_icon(
-                                                if self.sidebar_collapsed {
-                                                    "icons/arrow_right.svg"
-                                                } else {
-                                                    "icons/arrow_left.svg"
-                                                },
-                                                theme.colors.text_muted,
-                                                scaled_px(12.0),
-                                            ))
-                                            .style(components::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                                this.set_sidebar_collapsed(
-                                                    !this.sidebar_collapsed,
-                                                    cx,
-                                                );
-                                            }),
-                                    ),
+                                    div()
+                                        .absolute()
+                                        .bottom(px(6.0))
+                                        .right(px(PANE_TOGGLE_EDGE_INSET_PX))
+                                        .child(
+                                            components::Button::new("sidebar_toggle", "")
+                                                .start_slot(svg_icon(
+                                                    if self.sidebar_collapsed {
+                                                        "icons/arrow_right.svg"
+                                                    } else {
+                                                        "icons/arrow_left.svg"
+                                                    },
+                                                    theme.colors.text_muted,
+                                                    scaled_px(12.0),
+                                                ))
+                                                .style(components::ButtonStyle::Transparent)
+                                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                                    this.set_sidebar_collapsed(
+                                                        !this.sidebar_collapsed,
+                                                        cx,
+                                                    );
+                                                }),
+                                        ),
                                 ),
                         )
                         .child(self.pane_resize_handle(
@@ -899,25 +904,29 @@ impl GitCometView {
                                     )
                                 })
                                 .child(
-                                    div().absolute().bottom(px(6.0)).left(px(6.0)).child(
-                                        components::Button::new("details_toggle", "")
-                                            .start_slot(svg_icon(
-                                                if self.details_collapsed {
-                                                    "icons/arrow_left.svg"
-                                                } else {
-                                                    "icons/arrow_right.svg"
-                                                },
-                                                theme.colors.text_muted,
-                                                scaled_px(12.0),
-                                            ))
-                                            .style(components::ButtonStyle::Transparent)
-                                            .on_click(theme, cx, |this, _e, _w, cx| {
-                                                this.set_details_collapsed(
-                                                    !this.details_collapsed,
-                                                    cx,
-                                                );
-                                            }),
-                                    ),
+                                    div()
+                                        .absolute()
+                                        .bottom(px(6.0))
+                                        .left(px(PANE_TOGGLE_EDGE_INSET_PX))
+                                        .child(
+                                            components::Button::new("details_toggle", "")
+                                                .start_slot(svg_icon(
+                                                    if self.details_collapsed {
+                                                        "icons/arrow_left.svg"
+                                                    } else {
+                                                        "icons/arrow_right.svg"
+                                                    },
+                                                    theme.colors.text_muted,
+                                                    scaled_px(12.0),
+                                                ))
+                                                .style(components::ButtonStyle::Transparent)
+                                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                                    this.set_details_collapsed(
+                                                        !this.details_collapsed,
+                                                        cx,
+                                                    );
+                                                }),
+                                        ),
                                 ),
                         ),
                 )

@@ -359,7 +359,7 @@ impl Render for TitleBarView {
             .id("app_menu")
             .debug_selector(|| "app_menu".to_string())
             .h_full()
-            .pl(px(4.0))
+            .pl(px(2.0))
             .flex()
             .items_center()
             .cursor(CursorStyle::PointingHand)
