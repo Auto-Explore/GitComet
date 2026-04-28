@@ -25,8 +25,8 @@ These shortcuts apply in the normal GitComet window.
 | Open recent repositories | `Cmd-Shift-O`, `Option-Cmd-O` | `Ctrl-Shift-O` | |
 | Close the active repository tab, or close the window if no repo tab can close | `Cmd-W` | `Ctrl-W` | |
 | Close the active window | `Cmd-Shift-W` | `Ctrl-Shift-W` | |
-| Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Option-Cmd-Left` | `Ctrl-PageUp` | |
-| Next repository tab | `Cmd-PageDown`, `Cmd-}`, `Option-Cmd-Right` | `Ctrl-PageDown` | |
+| Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Option-Cmd-Left` | `Ctrl-PageUp`, `Ctrl-Shift-Tab` | |
+| Next repository tab | `Cmd-PageDown`, `Cmd-}`, `Option-Cmd-Right` | `Ctrl-PageDown`, `Ctrl-Tab` | |
 | Toggle full screen | `Ctrl-Cmd-F` | `F11` | |
 | Quit GitComet | `Cmd-Q` | `Ctrl-Q` | |
 

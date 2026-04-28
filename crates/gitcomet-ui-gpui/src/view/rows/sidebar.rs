@@ -1,6 +1,7 @@
 use super::*;
 use crate::ui_scale;
 use gitcomet_core::domain::LogScope;
+use std::num::NonZeroU32;
 
 const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
@@ -172,8 +173,10 @@ impl SidebarPaneView {
         const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 12.0;
         const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
         const BRANCH_TREE_GAP_PX: f32 = 6.0;
+        const BRANCH_BADGE_GAP_PX: f32 = 3.0;
+        const BRANCH_MENU_GAP_PX: f32 = 2.0;
         const CONTEXT_MENU_INDICATOR_SIZE_PX: f32 = 18.0;
-        const CONTEXT_MENU_INDICATOR_RIGHT_PX: f32 = 6.0;
+        const CONTEXT_MENU_INDICATOR_RIGHT_PX: f32 = 2.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
@@ -276,8 +279,10 @@ impl SidebarPaneView {
         );
         let context_menu_indicator =
             |id: SharedString, row_group: SharedString, visible: bool, menu_active: bool| {
+                let debug_selector = id.as_ref().to_owned();
                 div()
                     .id(id)
+                    .debug_selector(move || debug_selector.clone())
                     .absolute()
                     .right(scaled_px(CONTEXT_MENU_INDICATOR_RIGHT_PX))
                     .top_0()
@@ -810,10 +815,7 @@ impl SidebarPaneView {
                                 },
                             )),
                         )
-                        .gitcomet_tooltip(
-                            theme,
-                            "Worktrees (Add / Refresh / Open / Remove)".into(),
-                        )
+                        .gitcomet_tooltip(theme, "Worktrees (Add / Refresh / Open / Remove)".into())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -1141,10 +1143,7 @@ impl SidebarPaneView {
                                 },
                             )),
                         )
-                        .gitcomet_tooltip(
-                            theme,
-                            "Submodules (Add / Update / Open / Remove)".into(),
-                        )
+                        .gitcomet_tooltip(theme, "Submodules (Add / Update / Open / Remove)".into())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -1500,22 +1499,18 @@ impl SidebarPaneView {
                     let has_worktree = workspace_badge_path.is_some();
                     let has_active_workspace = active_workspace_path.is_some();
                     let show_workspace_badge = has_worktree;
-                    let show_branch_context_menu_indicator = !has_worktree;
                     let workspace_row_menu_invoker: Option<SharedString> =
                         workspace_badge_path.as_ref().map(|path| {
                             format!("worktree_menu_{}_{}", repo_id.0, path.display()).into()
                         });
-                    let workspace_menu_active = workspace_row_menu_invoker
-                        .as_ref()
-                        .is_some_and(|invoker| this.active_context_menu_invoker.as_ref() == Some(invoker));
+                    let workspace_menu_active =
+                        workspace_row_menu_invoker.as_ref().is_some_and(|invoker| {
+                            this.active_context_menu_invoker.as_ref() == Some(invoker)
+                        });
                     let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let full_name_for_indicator: SharedString = name.clone();
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
-                    let branch_has_right_metadata = has_active_workspace
-                        || (is_upstream
-                        && section == BranchSection::Remote)
-                        || divergence_behind.is_some()
-                        || divergence_ahead.is_some();
+                    let row_debug_selector = row_group.as_ref().to_owned();
                     let branch_text_color = if muted {
                         theme.colors.text_muted
                     } else {
@@ -1547,24 +1542,59 @@ impl SidebarPaneView {
                         theme.colors.text_muted,
                         if theme.is_dark { 0.55 } else { 0.40 },
                     );
-                    let worktree_action_open_border = with_alpha(
-                        theme.colors.accent,
-                        if theme.is_dark { 0.56 } else { 0.34 },
-                    );
-                    let worktree_action_open_hover_border = with_alpha(
-                        theme.colors.accent,
-                        if theme.is_dark { 0.72 } else { 0.46 },
-                    );
-                    let worktree_action_active_border = with_alpha(
-                        theme.colors.accent,
-                        if theme.is_dark { 0.84 } else { 0.68 },
-                    );
+                    let worktree_action_open_border =
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.56 } else { 0.34 });
+                    let worktree_action_open_hover_border =
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.46 });
+                    let worktree_action_active_border =
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.84 } else { 0.68 });
                     let worktree_action_text = theme.colors.text_muted;
                     let worktree_action_hover_text = theme.colors.text;
                     let worktree_action_open_text = theme.colors.accent;
                     let worktree_action_active_text = theme.colors.accent;
+                    let badge_gap_px = scaled_px(BRANCH_BADGE_GAP_PX);
+                    let menu_gap_px = scaled_px(BRANCH_MENU_GAP_PX);
+                    let divergence_badge =
+                        |icon_path: &'static str, color: gpui::Rgba, count: NonZeroU32| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .text_xs()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(color)
+                                .child(svg_icon(icon_path, color, 11.0))
+                                .child(
+                                    super::super::branch_sidebar::branch_sidebar_divergence_label(
+                                        count,
+                                    ),
+                                )
+                        };
+                    let upstream_badge = |debug_selector: Option<String>| {
+                        let mut badge = div()
+                            .px(scaled_px(3.0))
+                            .py(scaled_px(0.0))
+                            .rounded(scaled_px(2.0))
+                            .text_size(scaled_px(11.0))
+                            .text_color(theme.colors.text_muted)
+                            .bg(with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.16 } else { 0.10 },
+                            ))
+                            .border_1()
+                            .border_color(with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.32 } else { 0.22 },
+                            ))
+                            .child("Upstream");
+                        if let Some(debug_selector) = debug_selector {
+                            badge = badge.debug_selector(move || debug_selector.clone());
+                        }
+                        badge
+                    };
                     let mut row = div()
                         .id(("branch_item", ix))
+                        .debug_selector(move || row_debug_selector.clone())
                         .relative()
                         .h(if section == BranchSection::Local {
                             scaled_px(24.0)
@@ -1627,69 +1657,47 @@ impl SidebarPaneView {
                                 .child(label),
                         );
 
-                    let mut right = div().flex().items_center().gap_2().ml_auto().when(
-                        branch_has_right_metadata && show_branch_context_menu_indicator,
-                        |d| {
-                            d.pr(scaled_px(CONTEXT_MENU_INDICATOR_SIZE_PX
-                                + CONTEXT_MENU_INDICATOR_RIGHT_PX
-                                + 4.0))
-                        },
-                    );
-
-                    if is_upstream && section == BranchSection::Remote {
-                        right = right.child(
-                            div()
-                                .px(scaled_px(3.0))
-                                .py(scaled_px(0.0))
-                                .rounded(scaled_px(2.0))
-                                .text_size(scaled_px(11.0))
-                                .text_color(theme.colors.text_muted)
-                                .bg(with_alpha(
-                                    theme.colors.accent,
-                                    if theme.is_dark { 0.16 } else { 0.10 },
-                                ))
-                                .border_1()
-                                .border_color(with_alpha(
-                                    theme.colors.accent,
-                                    if theme.is_dark { 0.32 } else { 0.22 },
-                                ))
-                                .child("Upstream"),
-                        );
-                    }
+                    let show_branch_badges = divergence_behind.is_some()
+                        || divergence_ahead.is_some()
+                        || (is_upstream && section == BranchSection::Remote)
+                        || show_workspace_badge;
+                    let mut end_accessories_placeholder_badges =
+                        div().flex_none().flex().items_center().gap(badge_gap_px);
+                    let mut end_accessories_overlay = div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right(scaled_px(
+                            CONTEXT_MENU_INDICATOR_RIGHT_PX
+                                + CONTEXT_MENU_INDICATOR_SIZE_PX
+                                + BRANCH_MENU_GAP_PX,
+                        ))
+                        .flex()
+                        .items_center()
+                        .gap(badge_gap_px);
 
                     if divergence_behind.is_some() || divergence_ahead.is_some() {
                         if let Some(behind) = divergence_behind {
                             let color = theme.colors.warning;
-                            right = right.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_xs()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(color)
-                                    .child(svg_icon("icons/arrow_down.svg", color, 11.0))
-                                    .child(super::super::branch_sidebar::branch_sidebar_divergence_label(
-                                        behind,
-                                    )),
-                            );
+                            end_accessories_placeholder_badges = end_accessories_placeholder_badges
+                                .child(divergence_badge("icons/arrow_down.svg", color, behind));
+                            end_accessories_overlay = end_accessories_overlay
+                                .child(divergence_badge("icons/arrow_down.svg", color, behind));
                         }
                         if let Some(ahead) = divergence_ahead {
                             let color = theme.colors.success;
-                            right = right.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_xs()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(color)
-                                    .child(svg_icon("icons/arrow_up.svg", color, 11.0))
-                                    .child(super::super::branch_sidebar::branch_sidebar_divergence_label(
-                                        ahead,
-                                    )),
-                            );
+                            end_accessories_placeholder_badges = end_accessories_placeholder_badges
+                                .child(divergence_badge("icons/arrow_up.svg", color, ahead));
+                            end_accessories_overlay = end_accessories_overlay
+                                .child(divergence_badge("icons/arrow_up.svg", color, ahead));
                         }
+                    }
+
+                    if is_upstream && section == BranchSection::Remote {
+                        end_accessories_placeholder_badges =
+                            end_accessories_placeholder_badges.child(upstream_badge(None));
+                        end_accessories_overlay = end_accessories_overlay
+                            .child(upstream_badge(Some(format!("branch_upstream_badge_{ix}"))));
                     }
 
                     if show_workspace_badge {
@@ -1731,49 +1739,85 @@ impl SidebarPaneView {
                         } else {
                             worktree_action_hover_text
                         };
-                        right = right.child(
-                            div()
-                                .id(("branch_workspace_badge", ix))
-                                .debug_selector(move || format!("branch_workspace_badge_{ix}"))
-                                .flex()
-                                .items_center()
-                                .gap(scaled_px(3.0))
-                                .px(scaled_px(4.0))
-                                .py(scaled_px(0.0))
-                                .rounded(scaled_px(2.0))
-                                .border_1()
-                                .border_color(badge_border)
-                                .bg(worktree_action_bg)
-                                .cursor(CursorStyle::PointingHand)
-                                .text_size(scaled_px(11.0))
-                                .text_color(badge_text)
-                                .hover(move |s| {
-                                    if workspace_menu_active {
-                                        s.bg(worktree_action_active_bg)
-                                            .border_color(worktree_action_active_border)
-                                            .text_color(worktree_action_active_text)
-                                    } else {
-                                        s.bg(worktree_action_bg)
-                                            .border_color(badge_hover_border)
-                                            .text_color(badge_hover_text)
-                                    }
-                                })
-                                .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
-                                .child(workspace_badge_label.clone())
-                                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() {
-                                        return;
-                                    }
+                        let worktree_badge_base =
+                            |workspace_badge_label: SharedString,
+                             badge_border: gpui::Rgba,
+                             badge_text: gpui::Rgba| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(scaled_px(3.0))
+                                    .px(scaled_px(4.0))
+                                    .py(scaled_px(0.0))
+                                    .rounded(scaled_px(2.0))
+                                    .border_1()
+                                    .border_color(badge_border)
+                                    .bg(worktree_action_bg)
+                                    .text_size(scaled_px(11.0))
+                                    .text_color(badge_text)
+                                    .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
+                                    .child(workspace_badge_label)
+                            };
+                        end_accessories_placeholder_badges = end_accessories_placeholder_badges
+                            .child(worktree_badge_base(
+                                workspace_badge_label.clone(),
+                                badge_border,
+                                badge_text,
+                            ));
+                        end_accessories_overlay = end_accessories_overlay.child(
+                            worktree_badge_base(
+                                workspace_badge_label.clone(),
+                                badge_border,
+                                badge_text,
+                            )
+                            .id(("branch_workspace_badge", ix))
+                            .debug_selector(move || format!("branch_workspace_badge_{ix}"))
+                            .cursor(CursorStyle::PointingHand)
+                            .hover(move |s| {
+                                if workspace_menu_active {
+                                    s.bg(worktree_action_active_bg)
+                                        .border_color(worktree_action_active_border)
+                                        .text_color(worktree_action_active_text)
+                                } else {
+                                    s.bg(worktree_action_bg)
+                                        .border_color(badge_hover_border)
+                                        .text_color(badge_hover_text)
+                                }
+                            })
+                            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                                if !e.standard_click() {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                if e.click_count() >= 2 {
+                                    this.store
+                                        .dispatch(Msg::OpenRepo(workspace_path_for_open.clone()));
+                                    cx.notify();
+                                    return;
+                                }
+                                let Some(invoker) = workspace_menu_invoker_for_click.clone() else {
+                                    return;
+                                };
+                                this.activate_context_menu_invoker(invoker, cx);
+                                this.open_popover_at(
+                                    PopoverKind::worktree(
+                                        repo_id,
+                                        WorktreePopoverKind::Menu {
+                                            path: workspace_path_for_menu.clone(),
+                                            branch: Some(branch_name_for_click.clone()),
+                                        },
+                                    ),
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                     cx.stop_propagation();
-                                    if e.click_count() >= 2 {
-                                        this.store.dispatch(Msg::OpenRepo(
-                                            workspace_path_for_open.clone(),
-                                        ));
-                                        cx.notify();
-                                        return;
-                                    }
                                     let Some(invoker) =
-                                        workspace_menu_invoker_for_click.clone()
+                                        workspace_menu_invoker_for_right_click.clone()
                                     else {
                                         return;
                                     };
@@ -1782,76 +1826,68 @@ impl SidebarPaneView {
                                         PopoverKind::worktree(
                                             repo_id,
                                             WorktreePopoverKind::Menu {
-                                                path: workspace_path_for_menu.clone(),
-                                                branch: Some(branch_name_for_click.clone()),
+                                                path: workspace_badge_path.clone(),
+                                                branch: Some(branch_name_for_right_click.clone()),
                                             },
                                         ),
-                                        e.position(),
+                                        e.position,
                                         window,
                                         cx,
                                     );
-                                }))
-                                .on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        let Some(invoker) =
-                                            workspace_menu_invoker_for_right_click.clone()
-                                        else {
-                                            return;
-                                        };
-                                        this.activate_context_menu_invoker(invoker, cx);
-                                        this.open_popover_at(
-                                            PopoverKind::worktree(
-                                                repo_id,
-                                                WorktreePopoverKind::Menu {
-                                                    path: workspace_badge_path.clone(),
-                                                    branch: Some(branch_name_for_right_click.clone()),
-                                                },
-                                            ),
-                                            e.position,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                )
-                                .gitcomet_tooltip(theme, worktree_badge_tooltip.clone()),
+                                }),
+                            )
+                            .gitcomet_tooltip(theme, worktree_badge_tooltip.clone()),
                         );
                     }
 
-                    row = row.child(right);
-                    if show_branch_context_menu_indicator {
-                        row = row.child(
-                            context_menu_indicator(
-                                format!("branch_menu_indicator_{}_{}", repo_id.0, ix).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
+                    if show_branch_badges {
+                        row = row
+                            .child(
+                                div()
+                                    .ml_auto()
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .gap(menu_gap_px)
+                                    .child(end_accessories_placeholder_badges)
+                                    .child(
+                                        div().w(scaled_px(CONTEXT_MENU_INDICATOR_SIZE_PX)).h_full(),
+                                    )
+                                    .invisible(),
                             )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::BranchMenu {
-                                            repo_id,
-                                            section,
-                                            name: full_name_for_indicator.as_ref().to_owned(),
-                                        },
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        );
+                            .child(end_accessories_overlay);
                     }
+
+                    row = row.child(
+                        context_menu_indicator(
+                            format!("branch_menu_indicator_{}_{}", repo_id.0, ix).into(),
+                            row_group.clone(),
+                            context_menu_active,
+                            context_menu_active,
+                        )
+                        .on_click(cx.listener(
+                            move |this, e: &ClickEvent, window, cx| {
+                                if !e.standard_click() || e.click_count() != 1 {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                this.activate_context_menu_invoker(
+                                    context_menu_invoker_for_indicator.clone(),
+                                    cx,
+                                );
+                                this.open_popover_at(
+                                    PopoverKind::BranchMenu {
+                                        repo_id,
+                                        section,
+                                        name: full_name_for_indicator.as_ref().to_owned(),
+                                    },
+                                    e.position(),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                    );
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -1896,10 +1932,8 @@ impl SidebarPaneView {
                                         workspace_path.as_deref(),
                                     ) {
                                         LocalBranchDoubleClickAction::CheckoutBranch { name } => {
-                                            this.store.dispatch(Msg::CheckoutBranch {
-                                                repo_id,
-                                                name,
-                                            });
+                                            this.store
+                                                .dispatch(Msg::CheckoutBranch { repo_id, name });
                                             this.rebuild_diff_cache(cx);
                                             cx.notify();
                                         }
@@ -2147,7 +2181,7 @@ impl DetailsPaneView {
 mod tests {
     use super::*;
     use gitcomet_core::domain::{
-        Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Worktree,
+        Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Upstream, Worktree,
     };
     use gitcomet_core::services::{GitBackend, GitRepository, Result};
     use gitcomet_state::msg::{InternalMsg, Msg};
@@ -2194,6 +2228,40 @@ mod tests {
             let _ = window.draw(app);
         });
         cx.run_until_parked();
+    }
+
+    fn branch_row_index_for_name(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<GitCometView>,
+        section: BranchSection,
+        name: &str,
+    ) -> usize {
+        cx.update(|_window, app| {
+            let sidebar_pane = view.read(app).sidebar_pane.clone();
+            sidebar_pane.update(app, |pane, _cx| {
+                let presentation = pane
+                    .branch_sidebar_presentation_cached()
+                    .expect("expected sidebar presentation");
+                presentation
+                    .rows
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row,
+                            BranchSidebarRow::Branch {
+                                name: row_name,
+                                section: row_section,
+                                ..
+                            } if *row_section == section && row_name.as_ref() == name
+                        )
+                    })
+                    .unwrap_or_else(|| panic!("expected {section:?} branch row `{name}`"))
+            })
+        })
+    }
+
+    fn leak_selector(selector: String) -> &'static str {
+        Box::leak(selector.into_boxed_str())
     }
 
     fn commit_id(id: &str) -> CommitId {
@@ -2689,6 +2757,172 @@ mod tests {
                 fallback_scope: Some(LogScope::AllBranches),
             })
         );
+    }
+
+    #[gpui::test]
+    fn branch_hover_menu_appears_to_the_right_without_moving_badges(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        crate::view::test_support::redraw(cx);
+        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        wait_until(cx, "opened repo placeholder", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot.active_repo == Some(repo_id)
+                && snapshot.repos.iter().any(|repo| repo.id == repo_id)
+        });
+        sync_view_for_tests(cx, &view);
+
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
+            repo_id,
+            result: Ok("main".to_string()),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![
+                Branch {
+                    name: "main".to_string(),
+                    target: commit_id("main-tip"),
+                    upstream: Some(Upstream {
+                        remote: "origin".to_string(),
+                        branch: "main".to_string(),
+                    }),
+                    divergence: None,
+                },
+                Branch {
+                    name: "feature".to_string(),
+                    target: commit_id("feature-tip"),
+                    upstream: None,
+                    divergence: None,
+                },
+            ]),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::RemoteBranchesLoaded {
+            repo_id,
+            result: Ok(vec![RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: commit_id("origin-main-tip"),
+            }]),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![
+                Worktree {
+                    path: PathBuf::from("/tmp/repo"),
+                    head: None,
+                    branch: Some("main".to_string()),
+                    detached: false,
+                },
+                Worktree {
+                    path: PathBuf::from("/tmp/repo-feature"),
+                    head: None,
+                    branch: Some("feature".to_string()),
+                    detached: false,
+                },
+            ]),
+        }));
+        wait_until(cx, "sidebar badges loaded", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            matches!(repo.head_branch, Loadable::Ready(ref head) if head == "main")
+                && matches!(repo.branches, Loadable::Ready(_))
+                && matches!(repo.remote_branches, Loadable::Ready(_))
+                && matches!(repo.worktrees, Loadable::Ready(_))
+        });
+        sync_view_for_tests(cx, &view);
+
+        let feature_ix = branch_row_index_for_name(cx, &view, BranchSection::Local, "feature");
+        let upstream_ix =
+            branch_row_index_for_name(cx, &view, BranchSection::Remote, "origin/main");
+
+        let feature_row_selector =
+            leak_selector(format!("branch_row_{}_{}", repo_id.0, feature_ix));
+        let feature_badge_selector = leak_selector(format!("branch_workspace_badge_{feature_ix}"));
+        let feature_menu_selector = leak_selector(format!(
+            "branch_menu_indicator_{}_{}",
+            repo_id.0, feature_ix
+        ));
+        let feature_badge_before = cx
+            .debug_bounds(feature_badge_selector)
+            .expect("expected worktree badge before hover");
+        let feature_row_center = cx
+            .debug_bounds(feature_row_selector)
+            .expect("expected feature branch row")
+            .center();
+        cx.simulate_mouse_move(feature_row_center, None, gpui::Modifiers::default());
+        crate::view::test_support::redraw(cx);
+        let feature_badge_after = cx
+            .debug_bounds(feature_badge_selector)
+            .expect("expected worktree badge after hover");
+        let feature_menu_bounds = cx
+            .debug_bounds(feature_menu_selector)
+            .expect("expected branch menu button after hover");
+        assert_eq!(feature_badge_before.left(), feature_badge_after.left());
+        assert_eq!(feature_badge_before.right(), feature_badge_after.right());
+        assert!(
+            feature_menu_bounds.left() >= feature_badge_after.right(),
+            "expected the branch menu button to stay to the right of the worktree badge"
+        );
+        let neutral_point = gpui::point(px(700.0), px(500.0));
+        cx.simulate_mouse_move(neutral_point, None, gpui::Modifiers::default());
+        crate::view::test_support::redraw(cx);
+        let feature_badge_center = cx
+            .debug_bounds(feature_badge_selector)
+            .expect("expected worktree badge before badge-only hover")
+            .center();
+        cx.simulate_mouse_move(feature_badge_center, None, gpui::Modifiers::default());
+        crate::view::test_support::redraw(cx);
+        let feature_menu_from_badge_hover = cx
+            .debug_bounds(feature_menu_selector)
+            .expect("expected branch menu button when hovering the worktree badge");
+        assert_eq!(
+            feature_menu_bounds.left(),
+            feature_menu_from_badge_hover.left()
+        );
+        assert_eq!(
+            feature_menu_bounds.right(),
+            feature_menu_from_badge_hover.right()
+        );
+
+        let upstream_row_selector =
+            leak_selector(format!("branch_row_{}_{}", repo_id.0, upstream_ix));
+        let upstream_badge_selector = leak_selector(format!("branch_upstream_badge_{upstream_ix}"));
+        let upstream_menu_selector = leak_selector(format!(
+            "branch_menu_indicator_{}_{}",
+            repo_id.0, upstream_ix
+        ));
+        let upstream_badge_before = cx
+            .debug_bounds(upstream_badge_selector)
+            .expect("expected upstream badge before hover");
+        let upstream_row_center = cx
+            .debug_bounds(upstream_row_selector)
+            .expect("expected upstream branch row")
+            .center();
+        cx.simulate_mouse_move(upstream_row_center, None, gpui::Modifiers::default());
+        crate::view::test_support::redraw(cx);
+        let upstream_badge_after = cx
+            .debug_bounds(upstream_badge_selector)
+            .expect("expected upstream badge after hover");
+        let upstream_menu_bounds = cx
+            .debug_bounds(upstream_menu_selector)
+            .expect("expected upstream branch menu button after hover");
+        assert_eq!(upstream_badge_before.left(), upstream_badge_after.left());
+        assert_eq!(upstream_badge_before.right(), upstream_badge_after.right());
+        assert!(
+            upstream_menu_bounds.left() >= upstream_badge_after.right(),
+            "expected the branch menu button to stay to the right of the upstream badge"
+        );
+        let feature_gap = feature_menu_bounds.left() - feature_badge_after.right();
+        let upstream_gap = upstream_menu_bounds.left() - upstream_badge_after.right();
+        assert_eq!(feature_gap, upstream_gap);
+        assert_eq!(feature_menu_bounds.right(), upstream_menu_bounds.right());
     }
 
     #[gpui::test]

@@ -130,6 +130,8 @@ pub(in super::super) struct PopoverHost {
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
     context_menu_focus_handle: FocusHandle,
+    prompt_tab_group_focus_handle: FocusHandle,
+    prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
@@ -151,7 +153,34 @@ pub(in super::super) struct PopoverHost {
     remote_url_edit_input: Entity<components::TextInput>,
     create_branch_input: Entity<components::TextInput>,
     create_branch_checkout_enabled: bool,
+    create_branch_cancel_focus_handle: FocusHandle,
+    create_branch_submit_focus_handle: FocusHandle,
+    create_branch_from_ref_checkout_focus_handle: FocusHandle,
+    create_branch_from_ref_cancel_focus_handle: FocusHandle,
+    create_branch_from_ref_submit_focus_handle: FocusHandle,
+    checkout_remote_branch_cancel_focus_handle: FocusHandle,
+    checkout_remote_branch_submit_focus_handle: FocusHandle,
     stash_message_input: Entity<components::TextInput>,
+    stash_cancel_focus_handle: FocusHandle,
+    stash_submit_focus_handle: FocusHandle,
+    clone_repo_browse_focus_handle: FocusHandle,
+    clone_repo_cancel_focus_handle: FocusHandle,
+    clone_repo_submit_focus_handle: FocusHandle,
+    create_tag_cancel_focus_handle: FocusHandle,
+    create_tag_submit_focus_handle: FocusHandle,
+    remote_add_cancel_focus_handle: FocusHandle,
+    remote_add_submit_focus_handle: FocusHandle,
+    remote_edit_cancel_focus_handle: FocusHandle,
+    remote_edit_submit_focus_handle: FocusHandle,
+    push_upstream_cancel_focus_handle: FocusHandle,
+    push_upstream_submit_focus_handle: FocusHandle,
+    worktree_browse_focus_handle: FocusHandle,
+    worktree_cancel_focus_handle: FocusHandle,
+    worktree_submit_focus_handle: FocusHandle,
+    submodule_advanced_focus_handle: FocusHandle,
+    submodule_force_focus_handle: FocusHandle,
+    submodule_cancel_focus_handle: FocusHandle,
+    submodule_submit_focus_handle: FocusHandle,
     push_upstream_branch_input: Entity<components::TextInput>,
     worktree_path_input: Entity<components::TextInput>,
     worktree_ref_input: Entity<components::TextInput>,
@@ -183,6 +212,41 @@ pub(in super::super) fn popover_scaled_px_from_percent(
     ui_scale_percent: u32,
 ) -> Pixels {
     popover_scaled_px(value, ui_scale_percent)
+}
+
+pub(in super::super) fn focusable_toggle_row<V: 'static>(
+    id: &'static str,
+    debug_selector: &'static str,
+    theme: AppTheme,
+    focus_handle: &FocusHandle,
+    cx: &mut gpui::Context<V>,
+) -> gpui::Stateful<gpui::Div> {
+    let focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
+    div()
+        .id(id)
+        .debug_selector(move || debug_selector.to_string())
+        .w_full()
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .justify_between()
+        .rounded(px(theme.radii.row))
+        .track_focus(&focus_handle)
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |s| s.bg(theme.colors.hover))
+        .active(move |s| s.bg(theme.colors.active))
+        .focus(move |s| {
+            s.bg(theme.colors.focus_ring_bg)
+                .border_1()
+                .border_color(theme.colors.focus_ring)
+        })
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |_this, _e: &MouseDownEvent, window, cx| {
+                window.focus(&focus_handle, cx);
+            }),
+        )
 }
 
 fn popover_is_context_menu(kind: &PopoverKind) -> bool {
@@ -511,14 +575,9 @@ impl PopoverHost {
         let clone_repo_url_input_subscription =
             cx.observe(&clone_repo_url_input, |this, input, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+                let _ = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
-                    return;
-                }
-
-                if escape_pressed {
-                    this.close_popover(cx);
                     return;
                 }
 
@@ -533,14 +592,9 @@ impl PopoverHost {
         let clone_repo_parent_dir_input_subscription =
             cx.observe(&clone_repo_parent_dir_input, |this, input, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+                let _ = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
-                    return;
-                }
-
-                if escape_pressed {
-                    this.close_popover(cx);
                     return;
                 }
 
@@ -652,14 +706,9 @@ impl PopoverHost {
 
         let create_tag_input_subscription = cx.observe(&create_tag_input, |this, input, cx| {
             let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-            let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+            let _ = input.update(cx, |input, _| input.take_escape_pressed());
 
             if !matches!(this.popover, Some(PopoverKind::CreateTagPrompt { .. })) {
-                return;
-            }
-
-            if escape_pressed {
-                this.close_popover(cx);
                 return;
             }
 
@@ -674,7 +723,7 @@ impl PopoverHost {
         let create_branch_input_subscription =
             cx.observe_in(&create_branch_input, window, |this, input, window, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+                let _ = input.update(cx, |input, _| input.take_escape_pressed());
                 let is_create_branch_prompt = matches!(
                     this.popover,
                     Some(PopoverKind::CreateBranch)
@@ -682,11 +731,6 @@ impl PopoverHost {
                 );
 
                 if !is_create_branch_prompt {
-                    return;
-                }
-
-                if escape_pressed {
-                    this.dismiss_inline_popover(window, cx);
                     return;
                 }
 
@@ -701,14 +745,9 @@ impl PopoverHost {
         let stash_message_input_subscription =
             cx.observe_in(&stash_message_input, window, |this, input, window, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+                let _ = input.update(cx, |input, _| input.take_escape_pressed());
 
                 if !matches!(this.popover, Some(PopoverKind::StashPrompt)) {
-                    return;
-                }
-
-                if escape_pressed {
-                    this.dismiss_inline_popover(window, cx);
                     return;
                 }
 
@@ -819,6 +858,40 @@ impl PopoverHost {
         });
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let prompt_tab_group_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let prompt_tab_wrap_end_focus_handle = cx.focus_handle().tab_index(1).tab_stop(false);
+        let create_branch_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_branch_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_branch_from_ref_checkout_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_branch_from_ref_cancel_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_branch_from_ref_submit_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+        let checkout_remote_branch_cancel_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+        let checkout_remote_branch_submit_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+        let stash_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let stash_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let clone_repo_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let clone_repo_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let clone_repo_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_tag_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_tag_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let remote_add_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let remote_add_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let remote_edit_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let remote_edit_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let push_upstream_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let push_upstream_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let submodule_advanced_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let submodule_force_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let submodule_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let submodule_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
 
         Self {
             store,
@@ -845,6 +918,8 @@ impl PopoverHost {
             popover: None,
             popover_anchor: None,
             context_menu_focus_handle,
+            prompt_tab_group_focus_handle,
+            prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_search_input: None,
             recent_repo_picker_search_input: None,
@@ -864,7 +939,34 @@ impl PopoverHost {
             remote_url_edit_input,
             create_branch_input,
             create_branch_checkout_enabled: true,
+            create_branch_cancel_focus_handle,
+            create_branch_submit_focus_handle,
+            create_branch_from_ref_checkout_focus_handle,
+            create_branch_from_ref_cancel_focus_handle,
+            create_branch_from_ref_submit_focus_handle,
+            checkout_remote_branch_cancel_focus_handle,
+            checkout_remote_branch_submit_focus_handle,
             stash_message_input,
+            stash_cancel_focus_handle,
+            stash_submit_focus_handle,
+            clone_repo_browse_focus_handle,
+            clone_repo_cancel_focus_handle,
+            clone_repo_submit_focus_handle,
+            create_tag_cancel_focus_handle,
+            create_tag_submit_focus_handle,
+            remote_add_cancel_focus_handle,
+            remote_add_submit_focus_handle,
+            remote_edit_cancel_focus_handle,
+            remote_edit_submit_focus_handle,
+            push_upstream_cancel_focus_handle,
+            push_upstream_submit_focus_handle,
+            worktree_browse_focus_handle,
+            worktree_cancel_focus_handle,
+            worktree_submit_focus_handle,
+            submodule_advanced_focus_handle,
+            submodule_force_focus_handle,
+            submodule_cancel_focus_handle,
+            submodule_submit_focus_handle,
             push_upstream_branch_input,
             worktree_path_input,
             worktree_ref_input,
@@ -974,6 +1076,137 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in super::super) fn is_open(&self) -> bool {
         self.popover.is_some()
+    }
+
+    fn prompt_tab_navigation_enabled(&self) -> bool {
+        matches!(
+            self.popover,
+            Some(PopoverKind::CreateBranch)
+                | Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
+                | Some(PopoverKind::StashPrompt)
+                | Some(PopoverKind::CloneRepo)
+                | Some(PopoverKind::CreateTagPrompt { .. })
+                | Some(PopoverKind::PushSetUpstreamPrompt { .. })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                    ..
+                })
+        )
+    }
+
+    fn wrap_prompt_focus(
+        &mut self,
+        forward: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if forward {
+            window.focus(&self.prompt_tab_group_focus_handle, cx);
+            window.focus_next(cx);
+        } else {
+            window.focus(&self.prompt_tab_wrap_end_focus_handle, cx);
+            window.focus_prev(cx);
+        }
+    }
+
+    fn focus_next_prompt_field(
+        &mut self,
+        _: &crate::view::PopoverPromptTabNext,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.prompt_tab_navigation_enabled() {
+            return;
+        }
+
+        window.focus_next(cx);
+        if !self
+            .prompt_tab_group_focus_handle
+            .contains_focused(window, cx)
+        {
+            self.wrap_prompt_focus(true, window, cx);
+        }
+        cx.stop_propagation();
+    }
+
+    fn focus_prev_prompt_field(
+        &mut self,
+        _: &crate::view::PopoverPromptTabPrev,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.prompt_tab_navigation_enabled() {
+            return;
+        }
+
+        window.focus_prev(cx);
+        if !self
+            .prompt_tab_group_focus_handle
+            .contains_focused(window, cx)
+        {
+            self.wrap_prompt_focus(false, window, cx);
+        }
+        cx.stop_propagation();
+    }
+
+    pub(in super::super) fn dismiss_prompt_popover(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match self.popover.as_ref() {
+            Some(PopoverKind::CreateBranch)
+            | Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+            | Some(PopoverKind::StashPrompt) => self.dismiss_inline_popover(window, cx),
+            Some(PopoverKind::CloneRepo)
+            | Some(PopoverKind::CreateTagPrompt { .. })
+            | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
+            | Some(PopoverKind::PushSetUpstreamPrompt { .. })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                ..
+            })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
+                ..
+            })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                ..
+            })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                ..
+            }) => self.close_popover(cx),
+            _ => {}
+        }
+    }
+
+    fn dismiss_prompt(
+        &mut self,
+        _: &crate::view::PopoverPromptDismiss,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.prompt_tab_navigation_enabled() {
+            return;
+        }
+
+        self.dismiss_prompt_popover(window, cx);
+        cx.stop_propagation();
     }
 
     fn dismiss_inline_popover(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -2027,25 +2260,50 @@ impl PopoverHost {
             panel.into_any_element()
         };
 
+        let prompt_tab_navigation_enabled = self.prompt_tab_navigation_enabled();
+        let panel = if prompt_tab_navigation_enabled {
+            div()
+                .track_focus(&self.prompt_tab_group_focus_handle)
+                .tab_group()
+                .child(panel)
+                .child(
+                    div()
+                        .track_focus(&self.prompt_tab_wrap_end_focus_handle)
+                        .w(px(0.0))
+                        .h(px(0.0)),
+                )
+                .into_any_element()
+        } else {
+            panel
+        };
+
+        let mut popover_container = div()
+            .id("app_popover")
+            .debug_selector(|| "app_popover".to_string())
+            .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+            .occlude()
+            .bg(theme.colors.surface_bg_elevated)
+            .border_1()
+            .border_color(popover_border_color)
+            .rounded(px(theme.radii.panel))
+            .shadow_lg()
+            .overflow_hidden()
+            .p_1()
+            .child(panel);
+
+        if prompt_tab_navigation_enabled {
+            popover_container = popover_container
+                .key_context("PopoverPrompt")
+                .on_action(cx.listener(Self::dismiss_prompt))
+                .on_action(cx.listener(Self::focus_next_prompt_field))
+                .on_action(cx.listener(Self::focus_prev_prompt_field));
+        }
+
         anchored()
             .position(anchor)
             .anchor(anchor_corner)
             .offset(point(px(0.0), offset_y))
-            .child(
-                div()
-                    .id("app_popover")
-                    .debug_selector(|| "app_popover".to_string())
-                    .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
-                    .occlude()
-                    .bg(theme.colors.surface_bg_elevated)
-                    .border_1()
-                    .border_color(popover_border_color)
-                    .rounded(px(theme.radii.panel))
-                    .shadow_lg()
-                    .overflow_hidden()
-                    .p_1()
-                    .child(panel),
-            )
+            .child(popover_container)
     }
 }
 

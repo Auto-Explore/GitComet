@@ -254,11 +254,7 @@ fn create_tag_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        app.bind_keys([gpui::KeyBinding::new(
-            "enter",
-            crate::kit::Enter,
-            Some("TextInput"),
-        )]);
+        crate::app::bind_text_input_keys_for_test(app);
         let _ = window.draw(app);
     });
 

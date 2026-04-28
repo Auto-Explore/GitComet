@@ -64,15 +64,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("add_remote_cancel", "Cancel")
+                        .focus_handle(this.remote_add_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("add_remote_go", "Add")
+                        .focus_handle(this.remote_add_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             let name = this

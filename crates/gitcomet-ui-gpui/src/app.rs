@@ -3,10 +3,10 @@ use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
 use crate::ui_scale;
 use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, SettingsWindowView, StartupCrashReport,
-    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
-    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange,
+    GitCometViewMode, InitialRepositoryLaunchMode, PopoverPromptDismiss, PopoverPromptTabNext,
+    PopoverPromptTabPrev, SettingsWindowView, StartupCrashReport, TextInputCommitSubmit,
+    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
+    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -637,6 +637,10 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
         KeyBinding::new("secondary-pagedown", NextRepository, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-tab", PreviousRepository, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-tab", NextRepository, None),
         KeyBinding::new("secondary-+", IncreaseUiScale, None),
         KeyBinding::new("secondary-=", IncreaseUiScale, None),
         KeyBinding::new("secondary--", DecreaseUiScale, None),
@@ -1215,6 +1219,9 @@ pub(crate) fn ensure_graphics_device_available(
 
 fn bind_text_input_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", PopoverPromptDismiss, Some("PopoverPrompt")),
+        KeyBinding::new("tab", PopoverPromptTabNext, Some("PopoverPrompt")),
+        KeyBinding::new("shift-tab", PopoverPromptTabPrev, Some("PopoverPrompt")),
         KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),
@@ -1869,7 +1876,11 @@ mod tests {
         ]);
 
         #[cfg(not(target_os = "macos"))]
-        cases.push(("f11", ToggleFullScreen.name()));
+        cases.extend([
+            ("ctrl-shift-tab", PreviousRepository.name()),
+            ("ctrl-tab", NextRepository.name()),
+            ("f11", ToggleFullScreen.name()),
+        ]);
 
         for (keystroke, expected_action) in cases {
             observed_actions
@@ -2123,6 +2134,95 @@ mod tests {
         cx.simulate_keystrokes("secondary-shift-w");
         cx.run_until_parked();
         assert_eq!(cx.cx.update(|app| app.windows().len()), 0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+
+        let repos = vec![
+            PathBuf::from("/tmp/gitcomet-app-test-repo-1"),
+            PathBuf::from("/tmp/gitcomet-app-test-repo-2"),
+            PathBuf::from("/tmp/gitcomet-app-test-repo-3"),
+        ];
+
+        cx.update(|window, app| {
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+        });
+
+        store.dispatch(Msg::RestoreSession {
+            open_repos: repos.clone(),
+            active_repo: repos.first().cloned(),
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let repo_ids = loop {
+            cx.update(|window, app| {
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx)
+                });
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+
+            let snapshot = store.snapshot();
+            if snapshot.repos.len() == repos.len()
+                && !view.read_with(&cx.cx, |view, _| view.blocks_non_repository_actions())
+            {
+                break snapshot
+                    .repos
+                    .iter()
+                    .map(|repo| repo.id)
+                    .collect::<Vec<_>>();
+            }
+
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for restored repository tabs to become interactive");
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
+
+        cx.simulate_keystrokes("ctrl-tab");
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[1]));
+
+        cx.simulate_keystrokes("ctrl-shift-tab");
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
+
+        cx.simulate_keystrokes("ctrl-shift-tab");
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[2]));
     }
 
     #[gpui::test]

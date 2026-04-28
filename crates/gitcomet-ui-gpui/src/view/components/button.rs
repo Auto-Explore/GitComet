@@ -2,8 +2,8 @@ use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, ClickEvent, CursorStyle, Div, IntoElement, Pixels, SharedString, Stateful,
-    Window, div, px,
+    AnyElement, Bounds, ClickEvent, CursorStyle, Div, FocusHandle, IntoElement, Pixels,
+    SharedString, Stateful, Window, div, px,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -29,6 +29,7 @@ pub struct Button {
     selected_bg: Option<gpui::Rgba>,
     borderless: bool,
     suppress_hover_border: bool,
+    focus_handle: Option<FocusHandle>,
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
     separate_end_slot: bool,
@@ -45,6 +46,7 @@ impl Button {
             selected_bg: None,
             borderless: false,
             suppress_hover_border: false,
+            focus_handle: None,
             start_slot: None,
             end_slot: None,
             separate_end_slot: false,
@@ -68,6 +70,11 @@ impl Button {
 
     pub fn no_hover_border(mut self) -> Self {
         self.suppress_hover_border = true;
+        self
+    }
+
+    pub fn focus_handle(mut self, focus_handle: FocusHandle) -> Self {
+        self.focus_handle = Some(focus_handle);
         self
     }
 
@@ -153,6 +160,7 @@ impl Button {
             selected_bg,
             borderless,
             suppress_hover_border,
+            focus_handle,
             start_slot,
             end_slot,
             separate_end_slot,
@@ -316,7 +324,6 @@ impl Button {
 
         let mut base = div()
             .id(id.clone())
-            .tab_index(0)
             .h(control_height)
             .px(if icon_only { icon_pad_x } else { control_pad_x })
             .py(control_pad_y)
@@ -329,6 +336,13 @@ impl Button {
             .text_color(text)
             .cursor(CursorStyle::PointingHand)
             .child(inner);
+
+        if let Some(focus_handle) = focus_handle {
+            let focus_handle = focus_handle.tab_stop(!disabled);
+            base = base.track_focus(&focus_handle);
+        } else {
+            base = base.tab_index(0);
+        }
 
         if !borderless {
             base = base.border_1().border_color(border);

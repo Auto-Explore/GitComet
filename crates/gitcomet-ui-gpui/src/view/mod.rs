@@ -48,6 +48,9 @@ actions!(
         TextInputDiffNextSearchMatchOrChange,
         TextInputDiffPrevChange,
         TextInputDiffNextChange,
+        PopoverPromptDismiss,
+        PopoverPromptTabNext,
+        PopoverPromptTabPrev,
     ]
 );
 

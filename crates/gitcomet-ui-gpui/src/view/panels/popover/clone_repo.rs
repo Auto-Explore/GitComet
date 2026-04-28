@@ -69,6 +69,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 )
                 .child(
                     components::Button::new("clone_repo_browse", "Browse")
+                        .focus_handle(this.clone_repo_browse_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |_this, _e, window, cx| {
                             cx.stop_propagation();
@@ -112,14 +113,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("clone_repo_cancel", "Cancel")
+                        .focus_handle(this.clone_repo_cancel_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "clone_repo_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("clone_repo_go", "Clone")
+                        .focus_handle(this.clone_repo_submit_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "clone_repo_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_clone)
