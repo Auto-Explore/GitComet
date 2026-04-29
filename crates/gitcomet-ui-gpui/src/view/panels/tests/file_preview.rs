@@ -451,6 +451,99 @@ fn html_file_preview_renders_injected_attribute_syntax_from_real_document(
 }
 
 #[gpui::test]
+fn added_file_preview_text_file_stays_streamed_and_uses_heuristic_syntax_highlighting(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(77);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_added_preview_text_file_syntax",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("added_preview.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_source_path = workdir.join(".added_preview_source.json");
+    let highlighted_line = r#"  "previewValue": 7"#;
+    let highlighted_line_ix = 1usize;
+    let preview_text = ["{", highlighted_line, "}"].join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create added preview text-file workdir");
+    std::fs::write(&preview_source_path, &preview_text)
+        .expect("write added preview text-file fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
+                "materialized diff_file should not be consulted for added preview text-file syntax"
+                    .into(),
+            );
+            repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: preview_source_path.clone(),
+                    side: gitcomet_core::domain::DiffPreviewTextSide::New,
+                }),
+            ));
+            repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "added preview text-file streamed heuristic syntax render",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_source_path.as_ref() == Some(&preview_source_path)
+                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Json)
+                && pane.worktree_preview_prepared_syntax_document().is_none()
+                && pane
+                    .worktree_preview_segments_cache_get(highlighted_line_ix)
+                    .is_some_and(|styled| {
+                        styled.text.as_ref() == highlighted_line && !styled.highlights.is_empty()
+                    })
+        },
+        |pane| {
+            let highlighted_cached = pane
+                .worktree_preview_segments_cache_get(highlighted_line_ix)
+                .map(styled_debug_info);
+            format!(
+                "active={} preview_path={:?} source_path={:?} text_len={} language={:?} prepared={:?} highlighted_cached={highlighted_cached:?}",
+                pane.is_file_preview_active(),
+                pane.worktree_preview_path.clone(),
+                pane.worktree_preview_source_path.clone(),
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_syntax_language,
+                pane.worktree_preview_prepared_syntax_document(),
+            )
+        },
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup added preview text-file fixture");
+}
+
+#[gpui::test]
 fn large_file_preview_keeps_prepared_syntax_document_above_old_line_gate(
     cx: &mut gpui::TestAppContext,
 ) {

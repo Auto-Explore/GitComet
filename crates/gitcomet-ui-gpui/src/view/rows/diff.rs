@@ -875,8 +875,8 @@ impl MainPaneView {
                             new_line: row.new_line,
                         };
                         let cache_epoch = this.file_diff_style_cache_epochs.inline_epoch(row.kind);
-                        if streamed_spec.is_none() {
-                            if this
+                        if streamed_spec.is_none()
+                            && this
                                 .diff_text_segments_cache_get(inline_ix, cache_epoch)
                                 .is_none()
                             {
@@ -906,7 +906,6 @@ impl MainPaneView {
                                 }
                                 this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                             }
-                        }
                         let styled = if streamed_spec.is_none() {
                             this.diff_text_segments_cache_get_for_query(
                                 inline_ix,

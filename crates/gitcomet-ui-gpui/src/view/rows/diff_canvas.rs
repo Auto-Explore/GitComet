@@ -582,10 +582,36 @@ fn build_streamed_diff_slice_styled_text(
                             ));
                         }
                     }
-                    build_cached_diff_styled_text_from_relative_highlights(
-                        slice_text_ref,
-                        relative.as_slice(),
-                    )
+                    if relative.is_empty() {
+                        match syntax_highlights_for_streamed_line_slice_heuristic(
+                            theme,
+                            &spec.raw_text,
+                            *language,
+                            requested_slice_range.clone(),
+                            resolved_slice_range.clone(),
+                        ) {
+                            Some(highlights) => {
+                                build_cached_diff_styled_text_from_relative_highlights(
+                                    slice_text_ref,
+                                    highlights.as_slice(),
+                                )
+                            }
+                            None => build_cached_diff_styled_text(
+                                theme,
+                                slice_text_ref,
+                                &[],
+                                "",
+                                Some(*language),
+                                rows::DiffSyntaxMode::HeuristicOnly,
+                                None,
+                            ),
+                        }
+                    } else {
+                        build_cached_diff_styled_text_from_relative_highlights(
+                            slice_text_ref,
+                            relative.as_slice(),
+                        )
+                    }
                 }
                 None => build_cached_diff_styled_text(
                     theme,

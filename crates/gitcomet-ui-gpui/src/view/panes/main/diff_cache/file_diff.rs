@@ -919,7 +919,59 @@ impl StreamedFileDiffSource {
     }
 
     fn build_inline_text(&self) -> SharedString {
-        SharedString::default()
+        let mut text = String::with_capacity(self.plan.inline_row_count.saturating_mul(2));
+        let mut push_line = |prefix: char, line: gitcomet_core::file_diff::FileDiffLineText| {
+            text.push(prefix);
+            text.push_str(line.as_ref());
+            text.push('\n');
+        };
+
+        for run in self.plan.runs.as_slice() {
+            match *run {
+                gitcomet_core::file_diff::FileDiffPlanRun::Context { new_start, len, .. } => {
+                    for offset in 0..len {
+                        push_line(
+                            ' ',
+                            self.new_line_shared_text(new_start.saturating_add(offset)),
+                        );
+                    }
+                }
+                gitcomet_core::file_diff::FileDiffPlanRun::Remove { old_start, len } => {
+                    for offset in 0..len {
+                        push_line(
+                            '-',
+                            self.old_line_shared_text(old_start.saturating_add(offset)),
+                        );
+                    }
+                }
+                gitcomet_core::file_diff::FileDiffPlanRun::Add { new_start, len } => {
+                    for offset in 0..len {
+                        push_line(
+                            '+',
+                            self.new_line_shared_text(new_start.saturating_add(offset)),
+                        );
+                    }
+                }
+                gitcomet_core::file_diff::FileDiffPlanRun::Modify {
+                    old_start,
+                    new_start,
+                    len,
+                } => {
+                    for offset in 0..len {
+                        push_line(
+                            '-',
+                            self.old_line_shared_text(old_start.saturating_add(offset)),
+                        );
+                        push_line(
+                            '+',
+                            self.new_line_shared_text(new_start.saturating_add(offset)),
+                        );
+                    }
+                }
+            }
+        }
+
+        SharedString::from(text)
     }
 }
 

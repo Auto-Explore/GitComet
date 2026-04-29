@@ -1084,11 +1084,10 @@ impl MainPaneView {
             .reveal_up_lines
             .saturating_add(delta);
         self.persist_collapsed_diff_hunk_reveal(hunk_ix);
-        if self.collapsed_diff_hidden_up_rows(src_ix) == 0 {
-            if hunk_ix > 0 {
+        if self.collapsed_diff_hidden_up_rows(src_ix) == 0
+            && hunk_ix > 0 {
                 self.merge_collapsed_diff_hunks_up(hunk_ix);
             }
-        }
         self.invalidate_collapsed_diff_visible_projection();
         self.ensure_diff_visible_indices();
         cx.notify();
