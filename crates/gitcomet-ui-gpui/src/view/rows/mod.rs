@@ -365,8 +365,8 @@ pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,
-    DiffSyntaxMode, PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument,
-    PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
+    DiffSyntaxMode, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, PrepareDiffSyntaxDocumentResult,
+    PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,

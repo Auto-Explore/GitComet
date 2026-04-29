@@ -1083,11 +1083,13 @@ pub(super) fn schedule_effect(
                     msg_tx,
                     repo_id,
                     target,
-                    load_patch_diff,
-                    load_file_text,
-                    preview_text_side,
-                    load_submodule_summary,
-                    load_file_image,
+                    repo_load::SelectedDiffLoadOptions {
+                        load_patch_diff,
+                        load_file_text,
+                        preview_text_side,
+                        load_submodule_summary,
+                        load_file_image,
+                    },
                 );
             }
         }

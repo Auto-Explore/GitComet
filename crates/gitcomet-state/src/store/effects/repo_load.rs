@@ -1,7 +1,7 @@
 use crate::model::ConflictFileLoadMode;
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
-use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
+use gitcomet_core::domain::{DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
@@ -14,6 +14,14 @@ use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor};
 use super::util::{RepoMap, send_or_log, spawn_with_repo, spawn_with_repo_or_else};
+
+pub(super) struct SelectedDiffLoadOptions {
+    pub(super) load_patch_diff: bool,
+    pub(super) load_file_text: bool,
+    pub(super) preview_text_side: Option<DiffPreviewTextSide>,
+    pub(super) load_submodule_summary: bool,
+    pub(super) load_file_image: bool,
+}
 
 fn missing_repo_error(repo_id: RepoId) -> Error {
     Error::new(ErrorKind::Backend(format!(
@@ -952,7 +960,7 @@ pub(super) fn schedule_load_diff_preview_text_file(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     target: DiffTarget,
-    side: gitcomet_core::domain::DiffPreviewTextSide,
+    side: DiffPreviewTextSide,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.diff_preview_text_file(&target, side);
@@ -1109,19 +1117,15 @@ pub(super) fn schedule_load_selected_diff(
     msg_tx: mpsc::Sender<Msg>,
     repo_id: RepoId,
     target: DiffTarget,
-    load_patch_diff: bool,
-    load_file_text: bool,
-    preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
-    load_submodule_summary: bool,
-    load_file_image: bool,
+    options: SelectedDiffLoadOptions,
 ) {
-    if load_submodule_summary {
+    if options.load_submodule_summary {
         schedule_load_submodule_summary(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
-    if load_file_image {
+    if options.load_file_image {
         schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
-    if let Some(side) = preview_text_side {
+    if let Some(side) = options.preview_text_side {
         schedule_load_diff_preview_text_file(
             executor,
             repos,
@@ -1131,10 +1135,10 @@ pub(super) fn schedule_load_selected_diff(
             side,
         );
     }
-    if load_file_text {
+    if options.load_file_text {
         schedule_load_diff_file(executor, repos, msg_tx.clone(), repo_id, target.clone());
     }
-    if load_patch_diff {
+    if options.load_patch_diff {
         schedule_load_diff(executor, repos, msg_tx, repo_id, target);
     }
 }

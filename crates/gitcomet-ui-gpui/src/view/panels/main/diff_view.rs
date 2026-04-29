@@ -264,7 +264,6 @@ impl MainPaneView {
 
                         changes
                             .iter()
-                            .cloned()
                             .map(|change| {
                                 let (icon, icon_color) = change_row_icon(change.kind);
                                 let additions = change
@@ -275,10 +274,11 @@ impl MainPaneView {
                                     .deletions
                                     .map(|value| format!("-{value}"))
                                     .unwrap_or_else(|| "—".to_string());
+                                let change_path = change.path.clone();
                                 let target = range_commits.as_ref().map_or_else(
                                     || {
                                         live_area.map(|area| DiffTarget::WorkingTree {
-                                            path: change.path.clone(),
+                                            path: change_path.clone(),
                                             area,
                                         })
                                     },
@@ -286,7 +286,7 @@ impl MainPaneView {
                                         Some(DiffTarget::CommitRange {
                                             from_commit_id: from_commit_id.clone(),
                                             to_commit_id: to_commit_id.clone(),
-                                            path: Some(change.path.clone()),
+                                            path: Some(change_path.clone()),
                                         })
                                     },
                                 );
@@ -299,9 +299,10 @@ impl MainPaneView {
                                 let repo_path_for_menu = submodule_repo_path.clone();
                                 let summary_path_for_inline = summary.path.clone();
                                 let inline_entries_for_click = inline_entries.clone();
+                                let context_menu_path = change_path.clone();
 
                                 let mut row = div()
-                                .id(format!("{}_{}", section_key, change.path.display()))
+                                .id(format!("{}_{}", section_key, change_path.display()))
                                 .px_2()
                                 .py_1()
                                 .rounded(px(theme.radii.row))
@@ -319,7 +320,7 @@ impl MainPaneView {
                                         .min_w(px(0.0))
                                         .text_sm()
                                         .line_clamp(1)
-                                        .child(change.path.display().to_string()),
+                                        .child(change_path.display().to_string()),
                                 )
                                 .child(
                                     div()
@@ -368,7 +369,7 @@ impl MainPaneView {
                                                         format!(
                                                             "submodule_inner_diff_menu_{}_{}",
                                                             repo_id.0,
-                                                            change.path.display()
+                                                            context_menu_path.display()
                                                         )
                                                         .into(),
                                                         cx,

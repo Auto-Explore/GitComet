@@ -1151,7 +1151,7 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
             .shape_line(
                 posix_display.into(),
                 font_size,
-                &vec![style.clone().to_run(posix_display.len())],
+                &[style.clone().to_run(posix_display.len())],
                 None,
             )
             .x_for_index("/root/".len());
@@ -1160,7 +1160,7 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
             .shape_line(
                 drive_display.into(),
                 font_size,
-                &vec![style.clone().to_run(drive_display.len())],
+                &[style.clone().to_run(drive_display.len())],
                 None,
             )
             .x_for_index("C:\\root\\".len());
@@ -1169,7 +1169,7 @@ fn path_profile_anchor_preserves_posix_drive_and_unc_roots(cx: &mut gpui::TestAp
             .shape_line(
                 unc_display.into(),
                 font_size,
-                &vec![style.clone().to_run(unc_display.len())],
+                &[style.clone().to_run(unc_display.len())],
                 None,
             )
             .x_for_index(r"\\server\share\dir1\".len());

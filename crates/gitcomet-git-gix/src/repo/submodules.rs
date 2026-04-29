@@ -22,6 +22,9 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+type NumstatLineCounts = (Option<u32>, Option<u32>);
+type NumstatCounts = BTreeMap<PathBuf, NumstatLineCounts>;
+
 fn allow_file_submodule_transport(cmd: &mut Command) {
     // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
     // Use per-command config so local workflows keep working without disabling `https`/`ssh`.
@@ -831,7 +834,7 @@ fn submodule_range_changes_from_commits(
 
 fn submodule_inner_changes_from_status(
     entries: Vec<FileStatus>,
-    counts: &BTreeMap<PathBuf, (Option<u32>, Option<u32>)>,
+    counts: &NumstatCounts,
 ) -> Vec<SubmoduleInnerChange> {
     entries
         .into_iter()
@@ -861,10 +864,7 @@ where
     fields.find(|field| !field.is_empty())
 }
 
-fn git_numstat_counts(
-    workdir: &Path,
-    cached: bool,
-) -> Result<BTreeMap<PathBuf, (Option<u32>, Option<u32>)>> {
+fn git_numstat_counts(workdir: &Path, cached: bool) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
     command.arg("--no-optional-locks").arg("diff");
     if cached {
@@ -962,7 +962,7 @@ fn git_range_numstat_counts(
     workdir: &Path,
     from: &CommitId,
     to: &CommitId,
-) -> Result<BTreeMap<PathBuf, (Option<u32>, Option<u32>)>> {
+) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
     command
         .arg("--no-optional-locks")

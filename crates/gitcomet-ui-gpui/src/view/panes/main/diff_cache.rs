@@ -1084,10 +1084,9 @@ impl MainPaneView {
             .reveal_up_lines
             .saturating_add(delta);
         self.persist_collapsed_diff_hunk_reveal(hunk_ix);
-        if self.collapsed_diff_hidden_up_rows(src_ix) == 0
-            && hunk_ix > 0 {
-                self.merge_collapsed_diff_hunks_up(hunk_ix);
-            }
+        if self.collapsed_diff_hidden_up_rows(src_ix) == 0 && hunk_ix > 0 {
+            self.merge_collapsed_diff_hunks_up(hunk_ix);
+        }
         self.invalidate_collapsed_diff_visible_projection();
         self.ensure_diff_visible_indices();
         cx.notify();
@@ -1538,6 +1537,26 @@ impl MainPaneView {
         self.apply_worktree_preview_ready_state(
             path.clone(),
             path,
+            source_text.len(),
+            source_text,
+            line_starts,
+            line_flags,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn set_worktree_preview_ready_materialized_source(
+        &mut self,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+        source_text: SharedString,
+        line_starts: Arc<[usize]>,
+        line_flags: Arc<[u8]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_worktree_preview_ready_state(
+            display_path,
+            source_path,
             source_text.len(),
             source_text,
             line_starts,

@@ -560,7 +560,7 @@ fn staged_deleted_file_preview_uses_old_contents(cx: &mut gpui::TestAppContext) 
                     pane.worktree_preview,
                     gitcomet_state::model::Loadable::Ready(3)
                 )
-                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_text.as_ref() == "one\ntwo\n"
         },
         |pane| {
             format!(
@@ -674,7 +674,7 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                     pane.worktree_preview,
                     gitcomet_state::model::Loadable::Ready(2)
                 )
-                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_text.as_ref() == "{\"removed\":true}\n"
         },
         |pane| {
             format!(

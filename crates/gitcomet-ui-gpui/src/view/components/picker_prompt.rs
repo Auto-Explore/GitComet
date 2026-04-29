@@ -473,7 +473,7 @@ mod tests {
             PickerPromptItemPart::path("/tmp/repo/src/main.rs"),
         ]);
 
-        let matches = match_items(&[item.clone()], "main");
+        let matches = match_items(std::slice::from_ref(&item), "main");
         let range = matches
             .first()
             .and_then(|m| m.range.clone())

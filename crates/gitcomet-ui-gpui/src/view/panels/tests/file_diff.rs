@@ -1063,7 +1063,7 @@ fn collapsed_diff_revealed_hunk_header_hides_context_and_updates_ranges(
             .first()
             .copied()
             .expect("expected collapsed diff fixture to expose one hunk");
-        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(&pane, hunk.src_ix);
+        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(pane, hunk.src_ix);
         let header = pane
             .diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
             .to_string();
@@ -2406,7 +2406,7 @@ fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
 
     let hunk_visible_ix = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_hunk_visible_ix_for_src_ix(&pane, hunk_src_ix)
+        collapsed_hunk_visible_ix_for_src_ix(pane, hunk_src_ix)
     });
     scroll_collapsed_visible_ix_to_center(cx, &view, hunk_visible_ix);
 
@@ -2415,7 +2415,7 @@ fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
         diff_text_hitbox_top_for_visible_ix(cx, &view, hunk_visible_ix, DiffTextRegion::Inline);
     let hunk_first_visible_ix_before = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_file_row_visible_ix(&pane, hunk_base_row_start)
+        collapsed_file_row_visible_ix(pane, hunk_base_row_start)
     });
 
     let up_click = debug_selector_center(cx, "collapsed_diff_inline_hunk_up");
@@ -2424,7 +2424,7 @@ fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
 
     let hunk_visible_ix_after = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(&pane, hunk_src_ix);
+        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(pane, hunk_src_ix);
         assert!(
             matches!(
                 pane.collapsed_visible_row(visible_ix),
@@ -2444,7 +2444,7 @@ fn collapsed_diff_inline_up_reveal_keeps_header_above_revealed_context(
     });
     let hunk_first_visible_ix_after = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_file_row_visible_ix(&pane, hunk_base_row_start)
+        collapsed_file_row_visible_ix(pane, hunk_base_row_start)
     });
     let header_top_after = diff_text_hitbox_top_for_visible_ix(
         cx,
@@ -2536,7 +2536,7 @@ fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
 
     let hunk_visible_ix = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_hunk_visible_ix_for_src_ix(&pane, hunk_src_ix)
+        collapsed_hunk_visible_ix_for_src_ix(pane, hunk_src_ix)
     });
     scroll_collapsed_visible_ix_to_center(cx, &view, hunk_visible_ix);
 
@@ -2548,7 +2548,7 @@ fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
         diff_text_hitbox_top_for_visible_ix(cx, &view, hunk_visible_ix, DiffTextRegion::SplitRight);
     let hunk_first_visible_ix_before = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_file_row_visible_ix(&pane, hunk_base_row_start)
+        collapsed_file_row_visible_ix(pane, hunk_base_row_start)
     });
 
     let up_click = debug_selector_center(cx, "collapsed_diff_split_left_hunk_up");
@@ -2557,7 +2557,7 @@ fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
 
     let hunk_visible_ix_after = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(&pane, hunk_src_ix);
+        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(pane, hunk_src_ix);
         assert!(
             matches!(
                 pane.collapsed_visible_row(visible_ix),
@@ -2577,7 +2577,7 @@ fn collapsed_diff_split_up_reveal_keeps_header_above_revealed_context(
     });
     let hunk_first_visible_ix_after = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_file_row_visible_ix(&pane, hunk_base_row_start)
+        collapsed_file_row_visible_ix(pane, hunk_base_row_start)
     });
     let left_top_after = diff_text_hitbox_top_for_visible_ix(
         cx,
@@ -2684,7 +2684,7 @@ fn collapsed_diff_split_down_before_reveal_moves_both_columns_without_vertical_s
 
     let target_visible_ix = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_hunk_visible_ix_for_src_ix(&pane, second_hunk_src_ix)
+        collapsed_hunk_visible_ix_for_src_ix(pane, second_hunk_src_ix)
     });
     scroll_collapsed_visible_ix_to_center(cx, &view, target_visible_ix);
 
@@ -2713,7 +2713,7 @@ fn collapsed_diff_split_down_before_reveal_moves_both_columns_without_vertical_s
 
     let target_visible_ix_after = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(&pane, second_hunk_src_ix);
+        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(pane, second_hunk_src_ix);
         assert!(
             matches!(
                 pane.collapsed_visible_row(visible_ix),
@@ -2801,7 +2801,7 @@ fn collapsed_diff_short_gap_merge_moves_following_file_row(cx: &mut gpui::TestAp
 
     let (target_visible_ix, tracked_row_ix) = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(&pane, second_hunk_src_ix);
+        let visible_ix = collapsed_hunk_visible_ix_for_src_ix(pane, second_hunk_src_ix);
         let row_ix = match pane.collapsed_visible_row(visible_ix + 1) {
             Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { row_ix }) => row_ix,
             other => panic!("expected a file row after the short-gap header, got {other:?}"),
@@ -2812,7 +2812,7 @@ fn collapsed_diff_short_gap_merge_moves_following_file_row(cx: &mut gpui::TestAp
 
     let tracked_visible_ix_before = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_file_row_visible_ix(&pane, tracked_row_ix)
+        collapsed_file_row_visible_ix(pane, tracked_row_ix)
     });
     let scroll_y_before = diff_scroll_offset_y(cx, &view);
     let row_top_before = diff_text_hitbox_top_for_visible_ix(
@@ -2832,7 +2832,7 @@ fn collapsed_diff_short_gap_merge_moves_following_file_row(cx: &mut gpui::TestAp
 
     let tracked_visible_ix_after = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        collapsed_file_row_visible_ix(&pane, tracked_row_ix)
+        collapsed_file_row_visible_ix(pane, tracked_row_ix)
     });
     let row_top_after = diff_text_hitbox_top_for_visible_ix(
         cx,

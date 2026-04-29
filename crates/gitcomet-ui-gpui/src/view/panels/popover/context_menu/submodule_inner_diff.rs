@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn model(
     _repo_id: RepoId,
-    submodule_repo_path: &std::path::PathBuf,
+    submodule_repo_path: &std::path::Path,
     target: &DiffTarget,
 ) -> ContextMenuModel {
     let label = match target {
@@ -27,7 +27,7 @@ pub(super) fn model(
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::OpenSubmoduleDiffInTab {
-                path: submodule_repo_path.clone(),
+                path: submodule_repo_path.to_path_buf(),
                 target: target.clone(),
             }),
         },

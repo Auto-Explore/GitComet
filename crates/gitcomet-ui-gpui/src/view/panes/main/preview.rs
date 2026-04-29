@@ -4,16 +4,42 @@ use std::borrow::Cow;
 use std::io::Read;
 
 const WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
+const WORKTREE_PREVIEW_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
 
 struct IndexedWorktreePreview {
     source_len: usize,
     line_starts: Arc<[usize]>,
     line_flags: Arc<[u8]>,
+    source_text: Option<SharedString>,
 }
 
 #[inline]
 fn packed_preview_line_flags(ascii_only: bool, has_tabs: bool) -> u8 {
     preview_line_flags_from_bools(ascii_only, has_tabs)
+}
+
+#[inline]
+fn worktree_preview_index_line_capacity_hint(source_len_hint: usize) -> usize {
+    source_len_hint
+        .saturating_div(64)
+        .saturating_add(1)
+        .min(WORKTREE_PREVIEW_INDEX_LINE_CAPACITY_MAX)
+}
+
+#[inline]
+fn worktree_preview_materialized_source_arc(source_text: &SharedString) -> Arc<str> {
+    source_text.clone().into()
+}
+
+#[inline]
+fn worktree_preview_materialized_line_raw_text(
+    source_text: &SharedString,
+    range: std::ops::Range<usize>,
+) -> gitcomet_core::file_diff::FileDiffLineText {
+    gitcomet_core::file_diff::FileDiffLineText::shared_slice(
+        worktree_preview_materialized_source_arc(source_text),
+        range,
+    )
 }
 
 fn validate_utf8_chunk_streaming(
@@ -58,9 +84,10 @@ fn index_utf8_worktree_preview_file(
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut reader =
         std::io::BufReader::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES, file);
-    let source_len_hint = usize::try_from(metadata.len()).unwrap_or(0);
-    let mut line_starts = Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
-    let mut line_flags = Vec::with_capacity(source_len_hint.saturating_div(64).saturating_add(1));
+    let source_len_hint = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    let line_capacity_hint = worktree_preview_index_line_capacity_hint(source_len_hint);
+    let mut line_starts = Vec::with_capacity(line_capacity_hint);
+    let mut line_flags = Vec::with_capacity(line_capacity_hint);
     let mut validation_buffer =
         Vec::with_capacity(WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES.saturating_add(4));
     let mut utf8_tail = Vec::with_capacity(4);
@@ -68,6 +95,8 @@ fn index_utf8_worktree_preview_file(
     let mut source_len = 0usize;
     let mut line_ascii_only = true;
     let mut line_has_tabs = false;
+    let mut source_bytes = (source_len_hint <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES)
+        .then(|| Vec::with_capacity(source_len_hint));
 
     if source_len_hint > 0 {
         line_starts.push(0);
@@ -85,6 +114,15 @@ fn index_utf8_worktree_preview_file(
         }
         let chunk = &scan_buffer[..read_len];
         validate_utf8_chunk_streaming(&mut utf8_tail, &mut validation_buffer, chunk)?;
+        if let Some(bytes) = source_bytes.as_mut() {
+            if bytes.len().saturating_add(chunk.len())
+                <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
+            {
+                bytes.extend_from_slice(chunk);
+            } else {
+                source_bytes = None;
+            }
+        }
 
         for &byte in chunk {
             if byte == b'\n' {
@@ -113,11 +151,17 @@ fn index_utf8_worktree_preview_file(
     if source_len > 0 {
         line_flags.push(packed_preview_line_flags(line_ascii_only, line_has_tabs));
     }
+    let source_text = source_bytes
+        .map(String::from_utf8)
+        .transpose()
+        .map_err(|_| "File is not valid UTF-8; binary preview is not supported.".to_string())?
+        .map(SharedString::from);
 
     Ok(IndexedWorktreePreview {
         source_len,
         line_starts: Arc::from(line_starts),
         line_flags: Arc::from(line_flags),
+        source_text,
     })
 }
 
@@ -516,9 +560,8 @@ impl MainPaneView {
             ));
         }
 
-        let source_text: Arc<str> = Arc::from(self.worktree_preview_text.as_ref());
-        Some(gitcomet_core::file_diff::FileDiffLineText::shared_slice(
-            source_text,
+        Some(worktree_preview_materialized_line_raw_text(
+            &self.worktree_preview_text,
             range,
         ))
     }
@@ -817,14 +860,27 @@ impl MainPaneView {
                 this.worktree_preview_scroll
                     .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
                 match result {
-                    Ok(preview) => this.set_worktree_preview_ready_indexed_source(
-                        display_path.clone(),
-                        source_path.clone(),
-                        preview.source_len,
-                        preview.line_starts,
-                        preview.line_flags,
-                        cx,
-                    ),
+                    Ok(preview) => {
+                        if let Some(source_text) = preview.source_text {
+                            this.set_worktree_preview_ready_materialized_source(
+                                display_path.clone(),
+                                source_path.clone(),
+                                source_text,
+                                preview.line_starts,
+                                preview.line_flags,
+                                cx,
+                            );
+                        } else {
+                            this.set_worktree_preview_ready_indexed_source(
+                                display_path.clone(),
+                                source_path.clone(),
+                                preview.source_len,
+                                preview.line_starts,
+                                preview.line_flags,
+                                cx,
+                            );
+                        }
+                    }
                     Err(e) => {
                         this.worktree_preview = Loadable::Error(e);
                         this.reset_worktree_preview_source_state();
@@ -884,6 +940,8 @@ fn build_conflict_markdown_preview_documents(
 
 #[cfg(test)]
 mod tests {
+    use crate::perf_alloc::measure_allocations;
+
     use super::*;
 
     #[test]
@@ -897,6 +955,63 @@ mod tests {
         assert!(matches!(documents.base, Loadable::Ready(_)));
         assert!(matches!(documents.ours, Loadable::Ready(_)));
         assert!(matches!(documents.theirs, Loadable::Ready(_)));
+    }
+
+    #[test]
+    fn worktree_preview_index_line_capacity_hint_is_bounded_for_massive_files() {
+        assert_eq!(worktree_preview_index_line_capacity_hint(0), 1);
+        assert_eq!(worktree_preview_index_line_capacity_hint(128), 3);
+        assert_eq!(
+            worktree_preview_index_line_capacity_hint(usize::MAX),
+            WORKTREE_PREVIEW_INDEX_LINE_CAPACITY_MAX
+        );
+    }
+
+    #[test]
+    fn materialized_preview_line_raw_text_avoids_full_source_copy() {
+        let source: SharedString = "x".repeat(1024 * 1024).into();
+        let iterations = 4u64;
+
+        let ((copied_len, copied_slice_len), copied_metrics) = measure_allocations(|| {
+            let mut len = 0usize;
+            let mut slice_len = 0usize;
+            for _ in 0..iterations as usize {
+                let copied_source: Arc<str> = Arc::from(source.as_ref());
+                let line = gitcomet_core::file_diff::FileDiffLineText::shared_slice(
+                    copied_source,
+                    0..source.len(),
+                );
+                len = len.wrapping_add(line.len());
+                slice_len =
+                    slice_len.wrapping_add(line.slice_bytes(0..16).map_or(0, |slice| slice.len()));
+            }
+            (len, slice_len)
+        });
+
+        let ((shared_len, shared_slice_len), shared_metrics) = measure_allocations(|| {
+            let mut len = 0usize;
+            let mut slice_len = 0usize;
+            for _ in 0..iterations as usize {
+                let line = worktree_preview_materialized_line_raw_text(&source, 0..source.len());
+                len = len.wrapping_add(line.len());
+                slice_len =
+                    slice_len.wrapping_add(line.slice_bytes(0..16).map_or(0, |slice| slice.len()));
+            }
+            (len, slice_len)
+        });
+
+        assert_eq!(copied_len, source.len() * iterations as usize);
+        assert_eq!(copied_slice_len, 16 * iterations as usize);
+        assert_eq!(shared_len, source.len() * iterations as usize);
+        assert_eq!(shared_slice_len, 16 * iterations as usize);
+        assert!(
+            copied_metrics.alloc_bytes >= source.len() as u64 * iterations,
+            "copying baseline should allocate the source each time: {copied_metrics:?}"
+        );
+        assert!(
+            shared_metrics.alloc_bytes.saturating_mul(8) < copied_metrics.alloc_bytes,
+            "materialized preview row lookup should stay far below full-source copy cost: shared={shared_metrics:?} copied={copied_metrics:?}"
+        );
     }
 
     #[test]

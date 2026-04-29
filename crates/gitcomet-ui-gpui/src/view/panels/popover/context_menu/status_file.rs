@@ -4,7 +4,7 @@ pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
     area: DiffArea,
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
     cx: &gpui::Context<PopoverHost>,
 ) -> ContextMenuModel {
     let (use_selection, selected_count) = {
@@ -15,7 +15,7 @@ pub(super) fn model(
             .map(|sel| sel.selected_paths_for_area(area))
             .unwrap_or(&[]);
 
-        let use_selection = selection.len() > 1 && selection.iter().any(|p| p == path);
+        let use_selection = selection.len() > 1 && selection.iter().any(|p| p.as_path() == path);
         let selected_count = if use_selection { selection.len() } else { 1 };
         (use_selection, selected_count)
     };
@@ -27,10 +27,10 @@ pub(super) fn model(
         .find(|r| r.id == repo_id)
         .map(|repo| {
             let unstaged_kind = repo
-                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                .status_entry_for_path(DiffArea::Unstaged, path)
                 .map(|status| status.kind);
             let staged_kind = repo
-                .status_entry_for_path(DiffArea::Staged, path.as_path())
+                .status_entry_for_path(DiffArea::Staged, path)
                 .map(|status| status.kind);
 
             (
@@ -60,12 +60,12 @@ pub(super) fn model(
         .iter()
         .find(|repo| repo.id == repo_id)
         .and_then(|repo| {
-            let status_entry = repo.status_entry_for_path(area, path.as_path())?;
+            let status_entry = repo.status_entry_for_path(area, path)?;
             if status_entry.kind == gitcomet_core::domain::FileStatusKind::Untracked {
                 return None;
             }
 
-            let menu_state = submodule::menu_state(this, repo_id, path.as_path());
+            let menu_state = submodule::menu_state(this, repo_id, path);
             if menu_state.status.is_some() || repo.spec.workdir.join(path).is_dir() {
                 Some(menu_state)
             } else {
@@ -117,13 +117,13 @@ pub(super) fn model(
         action: if area == DiffArea::Unstaged && is_unstaged_conflicted {
             Box::new(ContextMenuAction::SelectConflictDiff {
                 repo_id,
-                path: path.clone(),
+                path: path.to_path_buf(),
             })
         } else {
             Box::new(ContextMenuAction::SelectDiff {
                 repo_id,
                 target: DiffTarget::WorkingTree {
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                     area,
                 },
             })
@@ -136,7 +136,7 @@ pub(super) fn model(
         disabled: false,
         action: Box::new(ContextMenuAction::OpenFile {
             repo_id,
-            path: path.clone(),
+            path: path.to_path_buf(),
         }),
     });
     items.push(ContextMenuItem::Entry {
@@ -146,7 +146,7 @@ pub(super) fn model(
         disabled: false,
         action: Box::new(ContextMenuAction::OpenFileLocation {
             repo_id,
-            path: path.clone(),
+            path: path.to_path_buf(),
         }),
     });
     items.push(ContextMenuItem::Entry {
@@ -157,7 +157,7 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory {
                 repo_id,
-                path: path.clone(),
+                path: path.to_path_buf(),
             },
         }),
     });
@@ -176,7 +176,7 @@ pub(super) fn model(
             action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
                 area,
-                path: path.clone(),
+                path: path.to_path_buf(),
                 side: gitcomet_core::services::ConflictSide::Ours,
             }),
         });
@@ -192,7 +192,7 @@ pub(super) fn model(
             action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
                 area,
-                path: path.clone(),
+                path: path.to_path_buf(),
                 side: gitcomet_core::services::ConflictSide::Theirs,
             }),
         });
@@ -209,7 +209,7 @@ pub(super) fn model(
             disabled: !can_manual,
             action: Box::new(ContextMenuAction::SelectConflictDiff {
                 repo_id,
-                path: path.clone(),
+                path: path.to_path_buf(),
             }),
         });
         if area == DiffArea::Unstaged && is_unstaged_conflicted {
@@ -225,7 +225,7 @@ pub(super) fn model(
                 disabled: !can_launch_external_mergetool,
                 action: Box::new(ContextMenuAction::LaunchMergetool {
                     repo_id,
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                 }),
             });
         }
@@ -243,7 +243,7 @@ pub(super) fn model(
                 action: Box::new(ContextMenuAction::StageSelectionOrPath {
                     repo_id,
                     area,
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                 }),
             }),
             DiffArea::Staged => items.push(ContextMenuItem::Entry {
@@ -258,7 +258,7 @@ pub(super) fn model(
                 action: Box::new(ContextMenuAction::UnstageSelectionOrPath {
                     repo_id,
                     area,
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                 }),
             }),
         };
@@ -278,7 +278,7 @@ pub(super) fn model(
             action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
                 repo_id,
                 area,
-                path: path.clone(),
+                path: path.to_path_buf(),
             }),
         });
     }
@@ -306,7 +306,7 @@ fn submodule_status_model(
     this: &PopoverHost,
     repo_id: RepoId,
     area: DiffArea,
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
     use_selection: bool,
     selected_count: usize,
     is_conflicted: bool,
@@ -338,7 +338,7 @@ fn submodule_status_model(
             disabled: false,
             action: Box::new(ContextMenuAction::LoadSubmodule {
                 repo_id,
-                path: path.clone(),
+                path: path.to_path_buf(),
             }),
         });
     }
@@ -350,7 +350,9 @@ fn submodule_status_model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::submodule(
                 repo_id,
-                SubmodulePopoverKind::ChangePointerPrompt { path: path.clone() },
+                SubmodulePopoverKind::ChangePointerPrompt {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -362,7 +364,9 @@ fn submodule_status_model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::submodule(
                 repo_id,
-                SubmodulePopoverKind::RemoveConfirm { path: path.clone() },
+                SubmodulePopoverKind::RemoveConfirm {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -382,7 +386,7 @@ fn submodule_status_model(
                 action: Box::new(ContextMenuAction::StageSelectionOrPath {
                     repo_id,
                     area,
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                 }),
             }),
             DiffArea::Staged => items.push(ContextMenuItem::Entry {
@@ -397,7 +401,7 @@ fn submodule_status_model(
                 action: Box::new(ContextMenuAction::UnstageSelectionOrPath {
                     repo_id,
                     area,
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                 }),
             }),
         }
@@ -424,7 +428,7 @@ fn submodule_status_model(
             action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
                 repo_id,
                 area,
-                path: path.clone(),
+                path: path.to_path_buf(),
             }),
         });
     }

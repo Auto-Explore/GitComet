@@ -71,7 +71,7 @@ pub(super) fn wait_for_diff_text_click_position_for_offset_range(
 
         if let Some(position) = cx.update(|_window, app| {
             let pane = view.read(app).main_pane.read(app);
-            diff_text_click_position_for_offset_range(&pane, visible_ix, region, target.clone())
+            diff_text_click_position_for_offset_range(pane, visible_ix, region, target.clone())
         }) {
             return position;
         }

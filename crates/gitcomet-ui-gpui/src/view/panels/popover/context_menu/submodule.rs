@@ -68,9 +68,9 @@ pub(super) fn status_label(status: Option<SubmoduleStatus>) -> Option<&'static s
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
-    path: &std::path::PathBuf,
+    path: &std::path::Path,
 ) -> ContextMenuModel {
-    let state = menu_state(this, repo_id, path.as_path());
+    let state = menu_state(this, repo_id, path);
     let mut items = vec![ContextMenuItem::Header("Submodule".into())];
     items.push(ContextMenuItem::Label(
         components::ContextMenuText::path_single_line(path.display().to_string()),
@@ -98,7 +98,7 @@ pub(super) fn model(
             disabled: false,
             action: Box::new(ContextMenuAction::LoadSubmodule {
                 repo_id,
-                path: path.clone(),
+                path: path.to_path_buf(),
             }),
         });
     }
@@ -111,7 +111,9 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::submodule(
                 repo_id,
-                SubmodulePopoverKind::ChangePointerPrompt { path: path.clone() },
+                SubmodulePopoverKind::ChangePointerPrompt {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });
@@ -125,7 +127,9 @@ pub(super) fn model(
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::submodule(
                 repo_id,
-                SubmodulePopoverKind::RemoveConfirm { path: path.clone() },
+                SubmodulePopoverKind::RemoveConfirm {
+                    path: path.to_path_buf(),
+                },
             ),
         }),
     });

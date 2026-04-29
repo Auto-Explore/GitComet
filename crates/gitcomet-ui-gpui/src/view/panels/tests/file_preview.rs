@@ -451,7 +451,7 @@ fn html_file_preview_renders_injected_attribute_syntax_from_real_document(
 }
 
 #[gpui::test]
-fn added_file_preview_text_file_stays_streamed_and_uses_heuristic_syntax_highlighting(
+fn added_file_preview_text_file_materializes_and_uses_prepared_syntax_highlighting(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -461,20 +461,30 @@ fn added_file_preview_text_file_stays_streamed_and_uses_heuristic_syntax_highlig
 
     let repo_id = gitcomet_state::model::RepoId(77);
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_added_preview_text_file_syntax",
+        "gitcomet_ui_test_{}_added_preview_prepared_syntax",
         std::process::id()
     ));
-    let file_rel = std::path::PathBuf::from("added_preview.json");
+    let file_rel = std::path::PathBuf::from("added_preview.html");
     let preview_abs_path = workdir.join(&file_rel);
-    let preview_source_path = workdir.join(".added_preview_source.json");
-    let highlighted_line = r#"  "previewValue": 7"#;
-    let highlighted_line_ix = 1usize;
-    let preview_text = ["{", highlighted_line, "}"].join("\n");
+    let preview_source_path = workdir.join(".added_preview_source.html");
+    let script_line = "const previewValue = 7;";
+    let style_line = "color: red;";
+    let script_line_ix = 1usize;
+    let style_line_ix = 4usize;
+    let preview_text = [
+        "<script>",
+        script_line,
+        "</script>",
+        "<style>",
+        style_line,
+        "</style>",
+    ]
+    .join("\n");
 
     let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(&workdir).expect("create added preview text-file workdir");
+    std::fs::create_dir_all(&workdir).expect("create added preview prepared syntax workdir");
     std::fs::write(&preview_source_path, &preview_text)
-        .expect("write added preview text-file fixture");
+        .expect("write added preview prepared syntax fixture");
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -486,7 +496,7 @@ fn added_file_preview_text_file_stays_streamed_and_uses_heuristic_syntax_highlig
                 gitcomet_core::domain::DiffArea::Staged,
             );
             repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
-                "materialized diff_file should not be consulted for added preview text-file syntax"
+                "materialized diff_file should not be consulted for added preview prepared syntax"
                     .into(),
             );
             repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
@@ -510,26 +520,37 @@ fn added_file_preview_text_file_stays_streamed_and_uses_heuristic_syntax_highlig
     wait_for_main_pane_condition(
         cx,
         &view,
-        "added preview text-file streamed heuristic syntax render",
+        "added preview text-file prepared syntax render",
         |pane| {
             pane.is_file_preview_active()
                 && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
                 && pane.worktree_preview_source_path.as_ref() == Some(&preview_source_path)
-                && pane.worktree_preview_text.is_empty()
-                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Json)
-                && pane.worktree_preview_prepared_syntax_document().is_none()
+                && pane.worktree_preview_text.as_ref() == preview_text
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Html)
+                && pane.worktree_preview_prepared_syntax_document().is_some()
                 && pane
-                    .worktree_preview_segments_cache_get(highlighted_line_ix)
+                    .worktree_preview_segments_cache_get(script_line_ix)
                     .is_some_and(|styled| {
-                        styled.text.as_ref() == highlighted_line && !styled.highlights.is_empty()
+                        styled.text.as_ref() == script_line
+                            && highlights_include_range(styled.highlights.as_ref(), 0..5)
+                            && highlights_include_range(styled.highlights.as_ref(), 21..22)
+                    })
+                && pane
+                    .worktree_preview_segments_cache_get(style_line_ix)
+                    .is_some_and(|styled| {
+                        styled.text.as_ref() == style_line
+                            && highlights_include_range(styled.highlights.as_ref(), 0..5)
                     })
         },
         |pane| {
-            let highlighted_cached = pane
-                .worktree_preview_segments_cache_get(highlighted_line_ix)
+            let script_cached = pane
+                .worktree_preview_segments_cache_get(script_line_ix)
+                .map(styled_debug_info);
+            let style_cached = pane
+                .worktree_preview_segments_cache_get(style_line_ix)
                 .map(styled_debug_info);
             format!(
-                "active={} preview_path={:?} source_path={:?} text_len={} language={:?} prepared={:?} highlighted_cached={highlighted_cached:?}",
+                "active={} preview_path={:?} source_path={:?} text_len={} language={:?} prepared={:?} script_cached={script_cached:?} style_cached={style_cached:?}",
                 pane.is_file_preview_active(),
                 pane.worktree_preview_path.clone(),
                 pane.worktree_preview_source_path.clone(),
@@ -540,7 +561,121 @@ fn added_file_preview_text_file_stays_streamed_and_uses_heuristic_syntax_highlig
         },
     );
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup added preview text-file fixture");
+    std::fs::remove_dir_all(&workdir).expect("cleanup added preview prepared syntax fixture");
+}
+
+#[gpui::test]
+fn deleted_file_preview_text_file_materializes_and_uses_prepared_syntax_highlighting(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(78);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_deleted_preview_prepared_syntax",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("deleted_preview.html");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_source_path = workdir.join(".deleted_preview_source.html");
+    let script_line = "const removedValue = 9;";
+    let style_line = "color: blue;";
+    let script_line_ix = 1usize;
+    let style_line_ix = 4usize;
+    let preview_text = [
+        "<script>",
+        script_line,
+        "</script>",
+        "<style>",
+        style_line,
+        "</style>",
+    ]
+    .join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create deleted preview prepared syntax workdir");
+    std::fs::write(&preview_source_path, &preview_text)
+        .expect("write deleted preview prepared syntax fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Deleted,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Error(
+                "materialized diff_file should not be consulted for deleted preview prepared syntax"
+                    .into(),
+            );
+            repo.diff_state.diff_preview_text_file = gitcomet_state::model::Loadable::Ready(Some(
+                Arc::new(gitcomet_core::domain::DiffPreviewTextFile {
+                    path: preview_source_path.clone(),
+                    side: gitcomet_core::domain::DiffPreviewTextSide::Old,
+                }),
+            ));
+            repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, Arc::clone(&next_state), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        window.refresh();
+        let _ = window.draw(app);
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "deleted preview text-file prepared syntax render",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
+                && pane.worktree_preview_source_path.as_ref() == Some(&preview_source_path)
+                && pane.worktree_preview_text.as_ref() == preview_text
+                && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Html)
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+                && pane
+                    .worktree_preview_segments_cache_get(script_line_ix)
+                    .is_some_and(|styled| {
+                        styled.text.as_ref() == script_line
+                            && highlights_include_range(styled.highlights.as_ref(), 0..5)
+                            && highlights_include_range(styled.highlights.as_ref(), 21..22)
+                    })
+                && pane
+                    .worktree_preview_segments_cache_get(style_line_ix)
+                    .is_some_and(|styled| {
+                        styled.text.as_ref() == style_line
+                            && highlights_include_range(styled.highlights.as_ref(), 0..5)
+                    })
+        },
+        |pane| {
+            let script_cached = pane
+                .worktree_preview_segments_cache_get(script_line_ix)
+                .map(styled_debug_info);
+            let style_cached = pane
+                .worktree_preview_segments_cache_get(style_line_ix)
+                .map(styled_debug_info);
+            format!(
+                "active={} preview_path={:?} source_path={:?} text_len={} language={:?} prepared={:?} script_cached={script_cached:?} style_cached={style_cached:?}",
+                pane.is_file_preview_active(),
+                pane.worktree_preview_path.clone(),
+                pane.worktree_preview_source_path.clone(),
+                pane.worktree_preview_text.len(),
+                pane.worktree_preview_syntax_language,
+                pane.worktree_preview_prepared_syntax_document(),
+            )
+        },
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup deleted preview prepared syntax fixture");
 }
 
 #[gpui::test]
@@ -939,7 +1074,8 @@ fn minified_json_preview_streams_visible_slice_for_giant_line(cx: &mut gpui::Tes
 fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     cx: &mut gpui::TestAppContext,
 ) {
-    const PAYLOAD_BYTES: usize = 256 * 1024;
+    const PREPARED_DOCUMENT_MAX_BYTES: usize = 8 * 1024 * 1024;
+    const PAYLOAD_BYTES: usize = PREPARED_DOCUMENT_MAX_BYTES + 256 * 1024;
 
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -957,6 +1093,10 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
     let long_json = format!(
         r#"{{"title":"Ä","needle":"preview-streamed","payload":"{}","tail":true}}"#,
         "x".repeat(PAYLOAD_BYTES)
+    );
+    assert!(
+        long_json.len() > PREPARED_DOCUMENT_MAX_BYTES,
+        "fixture should exceed the prepared-document byte gate"
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -1244,7 +1384,7 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
 }
 
 #[gpui::test]
-fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
+fn minified_json_preview_context_menu_copy_uses_streamed_line_target(
     cx: &mut gpui::TestAppContext,
 ) {
     const PAYLOAD_BYTES: usize = 96 * 1024;
@@ -1300,7 +1440,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
     wait_for_main_pane_condition(
         cx,
         &view,
-        "streamed preview ready before opening preview context menu",
+        "streamed materialized preview ready before opening preview context menu",
         |pane| {
             pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
                 && pane.worktree_preview_source_path.as_ref() == Some(&preview_abs_path)
@@ -1308,7 +1448,7 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
                     pane.worktree_preview,
                     gitcomet_state::model::Loadable::Ready(1)
                 )
-                && pane.worktree_preview_text.is_empty()
+                && pane.worktree_preview_text.as_ref() == long_json
         },
         |pane| {
             format!(
@@ -1403,8 +1543,8 @@ fn minified_json_preview_context_menu_copy_uses_streamed_line_source(
             "streamed preview context-menu copy should not populate the styled row cache"
         );
         assert!(
-            pane.worktree_preview_text.is_empty(),
-            "streamed preview context-menu copy should keep the preview file-backed"
+            pane.worktree_preview_text.as_ref() == long_json,
+            "streamed preview context-menu copy should keep normal-sized preview text materialized"
         );
     });
 

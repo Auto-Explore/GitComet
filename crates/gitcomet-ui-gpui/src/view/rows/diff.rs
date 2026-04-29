@@ -43,6 +43,12 @@ enum CollapsedHunkRevealAction {
     Short,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CollapsedHunkRevealClick {
+    action: CollapsedHunkRevealAction,
+    src_ix: usize,
+}
+
 fn diff_row_height(ui_scale_percent: u32) -> Pixels {
     crate::view::panes::main::diff_row_height_for_ui_scale(ui_scale_percent)
 }
@@ -127,8 +133,7 @@ fn collapsed_hunk_reveal_button(
     icon: &'static str,
     tooltip: &'static str,
     icon_color: gpui::Rgba,
-    action: CollapsedHunkRevealAction,
-    src_ix: usize,
+    click: CollapsedHunkRevealClick,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let mut button = div()
@@ -154,18 +159,18 @@ fn collapsed_hunk_reveal_button(
             )
             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                 cx.stop_propagation();
-                match action {
+                match click.action {
                     CollapsedHunkRevealAction::Up => {
-                        this.collapsed_diff_reveal_hunk_up(src_ix, cx);
+                        this.collapsed_diff_reveal_hunk_up(click.src_ix, cx);
                     }
                     CollapsedHunkRevealAction::Down => {
-                        this.collapsed_diff_reveal_hunk_down(src_ix, cx);
+                        this.collapsed_diff_reveal_hunk_down(click.src_ix, cx);
                     }
                     CollapsedHunkRevealAction::DownBefore => {
-                        this.collapsed_diff_reveal_hunk_down_before(src_ix, cx);
+                        this.collapsed_diff_reveal_hunk_down_before(click.src_ix, cx);
                     }
                     CollapsedHunkRevealAction::Short => {
-                        this.collapsed_diff_reveal_hunk_short(src_ix, cx);
+                        this.collapsed_diff_reveal_hunk_short(click.src_ix, cx);
                     }
                 }
             }));
@@ -1942,8 +1947,10 @@ fn collapsed_inline_header_row(
                         "icons/arrow_up.svg",
                         "Show hidden lines above",
                         button_color,
-                        CollapsedHunkRevealAction::Up,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -1959,8 +1966,10 @@ fn collapsed_inline_header_row(
                         "icons/arrow_down.svg",
                         "Show hidden lines below",
                         button_color,
-                        CollapsedHunkRevealAction::Down,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Down,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -1976,8 +1985,10 @@ fn collapsed_inline_header_row(
                         "icons/arrow_down.svg",
                         "Show hidden lines below",
                         button_color,
-                        CollapsedHunkRevealAction::DownBefore,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::DownBefore,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .child(collapsed_hunk_reveal_button(
@@ -1988,8 +1999,10 @@ fn collapsed_inline_header_row(
                         "icons/arrow_up.svg",
                         "Show hidden lines above",
                         button_color,
-                        CollapsedHunkRevealAction::Up,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -2005,8 +2018,10 @@ fn collapsed_inline_header_row(
                         "icons/plus.svg",
                         "Show hidden lines",
                         button_color,
-                        CollapsedHunkRevealAction::Short,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Short,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -2447,8 +2462,10 @@ fn collapsed_split_header_row(
                         "icons/arrow_up.svg",
                         "Show hidden lines above",
                         button_color,
-                        CollapsedHunkRevealAction::Up,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -2464,8 +2481,10 @@ fn collapsed_split_header_row(
                         "icons/arrow_down.svg",
                         "Show hidden lines below",
                         button_color,
-                        CollapsedHunkRevealAction::Down,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Down,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -2481,8 +2500,10 @@ fn collapsed_split_header_row(
                         "icons/arrow_down.svg",
                         "Show hidden lines below",
                         button_color,
-                        CollapsedHunkRevealAction::DownBefore,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::DownBefore,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .child(collapsed_hunk_reveal_button(
@@ -2493,8 +2514,10 @@ fn collapsed_split_header_row(
                         "icons/arrow_up.svg",
                         "Show hidden lines above",
                         button_color,
-                        CollapsedHunkRevealAction::Up,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),
@@ -2510,8 +2533,10 @@ fn collapsed_split_header_row(
                         "icons/plus.svg",
                         "Show hidden lines",
                         button_color,
-                        CollapsedHunkRevealAction::Short,
-                        src_ix,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Short,
+                            src_ix,
+                        },
                         cx,
                     ))
                     .into_any_element(),

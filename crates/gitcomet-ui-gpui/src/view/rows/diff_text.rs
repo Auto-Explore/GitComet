@@ -61,7 +61,8 @@ pub(in crate::view) use prepared::{
 };
 pub(in crate::view) use syntax::{
     DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode,
-    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
+    PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, diff_syntax_language_for_code_fence_info,
+    diff_syntax_language_for_path,
 };
 
 pub(super) fn syntax_highlights_for_streamed_line_slice_heuristic(
