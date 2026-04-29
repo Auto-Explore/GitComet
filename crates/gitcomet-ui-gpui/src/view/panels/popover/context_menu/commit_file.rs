@@ -17,7 +17,9 @@ pub(super) fn model(
             .unwrap_or_else(|| format!("{path:?}"))
             .into(),
     )];
-    items.push(ContextMenuItem::Label(path.display().to_string().into()));
+    items.push(ContextMenuItem::Label(
+        components::ContextMenuText::path_single_line(path.display().to_string()),
+    ));
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),

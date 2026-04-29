@@ -2072,6 +2072,60 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
     });
 }
 
+#[gpui::test]
+fn worktree_branch_prefix_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(760.0), px(440.0)));
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_worktree_branch_tooltip_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    let branch = "feature/super-long-worktree-branch-name-that-needs-truncation-to-fit-the-sidebar"
+        .to_string();
+    let linked_repo = base
+        .join("repo-feature")
+        .join("nested")
+        .join("workspace-with-a-long-path");
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: linked_repo,
+                head: None,
+                branch: Some(branch.clone()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
+
+    let label_ix = wait_for_debug_index(cx, &view, "worktree_branch_label", 128);
+    let label_bounds = cx
+        .debug_bounds(debug_selector("worktree_branch_label", label_ix))
+        .expect("expected worktree branch label to render");
+    cx.simulate_mouse_move(label_bounds.center(), None, Modifiers::default());
+    view::test_support::wait_for_native_tooltip(cx);
+
+    assert_eq!(
+        view::test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some(branch)
+    );
+}
+
 struct PanelLayoutTestView {
     theme: AppTheme,
     handle: gpui::UniformListScrollHandle,

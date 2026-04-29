@@ -1,6 +1,7 @@
 mod scrollbar;
 mod text_input;
 pub(crate) mod text_model;
+pub(crate) mod text_truncation;
 
 pub use scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarMarker, ScrollbarMarkerKind};
 #[cfg(feature = "benchmarks")]

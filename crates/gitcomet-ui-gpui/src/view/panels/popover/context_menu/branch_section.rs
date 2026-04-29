@@ -13,7 +13,7 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
         BranchSection::Local => "Local".into(),
         BranchSection::Remote => "Remote".into(),
     };
-    let mut items = vec![ContextMenuItem::Header(header)];
+    let mut items = vec![ContextMenuItem::Header(header.into())];
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Switch branch".into(),

@@ -13,7 +13,7 @@ pub(super) fn model(
     copy_text: &Option<String>,
     copy_target: Option<(usize, DiffTextRegion)>,
 ) -> ContextMenuModel {
-    let title = path
+    let title: SharedString = path
         .as_ref()
         .and_then(|p| {
             p.file_name()
@@ -22,9 +22,11 @@ pub(super) fn model(
         })
         .unwrap_or_else(|| "Diff".into());
 
-    let mut items = vec![ContextMenuItem::Header(title)];
+    let mut items = vec![ContextMenuItem::Header(title.into())];
     if let Some(path) = path {
-        items.push(ContextMenuItem::Label(path.display().to_string().into()));
+        items.push(ContextMenuItem::Label(
+            components::ContextMenuText::path_single_line(path.display().to_string()),
+        ));
     }
     items.push(ContextMenuItem::Separator);
 

@@ -38,7 +38,8 @@ pub(crate) use gitcomet_ui_gpui::benchmarks::{
     ScrollbarDragStepFixture, ScrollbarDragStepMetrics, SidebarResizeDragSustainedFixture,
     SidebarResizeDragSustainedMetrics, StagingFixture, StagingMetrics, StatusListFixture,
     StatusListMetrics, StatusMultiSelectFixture, StatusMultiSelectMetrics,
-    StatusSelectDiffOpenFixture, StatusSelectDiffOpenMetrics, SvgDualPathFirstWindowFixture,
+    StatusSelectDiffOpenFixture, StatusSelectDiffOpenMetrics, StatusTruncationRenderFixture,
+    StatusTruncationRenderMetrics, StatusTruncationScenario, SvgDualPathFirstWindowFixture,
     SvgDualPathFirstWindowMetrics, TextInputHighlightDensity, TextInputLongLineCapFixture,
     TextInputLongLineCapMetrics, TextInputPrepaintWindowedFixture,
     TextInputPrepaintWindowedMetrics, TextInputRunsStreamedHighlightFixture,
@@ -517,6 +518,57 @@ pub(crate) fn emit_status_list_sidecar(case_name: &str, metrics: &StatusListMetr
         json!(metrics.prewarmed_entries),
     );
     emit_sidecar_metrics(&format!("status_list/{case_name}"), payload);
+}
+
+pub(crate) fn emit_status_truncation_sidecar(
+    case_name: &str,
+    metrics: &StatusTruncationRenderMetrics,
+) {
+    let mut payload = Map::new();
+    payload.insert("sections".to_string(), json!(metrics.sections));
+    payload.insert("entries_total".to_string(), json!(metrics.entries_total));
+    payload.insert("rows_visible".to_string(), json!(metrics.rows_visible));
+    payload.insert("rows_shaped".to_string(), json!(metrics.rows_shaped));
+    payload.insert("layout_passes".to_string(), json!(metrics.layout_passes));
+    payload.insert(
+        "path_profile_shapes".to_string(),
+        json!(metrics.path_profile_shapes),
+    );
+    payload.insert(
+        "middle_profile_shapes".to_string(),
+        json!(metrics.middle_profile_shapes),
+    );
+    payload.insert(
+        "end_profile_shapes".to_string(),
+        json!(metrics.end_profile_shapes),
+    );
+    payload.insert("focus_shapes".to_string(), json!(metrics.focus_shapes));
+    payload.insert(
+        "truncated_shapes".to_string(),
+        json!(metrics.truncated_shapes),
+    );
+    payload.insert(
+        "path_alignment_notifications".to_string(),
+        json!(metrics.path_alignment_notifications),
+    );
+    payload.insert(
+        "candidate_measurements".to_string(),
+        json!(metrics.candidate_measurements),
+    );
+    payload.insert(
+        "path_display_cache_hits".to_string(),
+        json!(metrics.path_display_cache_hits),
+    );
+    payload.insert(
+        "path_display_cache_misses".to_string(),
+        json!(metrics.path_display_cache_misses),
+    );
+    payload.insert(
+        "path_display_cache_clears".to_string(),
+        json!(metrics.path_display_cache_clears),
+    );
+    payload.insert("max_path_depth".to_string(), json!(metrics.max_path_depth));
+    emit_sidecar_metrics(&format!("status_truncation/{case_name}"), payload);
 }
 
 pub(crate) fn emit_status_multi_select_sidecar(

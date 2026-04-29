@@ -800,6 +800,7 @@ impl MainPaneView {
         focused_mergetool_labels: Option<FocusedMergetoolLabels>,
         focused_mergetool_exit_code: Option<Arc<AtomicI32>>,
         root_view: WeakEntity<GitCometView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -953,6 +954,7 @@ impl MainPaneView {
             date_time_format,
             _ui_model_subscription: subscription,
             root_view,
+            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             last_window_size: size(px(0.0), px(0.0)),

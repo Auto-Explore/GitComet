@@ -18,6 +18,7 @@ benchmarks = [
     "gitcomet-state/benchmarks",
     "gitcomet-git-gix/benchmarks",
     "dep:gitcomet-git-gix",
+    "gpui/test-support",
 ]
 syntax-minimal = ["syntax-rust", "syntax-data", "syntax-shell"]
 syntax-common = ["syntax-minimal", "syntax-web", "syntax-python"]

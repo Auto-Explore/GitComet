@@ -19,6 +19,7 @@ pub(in super::super) struct SidebarPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
@@ -63,6 +64,7 @@ impl SidebarPaneView {
         theme: AppTheme,
         sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
@@ -91,6 +93,7 @@ impl SidebarPaneView {
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
             root_view,
+            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,

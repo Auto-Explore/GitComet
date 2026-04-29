@@ -123,6 +123,7 @@ pub(in super::super) struct PopoverHost {
     _stash_message_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
+    tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
 
@@ -522,6 +523,7 @@ impl PopoverHost {
         show_timezone: bool,
         change_tracking_view: ChangeTrackingView,
         root_view: WeakEntity<GitCometView>,
+        tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
         window: &mut Window,
@@ -910,6 +912,7 @@ impl PopoverHost {
             _stash_message_input_subscription: stash_message_input_subscription,
             notify_fingerprint: 0,
             root_view,
+            tooltip_host,
             main_pane,
             details_pane,
             popover: None,
@@ -1046,6 +1049,7 @@ impl PopoverHost {
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.clear_truncated_tooltip(cx);
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
@@ -1206,12 +1210,19 @@ impl PopoverHost {
     }
 
     fn dismiss_inline_popover(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.clear_truncated_tooltip(cx);
         self.popover = None;
         self.popover_anchor = None;
         self.clear_active_context_menu_invoker(cx);
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
         cx.notify();
+    }
+
+    fn clear_truncated_tooltip(&self, cx: &mut gpui::Context<Self>) {
+        let _ = self.tooltip_host.update(cx, |host, cx| {
+            host.clear_tooltip(cx);
+        });
     }
 
     fn can_submit_create_tag(&self, cx: &mut gpui::Context<Self>) -> bool {
@@ -1399,6 +1410,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.clear_truncated_tooltip(cx);
         self.request_lazy_popover_repo_data(&kind);
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu

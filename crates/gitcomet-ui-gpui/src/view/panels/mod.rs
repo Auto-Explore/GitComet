@@ -194,8 +194,8 @@ pub(in crate::view) enum ContextMenuAction {
 #[derive(Clone)]
 enum ContextMenuItem {
     Separator,
-    Header(SharedString),
-    Label(SharedString),
+    Header(components::ContextMenuText),
+    Label(components::ContextMenuText),
     Entry {
         label: SharedString,
         icon: Option<SharedString>,

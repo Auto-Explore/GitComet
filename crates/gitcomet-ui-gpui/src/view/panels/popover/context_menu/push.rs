@@ -7,10 +7,9 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
 
     ContextMenuModel::new(vec![
-        ContextMenuItem::Header(super::action_menu_title(
-            "Push",
-            tracking_branch_name.as_deref(),
-        )),
+        ContextMenuItem::Header(
+            super::action_menu_title("Push", tracking_branch_name.as_deref()).into(),
+        ),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Push".into(),

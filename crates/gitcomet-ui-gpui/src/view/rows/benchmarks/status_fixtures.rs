@@ -1,4 +1,12 @@
 use super::*;
+use crate::kit::text_truncation::{
+    PathTruncationAlignmentGroup, TextTruncationProfile,
+    clear_truncated_layout_cache_for_benchmark, measure_candidate_calls_for_benchmark,
+    path_alignment_style_key, path_alignment_visible_signature,
+    reset_measure_candidate_calls_for_benchmark, shape_truncated_line_cached_with_path_anchor,
+    truncated_line_ellipsis_x,
+};
+use gpui::TextStyle;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct StatusSelectionBenchCounters {
@@ -524,6 +532,367 @@ impl StatusListFixture {
             .max()
             .unwrap_or_default()
     }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StatusTruncationScenario {
+    PathAligned,
+    Middle,
+    End,
+    Focus,
+}
+
+impl StatusTruncationScenario {
+    fn profile(self) -> TextTruncationProfile {
+        match self {
+            Self::PathAligned => TextTruncationProfile::Path,
+            Self::Middle => TextTruncationProfile::Middle,
+            Self::End | Self::Focus => TextTruncationProfile::End,
+        }
+    }
+
+    fn layout_passes(self) -> u64 {
+        match self {
+            Self::PathAligned => 2,
+            Self::Middle | Self::End | Self::Focus => 1,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "benchmarks"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct StatusTruncationRenderMetrics {
+    pub sections: u64,
+    pub entries_total: u64,
+    pub rows_visible: u64,
+    pub rows_shaped: u64,
+    pub layout_passes: u64,
+    pub path_profile_shapes: u64,
+    pub middle_profile_shapes: u64,
+    pub end_profile_shapes: u64,
+    pub focus_shapes: u64,
+    pub truncated_shapes: u64,
+    pub path_alignment_notifications: u64,
+    pub candidate_measurements: u64,
+    pub path_display_cache_hits: u64,
+    pub path_display_cache_misses: u64,
+    pub path_display_cache_clears: u64,
+    pub max_path_depth: u64,
+}
+
+struct StatusTruncationSection {
+    section: StatusSection,
+    entries: Vec<FileStatus>,
+}
+
+pub struct StatusTruncationRenderFixture {
+    cx: gpui::TestAppContext,
+    window: gpui::WindowHandle<gpui::Empty>,
+    sections: Vec<StatusTruncationSection>,
+    path_display_cache: path_display::PathDisplayCache,
+    max_width: Pixels,
+    scenario: StatusTruncationScenario,
+}
+
+impl StatusTruncationRenderFixture {
+    pub fn long_untracked_unstaged(
+        entries_per_section: usize,
+        scenario: StatusTruncationScenario,
+        max_width_px: f32,
+    ) -> Self {
+        let entries_per_section = entries_per_section.max(1);
+        let mut cx = gpui::TestAppContext::single();
+        cx.skip_drawing();
+        let window = cx.add_window(|_window, _cx| gpui::Empty);
+
+        Self {
+            cx,
+            window,
+            sections: vec![
+                StatusTruncationSection {
+                    section: StatusSection::Untracked,
+                    entries: build_long_status_truncation_entries(
+                        entries_per_section,
+                        StatusSection::Untracked,
+                    ),
+                },
+                StatusTruncationSection {
+                    section: StatusSection::Unstaged,
+                    entries: build_long_status_truncation_entries(
+                        entries_per_section,
+                        StatusSection::Unstaged,
+                    ),
+                },
+            ],
+            path_display_cache: path_display::PathDisplayCache::default(),
+            max_width: px(max_width_px.max(1.0)),
+            scenario,
+        }
+    }
+
+    pub fn reset_runtime_state(&mut self) {
+        self.path_display_cache.clear();
+        clear_truncated_layout_cache_for_benchmark();
+        reset_measure_candidate_calls_for_benchmark();
+    }
+
+    pub fn run(&mut self) -> u64 {
+        self.run_with_metrics().0
+    }
+
+    pub fn run_with_metrics(&mut self) -> (u64, StatusTruncationRenderMetrics) {
+        self.reset_runtime_state();
+        path_display::bench_reset();
+
+        let sections = &self.sections;
+        let path_display_cache = &mut self.path_display_cache;
+        let max_width = self.max_width;
+        let scenario = self.scenario;
+        let window = self.window;
+        let layout_passes = scenario.layout_passes();
+        let rows_visible = sections
+            .iter()
+            .map(|section| section.entries.len())
+            .sum::<usize>();
+
+        let (hash, mut metrics) = self
+            .cx
+            .update_window(window.into(), |_, window, app| {
+                let mut hasher = FxHasher::default();
+                let mut metrics = StatusTruncationRenderMetrics {
+                    sections: sections.len() as u64,
+                    entries_total: rows_visible as u64,
+                    rows_visible: rows_visible as u64,
+                    layout_passes,
+                    max_path_depth: max_path_depth_for_sections(sections) as u64,
+                    ..StatusTruncationRenderMetrics::default()
+                };
+
+                let style = window.text_style();
+                let path_alignment_groups = if scenario == StatusTruncationScenario::PathAligned {
+                    sections
+                        .iter()
+                        .map(|section| {
+                            (
+                                section_visible_signature(section),
+                                PathTruncationAlignmentGroup::default(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+
+                for _ in 0..layout_passes {
+                    for (signature, group) in &path_alignment_groups {
+                        let _ = group.visible_rows(*signature);
+                    }
+
+                    for (section_ix, section) in sections.iter().enumerate() {
+                        status_section_hash_key(section.section).hash(&mut hasher);
+                        let path_alignment_group = path_alignment_groups
+                            .get(section_ix)
+                            .map(|(_, group)| group);
+
+                        for (row_ix, entry) in section.entries.iter().enumerate() {
+                            row_ix.hash(&mut hasher);
+                            status_row_kind_key(entry.kind).hash(&mut hasher);
+                            let path_display =
+                                path_display::cached_path_display(path_display_cache, &entry.path);
+                            hash_shared_string_identity(&path_display, &mut hasher);
+
+                            let shape_context = StatusTruncationShapeContext {
+                                scenario,
+                                max_width,
+                                path_alignment_group,
+                            };
+                            shape_status_truncation_label(
+                                window,
+                                app,
+                                &style,
+                                &path_display,
+                                &shape_context,
+                                &mut metrics,
+                                &mut hasher,
+                            );
+                        }
+                    }
+                }
+
+                (hasher.finish(), metrics)
+            })
+            .expect("status truncation benchmark window should remain open");
+
+        let path_display_counters = path_display::bench_snapshot();
+        path_display::bench_reset();
+        metrics.candidate_measurements = measure_candidate_calls_for_benchmark() as u64;
+        metrics.path_display_cache_hits = path_display_counters.cache_hits;
+        metrics.path_display_cache_misses = path_display_counters.cache_misses;
+        metrics.path_display_cache_clears = path_display_counters.cache_clears;
+
+        (hash, metrics)
+    }
+}
+
+struct StatusTruncationShapeContext<'a> {
+    scenario: StatusTruncationScenario,
+    max_width: Pixels,
+    path_alignment_group: Option<&'a PathTruncationAlignmentGroup>,
+}
+
+fn shape_status_truncation_label(
+    window: &mut Window,
+    app: &mut App,
+    base_style: &TextStyle,
+    path_display: &SharedString,
+    shape_context: &StatusTruncationShapeContext<'_>,
+    metrics: &mut StatusTruncationRenderMetrics,
+    hasher: &mut FxHasher,
+) {
+    let profile = shape_context.scenario.profile();
+    let focus_range = (shape_context.scenario == StatusTruncationScenario::Focus)
+        .then(|| focus_range_for_status_path(path_display.as_ref()))
+        .flatten();
+    let style_key = (profile == TextTruncationProfile::Path)
+        .then(|| path_alignment_style_key(base_style, window.rem_size()));
+    let path_ellipsis_anchor = shape_context.path_alignment_group.and_then(|group| {
+        style_key.and_then(|key| group.path_anchor_for_layout(Some(shape_context.max_width), key))
+    });
+
+    let line = shape_truncated_line_cached_with_path_anchor(
+        window,
+        app,
+        base_style,
+        path_display,
+        Some(shape_context.max_width),
+        profile,
+        &[],
+        focus_range.clone(),
+        path_ellipsis_anchor,
+    );
+
+    if profile == TextTruncationProfile::Path
+        && path_ellipsis_anchor.is_none()
+        && let Some(group) = shape_context.path_alignment_group
+        && let Some(style_key) = style_key
+        && let Some(ellipsis_x) = truncated_line_ellipsis_x(&line)
+        && group.report_natural_ellipsis(Some(shape_context.max_width), style_key, ellipsis_x)
+    {
+        metrics.path_alignment_notifications =
+            metrics.path_alignment_notifications.saturating_add(1);
+    }
+
+    metrics.rows_shaped = metrics.rows_shaped.saturating_add(1);
+    match profile {
+        TextTruncationProfile::Path => {
+            metrics.path_profile_shapes = metrics.path_profile_shapes.saturating_add(1);
+        }
+        TextTruncationProfile::Middle => {
+            metrics.middle_profile_shapes = metrics.middle_profile_shapes.saturating_add(1);
+        }
+        TextTruncationProfile::End => {
+            metrics.end_profile_shapes = metrics.end_profile_shapes.saturating_add(1);
+        }
+    }
+    if focus_range.is_some() {
+        metrics.focus_shapes = metrics.focus_shapes.saturating_add(1);
+    }
+    if line.truncated {
+        metrics.truncated_shapes = metrics.truncated_shapes.saturating_add(1);
+    }
+
+    line.truncated.hash(hasher);
+    f32::from(line.shaped_line.width).to_bits().hash(hasher);
+    f32::from(line.line_height).to_bits().hash(hasher);
+    truncated_line_ellipsis_x(&line)
+        .map(|x| f32::from(x).to_bits())
+        .unwrap_or_default()
+        .hash(hasher);
+    line.projection
+        .source_to_display_offset(path_display.len() / 2)
+        .hash(hasher);
+    line.projection
+        .source_to_display_offset(path_display.len())
+        .hash(hasher);
+}
+
+fn build_long_status_truncation_entries(entries: usize, section: StatusSection) -> Vec<FileStatus> {
+    let mut items = Vec::with_capacity(entries);
+    for ix in 0..entries {
+        let mut path = std::path::PathBuf::from("workspace");
+        path.push(match section {
+            StatusSection::Untracked => "untracked-files",
+            StatusSection::Unstaged | StatusSection::CombinedUnstaged => "unstaged-files",
+            StatusSection::Staged => "staged-files",
+        });
+        for depth_ix in 0..10 {
+            path.push(format!(
+                "very_long_component_{depth_ix:02}_group_{:03}_with_descriptive_context",
+                (ix.wrapping_mul(17).wrapping_add(depth_ix)) % 997
+            ));
+        }
+        path.push(format!(
+            "file_{ix:05}_with_an_excessively_descriptive_name_and_tail_{:04}.rs",
+            ix.wrapping_mul(29) % 10_000
+        ));
+
+        let kind = match section {
+            StatusSection::Untracked => FileStatusKind::Untracked,
+            StatusSection::Unstaged | StatusSection::CombinedUnstaged => {
+                if ix % 7 == 0 {
+                    FileStatusKind::Added
+                } else {
+                    FileStatusKind::Modified
+                }
+            }
+            StatusSection::Staged => FileStatusKind::Added,
+        };
+
+        items.push(FileStatus {
+            path,
+            kind,
+            conflict: None,
+        });
+    }
+    items
+}
+
+fn focus_range_for_status_path(path_display: &str) -> Option<Range<usize>> {
+    let filename_start = path_display
+        .rfind('/')
+        .or_else(|| path_display.rfind('\\'))
+        .map_or(0, |ix| ix + 1);
+    let focus_start = path_display[filename_start..]
+        .find("descriptive_name")
+        .map_or(filename_start, |ix| filename_start + ix);
+    let focus_end = focus_start.saturating_add(24).min(path_display.len());
+    (focus_start < focus_end).then_some(focus_start..focus_end)
+}
+
+fn section_visible_signature(section: &StatusTruncationSection) -> u64 {
+    path_alignment_visible_signature(&(
+        status_section_hash_key(section.section),
+        section.entries.len(),
+    ))
+}
+
+fn status_section_hash_key(section: StatusSection) -> u8 {
+    match section {
+        StatusSection::CombinedUnstaged => 0,
+        StatusSection::Untracked => 1,
+        StatusSection::Unstaged => 2,
+        StatusSection::Staged => 3,
+    }
+}
+
+fn max_path_depth_for_sections(sections: &[StatusTruncationSection]) -> usize {
+    sections
+        .iter()
+        .flat_map(|section| &section.entries)
+        .map(|entry| entry.path.components().count())
+        .max()
+        .unwrap_or_default()
 }
 
 fn status_row_kind_key(kind: FileStatusKind) -> u8 {

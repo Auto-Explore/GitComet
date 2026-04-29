@@ -2,19 +2,40 @@ use super::control_height_md;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
+use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, CursorStyle, Div, Entity, FontWeight, ScrollHandle, SharedString, Window, div, px,
+    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, ScrollHandle, SharedString,
+    WeakEntity, Window, div, px,
 };
 use std::ops::Range;
 use std::sync::Arc;
 
+use super::{TextTruncationProfile, TruncatedText};
+
 pub struct PickerPrompt {
     query_input: Entity<TextInput>,
     scroll_handle: ScrollHandle,
-    items: Vec<SharedString>,
+    items: Vec<PickerPromptItem>,
     empty_text: SharedString,
     max_height: gpui::Pixels,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PickerPromptItem {
+    display_text: SharedString,
+    match_text: SharedString,
+    parts: Vec<PickerPromptItemPart>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PickerPromptItemPart {
+    text: SharedString,
+    profile: TextTruncationProfile,
+    flexible: bool,
+    searchable: bool,
+    match_range: Option<Range<usize>>,
 }
 
 type OnSelectFn<V> =
@@ -28,11 +49,21 @@ impl PickerPrompt {
             items: Vec::new(),
             empty_text: "No matches".into(),
             max_height: px(360.0),
+            tooltip_host: None,
         }
     }
 
-    pub fn items(mut self, items: impl IntoIterator<Item = SharedString>) -> Self {
-        self.items = items.into_iter().collect();
+    pub fn items<I, T>(mut self, items: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<PickerPromptItem>,
+    {
+        self.items = items.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn tooltip_host(mut self, tooltip_host: WeakEntity<TooltipHost>) -> Self {
+        self.tooltip_host = Some(tooltip_host);
         self
     }
 
@@ -99,7 +130,13 @@ impl PickerPrompt {
             );
         } else {
             for m in matches {
-                let label = highlighted_label(theme, &self.items[m.index], &query, m.range);
+                let label = picker_item_label(
+                    theme,
+                    &self.items[m.index],
+                    m.range.clone(),
+                    self.tooltip_host.clone(),
+                    cx,
+                );
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
                 list = list.child(
@@ -145,6 +182,119 @@ impl PickerPrompt {
     }
 }
 
+impl PickerPromptItem {
+    pub fn plain(text: impl Into<SharedString>) -> Self {
+        Self::single(text, TextTruncationProfile::End)
+    }
+
+    pub fn single(text: impl Into<SharedString>, profile: TextTruncationProfile) -> Self {
+        Self::from_parts([PickerPromptItemPart::new(text).profile(profile)])
+    }
+
+    pub fn from_parts<I>(parts: I) -> Self
+    where
+        I: IntoIterator<Item = PickerPromptItemPart>,
+    {
+        let mut display_text = String::new();
+        let mut match_text = String::new();
+        let mut built_parts = Vec::new();
+
+        for mut part in parts {
+            display_text.push_str(part.text.as_ref());
+
+            if part.searchable {
+                let start = match_text.len();
+                match_text.push_str(part.text.as_ref());
+                part.match_range = Some(start..match_text.len());
+            }
+
+            built_parts.push(part);
+        }
+
+        Self {
+            display_text: display_text.into(),
+            match_text: match_text.into(),
+            parts: built_parts,
+        }
+    }
+
+    fn display_text(&self) -> &str {
+        self.display_text.as_ref()
+    }
+
+    fn match_text(&self) -> &str {
+        self.match_text.as_ref()
+    }
+
+    fn parts(&self) -> &[PickerPromptItemPart] {
+        self.parts.as_slice()
+    }
+}
+
+impl PickerPromptItemPart {
+    pub fn new(text: impl Into<SharedString>) -> Self {
+        Self {
+            text: text.into(),
+            profile: TextTruncationProfile::End,
+            flexible: true,
+            searchable: true,
+            match_range: None,
+        }
+    }
+
+    pub fn separator(text: impl Into<SharedString>) -> Self {
+        Self::new(text).flexible(false).searchable(false)
+    }
+
+    pub fn path(text: impl Into<SharedString>) -> Self {
+        Self::new(text).profile(TextTruncationProfile::Path)
+    }
+
+    pub fn profile(mut self, profile: TextTruncationProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    pub fn flexible(mut self, flexible: bool) -> Self {
+        self.flexible = flexible;
+        self
+    }
+
+    pub fn searchable(mut self, searchable: bool) -> Self {
+        self.searchable = searchable;
+        if !searchable {
+            self.match_range = None;
+        }
+        self
+    }
+
+    fn local_match_range(&self, range: Option<&Range<usize>>) -> Option<Range<usize>> {
+        let range = range?;
+        let part_range = self.match_range.as_ref()?;
+        let start = range.start.max(part_range.start);
+        let end = range.end.min(part_range.end);
+        (start < end).then_some((start - part_range.start)..(end - part_range.start))
+    }
+}
+
+impl From<SharedString> for PickerPromptItem {
+    fn from(value: SharedString) -> Self {
+        Self::plain(value)
+    }
+}
+
+impl From<String> for PickerPromptItem {
+    fn from(value: String) -> Self {
+        Self::plain(value)
+    }
+}
+
+impl From<&str> for PickerPromptItem {
+    fn from(value: &str) -> Self {
+        Self::plain(value.to_owned())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Match {
     index: usize,
@@ -152,15 +302,15 @@ struct Match {
     sort_key: (usize, usize, SharedString),
 }
 
-fn match_items(items: &[SharedString], query: &str) -> Vec<Match> {
+fn match_items(items: &[PickerPromptItem], query: &str) -> Vec<Match> {
     if query.is_empty() {
         return items
             .iter()
             .enumerate()
-            .map(|(index, label)| Match {
+            .map(|(index, item)| Match {
                 index,
                 range: None,
-                sort_key: (0, label.len(), label.clone()),
+                sort_key: (0, item.display_text().len(), item.display_text.clone()),
             })
             .collect();
     }
@@ -170,9 +320,14 @@ fn match_items(items: &[SharedString], query: &str) -> Vec<Match> {
     let first_lower = needle_bytes[0].to_ascii_lowercase();
     let first_upper = needle_bytes[0].to_ascii_uppercase();
 
-    for (index, label) in items.iter().enumerate() {
+    for (index, item) in items.iter().enumerate() {
+        let match_text = item.match_text();
+        if match_text.is_empty() {
+            continue;
+        }
+
         let Some(range) = find_ascii_case_insensitive_precomputed(
-            label.as_bytes(),
+            match_text.as_bytes(),
             needle_bytes,
             first_lower,
             first_upper,
@@ -183,7 +338,7 @@ fn match_items(items: &[SharedString], query: &str) -> Vec<Match> {
         out.push(Match {
             index,
             range: Some(range),
-            sort_key: (start, label.len(), label.clone()),
+            sort_key: (start, item.display_text().len(), item.display_text.clone()),
         });
     }
 
@@ -191,35 +346,59 @@ fn match_items(items: &[SharedString], query: &str) -> Vec<Match> {
     out
 }
 
-fn highlighted_label(
+fn picker_item_label<V: 'static>(
     theme: AppTheme,
-    label: &str,
-    query: &str,
+    item: &PickerPromptItem,
     range: Option<Range<usize>>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    cx: &gpui::Context<V>,
 ) -> Div {
-    let base = div()
+    let match_highlight = HighlightStyle {
+        color: Some(theme.colors.accent.into()),
+        font_weight: Some(FontWeight::BOLD),
+        ..HighlightStyle::default()
+    };
+
+    let mut label = div()
         .flex()
+        .w_full()
         .min_w(px(0.0))
+        .items_center()
         .overflow_hidden()
         .whitespace_nowrap()
         .text_sm();
 
-    let Some(range) = range.filter(|_| !query.is_empty()) else {
-        return base.child(label.to_string());
-    };
+    for (ix, part) in item.parts().iter().enumerate() {
+        let highlight_range = part.local_match_range(range.as_ref());
+        let mut container = div().min_w(px(0.0)).overflow_hidden().whitespace_nowrap();
+        if part.flexible {
+            container = container.flex_1();
+        } else if part.searchable {
+            container.style().flex_shrink = Some(1.0);
+        } else {
+            container = container.flex_shrink_0();
+        }
 
-    let prefix = label.get(..range.start).unwrap_or("");
-    let hit = label.get(range.clone()).unwrap_or("");
-    let suffix = label.get(range.end..).unwrap_or("");
+        let mut text = TruncatedText::new(part.text.clone())
+            .id(("picker_prompt_label_part_text", ix))
+            .profile(part.profile);
+        if let Some(highlight_range) = highlight_range.clone() {
+            text = text
+                .focus_range(Some(highlight_range.clone()))
+                .highlights([(highlight_range, match_highlight)]);
+        }
+        if let Some(tooltip_host) = tooltip_host.clone() {
+            text = text.full_text_tooltip(tooltip_host);
+        }
 
-    base.child(prefix.to_string())
-        .child(
-            div()
-                .font_weight(FontWeight::BOLD)
-                .text_color(theme.colors.accent)
-                .child(hit.to_string()),
-        )
-        .child(suffix.to_string())
+        label = label.child(
+            container
+                .id(("picker_prompt_label_part", ix))
+                .child(text.render(cx)),
+        );
+    }
+
+    label
 }
 
 /// Substring search with precomputed first-byte lowercase/uppercase values.
@@ -262,7 +441,10 @@ mod tests {
 
     #[test]
     fn match_items_skips_queries_longer_than_candidate_labels() {
-        let items = vec!["ab".into(), "alphabet".into()];
+        let items = vec![
+            PickerPromptItem::plain("ab"),
+            PickerPromptItem::plain("alphabet"),
+        ];
 
         let matches = match_items(&items, "alphabet soup");
 
@@ -281,5 +463,40 @@ mod tests {
         );
 
         assert_eq!(range, None);
+    }
+
+    #[test]
+    fn picker_prompt_item_maps_search_hits_into_part_local_ranges() {
+        let item = PickerPromptItem::from_parts([
+            PickerPromptItemPart::new("feature/worktree").flexible(false),
+            PickerPromptItemPart::separator("  "),
+            PickerPromptItemPart::path("/tmp/repo/src/main.rs"),
+        ]);
+
+        let matches = match_items(&[item.clone()], "main");
+        let range = matches
+            .first()
+            .and_then(|m| m.range.clone())
+            .expect("expected a match");
+
+        assert_eq!(item.parts()[0].local_match_range(Some(&range)), None);
+        assert_eq!(item.parts()[1].local_match_range(Some(&range)), None);
+        assert_eq!(
+            item.parts()[2].local_match_range(Some(&range)),
+            Some(14..18)
+        );
+    }
+
+    #[test]
+    fn picker_prompt_item_search_skips_non_searchable_separators() {
+        let item = PickerPromptItem::from_parts([
+            PickerPromptItemPart::new("repo").flexible(false),
+            PickerPromptItemPart::separator(" - "),
+            PickerPromptItemPart::path("/tmp/workspace"),
+        ]);
+
+        let matches = match_items(&[item], " - ");
+
+        assert!(matches.is_empty());
     }
 }

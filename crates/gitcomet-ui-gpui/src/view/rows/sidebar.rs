@@ -864,11 +864,8 @@ impl SidebarPaneView {
                     let branch_for_indicator = branch.as_ref().map(|name| name.to_string());
                     let branch_for_menu = branch.as_ref().map(|name| name.to_string());
                     let path_label = this.cached_path_display(&path);
-                    let label = super::super::branch_sidebar::branch_sidebar_worktree_label(
-                        branch.as_ref().map(SharedString::as_ref),
-                        detached,
-                        path_label.as_ref(),
-                    );
+                    let branch_tooltip_host = this.tooltip_host.clone();
+                    let detached_tooltip_host = this.tooltip_host.clone();
                     let context_menu_invoker: SharedString =
                         format!("worktree_menu_{}_{}", repo_id.0, path.display()).into();
                     let context_menu_active =
@@ -917,9 +914,75 @@ impl SidebarPaneView {
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .text_sm()
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .child(label.clone()),
+                                .flex()
+                                .items_center()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .min_w(px(0.0))
+                                        .when_some(branch.clone(), |label, branch| {
+                                            let tooltip_host = branch_tooltip_host.clone();
+                                            let mut prefix = div()
+                                                .debug_selector(move || {
+                                                    format!("worktree_branch_label_{ix}")
+                                                })
+                                                .min_w(px(0.0))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap();
+                                            prefix.style().flex_shrink = Some(1.0);
+                                            label
+                                                .child(
+                                                    prefix.child(
+                                                        components::TruncatedText::new(branch)
+                                                            .id(("worktree_branch_text", ix))
+                                                            .full_text_tooltip(tooltip_host)
+                                                            .render(cx),
+                                                    ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .whitespace_nowrap()
+                                                        .child("  "),
+                                                )
+                                        })
+                                        .when(branch.is_none() && detached, |label| {
+                                            let tooltip_host = detached_tooltip_host.clone();
+                                            let mut prefix = div()
+                                                .debug_selector(move || {
+                                                    format!("worktree_branch_label_{ix}")
+                                                })
+                                                .min_w(px(0.0))
+                                                .overflow_hidden()
+                                                .whitespace_nowrap();
+                                            prefix.style().flex_shrink = Some(1.0);
+                                            label
+                                                .child(
+                                                    prefix.child(
+                                                        components::TruncatedText::new(
+                                                            "(detached)",
+                                                        )
+                                                        .id(("worktree_branch_text", ix))
+                                                        .full_text_tooltip(tooltip_host)
+                                                        .render(cx),
+                                                    ),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .whitespace_nowrap()
+                                                        .child("  "),
+                                                )
+                                        })
+                                        .child(
+                                            div().flex_1().min_w(px(0.0)).child(
+                                                components::TruncatedText::path(path_label.clone())
+                                                    .id(("worktree_path_text", ix))
+                                                    .full_text_tooltip(this.tooltip_host.clone())
+                                                    .render(cx),
+                                            ),
+                                        ),
+                                ),
                         )
                         .child(
                             context_menu_indicator(
@@ -982,7 +1045,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .gitcomet_tooltip(theme, label.clone())
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulesHeader {
@@ -1961,6 +2023,15 @@ impl DetailsPaneView {
             repo.history_state.commit_details_rev,
             &details.files,
         );
+        let visible_signature = this.commit_files_visible_signature(
+            repo_id,
+            repo.history_state.commit_details_rev,
+            &range,
+            details.files.len(),
+        );
+        let path_alignment_group = this
+            .commit_files_path_alignment_group
+            .visible_rows(visible_signature);
 
         range
             .filter_map(|ix| {
@@ -2038,7 +2109,13 @@ impl DetailsPaneView {
                             .line_height(scaled_px(18.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
-                            .child(path_label),
+                            .child(
+                                components::TruncatedText::aligned_path(
+                                    path_label,
+                                    path_alignment_group.clone(),
+                                )
+                                .render(cx),
+                            ),
                     )
                     .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
                         this.focus_diff_panel(window, cx);

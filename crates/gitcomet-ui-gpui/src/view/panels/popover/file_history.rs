@@ -1,5 +1,18 @@
 use super::*;
 
+fn file_history_item(commit: &gitcomet_core::domain::Commit) -> components::PickerPromptItem {
+    let sha = commit.id.as_ref();
+    let short = sha.get(0..8).unwrap_or(sha).to_owned();
+    components::PickerPromptItem::from_parts([
+        components::PickerPromptItemPart::new(short)
+            .profile(components::TextTruncationProfile::End)
+            .flexible(false),
+        components::PickerPromptItemPart::separator("  "),
+        components::PickerPromptItemPart::new(commit.summary.to_string())
+            .profile(components::TextTruncationProfile::End),
+    ])
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -34,33 +47,53 @@ pub(super) fn panel(
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .line_height(scaled_px(14.0))
-                        .line_clamp(1)
-                        .whitespace_nowrap()
-                        .child(title),
+                        .child(
+                            components::TruncatedText::path(title.clone())
+                                .id(("file_history_title_path", repo_id.0))
+                                .full_text_tooltip(this.tooltip_host.clone())
+                                .render(cx),
+                        ),
                 ),
         )
         .child(
             components::Button::new("file_history_close", "Close")
                 .style(components::ButtonStyle::Outlined)
-                .on_click(theme, cx, |this, _e, _w, cx| {
-                    this.popover = None;
-                    this.popover_anchor = None;
-                    cx.notify();
-                }),
+                .on_click(theme, cx, |this, _e, _w, cx| this.close_popover(cx)),
         );
 
     let body: AnyElement = match repo.map(|r| &r.history_state.file_history) {
-        None => components::context_menu_label(theme, ui_scale_percent, "No repository")
-            .into_any_element(),
-        Some(Loadable::Loading) => {
-            components::context_menu_label(theme, ui_scale_percent, "Loading").into_any_element()
-        }
-        Some(Loadable::Error(e)) => {
-            components::context_menu_label(theme, ui_scale_percent, e.clone()).into_any_element()
-        }
-        Some(Loadable::NotLoaded) => {
-            components::context_menu_label(theme, ui_scale_percent, "Not loaded").into_any_element()
-        }
+        None => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            "No repository",
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
+        Some(Loadable::Loading) => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            "Loading",
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
+        Some(Loadable::Error(e)) => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            e.clone(),
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
+        Some(Loadable::NotLoaded) => components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            "Not loaded",
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+        .into_any_element(),
         Some(Loadable::Ready(page)) => {
             let commit_ids = page
                 .commits
@@ -70,16 +103,13 @@ pub(super) fn panel(
             let items = page
                 .commits
                 .iter()
-                .map(|c| {
-                    let sha = c.id.as_ref();
-                    let short = sha.get(0..8).unwrap_or(sha);
-                    format!("{short}  {}", c.summary).into()
-                })
-                .collect::<Vec<SharedString>>();
+                .map(file_history_item)
+                .collect::<Vec<_>>();
 
             if let Some(search) = this.file_history_search_input.clone() {
                 components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
                     .items(items)
+                    .tooltip_host(this.tooltip_host.clone())
                     .empty_text("No commits")
                     .max_height(scaled_px(340.0))
                     .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
@@ -97,9 +127,7 @@ pub(super) fn panel(
                                 path: Some(path.clone()),
                             },
                         });
-                        this.popover = None;
-                        this.popover_anchor = None;
-                        cx.notify();
+                        this.close_popover(cx);
                     })
                     .into_any_element()
             } else {
@@ -107,6 +135,8 @@ pub(super) fn panel(
                     theme,
                     ui_scale_percent,
                     "Search input not initialized",
+                    Some(this.tooltip_host.clone()),
+                    cx,
                 )
                 .into_any_element()
             }

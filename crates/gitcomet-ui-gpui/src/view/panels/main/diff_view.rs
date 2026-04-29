@@ -47,7 +47,7 @@ impl MainPaneView {
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
-        let title = self.diff_panel_title(theme);
+        let title = self.diff_panel_title(theme, cx);
 
         let untracked_directory_notice = self.untracked_directory_notice();
 

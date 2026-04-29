@@ -1,5 +1,6 @@
 use super::super::path_display;
 use super::super::*;
+use crate::kit::text_truncation::path_alignment_visible_signature;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 
@@ -12,6 +13,7 @@ pub(in super::super) struct DetailsPaneView {
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     change_tracking_height_design: Option<f32>,
@@ -50,6 +52,11 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    pub(in super::super) untracked_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) unstaged_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) commit_files_path_alignment_group:
+        components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -59,6 +66,7 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) untracked_height: Option<u32>,
     pub(in super::super) ui_scale_percent: u32,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
 
 pub(in super::super) struct StatusSectionResizeTracker {
@@ -187,6 +195,7 @@ impl DetailsPaneView {
             untracked_height,
             ui_scale_percent,
             root_view,
+            tooltip_host,
         } = init;
         let state = Arc::clone(&ui_model.read(cx).state);
         let initial_fingerprint = Self::notify_fingerprint(&state);
@@ -235,7 +244,7 @@ impl DetailsPaneView {
         });
 
         let commit_details_sha_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "".into(),
                     multiline: false,
@@ -245,7 +254,9 @@ impl DetailsPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
+            input
         });
 
         let commit_details_date_input = cx.new(|cx| {
@@ -263,7 +274,7 @@ impl DetailsPaneView {
         });
 
         let commit_details_parent_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "".into(),
                     multiline: false,
@@ -273,7 +284,9 @@ impl DetailsPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
+            input
         });
 
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
@@ -299,6 +312,7 @@ impl DetailsPaneView {
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
+            tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
             change_tracking_height_design: Self::sanitized_restored_change_tracking_height_design(
@@ -336,6 +350,10 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -496,6 +514,61 @@ impl DetailsPaneView {
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
         let mut cache = self.commit_file_rows.borrow_mut();
         cache.rows_for(&(repo_id, commit_details_rev), files)
+    }
+
+    pub(in super::super) fn status_path_alignment_group(
+        &self,
+        section: StatusSection,
+    ) -> &components::PathTruncationAlignmentGroup {
+        match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+                &self.unstaged_path_alignment_group
+            }
+            StatusSection::Untracked => &self.untracked_path_alignment_group,
+            StatusSection::Staged => &self.staged_path_alignment_group,
+        }
+    }
+
+    pub(in super::super) fn status_visible_signature(
+        &self,
+        repo: &RepoState,
+        section: StatusSection,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo.id,
+            Self::status_section_alignment_key(section),
+            status_section_rev(repo, section),
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
+    pub(in super::super) fn commit_files_visible_signature(
+        &self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo_id,
+            commit_details_rev,
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
+    fn status_section_alignment_key(section: StatusSection) -> u8 {
+        match section {
+            StatusSection::CombinedUnstaged => 0,
+            StatusSection::Untracked => 1,
+            StatusSection::Unstaged => 2,
+            StatusSection::Staged => 3,
+        }
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {

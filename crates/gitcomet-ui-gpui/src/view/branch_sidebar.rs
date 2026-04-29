@@ -222,6 +222,7 @@ pub(in crate::view) fn branch_sidebar_branch_label(full_name: &str) -> &str {
         .map_or(full_name, |(_, label)| label)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn branch_sidebar_worktree_label(
     branch: Option<&str>,
     detached: bool,

@@ -2153,6 +2153,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) date_time_format: DateTimeFormat,
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) root_view: WeakEntity<GitCometView>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     pub(super) notify_fingerprint: u64,
     pub(in crate::view) active_context_menu_invoker: Option<SharedString>,
 

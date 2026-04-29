@@ -63,6 +63,55 @@ fn status_list_mixed_depth_fixture_reports_cache_churn_metrics() {
 }
 
 #[test]
+fn status_truncation_fixture_reports_path_aligned_metrics() {
+    let mut fixture = StatusTruncationRenderFixture::long_untracked_unstaged(
+        6,
+        StatusTruncationScenario::PathAligned,
+        120.0,
+    );
+    let (hash, metrics) = fixture.run_with_metrics();
+
+    assert_ne!(hash, 0);
+    assert_eq!(metrics.sections, 2);
+    assert_eq!(metrics.entries_total, 12);
+    assert_eq!(metrics.rows_visible, 12);
+    assert_eq!(metrics.layout_passes, 2);
+    assert_eq!(metrics.rows_shaped, 24);
+    assert_eq!(metrics.path_profile_shapes, 24);
+    assert_eq!(metrics.middle_profile_shapes, 0);
+    assert_eq!(metrics.end_profile_shapes, 0);
+    assert_eq!(metrics.focus_shapes, 0);
+    assert_eq!(metrics.truncated_shapes, 24);
+    assert_eq!(metrics.path_display_cache_misses, 12);
+    assert_eq!(metrics.path_display_cache_hits, 12);
+    assert_eq!(metrics.max_path_depth, 13);
+    assert!(metrics.path_alignment_notifications > 0);
+    assert!(metrics.candidate_measurements >= metrics.rows_shaped);
+}
+
+#[test]
+fn status_truncation_fixture_reports_profile_specific_metrics() {
+    for (scenario, expected_middle, expected_end, expected_focus) in [
+        (StatusTruncationScenario::Middle, 8, 0, 0),
+        (StatusTruncationScenario::End, 0, 8, 0),
+        (StatusTruncationScenario::Focus, 0, 8, 8),
+    ] {
+        let mut fixture =
+            StatusTruncationRenderFixture::long_untracked_unstaged(4, scenario, 120.0);
+        let (_hash, metrics) = fixture.run_with_metrics();
+
+        assert_eq!(metrics.rows_visible, 8);
+        assert_eq!(metrics.rows_shaped, 8);
+        assert_eq!(metrics.path_profile_shapes, 0);
+        assert_eq!(metrics.middle_profile_shapes, expected_middle);
+        assert_eq!(metrics.end_profile_shapes, expected_end);
+        assert_eq!(metrics.focus_shapes, expected_focus);
+        assert_eq!(metrics.truncated_shapes, 8);
+        assert!(metrics.candidate_measurements >= metrics.rows_shaped);
+    }
+}
+
+#[test]
 fn status_multi_select_fixture_reports_range_metrics() {
     let fixture = StatusMultiSelectFixture::range_select(20_000, 4_096, 512);
     let (hash, metrics) = fixture.run_with_metrics();

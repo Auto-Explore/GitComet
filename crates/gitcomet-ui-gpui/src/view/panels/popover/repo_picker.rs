@@ -12,22 +12,26 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .state
             .repos
             .iter()
-            .map(|r| path_display::path_display_shared(&r.spec.workdir))
-            .collect::<Vec<SharedString>>();
+            .map(|r| {
+                components::PickerPromptItem::single(
+                    path_display::path_display_shared(&r.spec.workdir),
+                    components::TextTruncationProfile::Path,
+                )
+            })
+            .collect::<Vec<_>>();
 
         components::context_menu(
             theme,
             components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
                 .items(items)
+                .tooltip_host(this.tooltip_host.clone())
                 .empty_text("No repositories")
                 .max_height(scaled_px(260.0))
                 .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                     if let Some(&repo_id) = repo_ids.get(ix) {
                         this.store.dispatch(Msg::SetActiveRepo { repo_id });
                     }
-                    this.popover = None;
-                    this.popover_anchor = None;
-                    cx.notify();
+                    this.close_popover(cx);
                 }),
         )
         .w(scaled_px(420.0))

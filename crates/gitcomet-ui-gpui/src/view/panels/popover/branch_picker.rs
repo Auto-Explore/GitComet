@@ -24,15 +24,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     menu = menu.child(
                         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
                             .items(items)
+                            .tooltip_host(this.tooltip_host.clone())
                             .empty_text("No branches")
                             .max_height(scaled_px(240.0))
                             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                                 if let Some(name) = branch_names.get(ix).cloned() {
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                 }
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
+                                this.close_popover(cx);
                             }),
                     );
                 } else {
@@ -57,9 +56,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                         repo_id,
                                         name: name.clone(),
                                     });
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
+                                    this.close_popover(cx);
                                 },
                             )),
                         );
@@ -71,6 +68,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     theme,
                     ui_scale_percent,
                     "Loading",
+                    Some(this.tooltip_host.clone()),
+                    cx,
                 ));
             }
             Loadable::Error(e) => {
@@ -78,6 +77,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     theme,
                     ui_scale_percent,
                     e.clone(),
+                    Some(this.tooltip_host.clone()),
+                    cx,
                 ));
             }
             Loadable::NotLoaded => {
@@ -85,6 +86,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     theme,
                     ui_scale_percent,
                     "Not loaded",
+                    Some(this.tooltip_host.clone()),
+                    cx,
                 ));
             }
         }

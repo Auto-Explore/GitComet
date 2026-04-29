@@ -1,5 +1,30 @@
 use super::*;
 
+fn recent_repo_picker_item(path: &std::path::Path) -> components::PickerPromptItem {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return components::PickerPromptItem::single(
+            path.display().to_string(),
+            components::TextTruncationProfile::Path,
+        );
+    };
+
+    let Some(parent) = path.parent() else {
+        return components::PickerPromptItem::from_parts([components::PickerPromptItemPart::new(
+            name.to_owned(),
+        )
+        .profile(components::TextTruncationProfile::End)
+        .flexible(false)]);
+    };
+
+    components::PickerPromptItem::from_parts([
+        components::PickerPromptItemPart::new(name.to_owned())
+            .profile(components::TextTruncationProfile::End)
+            .flexible(false),
+        components::PickerPromptItemPart::separator(" - "),
+        components::PickerPromptItemPart::path(parent.display().to_string()),
+    ])
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
@@ -9,12 +34,17 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .iter()
         .map(|path| crate::app::recent_repository_label(path).into())
         .collect::<Vec<SharedString>>();
+    let items = recent_repos
+        .iter()
+        .map(|path| recent_repo_picker_item(path))
+        .collect::<Vec<_>>();
 
     if let Some(search) = this.recent_repo_picker_search_input.clone() {
         components::context_menu(
             theme,
             components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-                .items(labels)
+                .items(items)
+                .tooltip_host(this.tooltip_host.clone())
                 .empty_text("No recent repositories")
                 .max_height(scaled_px(320.0))
                 .render(

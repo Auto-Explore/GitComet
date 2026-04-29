@@ -6,7 +6,9 @@ pub(super) fn model(
     branch: Option<&str>,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Worktree".into())];
-    items.push(ContextMenuItem::Label(path.display().to_string().into()));
+    items.push(ContextMenuItem::Label(
+        components::ContextMenuText::path_single_line(path.display().to_string()),
+    ));
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Open in new tab".into(),

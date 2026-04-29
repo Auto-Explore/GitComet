@@ -2096,6 +2096,34 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| {
+            host.open_popover_at(
+                PopoverKind::BranchPicker,
+                point(px(72.0), px(72.0)),
+                window,
+                cx,
+            );
+        });
+
+        let tooltip_host = view.read(app).tooltip_host.clone();
+        tooltip_host.update(app, |host, cx| {
+            host.set_tooltip_text_if_changed(Some("stale popover label".into()), cx);
+        });
+
+        popover_host.update(app, |host, cx| host.close_popover(cx));
+    });
+
+    assert_eq!(test_support::tooltip_text(cx, &view), None);
+}
+
+#[gpui::test]
 fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx: &mut gpui::TestAppContext,
 ) {

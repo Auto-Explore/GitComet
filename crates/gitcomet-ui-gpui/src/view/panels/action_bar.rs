@@ -317,8 +317,7 @@ impl Render for ActionBarView {
                             .min_w(px(0.0))
                             .text_sm()
                             .text_color(theme.colors.text_muted)
-                            .line_clamp(1)
-                            .child(repo_title),
+                            .child(components::TruncatedText::path(repo_title).render(cx)),
                     ),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {

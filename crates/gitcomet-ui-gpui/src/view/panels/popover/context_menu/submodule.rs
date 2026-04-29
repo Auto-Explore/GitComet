@@ -6,7 +6,9 @@ pub(super) fn model(
     path: &std::path::PathBuf,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header("Submodule".into())];
-    items.push(ContextMenuItem::Label(path.display().to_string().into()));
+    items.push(ContextMenuItem::Label(
+        components::ContextMenuText::path_single_line(path.display().to_string()),
+    ));
     items.push(ContextMenuItem::Separator);
 
     let open_path = this
