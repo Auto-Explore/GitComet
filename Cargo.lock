@@ -2312,6 +2312,7 @@ dependencies = [
  "tree-sitter-zig",
  "unicode-segmentation",
  "url",
+ "x11-clipboard",
 ]
 
 [[package]]

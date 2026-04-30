@@ -174,9 +174,6 @@ impl SidebarPaneView {
         const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
         const BRANCH_TREE_GAP_PX: f32 = 6.0;
         const BRANCH_BADGE_GAP_PX: f32 = 3.0;
-        const BRANCH_MENU_GAP_PX: f32 = 2.0;
-        const CONTEXT_MENU_INDICATOR_SIZE_PX: f32 = 18.0;
-        const CONTEXT_MENU_INDICATOR_RIGHT_PX: f32 = 2.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
@@ -246,91 +243,9 @@ impl SidebarPaneView {
             BranchSection::Local => theme.colors.text,
             BranchSection::Remote => theme.colors.text_muted,
         };
-        let mix_color = |a: gpui::Rgba, b: gpui::Rgba, t: f32| {
-            let t = t.clamp(0.0, 1.0);
-            gpui::Rgba {
-                r: a.r + (b.r - a.r) * t,
-                g: a.g + (b.g - a.g) * t,
-                b: a.b + (b.b - a.b) * t,
-                a: a.a + (b.a - a.a) * t,
-            }
-        };
-        let context_menu_indicator_icon =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.82 } else { 0.70 });
-        let context_menu_indicator_bg = mix_color(
-            theme.colors.window_bg,
-            theme.colors.surface_bg,
-            if theme.is_dark { 0.64 } else { 0.52 },
-        );
-        let context_menu_indicator_hover_bg = mix_color(
-            context_menu_indicator_bg,
-            theme.colors.active_section,
-            if theme.is_dark { 0.60 } else { 0.42 },
-        );
-        let context_menu_indicator_active_bg = mix_color(
-            theme.colors.surface_bg,
-            theme.colors.accent,
-            if theme.is_dark { 0.34 } else { 0.20 },
-        );
-        let context_menu_indicator_border = mix_color(
-            theme.colors.window_bg,
-            theme.colors.border,
-            if theme.is_dark { 0.92 } else { 0.86 },
-        );
-        let context_menu_indicator =
-            |id: SharedString, row_group: SharedString, visible: bool, menu_active: bool| {
-                let debug_selector = id.as_ref().to_owned();
-                div()
-                    .id(id)
-                    .debug_selector(move || debug_selector.clone())
-                    .absolute()
-                    .right(scaled_px(CONTEXT_MENU_INDICATOR_RIGHT_PX))
-                    .top_0()
-                    .bottom_0()
-                    .w(scaled_px(CONTEXT_MENU_INDICATOR_SIZE_PX))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(scaled_px(4.0))
-                    .bg(if menu_active {
-                        context_menu_indicator_active_bg
-                    } else {
-                        context_menu_indicator_bg
-                    })
-                    .border_1()
-                    .border_color(context_menu_indicator_border)
-                    .cursor(CursorStyle::PointingHand)
-                    .invisible()
-                    .when(visible, |d| d.visible())
-                    .group_hover(row_group, |d| d.visible())
-                    .hover(move |s| {
-                        if menu_active {
-                            s.bg(context_menu_indicator_active_bg)
-                        } else {
-                            s.bg(context_menu_indicator_hover_bg)
-                        }
-                    })
-                    .active(move |s| s.bg(context_menu_indicator_active_bg))
-                    .child(svg_icon(
-                        "icons/menu.svg",
-                        context_menu_indicator_icon,
-                        12.0,
-                    ))
-            };
 
         let indent_px = |depth: usize| {
             scaled_px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
-        };
-
-        let left_divider = |color: gpui::Rgba, radius: Pixels| {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(scaled_px(2.0))
-                .rounded_l(radius)
-                .bg(color)
         };
 
         let top_divider = |color: gpui::Rgba| {
@@ -366,7 +281,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("branch_section_row_{}_{}", repo_id.0, section_key).into();
 
@@ -405,36 +319,6 @@ impl SidebarPaneView {
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .child(label),
-                        )
-                        .child(
-                            context_menu_indicator(
-                                format!(
-                                    "branch_section_menu_indicator_{}_{}",
-                                    repo_id.0, section_key
-                                )
-                                .into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::BranchSectionMenu { repo_id, section },
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
                         )
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -480,7 +364,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let row_group: SharedString = format!("stash_section_row_{}", repo_id.0).into();
 
                     div()
@@ -531,36 +414,7 @@ impl SidebarPaneView {
                                     )),
                             )
                         })
-                        .child(
-                            context_menu_indicator(
-                                format!("stash_section_menu_indicator_{}", repo_id.0).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::StashPrompt,
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
-                        .gitcomet_tooltip(
-                            theme,
-                            "Stashes (Right-click or use the menu button for actions)".into(),
-                        )
+                        .gitcomet_tooltip(theme, "Stashes (Right-click for actions)".into())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -607,9 +461,7 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let stash_message_for_right_click = stash_message_for_menu.clone();
-                    let stash_message_for_indicator = stash_message_for_menu.clone();
                     let row_group: SharedString =
                         format!("stash_row_{}_{}", repo_id.0, index).into();
 
@@ -644,36 +496,6 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .child(message.clone()),
-                        )
-                        .child(
-                            context_menu_indicator(
-                                format!("stash_menu_indicator_{}_{}", repo_id.0, index).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::StashMenu {
-                                            repo_id,
-                                            index,
-                                            message: stash_message_for_indicator.clone(),
-                                        },
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -732,7 +554,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("worktrees_section_row_{}", repo_id.0).into();
 
@@ -786,35 +607,6 @@ impl SidebarPaneView {
                                     )),
                             )
                         })
-                        .child(
-                            context_menu_indicator(
-                                format!("worktrees_section_menu_indicator_{}", repo_id.0).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::worktree(
-                                            repo_id,
-                                            WorktreePopoverKind::SectionMenu,
-                                        ),
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
                         .gitcomet_tooltip(theme, "Worktrees (Add / Refresh / Open / Remove)".into())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
@@ -861,7 +653,6 @@ impl SidebarPaneView {
                     let branch = branch.clone();
                     let path_for_open = path.clone();
                     let path_for_menu = path.clone();
-                    let branch_for_indicator = branch.as_ref().map(|name| name.to_string());
                     let branch_for_menu = branch.as_ref().map(|name| name.to_string());
                     let path_label = this.cached_path_display(&path);
                     let branch_tooltip_host = this.tooltip_host.clone();
@@ -871,8 +662,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
-                    let path_for_indicator = path.clone();
                     let row_group: SharedString =
                         format!("worktree_row_{}_{}", repo_id.0, ix).into();
 
@@ -892,10 +681,6 @@ impl SidebarPaneView {
                             d.bg(with_alpha(
                                 theme.colors.accent,
                                 if theme.is_dark { 0.18 } else { 0.12 },
-                            ))
-                            .child(left_divider(
-                                with_alpha(theme.colors.accent, 0.90),
-                                px(theme.radii.row),
                             ))
                         })
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
@@ -984,38 +769,6 @@ impl SidebarPaneView {
                                         ),
                                 ),
                         )
-                        .child(
-                            context_menu_indicator(
-                                format!("worktree_menu_indicator_{}_{}", repo_id.0, ix).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::worktree(
-                                            repo_id,
-                                            WorktreePopoverKind::Menu {
-                                                path: path_for_indicator.clone(),
-                                                branch: branch_for_indicator.clone(),
-                                            },
-                                        ),
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
                                 return;
@@ -1061,7 +814,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("submodules_section_row_{}", repo_id.0).into();
 
@@ -1115,35 +867,6 @@ impl SidebarPaneView {
                                     )),
                             )
                         })
-                        .child(
-                            context_menu_indicator(
-                                format!("submodules_section_menu_indicator_{}", repo_id.0).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::submodule(
-                                            repo_id,
-                                            SubmodulePopoverKind::SectionMenu,
-                                        ),
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
                         .gitcomet_tooltip(theme, "Submodules (Add / Update / Open / Remove)".into())
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
@@ -1192,8 +915,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
-                    let path_for_indicator = path.clone();
                     let row_group: SharedString =
                         format!("submodule_row_{}_{}", repo_id.0, ix).into();
 
@@ -1227,38 +948,8 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
+                                .debug_selector(move || format!("submodule_label_{ix}"))
                                 .child(path_label),
-                        )
-                        .child(
-                            context_menu_indicator(
-                                format!("submodule_menu_indicator_{}_{}", repo_id.0, ix).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::submodule(
-                                            repo_id,
-                                            SubmodulePopoverKind::Menu {
-                                                path: path_for_indicator.clone(),
-                                            },
-                                        ),
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -1308,8 +999,6 @@ impl SidebarPaneView {
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let remote_name_for_right_click: String = name.as_ref().to_owned();
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
-                    let remote_name_for_indicator: String = name.as_ref().to_owned();
                     let row_group: SharedString =
                         format!("remote_header_row_{}_{}", repo_id.0, remote_name).into();
 
@@ -1341,37 +1030,6 @@ impl SidebarPaneView {
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot("icons/folder.svg", remote_color, 14.0))
                         .child(div().flex_1().min_w(px(0.0)).line_clamp(1).child(name))
-                        .child(
-                            context_menu_indicator(
-                                format!("remote_menu_indicator_{}_{}", repo_id.0, ix).into(),
-                                row_group.clone(),
-                                context_menu_active,
-                                context_menu_active,
-                            )
-                            .on_click(cx.listener(
-                                move |this, e: &ClickEvent, window, cx| {
-                                    if !e.standard_click() || e.click_count() != 1 {
-                                        return;
-                                    }
-                                    cx.stop_propagation();
-                                    this.activate_context_menu_invoker(
-                                        context_menu_invoker_for_indicator.clone(),
-                                        cx,
-                                    );
-                                    this.open_popover_at(
-                                        PopoverKind::remote(
-                                            repo_id,
-                                            RemotePopoverKind::Menu {
-                                                name: remote_name_for_indicator.clone(),
-                                            },
-                                        ),
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            )),
-                        )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -1508,8 +1166,6 @@ impl SidebarPaneView {
                         workspace_row_menu_invoker.as_ref().is_some_and(|invoker| {
                             this.active_context_menu_invoker.as_ref() == Some(invoker)
                         });
-                    let context_menu_invoker_for_indicator = context_menu_invoker.clone();
-                    let full_name_for_indicator: SharedString = name.clone();
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
                     let row_debug_selector = row_group.as_ref().to_owned();
                     let branch_text_color = if muted {
@@ -1554,10 +1210,12 @@ impl SidebarPaneView {
                     let worktree_action_open_text = theme.colors.accent;
                     let worktree_action_active_text = theme.colors.accent;
                     let badge_gap_px = scaled_px(BRANCH_BADGE_GAP_PX);
-                    let menu_gap_px = scaled_px(BRANCH_MENU_GAP_PX);
                     let divergence_badge =
-                        |icon_path: &'static str, color: gpui::Rgba, count: NonZeroU32| {
-                            div()
+                        |icon_path: &'static str,
+                         color: gpui::Rgba,
+                         count: NonZeroU32,
+                         debug_selector: Option<String>| {
+                            let mut badge = div()
                                 .flex()
                                 .items_center()
                                 .gap_1()
@@ -1569,7 +1227,11 @@ impl SidebarPaneView {
                                     super::super::branch_sidebar::branch_sidebar_divergence_label(
                                         count,
                                     ),
-                                )
+                                );
+                            if let Some(debug_selector) = debug_selector {
+                                badge = badge.debug_selector(move || debug_selector.clone());
+                            }
+                            badge
                         };
                     let upstream_badge = |debug_selector: Option<String>| {
                         let mut badge = div()
@@ -1608,16 +1270,12 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(usize::from(depth)))
-                        .pr_2()
+                        .pr(px(0.0))
                         .rounded(px(theme.radii.row))
                         .when(is_head, |d| {
                             d.bg(with_alpha(
                                 theme.colors.accent,
                                 if theme.is_dark { 0.18 } else { 0.12 },
-                            ))
-                            .child(left_divider(
-                                with_alpha(theme.colors.accent, 0.90),
-                                px(theme.radii.row),
                             ))
                         })
                         .when(branch_selected, |d| d.bg(branch_selected_bg))
@@ -1662,17 +1320,9 @@ impl SidebarPaneView {
                         || divergence_ahead.is_some()
                         || (is_upstream && section == BranchSection::Remote)
                         || show_workspace_badge;
-                    let mut end_accessories_placeholder_badges =
-                        div().flex_none().flex().items_center().gap(badge_gap_px);
-                    let mut end_accessories_overlay = div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .right(scaled_px(
-                            CONTEXT_MENU_INDICATOR_RIGHT_PX
-                                + CONTEXT_MENU_INDICATOR_SIZE_PX
-                                + BRANCH_MENU_GAP_PX,
-                        ))
+                    let mut end_accessories = div()
+                        .ml_auto()
+                        .flex_none()
                         .flex()
                         .items_center()
                         .gap(badge_gap_px);
@@ -1680,24 +1330,26 @@ impl SidebarPaneView {
                     if divergence_behind.is_some() || divergence_ahead.is_some() {
                         if let Some(behind) = divergence_behind {
                             let color = theme.colors.warning;
-                            end_accessories_placeholder_badges = end_accessories_placeholder_badges
-                                .child(divergence_badge("icons/arrow_down.svg", color, behind));
-                            end_accessories_overlay = end_accessories_overlay
-                                .child(divergence_badge("icons/arrow_down.svg", color, behind));
+                            end_accessories = end_accessories.child(divergence_badge(
+                                "icons/arrow_down.svg",
+                                color,
+                                behind,
+                                Some(format!("branch_pull_badge_{ix}")),
+                            ));
                         }
                         if let Some(ahead) = divergence_ahead {
                             let color = theme.colors.success;
-                            end_accessories_placeholder_badges = end_accessories_placeholder_badges
-                                .child(divergence_badge("icons/arrow_up.svg", color, ahead));
-                            end_accessories_overlay = end_accessories_overlay
-                                .child(divergence_badge("icons/arrow_up.svg", color, ahead));
+                            end_accessories = end_accessories.child(divergence_badge(
+                                "icons/arrow_up.svg",
+                                color,
+                                ahead,
+                                Some(format!("branch_push_badge_{ix}")),
+                            ));
                         }
                     }
 
                     if is_upstream && section == BranchSection::Remote {
-                        end_accessories_placeholder_badges =
-                            end_accessories_placeholder_badges.child(upstream_badge(None));
-                        end_accessories_overlay = end_accessories_overlay
+                        end_accessories = end_accessories
                             .child(upstream_badge(Some(format!("branch_upstream_badge_{ix}"))));
                     }
 
@@ -1710,6 +1362,7 @@ impl SidebarPaneView {
                             workspace_row_menu_invoker.clone();
                         let workspace_path_for_menu = workspace_badge_path.clone();
                         let workspace_path_for_open = workspace_badge_path.clone();
+                        let workspace_path_for_right_click = workspace_badge_path.clone();
                         let workspace_badge_label =
                             super::super::path_display::repo_path_name(&workspace_badge_path);
                         let worktree_badge_tooltip: SharedString =
@@ -1740,40 +1393,23 @@ impl SidebarPaneView {
                         } else {
                             worktree_action_hover_text
                         };
-                        let worktree_badge_base =
-                            |workspace_badge_label: SharedString,
-                             badge_border: gpui::Rgba,
-                             badge_text: gpui::Rgba| {
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(scaled_px(3.0))
-                                    .px(scaled_px(4.0))
-                                    .py(scaled_px(0.0))
-                                    .rounded(scaled_px(2.0))
-                                    .border_1()
-                                    .border_color(badge_border)
-                                    .bg(worktree_action_bg)
-                                    .text_size(scaled_px(11.0))
-                                    .text_color(badge_text)
-                                    .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
-                                    .child(workspace_badge_label)
-                            };
-                        end_accessories_placeholder_badges = end_accessories_placeholder_badges
-                            .child(worktree_badge_base(
-                                workspace_badge_label.clone(),
-                                badge_border,
-                                badge_text,
-                            ));
-                        end_accessories_overlay = end_accessories_overlay.child(
-                            worktree_badge_base(
-                                workspace_badge_label.clone(),
-                                badge_border,
-                                badge_text,
-                            )
+                        let worktree_badge = div()
                             .id(("branch_workspace_badge", ix))
                             .debug_selector(move || format!("branch_workspace_badge_{ix}"))
+                            .flex()
+                            .items_center()
+                            .gap(scaled_px(3.0))
+                            .px(scaled_px(4.0))
+                            .py(scaled_px(0.0))
+                            .rounded(scaled_px(2.0))
+                            .border_1()
+                            .border_color(badge_border)
+                            .bg(worktree_action_bg)
+                            .text_size(scaled_px(11.0))
+                            .text_color(badge_text)
                             .cursor(CursorStyle::PointingHand)
+                            .child(svg_icon(WORKTREE_ICON_PATH, badge_text, 9.0))
+                            .child(workspace_badge_label)
                             .hover(move |s| {
                                 if workspace_menu_active {
                                     s.bg(worktree_action_active_bg)
@@ -1827,7 +1463,7 @@ impl SidebarPaneView {
                                         PopoverKind::worktree(
                                             repo_id,
                                             WorktreePopoverKind::Menu {
-                                                path: workspace_badge_path.clone(),
+                                                path: workspace_path_for_right_click.clone(),
                                                 branch: Some(branch_name_for_right_click.clone()),
                                             },
                                         ),
@@ -1837,58 +1473,14 @@ impl SidebarPaneView {
                                     );
                                 }),
                             )
-                            .gitcomet_tooltip(theme, worktree_badge_tooltip.clone()),
-                        );
+                            .gitcomet_tooltip(theme, worktree_badge_tooltip.clone());
+
+                        end_accessories = end_accessories.child(worktree_badge);
                     }
 
                     if show_branch_badges {
-                        row = row
-                            .child(
-                                div()
-                                    .ml_auto()
-                                    .flex_none()
-                                    .flex()
-                                    .items_center()
-                                    .gap(menu_gap_px)
-                                    .child(end_accessories_placeholder_badges)
-                                    .child(
-                                        div().w(scaled_px(CONTEXT_MENU_INDICATOR_SIZE_PX)).h_full(),
-                                    )
-                                    .invisible(),
-                            )
-                            .child(end_accessories_overlay);
+                        row = row.child(end_accessories);
                     }
-
-                    row = row.child(
-                        context_menu_indicator(
-                            format!("branch_menu_indicator_{}_{}", repo_id.0, ix).into(),
-                            row_group.clone(),
-                            context_menu_active,
-                            context_menu_active,
-                        )
-                        .on_click(cx.listener(
-                            move |this, e: &ClickEvent, window, cx| {
-                                if !e.standard_click() || e.click_count() != 1 {
-                                    return;
-                                }
-                                cx.stop_propagation();
-                                this.activate_context_menu_invoker(
-                                    context_menu_invoker_for_indicator.clone(),
-                                    cx,
-                                );
-                                this.open_popover_at(
-                                    PopoverKind::BranchMenu {
-                                        repo_id,
-                                        section,
-                                        name: full_name_for_indicator.as_ref().to_owned(),
-                                    },
-                                    e.position(),
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    );
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -2075,6 +1667,7 @@ impl DetailsPaneView {
 
                 let mut row = div()
                     .id(("commit_file", ix))
+                    .debug_selector(move || format!("commit_file_{}_{}", repo_id.0, ix))
                     .h(scaled_px(24.0))
                     .flex()
                     .items_center()
@@ -2117,7 +1710,10 @@ impl DetailsPaneView {
                                 .render(cx),
                             ),
                     )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if !e.standard_click() || e.click_count() != 1 {
+                            return;
+                        }
                         this.focus_diff_panel(window, cx);
                         this.store.dispatch(Msg::SelectDiff {
                             repo_id,
@@ -2133,13 +1729,6 @@ impl DetailsPaneView {
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::Commit {
-                                commit_id: commit_id_for_menu.clone(),
-                                path: Some(path_for_menu.clone()),
-                            },
-                        });
                         let invoker: SharedString = format!(
                             "commit_file_menu_{}_{}_{}",
                             repo_id.0,
@@ -2182,7 +1771,8 @@ impl DetailsPaneView {
 mod tests {
     use super::*;
     use gitcomet_core::domain::{
-        Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Upstream, Worktree,
+        Branch, Commit, CommitId, DiffTarget, LogPage, RemoteBranch, RepoSpec, Upstream,
+        UpstreamDivergence, Worktree,
     };
     use gitcomet_core::services::{GitBackend, GitRepository, Result};
     use gitcomet_state::msg::{InternalMsg, Msg};
@@ -2761,7 +2351,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn branch_hover_menu_appears_to_the_right_without_moving_badges(cx: &mut gpui::TestAppContext) {
+    fn branch_badges_are_static_and_worktree_badge_remains_interactive(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let _visual_guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new(Arc::new(BlockingBackend));
         let store_for_assert = store.clone();
@@ -2797,18 +2389,31 @@ mod tests {
                 Branch {
                     name: "feature".to_string(),
                     target: commit_id("feature-tip"),
-                    upstream: None,
-                    divergence: None,
+                    upstream: Some(Upstream {
+                        remote: "origin".to_string(),
+                        branch: "feature".to_string(),
+                    }),
+                    divergence: Some(UpstreamDivergence {
+                        ahead: 3,
+                        behind: 2,
+                    }),
                 },
             ]),
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::RemoteBranchesLoaded {
             repo_id,
-            result: Ok(vec![RemoteBranch {
-                remote: "origin".to_string(),
-                name: "main".to_string(),
-                target: commit_id("origin-main-tip"),
-            }]),
+            result: Ok(vec![
+                RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "main".to_string(),
+                    target: commit_id("origin-main-tip"),
+                },
+                RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "feature".to_string(),
+                    target: commit_id("origin-feature-tip"),
+                },
+            ]),
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::WorktreesLoaded {
             repo_id,
@@ -2846,51 +2451,179 @@ mod tests {
         let feature_row_selector =
             leak_selector(format!("branch_row_{}_{}", repo_id.0, feature_ix));
         let feature_badge_selector = leak_selector(format!("branch_workspace_badge_{feature_ix}"));
+        let feature_pull_badge_selector = leak_selector(format!("branch_pull_badge_{feature_ix}"));
+        let feature_push_badge_selector = leak_selector(format!("branch_push_badge_{feature_ix}"));
         let feature_menu_selector = leak_selector(format!(
             "branch_menu_indicator_{}_{}",
             repo_id.0, feature_ix
         ));
+        assert!(
+            cx.debug_bounds(feature_menu_selector).is_none(),
+            "expected branch hamburger menu indicator to be removed"
+        );
         let feature_badge_before = cx
             .debug_bounds(feature_badge_selector)
             .expect("expected worktree badge before hover");
-        let feature_row_center = cx
+        let feature_pull_badge_before = cx
+            .debug_bounds(feature_pull_badge_selector)
+            .expect("expected pull count badge before hover");
+        let feature_push_badge_before = cx
+            .debug_bounds(feature_push_badge_selector)
+            .expect("expected push count badge before hover");
+        let feature_row_bounds = cx
             .debug_bounds(feature_row_selector)
-            .expect("expected feature branch row")
-            .center();
+            .expect("expected feature branch row");
+        let feature_row_center = feature_row_bounds.center();
+        let feature_badge_edge_gap = feature_row_bounds.right() - feature_badge_before.right();
+        assert!(
+            feature_badge_edge_gap >= px(0.0) && feature_badge_edge_gap <= px(1.0),
+            "expected the worktree badge to sit flush with the row edge"
+        );
         cx.simulate_mouse_move(feature_row_center, None, gpui::Modifiers::default());
         crate::view::test_support::redraw(cx);
         let feature_badge_after = cx
             .debug_bounds(feature_badge_selector)
             .expect("expected worktree badge after hover");
-        let feature_menu_bounds = cx
-            .debug_bounds(feature_menu_selector)
-            .expect("expected branch menu button after hover");
-        assert_eq!(feature_badge_before.left(), feature_badge_after.left());
-        assert_eq!(feature_badge_before.right(), feature_badge_after.right());
-        assert!(
-            feature_menu_bounds.left() >= feature_badge_after.right(),
-            "expected the branch menu button to stay to the right of the worktree badge"
+        let feature_pull_badge_after = cx
+            .debug_bounds(feature_pull_badge_selector)
+            .expect("expected pull count badge after hover");
+        let feature_push_badge_after = cx
+            .debug_bounds(feature_push_badge_selector)
+            .expect("expected push count badge after hover");
+        assert_eq!(
+            feature_badge_before.left(),
+            feature_badge_after.left(),
+            "expected the worktree badge to stay fixed on row hover"
         );
-        let neutral_point = gpui::point(px(700.0), px(500.0));
-        cx.simulate_mouse_move(neutral_point, None, gpui::Modifiers::default());
+        assert_eq!(
+            feature_badge_before.right(),
+            feature_badge_after.right(),
+            "expected the worktree badge to stay fixed on row hover"
+        );
+        assert_eq!(
+            feature_pull_badge_before.left(),
+            feature_pull_badge_after.left(),
+            "expected the pull badge to stay fixed on row hover"
+        );
+        assert_eq!(
+            feature_push_badge_before.left(),
+            feature_push_badge_after.left(),
+            "expected the push badge to stay fixed on row hover"
+        );
+        cx.simulate_mouse_down(
+            feature_row_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
         crate::view::test_support::redraw(cx);
+        let popover_kind = cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        });
+        assert!(
+            matches!(
+                popover_kind,
+                Some(PopoverKind::BranchMenu {
+                    repo_id: opened_repo_id,
+                    section: BranchSection::Local,
+                    ref name,
+                }) if opened_repo_id == repo_id && name == "feature"
+            ),
+            "expected feature branch right-click to open the branch menu"
+        );
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.close_popover(cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        crate::view::test_support::redraw(cx);
+
         let feature_badge_center = cx
             .debug_bounds(feature_badge_selector)
-            .expect("expected worktree badge before badge-only hover")
+            .expect("expected worktree badge before badge click")
             .center();
         cx.simulate_mouse_move(feature_badge_center, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(
+            feature_badge_center,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            feature_badge_center,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
         crate::view::test_support::redraw(cx);
-        let feature_menu_from_badge_hover = cx
-            .debug_bounds(feature_menu_selector)
-            .expect("expected branch menu button when hovering the worktree badge");
-        assert_eq!(
-            feature_menu_bounds.left(),
-            feature_menu_from_badge_hover.left()
+        let popover_kind = cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        });
+        assert!(
+            matches!(
+                popover_kind,
+                Some(PopoverKind::Repo {
+                    repo_id: opened_repo_id,
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu {
+                        ref path,
+                        branch: Some(ref branch),
+                    }),
+                }) if opened_repo_id == repo_id
+                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && branch == "feature"
+            ),
+            "expected worktree badge click to open the worktree menu"
         );
-        assert_eq!(
-            feature_menu_bounds.right(),
-            feature_menu_from_badge_hover.right()
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.close_popover(cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+
+        cx.simulate_mouse_down(
+            feature_badge_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
         );
+        crate::view::test_support::redraw(cx);
+        let popover_kind = cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        });
+        assert!(
+            matches!(
+                popover_kind,
+                Some(PopoverKind::Repo {
+                    repo_id: opened_repo_id,
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::Menu {
+                        ref path,
+                        branch: Some(ref branch),
+                    }),
+                }) if opened_repo_id == repo_id
+                    && path == &PathBuf::from("/tmp/repo-feature")
+                    && branch == "feature"
+            ),
+            "expected worktree badge right-click to open the worktree menu"
+        );
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.close_popover(cx);
+                });
+            });
+        });
+        cx.run_until_parked();
 
         let upstream_row_selector =
             leak_selector(format!("branch_row_{}_{}", repo_id.0, upstream_ix));
@@ -2899,6 +2632,10 @@ mod tests {
             "branch_menu_indicator_{}_{}",
             repo_id.0, upstream_ix
         ));
+        assert!(
+            cx.debug_bounds(upstream_menu_selector).is_none(),
+            "expected upstream branch hamburger menu indicator to be removed"
+        );
         let upstream_badge_before = cx
             .debug_bounds(upstream_badge_selector)
             .expect("expected upstream badge before hover");
@@ -2911,19 +2648,16 @@ mod tests {
         let upstream_badge_after = cx
             .debug_bounds(upstream_badge_selector)
             .expect("expected upstream badge after hover");
-        let upstream_menu_bounds = cx
-            .debug_bounds(upstream_menu_selector)
-            .expect("expected upstream branch menu button after hover");
-        assert_eq!(upstream_badge_before.left(), upstream_badge_after.left());
-        assert_eq!(upstream_badge_before.right(), upstream_badge_after.right());
-        assert!(
-            upstream_menu_bounds.left() >= upstream_badge_after.right(),
-            "expected the branch menu button to stay to the right of the upstream badge"
+        assert_eq!(
+            upstream_badge_before.left(),
+            upstream_badge_after.left(),
+            "expected the upstream badge to stay fixed on row hover"
         );
-        let feature_gap = feature_menu_bounds.left() - feature_badge_after.right();
-        let upstream_gap = upstream_menu_bounds.left() - upstream_badge_after.right();
-        assert_eq!(feature_gap, upstream_gap);
-        assert_eq!(feature_menu_bounds.right(), upstream_menu_bounds.right());
+        assert_eq!(
+            upstream_badge_before.right(),
+            upstream_badge_after.right(),
+            "expected the upstream badge to stay fixed on row hover"
+        );
     }
 
     #[gpui::test]
