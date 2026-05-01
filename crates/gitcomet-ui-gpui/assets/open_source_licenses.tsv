@@ -380,7 +380,7 @@ libfuzzer-sys	0.4.12	(MIT OR Apache-2.0) AND NCSA
 libgit2-sys	0.18.3+1.9.2	MIT OR Apache-2.0
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
-libmimalloc-sys	0.1.45	MIT
+libmimalloc-sys	0.1.46	MIT
 libredox	0.1.16	MIT
 libz-sys	1.1.28	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT

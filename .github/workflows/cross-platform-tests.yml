@@ -16,254 +16,231 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  APP_FEATURES: --no-default-features --features gix
 
 jobs:
-  fmt:
-    name: Rustfmt
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-  linux-ubuntu:
-    name: Linux Headless Suite (${{ matrix.name }})
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: x86_64-linux / ubuntu-22.04
-            target_platform: x86_64-linux
-            runs_on: ubuntu-22.04
-          - name: aarch64-linux / ubuntu-22.04-arm
-            target_platform: aarch64-linux
-            runs_on: ubuntu-22.04-arm
-    steps:
-      - uses: actions/checkout@v6
-      - name: Show Git version
-        run: git --version
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-      - name: Run headless test suite
-        run: |
-          cargo test --workspace \
-            --exclude gitcomet-ui \
-            --exclude gitcomet-ui-gpui \
-            $APP_FEATURES \
-            --locked \
-            --verbose
-
-  linux-fedora:
-    name: Linux Headless Suite (Fedora container)
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    container:
-      image: fedora:41
-    steps:
-      - name: Install build dependencies
-        run: |
-          dnf -y install \
-            bash \
-            curl \
-            findutils \
-            gcc \
-            gcc-c++ \
-            git \
-            make \
-            openssl-devel \
-            pkg-config \
-            tar \
-            which
-      - uses: actions/checkout@v6
-      - name: Show Git version
-        run: git --version
-      - name: Install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - name: Run headless test suite
-        shell: bash
-        run: |
-          cargo test --workspace \
-            --exclude gitcomet-ui \
-            --exclude gitcomet-ui-gpui \
-            $APP_FEATURES \
-            --locked \
-            --verbose
-
-  linux-display-profiles:
-    name: Linux Display Profile (${{ matrix.profile.name }})
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        profile:
-          - name: x11-gnome
-            display: ":99"
-            wayland_display: ""
-            session_type: x11
-            desktop: GNOME
-          - name: wayland-gnome
-            display: ""
-            wayland_display: wayland-1
-            session_type: wayland
-            desktop: GNOME
-          - name: wayland-kde
-            display: ""
-            wayland_display: wayland-1
-            session_type: wayland
-            desktop: KDE
-    env:
-      DISPLAY: ${{ matrix.profile.display }}
-      WAYLAND_DISPLAY: ${{ matrix.profile.wayland_display }}
-      XDG_SESSION_TYPE: ${{ matrix.profile.session_type }}
-      XDG_CURRENT_DESKTOP: ${{ matrix.profile.desktop }}
-    steps:
-      - uses: actions/checkout@v6
-      - name: Show Git version
-        run: git --version
-      - name: Install Linux UI native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libxcb1-dev \
-            libxkbcommon-dev \
-            libxkbcommon-x11-dev
-      - name: Preflight Linux UI link dependencies
-        run: |
-          missing=0
-          for dep in xcb xkbcommon xkbcommon-x11; do
-            if ! pkg-config --exists "$dep"; then
-              echo "::error title=Missing Linux UI dependency::pkg-config could not find '$dep'. Install libxcb1-dev, libxkbcommon-dev, and libxkbcommon-x11-dev."
-              missing=1
-            fi
-          done
-          if [ "$missing" -ne 0 ]; then
-            echo "Linux display-profile job is missing required native UI link dependencies."
-            exit 1
-          fi
-          pkg-config --modversion xcb xkbcommon xkbcommon-x11
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-      - name: Print display profile
-        run: |
-          echo "DISPLAY=${DISPLAY:-<unset>}"
-          echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-<unset>}"
-          echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-<unset>}"
-          echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-<unset>}"
-      - name: Run display-selection integration tests
-        run: |
-          cargo test -p gitcomet $APP_FEATURES --test mergetool_git_integration gui_default --verbose
-          cargo test -p gitcomet $APP_FEATURES --test difftool_git_integration gui_default --verbose
-      - name: Run UI smoke test under selected profile
-        run: cargo test -p gitcomet-ui-gpui smoke_tests::smoke_view_renders_without_panicking -- --exact
-
-  macos-tests:
-    name: macOS Tests (${{ matrix.target_platform }})
-    runs-on: ${{ matrix.runs_on }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_platform: aarch64-darwin
-            name: apple-silicon (macos-latest)
-            runs_on: macos-latest
-          - target_platform: x86_64-darwin
-            name: intel (macos-15-intel)
-            runs_on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v6
-      - name: Show Git version
-        run: git --version
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-      - name: Show host target
-        run: rustc -vV
-      - name: Run headless test suite
-        run: |
-          cargo test --workspace \
-            --exclude gitcomet-ui \
-            --exclude gitcomet-ui-gpui \
-            $APP_FEATURES \
-            --locked \
-            --verbose
-      - name: Gatekeeper and code-signing check (informational)
-        run: |
-          set -euo pipefail
-          cargo_config_output="$(scripts/macos-cargo-config.sh "$(uname -m)" release)"
-          set --
-          if [[ -n "$cargo_config_output" ]]; then
-            while IFS= read -r arg; do
-              set -- "$@" "$arg"
-            done <<<"$cargo_config_output"
-          fi
-          set -- "$@" -p gitcomet $APP_FEATURES --release --locked
-          cargo build "$@"
-          codesign --verify --verbose target/release/gitcomet || true
-          spctl --assess --type execute --verbose target/release/gitcomet || true
-
   windows-tests:
-    name: Windows Tests (${{ matrix.target_platform }})
-    runs-on: ${{ matrix.runs_on }}
+    name: Windows Tests (aarch64-windows)
+    runs-on: windows-11-arm
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target_platform: x86_64-windows
-            runs_on: windows-latest
-          - target_platform: aarch64-windows
-            runs_on: windows-11-arm
+
     steps:
       - uses: actions/checkout@v6
+
       - name: Show Git version
         shell: pwsh
         run: git --version
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
-      - name: Show path behavior (PowerShell + Git Bash)
+
+      - name: Install ProcDump for Windows ARM test crashes
         shell: pwsh
         run: |
-          Write-Host "PowerShell path: $pwd"
-          $bashPwd = bash -lc "pwd"
-          Write-Host "Git Bash path: $bashPwd"
-      - name: Run headless test suite (PowerShell)
+          $dumpDir = 'C:\CrashDumps'
+          $procDumpDir = Join-Path $env:RUNNER_TEMP 'procdump'
+          $procDumpArchive = Join-Path $env:RUNNER_TEMP 'Procdump.zip'
+          $procDumpExe = Join-Path $procDumpDir 'procdump64a.exe'
+
+          New-Item -ItemType Directory -Force $dumpDir | Out-Null
+          New-Item -ItemType Directory -Force $procDumpDir | Out-Null
+
+          Invoke-WebRequest 'https://download.sysinternals.com/files/Procdump.zip' -OutFile $procDumpArchive -UseBasicParsing
+          Expand-Archive -Path $procDumpArchive -DestinationPath $procDumpDir -Force
+
+          if (-not (Test-Path $procDumpExe)) {
+            throw "ProcDump ARM64 binary not found at $procDumpExe"
+          }
+
+          "CRASH_DUMP_DIR=$dumpDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PROCDUMP_EXE=$procDumpExe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Run workspace tests except gitcomet harness
         shell: pwsh
         run: |
           cargo test --workspace `
+            --exclude gitcomet `
             --exclude gitcomet-ui `
             --exclude gitcomet-ui-gpui `
+            --no-default-features `
+            --locked `
+            --verbose
+
+      - name: Build gitcomet test harness
+        shell: pwsh
+        run: |
+          cargo test -p gitcomet `
+            --bin gitcomet `
+            --no-run `
             --no-default-features `
             --features gix `
             --locked `
             --verbose
-      - name: Run standalone smoke test in CMD
-        shell: cmd
-        run: cargo test -p gitcomet --no-default-features --features gix --test standalone_tool_mode_integration help_flag_exits_zero -- --exact
-      - name: Show path behavior (CMD + Git Bash)
-        shell: cmd
+
+      - name: Capture gitcomet test harness crash dump with ProcDump
+        shell: pwsh
         run: |
-          echo CMD path: %CD%
-          for /f "delims=" %%i in ('bash -lc "pwd"') do set BASH_PWD=%%i
-          echo Git Bash path: %BASH_PWD%
+          $dumpDir = $env:CRASH_DUMP_DIR
+          $procDumpExe = $env:PROCDUMP_EXE
+          $procDumpStdoutLog = Join-Path $dumpDir 'procdump.stdout.log'
+          $procDumpStderrLog = Join-Path $dumpDir 'procdump.stderr.log'
+
+          $harness = Get-ChildItem -Path 'target\debug\deps' -Filter 'gitcomet-*.exe' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $harness) {
+            throw 'gitcomet test harness executable was not found under target\debug\deps.'
+          }
+
+          Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+          Remove-Item $procDumpStdoutLog, $procDumpStderrLog -Force -ErrorAction SilentlyContinue
+
+          Write-Host "Running $($harness.Name) directly under ProcDump."
+
+          $procDumpArgs = @(
+            '-accepteula'
+            '-ma'
+            '-e'
+            '-n'
+            '1'
+            '-x'
+            $dumpDir
+            $harness.FullName
+            '--nocapture'
+          )
+
+          $procDump = Start-Process -FilePath $procDumpExe `
+            -ArgumentList $procDumpArgs `
+            -PassThru `
+            -WindowStyle Hidden `
+            -Wait `
+            -RedirectStandardOutput $procDumpStdoutLog `
+            -RedirectStandardError $procDumpStderrLog
+
+          Write-Host "ProcDump exited with code $($procDump.ExitCode)"
+
+          $dumps = @(Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue)
+          if ($dumps.Count -eq 0) {
+            throw 'ProcDump did not produce a crash dump.'
+          }
+
+          throw "ProcDump captured crash dump(s) for $($harness.Name); collecting artifacts and stack trace next."
+
+      - name: Collect crash dump and print stack trace
+        if: failure()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $dumpDir = if ($env:CRASH_DUMP_DIR) { $env:CRASH_DUMP_DIR } else { 'C:\CrashDumps' }
+          $procDumpStdoutLog = Join-Path $dumpDir 'procdump.stdout.log'
+          $procDumpStderrLog = Join-Path $dumpDir 'procdump.stderr.log'
+          $deadline = (Get-Date).AddSeconds(60)
+
+          do {
+            $dumps = @(Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue)
+            if ($dumps.Count -gt 0) { break }
+            Start-Sleep -Seconds 5
+          } while ((Get-Date) -lt $deadline)
+
+          Write-Host 'Crash dump directory contents:'
+          if (Test-Path $dumpDir) {
+            Get-ChildItem -Path $dumpDir -Force |
+              Sort-Object Name |
+              Format-Table -AutoSize Name,Length,LastWriteTime
+          } else {
+            Write-Host "$dumpDir does not exist."
+          }
+
+          if (Test-Path $procDumpStdoutLog) {
+            Write-Host 'ProcDump stdout:'
+            Get-Content $procDumpStdoutLog
+          }
+
+          if (Test-Path $procDumpStderrLog) {
+            Write-Host 'ProcDump stderr:'
+            Get-Content $procDumpStderrLog
+          }
+
+          $dump = Get-ChildItem -Path $dumpDir -Filter *.dmp -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $dump) {
+            Write-Host 'No crash dump was captured.'
+            return
+          }
+
+          function Find-Cdb {
+            $command = Get-Command cdb.exe -ErrorAction SilentlyContinue
+            if ($command) {
+              return $command.Source
+            }
+
+            $searchRoots = @(
+              'C:\Program Files (x86)\Windows Kits\10\Debuggers'
+              'C:\Program Files\Windows Kits\10\Debuggers'
+            ) | Where-Object { Test-Path $_ }
+
+            $candidates = @()
+            foreach ($root in $searchRoots) {
+              $candidates += Get-ChildItem -Path $root -Filter cdb.exe -Recurse -ErrorAction SilentlyContinue
+            }
+
+            if ($candidates.Count -eq 0) {
+              return $null
+            }
+
+            $arm64 = $candidates |
+              Where-Object { $_.FullName -match '\\arm64\\' } |
+              Select-Object -First 1
+            if ($arm64) {
+              return $arm64.FullName
+            }
+
+            return ($candidates | Select-Object -First 1).FullName
+          }
+
+          $cdb = Find-Cdb
+          if (-not $cdb) {
+            Write-Host 'cdb.exe was not found on the runner; skipping automated stack trace extraction.'
+            return
+          }
+
+          $stackTracePath = Join-Path $dumpDir 'latest-dump-stack.txt'
+          $workspace = (Get-Location).Path
+          $symbolCache = Join-Path $env:RUNNER_TEMP 'symbols'
+          New-Item -ItemType Directory -Force $symbolCache | Out-Null
+
+          $symbolPath = "srv*$symbolCache*https://msdl.microsoft.com/download/symbols;$workspace\target\debug\deps;$workspace\target\debug"
+          $imagePath = "$workspace\target\debug;$workspace\target\debug\deps"
+
+          Write-Host "Analyzing $($dump.Name) with $cdb"
+          $analysis = & $cdb `
+            -y $symbolPath `
+            -i $imagePath `
+            -z $dump.FullName `
+            -c "!analyze -v; .ecxr; kb; ~*kb; q" 2>&1
+
+          $analysis | Tee-Object -FilePath $stackTracePath
+
+      - name: Upload Windows ARM crash dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-arm64-crash-dumps
+          if-no-files-found: warn
+          path: |
+            C:\CrashDumps\*.dmp
+            C:\CrashDumps\*.txt
+
+      - name: Upload Windows ARM symbols and binaries
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-arm64-symbols
+          if-no-files-found: warn
+          path: |
+            target\**\*.pdb
+            target\**\gitcomet*.exe
