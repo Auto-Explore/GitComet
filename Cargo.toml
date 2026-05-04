@@ -47,7 +47,7 @@ gix = { version = "0.82.0", default-features = false, features = ["max-performan
 # Load gpui-ce directly from GitHub at commit 1679dc543d880e6562d84afe316a1b192a064b08.
 gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "1679dc543d880e6562d84afe316a1b192a064b08" }
 image = "0.25.10"
-lru = "0.17"
+lru = "0.18"
 memchr = "2.8.0"
 # Pin mimalloc to the PR #152 head until the submodule update lands in a release.
 mimalloc = { git = "https://github.com/eduDorus/mimalloc_rust.git", rev = "262fb407466952bf6ebaf4a5d586c3010396cb2f", features = ["v3"] }
