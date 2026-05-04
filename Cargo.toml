@@ -52,7 +52,7 @@ memchr = "2.8.0"
 # Pin mimalloc to the PR #152 head until the submodule update lands in a release.
 mimalloc = { git = "https://github.com/eduDorus/mimalloc_rust.git", rev = "262fb407466952bf6ebaf4a5d586c3010396cb2f", features = ["v3"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
-notify = "9.0.0-rc.3"
+notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
 regex = "1.12.3"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
