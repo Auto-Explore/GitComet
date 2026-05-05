@@ -1711,17 +1711,24 @@ impl DetailsPaneView {
                             ),
                     )
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                        if !e.standard_click() || e.click_count() != 1 {
+                        if !e.standard_click() {
                             return;
                         }
-                        this.focus_diff_panel(window, cx);
-                        this.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::Commit {
-                                commit_id: commit_id_for_click.clone(),
-                                path: Some(path_for_click.clone()),
-                            },
+                        let target = DiffTarget::Commit {
+                            commit_id: commit_id_for_click.clone(),
+                            path: Some(path_for_click.clone()),
+                        };
+                        let selected = this.active_repo().is_some_and(|repo| {
+                            repo.id == repo_id
+                                && repo.diff_state.diff_target.as_ref() == Some(&target)
                         });
+
+                        if selected {
+                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                        } else {
+                            this.focus_diff_panel(window, cx);
+                            this.store.dispatch(Msg::SelectDiff { repo_id, target });
+                        }
                         cx.notify();
                     }))
                     .gitcomet_tooltip(theme, tooltip.clone());
