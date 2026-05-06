@@ -352,17 +352,6 @@ impl SidebarPaneView {
             scaled_px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
         };
 
-        let left_divider = |color: gpui::Rgba, radius: Pixels| {
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(scaled_px(2.0))
-                .rounded_l(radius)
-                .bg(color)
-        };
-
         let top_divider = |color: gpui::Rgba| {
             div()
                 .absolute()
@@ -806,10 +795,6 @@ impl SidebarPaneView {
                                 theme.colors.accent,
                                 if theme.is_dark { 0.18 } else { 0.12 },
                             ))
-                            .child(left_divider(
-                                with_alpha(theme.colors.accent, 0.90),
-                                px(theme.radii.row),
-                            ))
                         })
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -1127,6 +1112,7 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
+                                .debug_selector(move || format!("submodule_label_{ix}"))
                                 .child(path_label),
                         )
                         .when_some(badge_label, |row, badge_label| {
@@ -1464,10 +1450,6 @@ impl SidebarPaneView {
                             d.bg(with_alpha(
                                 theme.colors.accent,
                                 if theme.is_dark { 0.18 } else { 0.12 },
-                            ))
-                            .child(left_divider(
-                                with_alpha(theme.colors.accent, 0.90),
-                                px(theme.radii.row),
                             ))
                         })
                         .when(branch_selected, |d| d.bg(branch_selected_bg))
@@ -1839,6 +1821,7 @@ impl DetailsPaneView {
 
                 let mut row = div()
                     .id(("commit_file", ix))
+                    .debug_selector(move || format!("commit_file_{}_{}", repo_id.0, ix))
                     .h(scaled_px(24.0))
                     .flex()
                     .items_center()
@@ -1882,15 +1865,25 @@ impl DetailsPaneView {
                                 .render(cx),
                             ),
                     )
-                    .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-                        this.focus_diff_panel(window, cx);
-                        this.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::Commit {
-                                commit_id: commit_id_for_click.clone(),
-                                path: Some(path_for_click.clone()),
-                            },
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if !e.standard_click() {
+                            return;
+                        }
+                        let target = DiffTarget::Commit {
+                            commit_id: commit_id_for_click.clone(),
+                            path: Some(path_for_click.clone()),
+                        };
+                        let selected = this.active_repo().is_some_and(|repo| {
+                            repo.id == repo_id
+                                && repo.diff_state.diff_target.as_ref() == Some(&target)
                         });
+
+                        if selected {
+                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                        } else {
+                            this.focus_diff_panel(window, cx);
+                            this.store.dispatch(Msg::SelectDiff { repo_id, target });
+                        }
                         cx.notify();
                     }))
                     .gitcomet_tooltip(theme, tooltip.clone());
@@ -1898,13 +1891,6 @@ impl DetailsPaneView {
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::Commit {
-                                commit_id: commit_id_for_menu.clone(),
-                                path: Some(path_for_menu.clone()),
-                            },
-                        });
                         let invoker: SharedString = format!(
                             "commit_file_menu_{}_{}_{}",
                             repo_id.0,

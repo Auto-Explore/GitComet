@@ -678,8 +678,15 @@ fn status_row(
                 .child(stage_button),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-            this.focus_diff_panel(window, cx);
             let modifiers = _e.modifiers();
+            let target = DiffTarget::WorkingTree {
+                path: (*path_for_row).clone(),
+                area,
+            };
+            let should_unselect = _e.standard_click()
+                && this.active_repo().is_some_and(|repo| {
+                    repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
+                });
             let entries = if modifiers.shift {
                 this.active_repo()
                     .filter(|r| r.id == repo_id)
@@ -695,19 +702,17 @@ fn status_row(
                 modifiers,
                 entries.as_deref(),
             );
-            if is_conflicted && area == DiffArea::Unstaged {
+            if should_unselect {
+                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            } else if is_conflicted && area == DiffArea::Unstaged {
+                this.focus_diff_panel(window, cx);
                 this.store.dispatch(Msg::SelectConflictDiff {
                     repo_id,
                     path: (*path_for_row).clone(),
                 });
             } else {
-                this.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
-                        path: (*path_for_row).clone(),
-                        area,
-                    },
-                });
+                this.focus_diff_panel(window, cx);
+                this.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
             cx.notify();
         }))

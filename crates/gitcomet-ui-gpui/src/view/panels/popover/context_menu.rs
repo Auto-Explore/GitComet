@@ -727,9 +727,11 @@ impl PopoverHost {
                 }
             }
             ContextMenuAction::CopyText { text } => {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                window.activate_window();
+                crate::clipboard::write_text(cx, text);
             }
             ContextMenuAction::CopyDiffText { visible_ix, region } => {
+                window.activate_window();
                 self.main_pane.update(cx, |pane, cx| {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
                 });
@@ -822,6 +824,18 @@ impl PopoverHost {
             self.close_popover_and_restore_focus(window, cx);
         } else {
             cx.notify();
+        }
+    }
+
+    fn context_menu_activate_model_entry(
+        &mut self,
+        model: &ContextMenuModel,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(action) = context_menu_entry_action_at(model, ix) {
+            self.context_menu_activate_action(action, window, cx);
         }
     }
 
@@ -944,6 +958,7 @@ impl PopoverHost {
             .context_menu_model(&kind, cx)
             .unwrap_or_else(|| ContextMenuModel::new(vec![]));
         let model_for_keys = model.clone();
+        let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
 
         let focus = self.context_menu_focus_handle.clone();
@@ -1013,26 +1028,30 @@ impl PopoverHost {
                                     return;
                                 };
                                 cx.stop_propagation();
-                                if let Some(action) =
-                                    context_menu_entry_action_at(&model_for_keys, ix)
-                                {
-                                    this.context_menu_activate_action(action, window, cx);
-                                }
+                                this.context_menu_activate_model_entry(
+                                    &model_for_keys,
+                                    ix,
+                                    window,
+                                    cx,
+                                );
                             }
                             _ => {
                                 if let Some(ix) =
                                     context_menu_shortcut_entry_ix(&model_for_keys, key)
-                                    && let Some(action) =
-                                        context_menu_entry_action_at(&model_for_keys, ix)
                                 {
                                     cx.stop_propagation();
-                                    this.context_menu_activate_action(action, window, cx);
+                                    this.context_menu_activate_model_entry(
+                                        &model_for_keys,
+                                        ix,
+                                        window,
+                                        cx,
+                                    );
                                 }
                             }
                         }
                     }),
                 )
-                .children(model.items.into_iter().enumerate().map(|(ix, item)| {
+                .children(model.items.into_iter().enumerate().map(move |(ix, item)| {
                     match item {
                         ContextMenuItem::Separator => {
                             components::context_menu_separator(theme, ui_scale)
@@ -1062,12 +1081,12 @@ impl PopoverHost {
                             icon,
                             shortcut,
                             disabled,
-                            action,
+                            action: _,
                         } => {
                             let selected = selected_for_render == Some(ix);
                             let debug_selector = context_menu_entry_debug_selector(label.as_ref());
-                            let activate_on_click = action.as_ref().clone();
-                            let activate_on_right_release = activate_on_click.clone();
+                            let activate_on_left_release = model_for_mouse.clone();
+                            let activate_on_right_release = model_for_mouse.clone();
                             let row = components::context_menu_entry(
                                 ("context_menu_entry", ix),
                                 theme,
@@ -1088,30 +1107,29 @@ impl PopoverHost {
                             }))
                             .when(!disabled, |row| {
                                 row.on_mouse_up(
-                                    MouseButton::Right,
+                                    MouseButton::Left,
                                     cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
                                         cx.stop_propagation();
-                                        this.context_menu_activate_action(
-                                            activate_on_right_release.clone(),
+                                        this.context_menu_activate_model_entry(
+                                            &activate_on_left_release,
+                                            ix,
                                             window,
                                             cx,
                                         );
                                     }),
                                 )
-                                .on_click(cx.listener(
-                                    move |this, e: &ClickEvent, window, cx| {
-                                        if e.is_right_click() {
-                                            cx.stop_propagation();
-                                            return;
-                                        }
+                                .on_mouse_up(
+                                    MouseButton::Right,
+                                    cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
                                         cx.stop_propagation();
-                                        this.context_menu_activate_action(
-                                            activate_on_click.clone(),
+                                        this.context_menu_activate_model_entry(
+                                            &activate_on_right_release,
+                                            ix,
                                             window,
                                             cx,
                                         );
-                                    },
-                                ))
+                                    }),
+                                )
                             })
                             .into_any_element()
                         }
