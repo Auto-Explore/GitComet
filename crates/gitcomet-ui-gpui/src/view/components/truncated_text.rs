@@ -6,9 +6,9 @@ use crate::view::tooltip_host::TooltipHost;
 use gpui::EntityId;
 use gpui::prelude::*;
 use gpui::{
-    App, AvailableSpace, Bounds, Context, Element, ElementId, GlobalElementId, HighlightStyle,
-    InspectorElementId, IntoElement, LayoutId, Pixels, Rgba, SharedString, TextAlign, WeakEntity,
-    Window, div, point, px, size,
+    AbsoluteLength, App, AvailableSpace, Bounds, Context, Element, ElementId, GlobalElementId,
+    HighlightStyle, InspectorElementId, IntoElement, LayoutId, Pixels, Rgba, SharedString,
+    TextAlign, WeakEntity, Window, div, point, px, rems, size,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
@@ -41,6 +41,7 @@ pub struct TruncatedText {
     path_alignment_group: Option<PathTruncationAlignmentGroup>,
     id: Option<ElementId>,
     text_color: Option<Rgba>,
+    text_size: Option<AbsoluteLength>,
 }
 
 impl TruncatedText {
@@ -55,6 +56,7 @@ impl TruncatedText {
             path_alignment_group: None,
             id: None,
             text_color: None,
+            text_size: None,
         }
     }
 
@@ -93,6 +95,16 @@ impl TruncatedText {
 
     pub fn text_color(mut self, text_color: Rgba) -> Self {
         self.text_color = Some(text_color);
+        self
+    }
+
+    pub fn text_size(mut self, text_size: impl Into<AbsoluteLength>) -> Self {
+        self.text_size = Some(text_size.into());
+        self
+    }
+
+    pub fn text_sm(mut self) -> Self {
+        self.text_size = Some(rems(0.875).into());
         self
     }
 
@@ -136,6 +148,7 @@ impl TruncatedText {
             owner_view_id,
             path_alignment_group: self.path_alignment_group,
             text_color: self.text_color,
+            text_size: self.text_size,
         };
 
         let root = div()
@@ -196,6 +209,7 @@ struct TruncatedTextElement {
     owner_view_id: EntityId,
     path_alignment_group: Option<PathTruncationAlignmentGroup>,
     text_color: Option<Rgba>,
+    text_size: Option<AbsoluteLength>,
 }
 
 impl Element for TruncatedTextElement {
@@ -226,6 +240,7 @@ impl Element for TruncatedTextElement {
         let owner_view_id = self.owner_view_id;
         let path_alignment_group = self.path_alignment_group.clone();
         let text_color = self.text_color;
+        let text_size = self.text_size;
 
         let layout_id = window.request_measured_layout(
             Default::default(),
@@ -237,6 +252,9 @@ impl Element for TruncatedTextElement {
                 let mut base_style = window.text_style();
                 if let Some(text_color) = text_color {
                     base_style.color = text_color.into();
+                }
+                if let Some(text_size) = text_size {
+                    base_style.font_size = text_size;
                 }
                 let alignment_style_key = (profile == TextTruncationProfile::Path)
                     .then(|| path_alignment_style_key(&base_style, window.rem_size()));

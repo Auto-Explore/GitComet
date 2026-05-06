@@ -1445,10 +1445,6 @@ fn debug_selector(prefix: &str, ix: usize) -> &'static str {
     Box::leak(format!("{prefix}_{ix}").into_boxed_str())
 }
 
-fn branch_menu_indicator_selector(repo_id: RepoId, ix: usize) -> &'static str {
-    Box::leak(format!("branch_menu_indicator_{}_{}", repo_id.0, ix).into_boxed_str())
-}
-
 fn wait_for_repo_count(store: &AppStore, expected: usize) -> Arc<gitcomet_state::model::AppState> {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -2077,7 +2073,9 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
 }
 
 #[gpui::test]
-fn branch_worktree_badge_keeps_branch_menu_hamburger_clickable(cx: &mut gpui::TestAppContext) {
+fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2117,39 +2115,45 @@ fn branch_worktree_badge_keeps_branch_menu_hamburger_clickable(cx: &mut gpui::Te
     ));
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let row_selector = Box::leak(format!("branch_row_{}_{}", repo_id.0, badge_ix).into_boxed_str());
     let badge_bounds = cx
         .debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
         .expect("expected branch worktree badge bounds");
-    let menu_selector = branch_menu_indicator_selector(repo_id, badge_ix);
-    let menu_bounds = cx
-        .debug_bounds(menu_selector)
-        .expect("expected branch menu indicator bounds");
+    let row_bounds = cx
+        .debug_bounds(row_selector)
+        .expect("expected branch row bounds");
+    let menu_selector =
+        Box::leak(format!("branch_menu_indicator_{}_{}", repo_id.0, badge_ix).into_boxed_str());
 
     assert!(
-        badge_bounds.right() <= menu_bounds.left(),
-        "expected branch menu indicator to stay to the right of the worktree badge"
+        cx.debug_bounds(menu_selector).is_none(),
+        "expected branch hamburger menu indicator to be removed"
+    );
+    let edge_gap = row_bounds.right() - badge_bounds.right();
+    assert!(
+        edge_gap >= px(0.0) && edge_gap <= px(1.0),
+        "expected branch worktree badge to sit flush with the row edge"
     );
 
-    let menu_center = menu_bounds.center();
-    cx.simulate_mouse_move(menu_center, None, Modifiers::default());
+    let row_center = row_bounds.center();
+    cx.simulate_mouse_move(row_center, None, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
-    cx.simulate_mouse_down(menu_center, MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(menu_center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_down(row_center, MouseButton::Right, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
     cx.update(|_window, app| {
         assert!(
             crate::view::test_support::popover_is_open(view.read(app), app),
-            "expected branch menu hamburger to open a popover even with a worktree badge"
+            "expected branch row right-click to open a popover even with a worktree badge"
         );
     });
 }
 
 #[gpui::test]
-fn worktree_branch_prefix_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
+fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
@@ -2189,16 +2193,101 @@ fn worktree_branch_prefix_shows_full_tooltip_when_truncated(cx: &mut gpui::TestA
     let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
     click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
 
-    let label_ix = wait_for_debug_index(cx, &view, "worktree_branch_label", 128);
+    let label_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge_label", 128);
     let label_bounds = cx
-        .debug_bounds(debug_selector("worktree_branch_label", label_ix))
-        .expect("expected worktree branch label to render");
+        .debug_bounds(debug_selector("worktree_branch_badge_label", label_ix))
+        .expect("expected worktree branch badge label to render");
     cx.simulate_mouse_move(label_bounds.center(), None, Modifiers::default());
     view::test_support::wait_for_native_tooltip(cx);
 
     assert_eq!(
         view::test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
         Some(branch)
+    );
+}
+
+#[gpui::test]
+fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(1200.0), px(440.0)));
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_worktree_row_layout_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+
+    let worktree_root = base.join("ae");
+    let branch = "feature/badge-expands".to_string();
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: worktree_root.join("agent4"),
+                head: None,
+                branch: Some(branch.clone()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
+
+    let row_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge", 128);
+    let row_selector = Box::leak(format!("worktree_row_{}_{}", repo_id.0, row_ix).into_boxed_str());
+    let branch_selector = debug_selector("worktree_branch_badge", row_ix);
+    let branch_label_selector = debug_selector("worktree_branch_badge_label", row_ix);
+    let path_selector = debug_selector("worktree_path_label", row_ix);
+
+    sync_view_for_tests(cx, &view);
+    let row_bounds = cx
+        .debug_bounds(row_selector)
+        .expect("expected worktree row bounds");
+    let branch_bounds = cx
+        .debug_bounds(branch_selector)
+        .expect("expected worktree branch badge bounds");
+    let branch_label_bounds = cx
+        .debug_bounds(branch_label_selector)
+        .expect("expected worktree branch badge label bounds");
+    let path_bounds = cx
+        .debug_bounds(path_selector)
+        .expect("expected worktree path label bounds");
+
+    assert_eq!(
+        path_bounds.center().y,
+        row_bounds.center().y,
+        "expected path label {path_bounds:?} to be centered in row {row_bounds:?}",
+    );
+    assert_eq!(
+        branch_bounds.center().y,
+        row_bounds.center().y,
+        "expected branch badge {branch_bounds:?} to be centered in row {row_bounds:?}",
+    );
+    assert!(
+        path_bounds.right() <= branch_bounds.left(),
+        "expected path label {path_bounds:?} to stay to the left of branch badge {branch_bounds:?}",
+    );
+    assert!(
+        branch_bounds.right() - branch_bounds.left() > px(104.0),
+        "expected branch badge {branch_bounds:?} to grow beyond the old fixed cap",
+    );
+
+    cx.simulate_mouse_move(branch_label_bounds.center(), None, Modifiers::default());
+    view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        view::test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        None,
+        "expected branch badge label to fit without truncation when the row has room"
     );
 }
 

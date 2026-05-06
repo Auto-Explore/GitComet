@@ -152,6 +152,13 @@ impl SidebarPaneView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
+    pub(in super::super) fn open_repo_for_workdir(
+        &self,
+        workdir: &std::path::Path,
+    ) -> Option<&RepoState> {
+        self.state.repos.iter().find(|r| r.spec.workdir == workdir)
+    }
+
     pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
