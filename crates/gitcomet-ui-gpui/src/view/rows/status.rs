@@ -647,8 +647,7 @@ fn status_row(
             };
             let should_unselect = _e.standard_click()
                 && this.active_repo().is_some_and(|repo| {
-                    repo.id == repo_id
-                        && repo.diff_state.diff_target.as_ref() == Some(&target)
+                    repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
                 });
             let entries = if modifiers.shift {
                 this.active_repo()
@@ -675,10 +674,7 @@ fn status_row(
                 });
             } else {
                 this.focus_diff_panel(window, cx);
-                this.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target,
-                });
+                this.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
             cx.notify();
         }))
