@@ -916,6 +916,7 @@ impl MainPaneView {
                 );
             });
 
+        let diff_search_scroll = ScrollHandle::new();
         let diff_search_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
@@ -929,6 +930,15 @@ impl MainPaneView {
                 cx,
             );
             input.set_submit_on_enter(true);
+            input.set_vertical_scroll_handle(Some(diff_search_scroll.clone()));
+            input.set_vertical_padding(Some(px(4.0)), cx);
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(
+                    18.0,
+                    ui_scale::current(cx).percent,
+                )),
+                cx,
+            );
             input
         });
         let diff_search_subscription = cx.observe(&diff_search_input, |this, input, cx| {
@@ -943,13 +953,21 @@ impl MainPaneView {
             if this.diff_search_query != next {
                 let previous_query = this.diff_search_query.clone();
                 this.diff_search_query = next.clone();
+                if next.is_empty() {
+                    this.diff_search_scroll.set_offset(point(px(0.0), px(0.0)));
+                }
                 this.invalidate_diff_text_query_overlay_cache(
                     next.as_ref(),
                     this.diff_search_options,
                 );
                 this.clear_worktree_preview_segments_cache();
                 this.clear_conflict_diff_query_overlay_caches();
-                this.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
+                if next.is_empty() {
+                    this.diff_search_cancel_pending_query_recompute();
+                    this.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
+                } else {
+                    this.diff_search_schedule_query_recompute(previous_query, cx);
+                }
                 cx.notify();
             }
         });
@@ -1073,6 +1091,9 @@ impl MainPaneView {
             diff_search_matches: Vec::new(),
             diff_search_inline_patch_trigram_index: None,
             diff_search_match_ix: None,
+            diff_search_debounce_seq: 0,
+            diff_search_pending_previous_query: None,
+            diff_search_scroll,
             diff_search_input,
             _diff_search_subscription: diff_search_subscription,
             file_diff_cache_repo_id: None,

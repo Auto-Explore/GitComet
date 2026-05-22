@@ -142,6 +142,13 @@ fn wait_until(
     }
 }
 
+fn wait_for_diff_search_debounce(cx: &mut gpui::VisualTestContext) {
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(150));
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+}
+
 fn wait_until_store_diff_target_path(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
@@ -2698,6 +2705,7 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
         let _ = window.draw(app);
     });
     draw_and_drain_test_window(cx);
+    wait_for_diff_search_debounce(cx);
 
     let overlay_with_matches = cx
         .debug_bounds("diff_search_overlay")
@@ -2750,6 +2758,129 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
     assert!(
         cx.debug_bounds("diff_search_overlay").is_none(),
         "expected search close button to remove diff search overlay"
+    );
+}
+
+#[gpui::test]
+fn diff_search_input_slot_grows_for_multiline_query(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70548);
+    let commit_id = CommitId("1122334455667748".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_multiline_grows",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+    focus_diff_search_input(cx, &view);
+    draw_and_drain_test_window(cx);
+
+    let single_line = cx
+        .debug_bounds("diff_search_input_slot")
+        .expect("expected diff search input slot for a single-line query");
+    assert!(
+        single_line.size.height <= px(30.0),
+        "expected compact one-line diff search slot height; got {single_line:?}"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("alpha\nbeta", cx));
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    let multiline = cx
+        .debug_bounds("diff_search_input_slot")
+        .expect("expected diff search input slot for a multiline query");
+    assert_eq!(
+        multiline.size.width, single_line.size.width,
+        "expected multiline diff search to preserve the input slot width"
+    );
+    assert!(
+        multiline.size.height > single_line.size.height + px(8.0),
+        "expected multiline diff search slot to grow; single={single_line:?} multiline={multiline:?}"
+    );
+}
+
+#[gpui::test]
+fn diff_search_input_slot_caps_tall_multiline_query(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70549);
+    let commit_id = CommitId("1122334455667749".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_multiline_caps",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    cx.simulate_resize(gpui::size(px(1000.0), px(640.0)));
+    focus_diff_search_input(cx, &view);
+
+    let tall_query = (0..40)
+        .map(|ix| format!("needle_{ix}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(tall_query.clone(), cx));
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    let tall_slot = cx
+        .debug_bounds("diff_search_input_slot")
+        .expect("expected diff search input slot for a tall multiline query");
+    let max_height = px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
+    assert!(
+        tall_slot.size.height <= max_height + px(1.0),
+        "expected tall diff search slot to cap at {max_height:?}; got {tall_slot:?}"
+    );
+
+    let max_scroll_y = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_search_scroll
+            .max_offset()
+            .y
+    });
+    assert!(
+        max_scroll_y > px(0.0),
+        "expected tall diff search query to be vertically scrollable"
     );
 }
 
@@ -2995,6 +3126,16 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_search_query.as_ref(), "new");
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "expected match recompute to wait for the search debounce"
+        );
+    });
+    wait_for_diff_search_debounce(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "new");
         assert_eq!(
             pane.diff_search_matches.len(),
             2,
@@ -3009,6 +3150,120 @@ fn diff_search_query_edit_selects_first_match_and_updates_count(cx: &mut gpui::T
             pane.diff_selection_anchor,
             pane.diff_search_matches.first().copied(),
             "expected query edits to scroll/anchor to the first match"
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_search_navigation_keys_flush_pending_query_recompute(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70543);
+    let commit_id = CommitId("1122334455667743".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_diff_search_nav_flush",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+    repo.diff_state.diff = Loadable::Ready(
+        two_hunk_diff(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+        .into(),
+    );
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                pane.diff_search_active = true;
+                let focus = pane.diff_search_input.read(cx).focus_handle();
+                window.focus(&focus, cx);
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    let set_pending_query = |cx: &mut gpui::VisualTestContext, query: &str| {
+        let query = query.to_string();
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.diff_search_input
+                        .update(cx, |input, cx| input.set_text(query.clone(), cx));
+                    cx.notify();
+                });
+            });
+            let _ = window.draw(app);
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    set_pending_query(cx, "new");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "new");
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "expected F3 to navigate before the debounce has recomputed matches"
+        );
+    });
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "new");
+        assert_eq!(pane.diff_search_matches.len(), 2);
+        assert_eq!(
+            pane.diff_search_match_ix,
+            Some(1),
+            "expected F3 to flush the pending search before advancing"
+        );
+    });
+
+    set_pending_query(cx, "old");
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "old");
+        assert_eq!(pane.diff_search_matches.len(), 2);
+        assert_eq!(
+            pane.diff_search_match_ix,
+            Some(1),
+            "expected F2 to flush the pending search before moving backward"
+        );
+    });
+
+    set_pending_query(cx, "unchanged");
+    cx.simulate_keystrokes("enter");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_search_query.as_ref(), "unchanged");
+        assert_eq!(pane.diff_search_matches.len(), 1);
+        assert_eq!(
+            pane.diff_search_match_ix,
+            Some(0),
+            "expected Enter to flush the pending search before navigating"
         );
     });
 }

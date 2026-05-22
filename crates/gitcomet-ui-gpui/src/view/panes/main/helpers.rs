@@ -2391,6 +2391,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_search_inline_patch_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) diff_search_match_ix: Option<usize>,
+    pub(in crate::view) diff_search_debounce_seq: u64,
+    pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
+    pub(in crate::view) diff_search_scroll: ScrollHandle,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
 

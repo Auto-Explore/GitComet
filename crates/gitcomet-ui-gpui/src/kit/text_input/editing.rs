@@ -28,6 +28,7 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             line_height_override: None,
+            vertical_padding_override: None,
             highlight: HighlightState::new(),
             layout: LayoutState::new(),
             wrap: WrapState::new(),
@@ -211,6 +212,14 @@ impl TextInput {
             return;
         }
         self.line_height_override = line_height;
+        cx.notify();
+    }
+
+    pub fn set_vertical_padding(&mut self, padding: Option<Pixels>, cx: &mut Context<Self>) {
+        if self.vertical_padding_override == padding {
+            return;
+        }
+        self.vertical_padding_override = padding;
         cx.notify();
     }
 

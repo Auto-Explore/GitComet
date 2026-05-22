@@ -467,6 +467,7 @@ impl MainPaneView {
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
         self.clear_conflict_diff_query_overlay_caches();
+        self.diff_search_cancel_pending_query_recompute();
         if was_search_active {
             self.diff_search_recompute_matches();
         } else {
@@ -479,6 +480,7 @@ impl MainPaneView {
     }
 
     fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.diff_search_cancel_pending_query_recompute();
         self.diff_search_active = false;
         self.diff_search_query = SharedString::default();
         self.diff_search_regex_error = None;
@@ -486,6 +488,7 @@ impl MainPaneView {
         self.diff_search_match_ix = None;
         self.diff_search_input
             .update(cx, |input, cx| input.set_text("", cx));
+        self.diff_search_scroll.set_offset(point(px(0.0), px(0.0)));
         self.clear_diff_text_query_overlay_cache();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
@@ -502,6 +505,7 @@ impl MainPaneView {
         self.invalidate_diff_text_query_overlay_cache(query.as_ref(), self.diff_search_options);
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
+        self.diff_search_cancel_pending_query_recompute();
         self.diff_search_recompute_matches_and_scroll_to_first();
     }
 
@@ -594,10 +598,11 @@ impl MainPaneView {
         let compact_control_height = px(26.0);
         let compact_icon_button_width = px(22.0);
         let compact_option_button_width = px(24.0);
+        let max_search_input_height = px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
 
         let panel = div()
             .flex()
-            .items_center()
+            .items_start()
             .gap(px(2.0))
             .px(px(4.0))
             .py(px(2.0))
@@ -608,13 +613,32 @@ impl MainPaneView {
             .shadow_sm()
             .child(
                 div()
+                    .relative()
                     .w(px(220.0))
                     .min_w(px(140.0))
-                    .h(compact_control_height)
-                    .max_h(compact_control_height)
-                    .overflow_hidden()
                     .debug_selector(|| "diff_search_input_slot".to_string())
-                    .child(self.diff_search_input.clone()),
+                    .child(
+                        div()
+                            .id("diff_search_input_scroll")
+                            .relative()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .max_h(max_search_input_height)
+                            .pr(components::Scrollbar::visible_gutter(
+                                self.diff_search_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            ))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.diff_search_scroll)
+                            .child(self.diff_search_input.clone()),
+                    )
+                    .child(
+                        components::Scrollbar::new(
+                            "diff_search_scrollbar",
+                            self.diff_search_scroll.clone(),
+                        )
+                        .render(theme),
+                    ),
             )
             .child(
                 components::Button::new("diff_search_newline", "")

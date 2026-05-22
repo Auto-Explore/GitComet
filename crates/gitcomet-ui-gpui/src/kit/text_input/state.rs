@@ -495,6 +495,7 @@ pub struct TextInput {
     pub(super) line_ending: &'static str,
     pub(super) style: TextInputStyle,
     pub(super) line_height_override: Option<Pixels>,
+    pub(super) vertical_padding_override: Option<Pixels>,
     pub(super) highlight: HighlightState,
     pub(super) layout: LayoutState,
     pub(super) wrap: WrapState,

@@ -7,10 +7,12 @@ use smallvec::SmallVec;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::ops::Range;
+use std::time::Duration;
 
 const FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES: usize = 32 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_WINDOW_BYTES: usize = 256 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES: usize = 64 * 1024;
+const DIFF_SEARCH_QUERY_DEBOUNCE_MS: u64 = 150;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(in crate::view) struct DiffSearchOptions {
@@ -1166,6 +1168,7 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches(&mut self) {
+        self.diff_search_cancel_pending_query_recompute();
         if !self.diff_search_active {
             self.diff_search_matches.clear();
             self.diff_search_match_ix = None;
@@ -1180,6 +1183,7 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches_and_scroll_to_first(&mut self) {
+        self.diff_search_cancel_pending_query_recompute();
         self.diff_search_recompute_matches_with_finalize(DiffSearchFinalizeMode::ScrollToFirst);
     }
 
@@ -1198,6 +1202,7 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches_preserving_current(&mut self) {
+        self.diff_search_cancel_pending_query_recompute();
         if !self.diff_search_active {
             self.diff_search_matches.clear();
             self.diff_search_match_ix = None;
@@ -1270,6 +1275,57 @@ impl MainPaneView {
         }
 
         self.diff_search_finalize_matches(DiffSearchFinalizeMode::ScrollToFirst);
+    }
+
+    pub(in super::super::super) fn diff_search_cancel_pending_query_recompute(&mut self) {
+        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
+        self.diff_search_pending_previous_query = None;
+    }
+
+    pub(super) fn diff_search_schedule_query_recompute(
+        &mut self,
+        previous_query: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_search_active {
+            self.diff_search_cancel_pending_query_recompute();
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
+            return;
+        }
+
+        if self.diff_search_pending_previous_query.is_none() {
+            self.diff_search_pending_previous_query = Some(previous_query);
+        }
+        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
+        let seq = self.diff_search_debounce_seq;
+
+        cx.spawn(
+            async move |view: gpui::WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(DIFF_SEARCH_QUERY_DEBOUNCE_MS))
+                    .await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.diff_search_debounce_seq != seq {
+                        return;
+                    }
+                    if this.diff_search_flush_pending_query_recompute() {
+                        cx.notify();
+                    }
+                });
+            },
+        )
+        .detach();
+    }
+
+    pub(super) fn diff_search_flush_pending_query_recompute(&mut self) -> bool {
+        let Some(previous_query) = self.diff_search_pending_previous_query.take() else {
+            return false;
+        };
+
+        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
+        self.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
+        true
     }
 
     pub(super) fn diff_search_recompute_matches_for_current_view(&mut self) {
@@ -1887,6 +1943,7 @@ impl MainPaneView {
             return;
         }
 
+        self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -1910,6 +1967,7 @@ impl MainPaneView {
             return;
         }
 
+        self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
         }
