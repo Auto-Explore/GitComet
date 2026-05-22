@@ -2460,6 +2460,12 @@ pub(super) enum PopoverKind {
     },
     PullPicker,
     PushPicker,
+    CommitOptionsMenu {
+        repo_id: RepoId,
+    },
+    PreviousCommitMessagesMenu {
+        repo_id: RepoId,
+    },
     AppMenu,
     DiffActionMenu,
     DiffHunkMenu {
@@ -3213,6 +3219,7 @@ pub struct GitCometView {
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,

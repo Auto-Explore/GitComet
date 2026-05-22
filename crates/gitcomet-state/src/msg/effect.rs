@@ -2,7 +2,8 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{
-    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -81,6 +82,11 @@ pub enum Effect {
     LoadReflog {
         repo_id: RepoId,
         limit: usize,
+    },
+    LoadRecentCommitMessages {
+        repo_id: RepoId,
+        limit: usize,
+        request_rev: u64,
     },
     LoadFileHistory {
         repo_id: RepoId,
@@ -330,6 +336,11 @@ pub enum Effect {
         message: String,
         auth: Option<StagedGitAuth>,
     },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+        auth: Option<StagedGitAuth>,
+    },
     FetchAll {
         repo_id: RepoId,
         prune: bool,
@@ -364,8 +375,19 @@ pub enum Effect {
         repo_id: RepoId,
         auth: Option<StagedGitAuth>,
     },
+    PushAfterCommit {
+        repo_id: RepoId,
+        target: SafePushAfterCommitTarget,
+        set_upstream: bool,
+        auth: Option<StagedGitAuth>,
+    },
     ForcePush {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    ForcePushWithLease {
+        repo_id: RepoId,
+        lease: ForcePushLease,
         auth: Option<StagedGitAuth>,
     },
     PushSetUpstream {

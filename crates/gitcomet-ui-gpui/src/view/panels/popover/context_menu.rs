@@ -5,6 +5,7 @@ mod branch_section;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
+mod commit_options;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
@@ -13,6 +14,7 @@ mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod history_branch_filter;
+mod previous_commit_messages;
 mod pull;
 mod push;
 mod remote;
@@ -100,6 +102,16 @@ fn context_menu_entry_debug_selector(label: &str) -> String {
 fn context_menu_entry_action_at(model: &ContextMenuModel, ix: usize) -> Option<ContextMenuAction> {
     match model.items.get(ix) {
         Some(ContextMenuItem::Entry { action, .. }) => Some((**action).clone()),
+        _ => None,
+    }
+}
+
+fn context_menu_entry_tooltip(action: &ContextMenuAction) -> Option<SharedString> {
+    match action {
+        ContextMenuAction::UseCommitMessage { message } => {
+            let text = message.trim();
+            (!text.is_empty()).then(|| text.to_owned().into())
+        }
         _ => None,
     }
 }
@@ -215,6 +227,12 @@ impl PopoverHost {
         match kind {
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
+            PopoverKind::CommitOptionsMenu { repo_id } => {
+                Some(commit_options::model(self, *repo_id))
+            }
+            PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
+                Some(previous_commit_messages::model(self, *repo_id))
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 Some(commit::model(self, *repo_id, commit_id))
             }
@@ -517,6 +535,31 @@ impl PopoverHost {
                     let _ = root_view.update(cx, |root, cx| {
                         root.set_change_tracking_view(view, cx);
                     });
+                });
+            }
+            ContextMenuAction::SetCommitAmendEnabled { enabled } => {
+                close_after_action = false;
+                self.commit_amend_enabled = enabled;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.set_commit_amend_enabled(enabled, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SetCommitPushAfterEnabled { enabled } => {
+                close_after_action = false;
+                self.commit_push_after_enabled = enabled;
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.set_commit_push_after_enabled(enabled, cx);
+                    });
+                });
+            }
+            ContextMenuAction::UseCommitMessage { message } => {
+                self.details_pane.update(cx, |pane, cx| {
+                    pane.set_commit_message_from_history(message, window, cx);
                 });
             }
             ContextMenuAction::StageSelectionOrPath {
@@ -1099,10 +1142,14 @@ impl PopoverHost {
                             icon,
                             shortcut,
                             disabled,
-                            action: _,
+                            action,
                         } => {
                             let selected = selected_for_render == Some(ix);
                             let debug_selector = context_menu_entry_debug_selector(label.as_ref());
+                            let tooltip_text = context_menu_entry_tooltip(action.as_ref());
+                            let tooltip_host_for_move = tooltip_host.clone();
+                            let tooltip_text_for_move = tooltip_text.clone();
+                            let tooltip_host_for_hover = tooltip_host.clone();
                             let activate_on_left_release = model_for_mouse.clone();
                             let activate_on_right_release = model_for_mouse.clone();
                             let row = components::context_menu_entry(
@@ -1117,10 +1164,29 @@ impl PopoverHost {
                             )
                             .debug_selector(move || debug_selector.clone());
 
-                            row.on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            row.on_mouse_move(cx.listener(
+                                move |this, event: &MouseMoveEvent, _w, cx| {
+                                    this.context_menu_selected_ix = Some(ix);
+                                    if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
+                                        let _ = tooltip_host_for_move.update(cx, |host, cx| {
+                                            host.on_mouse_moved(event.position, cx);
+                                            host.set_tooltip_text_if_changed(
+                                                Some(tooltip_text.clone()),
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                    cx.notify();
+                                },
+                            ))
+                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
                                 if *hovering {
                                     this.context_menu_selected_ix = Some(ix);
                                     cx.notify();
+                                } else if let Some(tooltip_text) = tooltip_text.as_ref() {
+                                    let _ = tooltip_host_for_hover.update(cx, |host, cx| {
+                                        host.clear_tooltip_if_matches(tooltip_text, cx);
+                                    });
                                 }
                             }))
                             .when(!disabled, |row| {
@@ -1237,5 +1303,25 @@ mod tests {
         assert_eq!(context_menu_activate_entry_ix(&model, Some(3)), Some(3));
         assert_eq!(context_menu_activate_entry_ix(&model, Some(1)), Some(2));
         assert_eq!(context_menu_activate_entry_ix(&model, Some(99)), Some(2));
+    }
+
+    #[test]
+    fn use_commit_message_action_exposes_full_message_tooltip() {
+        let tooltip = context_menu_entry_tooltip(&ContextMenuAction::UseCommitMessage {
+            message: "\n\nsubject\n\nbody".to_string(),
+        });
+
+        assert_eq!(
+            tooltip.as_ref().map(|text| text.as_ref()),
+            Some("subject\n\nbody")
+        );
+    }
+
+    #[test]
+    fn non_commit_message_actions_do_not_expose_entry_tooltips() {
+        assert!(
+            context_menu_entry_tooltip(&ContextMenuAction::FetchAll { repo_id: RepoId(1) })
+                .is_none()
+        );
     }
 }

@@ -3265,6 +3265,7 @@ fn repo_action_finished_clears_error_and_refreshes() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
             repo_id: RepoId(1),
+            action: RepoActionKind::CheckoutBranch,
             result: Ok(()),
         }),
     );
@@ -3294,6 +3295,7 @@ fn repo_action_finished_err_records_diagnostic() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
             repo_id: RepoId(1),
+            action: RepoActionKind::CheckoutBranch,
             result: Err(error),
         }),
     );

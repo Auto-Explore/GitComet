@@ -139,6 +139,7 @@ impl GitCometView {
                                 gitcomet_state::model::GitLogTagFetchMode::Disabled
                             }),
                             default_history_mode: None,
+                            commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             git_executable_path: None,
                         };
 

@@ -151,6 +151,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
+        | PopoverKind::CommitOptionsMenu { repo_id }
+        | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
         | PopoverKind::DiffEditorMenu { repo_id, .. }
         | PopoverKind::CommitMenu { repo_id, .. }
@@ -254,6 +256,19 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
+            hash_pending_force_push_lease(repo, hasher);
+        }
+
+        PopoverKind::PreviousCommitMessagesMenu { .. } => {
+            repo.recent_commit_messages_rev.hash(hasher);
+        }
+
+        PopoverKind::CommitOptionsMenu { .. } => {
+            repo.log_rev.hash(hasher);
+            repo.ops_rev.hash(hasher);
+            repo.merge_message_rev.hash(hasher);
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
         }
 
         PopoverKind::TagMenu { .. } => {
@@ -284,6 +299,20 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo => {}
+    }
+}
+
+fn hash_pending_force_push_lease(repo: &RepoState, hasher: &mut impl Hasher) {
+    match &repo.pending_force_push_lease {
+        Some(lease) => {
+            1u8.hash(hasher);
+            lease.remote.hash(hasher);
+            lease.branch.hash(hasher);
+            lease.expected.hash(hasher);
+            lease.local_branch.hash(hasher);
+            lease.local_head.hash(hasher);
+        }
+        None => 0u8.hash(hasher),
     }
 }
 
@@ -334,6 +363,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::DiffActionMenu => 69u8.hash(hasher),
+        PopoverKind::CommitOptionsMenu { repo_id } => {
+            70u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
+            71u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
 
         PopoverKind::ResetPrompt {
             repo_id,
@@ -700,6 +737,16 @@ mod tests {
         dir
     }
 
+    fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
+        gitcomet_core::services::ForcePushLease {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            expected: CommitId("1111111111111111111111111111111111111111".into()),
+            local_branch: "main".to_string(),
+            local_head: CommitId("2222222222222222222222222222222222222222".into()),
+        }
+    }
+
     fn run_subtest_with_session_env(filter: &str, session_file: &Path) {
         let current_exe = std::env::current_exe().expect("locate current test binary");
         let output = Command::new(current_exe)
@@ -785,6 +832,76 @@ mod tests {
         let before = notify_fingerprint(&state, &PopoverKind::PullPicker);
         state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
         let after = notify_fingerprint(&state, &PopoverKind::PullPicker);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn commit_options_fingerprint_changes_when_amend_availability_revisions_change() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_commit_options_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+
+        let popover = PopoverKind::CommitOptionsMenu { repo_id };
+        let before = notify_fingerprint(&state, &popover);
+
+        state.repos[0].head_branch_rev = state.repos[0].head_branch_rev.wrapping_add(1);
+        let after_head_branch = notify_fingerprint(&state, &popover);
+        assert_ne!(before, after_head_branch);
+
+        state.repos[0].branches_rev = state.repos[0].branches_rev.wrapping_add(1);
+        assert_ne!(after_head_branch, notify_fingerprint(&state, &popover));
+    }
+
+    #[test]
+    fn force_push_confirm_fingerprint_changes_when_pending_lease_changes() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_force_push_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+
+        let before = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id });
+        state.repos[0].pending_force_push_lease = Some(test_force_push_lease());
+        let after = notify_fingerprint(&state, &PopoverKind::ForcePushConfirm { repo_id });
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn push_picker_fingerprint_changes_when_pending_lease_changes() {
+        let repo_id = RepoId(9);
+        let repo = RepoState::new_opening(
+            repo_id,
+            gitcomet_core::domain::RepoSpec {
+                workdir: std::env::temp_dir().join("gitcomet_push_picker_lease_fingerprint"),
+            },
+        );
+        let mut state = AppState {
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+        state.repos.push(repo);
+
+        let before = notify_fingerprint(&state, &PopoverKind::PushPicker);
+        state.repos[0].pending_force_push_lease = Some(test_force_push_lease());
+        let after = notify_fingerprint(&state, &PopoverKind::PushPicker);
 
         assert_ne!(before, after);
     }

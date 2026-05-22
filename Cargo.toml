@@ -51,7 +51,6 @@ http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"
 lru = "0.18"
 memchr = "2.8.0"
-# Pin mimalloc to the requested fork commit until the updated submodule lands in a release.
 mimalloc = { version = "0.1.51", features = ["extended"] }
 libmimalloc-sys = { version = "0.1.48", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }

@@ -1,5 +1,45 @@
 use super::*;
 
+fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
+    gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: CommitId("1111111111111111111111111111111111111111".into()),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    }
+}
+
+fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
+    test_recent_commit_message_with_summary(
+        "1111111111111111111111111111111111111111",
+        "old message",
+    )
+}
+
+fn test_recent_commit_message_with_summary(
+    id: &str,
+    summary: &str,
+) -> gitcomet_core::domain::RecentCommitMessage {
+    gitcomet_core::domain::RecentCommitMessage {
+        id: CommitId(id.into()),
+        summary: Arc::from(summary),
+        message: format!("{summary}\n\nbody"),
+    }
+}
+
+fn repo_with_head_dependent_cached_state(repo_id: RepoId) -> RepoState {
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
+    repo_state
+}
+
 #[test]
 fn pull_and_push_mark_in_flight_until_command_finished() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -360,6 +400,7 @@ fn commit_emits_effect() {
         Msg::Commit {
             repo_id: RepoId(1),
             message: "hello".to_string(),
+            push_after_commit: false,
         },
     );
 
@@ -512,6 +553,7 @@ fn commit_amend_emits_effect() {
         Msg::CommitAmend {
             repo_id: RepoId(1),
             message: "amended".to_string(),
+            push_after_commit: false,
         },
     );
 
@@ -1262,6 +1304,7 @@ fn repo_operations_emit_effects() {
         Msg::Commit {
             repo_id: RepoId(1),
             message: "m".to_string(),
+            push_after_commit: false,
         },
     );
     assert!(matches!(
@@ -1589,6 +1632,7 @@ fn commit_bumps_ops_rev() {
         Msg::Commit {
             repo_id,
             message: "test commit".to_string(),
+            push_after_commit: false,
         },
     );
     assert!(
@@ -1661,7 +1705,7 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     let expected_scope = state.repos[0].history_state.history_scope;
@@ -3036,7 +3080,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert!(!effects.is_empty());
@@ -3083,7 +3127,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id,
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert_eq!(
@@ -3118,7 +3162,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitFinished {
             repo_id: RepoId(999),
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert!(missing_commit.is_empty());
@@ -3128,14 +3172,403 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished {
             repo_id: RepoId(999),
-            result: Ok(()),
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
         }),
     );
     assert!(missing_amend.is_empty());
 }
 
 #[test]
-fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
+fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+        message: "ship".to_string(),
+        amend: false,
+        push_after_commit: true,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(gitcomet_core::services::CommitOperationOutcome {
+                local_branch: Some("main".to_string()),
+                pre_head: Some(CommitId("1111111111111111111111111111111111111111".into())),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            }),
+        }),
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SafePushAfterCommit { repo_id: id, context, .. } if *id == repo_id
+                && !context.amend
+                && context.local_branch.as_deref() == Some("main")
+                && context.pre_head.as_ref().is_some_and(|id| id.as_ref() == "1111111111111111111111111111111111111111")
+                && context.post_head.as_ref().is_some_and(|id| id.as_ref() == "2222222222222222222222222222222222222222")))
+    );
+    assert_eq!(state.repos[0].push_in_flight, 0);
+    assert!(state.repos[0].pending_commit_retry.is_none());
+
+    state.repos[0].push_in_flight = 0;
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].pending_commit_retry = Some(crate::model::PendingCommitRetry {
+        message: "ship".to_string(),
+        amend: false,
+        push_after_commit: true,
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Err(Error::new(ErrorKind::Backend("commit boom".to_string()))),
+        }),
+    );
+
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SafePushAfterCommit { .. }))
+    );
+    assert_eq!(state.repos[0].push_in_flight, 0);
+}
+
+#[test]
+fn safe_push_after_commit_decision_push_enqueues_checked_push() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let target = gitcomet_core::services::SafePushAfterCommitTarget {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let auth = gitcomet_core::auth::StagedGitAuth {
+        kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
+        username: Some("alice".to_string()),
+        secret: "token".to_string(),
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                local_branch: Some("main".to_string()),
+                pre_head: None,
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            auth: Some(auth.clone()),
+            result: Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push {
+                target: target.clone(),
+            }),
+        }),
+    );
+
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PushAfterCommit {
+            repo_id: id,
+            target: effect_target,
+            set_upstream: false,
+            auth: Some(effect_auth),
+        } if *id == repo_id && effect_target == &target && effect_auth == &auth
+    )));
+    assert_eq!(state.repos[0].push_in_flight, 1);
+}
+
+#[test]
+fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let target = gitcomet_core::services::SafePushAfterCommitTarget {
+        remote: "origin".to_string(),
+        branch: "feature".to_string(),
+        local_branch: "feature".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+    repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: false,
+                local_branch: Some("feature".to_string()),
+                pre_head: None,
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            auth: None,
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream {
+                    target: target.clone(),
+                },
+            ),
+        }),
+    );
+
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PushAfterCommit {
+            repo_id: id,
+            target: effect_target,
+            set_upstream: true,
+            ..
+        } if *id == repo_id && effect_target == &target
+    )));
+    assert_eq!(state.repos[0].push_in_flight, 1);
+}
+
+#[test]
+fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let expected = CommitId("1111111111111111111111111111111111111111".into());
+    let lease = gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: expected.clone(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: true,
+                local_branch: Some("main".to_string()),
+                pre_head: Some(expected.clone()),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            auth: None,
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::Blocked {
+                    summary: "published amend".to_string(),
+                    lease: Some(lease.clone()),
+                },
+            ),
+        }),
+    );
+
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::Push { .. } | Effect::PushAfterCommit { .. } | Effect::PushSetUpstream { .. }
+    )));
+    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+    assert!(
+        state.repos[0]
+            .last_error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Push after commit blocked")
+    );
+}
+
+#[test]
+fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refresh() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let expected = CommitId("1111111111111111111111111111111111111111".into());
+    let lease = gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: expected.clone(),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id,
+            context: gitcomet_core::services::SafePushAfterCommitContext {
+                amend: true,
+                local_branch: Some("main".to_string()),
+                pre_head: Some(expected),
+                post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+            },
+            auth: None,
+            result: Ok(
+                gitcomet_core::services::SafePushAfterCommitDecision::Blocked {
+                    summary: "published amend".to_string(),
+                    lease: Some(lease.clone()),
+                },
+            ),
+        }),
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert_eq!(state.repos[0].pending_force_push_lease, Some(lease));
+}
+
+#[test]
+fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+    let recent_rev = state.repos[0].recent_commit_messages_rev;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CheckoutBranch {
+            repo_id,
+            name: "feature".to_string(),
+        },
+    );
+
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::CheckoutBranch { repo_id: id, name }
+                if *id == repo_id && name == "feature"
+        )
+    }));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert!(state.repos[0].recent_commit_messages_rev > recent_rev);
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+}
+
+#[test]
+fn cherry_pick_clears_recent_messages_from_previous_head() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CherryPickCommit {
+            repo_id,
+            commit_id: CommitId("3333333333333333333333333333333333333333".into()),
+        },
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+}
+
+#[test]
+fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
+    repo_state.local_actions_in_flight = 1;
+    state.repos.push(repo_state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::CherryPickCommit,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
+fn stale_recent_commit_messages_loaded_after_head_change_is_ignored() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -3146,6 +3579,115 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     );
+    repo_state.open = Loadable::Ready(());
+    state.repos.push(repo_state);
+
+    let first_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRecentCommitMessages { repo_id, limit: 10 },
+    );
+    let first_request_rev = match first_effects.as_slice() {
+        [
+            Effect::LoadRecentCommitMessages {
+                repo_id: effect_repo_id,
+                limit,
+                request_rev,
+            },
+        ] if *effect_repo_id == repo_id && *limit == 10 => *request_rev,
+        effects => panic!("expected recent commit message load effect, got {effects:?}"),
+    };
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::Loading
+    ));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+
+    let second_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRecentCommitMessages { repo_id, limit: 10 },
+    );
+    let second_request_rev = match second_effects.as_slice() {
+        [
+            Effect::LoadRecentCommitMessages {
+                repo_id: effect_repo_id,
+                limit,
+                request_rev,
+            },
+        ] if *effect_repo_id == repo_id && *limit == 10 => *request_rev,
+        effects => panic!("expected second recent commit message load effect, got {effects:?}"),
+    };
+    assert!(second_request_rev > first_request_rev);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+            repo_id,
+            request_rev: first_request_rev,
+            result: Ok(vec![test_recent_commit_message_with_summary(
+                "2222222222222222222222222222222222222222",
+                "stale message",
+            )]),
+        }),
+    );
+
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::Loading
+    ));
+    assert_eq!(
+        state.repos[0].recent_commit_messages_rev,
+        second_request_rev
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+            repo_id,
+            request_rev: second_request_rev,
+            result: Ok(vec![test_recent_commit_message_with_summary(
+                "3333333333333333333333333333333333333333",
+                "current message",
+            )]),
+        }),
+    );
+
+    match &state.repos[0].recent_commit_messages {
+        Loadable::Ready(messages) => {
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].summary.as_ref(), "current message");
+        }
+        other => panic!("expected current recent messages, got {other:?}"),
+    }
+}
+
+#[test]
+fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = repo_with_head_dependent_cached_state(repo_id);
     repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
         path: PathBuf::from("a.txt"),
         area: DiffArea::Staged,
@@ -3171,6 +3713,8 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
     assert!(!effects.is_empty());
     let repo = &state.repos[0];
     assert!(repo.diff_state.diff_target.is_none());
+    assert_eq!(repo.pending_force_push_lease, None);
+    assert!(matches!(&repo.recent_commit_messages, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff, Loadable::NotLoaded));
     assert!(matches!(repo.diff_state.diff_file, Loadable::NotLoaded));
     assert!(matches!(

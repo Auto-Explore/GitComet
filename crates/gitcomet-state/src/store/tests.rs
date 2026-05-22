@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::{CloneOpStatus, CloneProgressStage, DiagnosticKind, Loadable, RepoState};
-use crate::msg::{Effect, RepoCommandKind};
+use crate::msg::{Effect, RepoActionKind, RepoCommandKind};
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
     ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,

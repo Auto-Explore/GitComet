@@ -139,6 +139,7 @@ mod tests {
     use gitcomet_core::error::ErrorKind;
     use gitcomet_core::services::{
         ConflictSide, GitBackend, GitRepository, PullMode, RemoteUrlKind, ResetMode, Result,
+        SafePushAfterCommitTarget,
     };
     use std::path::{Path, PathBuf};
 
@@ -220,6 +221,12 @@ mod tests {
     fn noop_repo_default_trait_methods_use_fallback_behavior() {
         let repo = sample_repo();
         let commit = CommitId("abc123".into());
+        let safe_push_target = SafePushAfterCommitTarget {
+            remote: "origin".to_string(),
+            branch: "main".to_string(),
+            local_branch: "main".to_string(),
+            local_head: commit.clone(),
+        };
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
             resume_from: None,
@@ -266,6 +273,8 @@ mod tests {
         assert_unsupported(repo.fetch_all_with_output_prune(true));
         assert_unsupported(repo.pull_with_output(PullMode::FastForwardOnly));
         assert_unsupported(repo.push_with_output());
+        assert_unsupported(repo.push_after_commit_with_output(&safe_push_target));
+        assert_unsupported(repo.push_after_commit_set_upstream_with_output(&safe_push_target));
         assert_unsupported(repo.push_force());
         assert_unsupported(repo.push_force_with_output());
         assert_unsupported(repo.push_set_upstream("origin", "main"));

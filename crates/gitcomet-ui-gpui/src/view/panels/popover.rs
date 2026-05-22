@@ -113,6 +113,8 @@ pub(in super::super) struct PopoverHost {
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
+    commit_amend_enabled: bool,
+    commit_push_after_enabled: bool,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
     _ui_model_subscription: gpui::Subscription,
@@ -257,6 +259,8 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
         kind,
         PopoverKind::PullPicker
             | PopoverKind::PushPicker
+            | PopoverKind::CommitOptionsMenu { .. }
+            | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
@@ -343,6 +347,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
+        | PopoverKind::CommitOptionsMenu { .. }
+        | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
@@ -430,6 +436,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
+        | PopoverKind::CommitOptionsMenu { .. }
+        | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -537,6 +545,7 @@ impl PopoverHost {
         timezone: Timezone,
         show_timezone: bool,
         change_tracking_view: ChangeTrackingView,
+        commit_push_after_enabled: bool,
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
         root_view: WeakEntity<GitCometView>,
@@ -966,6 +975,8 @@ impl PopoverHost {
             timezone,
             show_timezone,
             change_tracking_view,
+            commit_amend_enabled: false,
+            commit_push_after_enabled,
             diff_content_mode,
             diff_whitespace_mode,
             _ui_model_subscription: subscription,
@@ -1500,6 +1511,7 @@ impl PopoverHost {
     fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
         let repo_id = match kind {
             PopoverKind::TagMenu { repo_id, .. } => Some(*repo_id),
+            PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
             _ => None,
         };
         let Some(repo_id) = repo_id else {
@@ -1508,6 +1520,17 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
             return;
         };
+
+        if matches!(kind, PopoverKind::PreviousCommitMessagesMenu { .. }) {
+            if matches!(
+                repo.recent_commit_messages,
+                Loadable::NotLoaded | Loadable::Error(_)
+            ) {
+                self.store
+                    .dispatch(Msg::LoadRecentCommitMessages { repo_id, limit: 10 });
+            }
+            return;
+        }
 
         if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
             self.store.dispatch(Msg::LoadTags { repo_id });
@@ -1937,6 +1960,36 @@ impl PopoverHost {
         }
     }
 
+    pub(in super::super) fn sync_commit_push_after_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_push_after_enabled == enabled {
+            return;
+        }
+
+        self.commit_push_after_enabled = enabled;
+        if matches!(self.popover, Some(PopoverKind::CommitOptionsMenu { .. })) {
+            cx.notify();
+        }
+    }
+
+    pub(in super::super) fn sync_commit_amend_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_amend_enabled == enabled {
+            return;
+        }
+
+        self.commit_amend_enabled = enabled;
+        if matches!(self.popover, Some(PopoverKind::CommitOptionsMenu { .. })) {
+            cx.notify();
+        }
+    }
+
     pub(in super::super) fn sync_diff_content_mode(
         &mut self,
         next: DiffContentMode,
@@ -2220,6 +2273,12 @@ impl PopoverHost {
             PopoverKind::UiScalePicker => self.context_menu_view(PopoverKind::UiScalePicker, cx),
             PopoverKind::PullPicker => self.context_menu_view(PopoverKind::PullPicker, cx),
             PopoverKind::PushPicker => self.context_menu_view(PopoverKind::PushPicker, cx),
+            PopoverKind::CommitOptionsMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::CommitOptionsMenu { repo_id }, cx)
+            }
+            PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::PreviousCommitMessagesMenu { repo_id }, cx)
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }

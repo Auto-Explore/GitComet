@@ -4,8 +4,8 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
-    SubmoduleTrustTarget,
+    CommandOutput, ConflictSide, ForcePushLease, GitRepository, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -643,6 +643,61 @@ pub(super) fn schedule_push(
     );
 }
 
+pub(super) fn schedule_push_after_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_target = target.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushAfterCommit {
+            target: command_target,
+            set_upstream,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                if set_upstream {
+                    repo.push_after_commit_set_upstream_with_output(&target)
+                } else {
+                    repo.push_after_commit_with_output(&target)
+                }
+            })
+        },
+    );
+}
+
+pub(super) fn schedule_safe_push_after_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    context: SafePushAfterCommitContext,
+    auth: Option<StagedGitAuth>,
+) {
+    let finish_context = context.clone();
+    let follow_up_auth = auth.clone();
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+                repo_id,
+                context: finish_context,
+                auth: follow_up_auth,
+                result,
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_force_push(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -657,6 +712,27 @@ pub(super) fn schedule_force_push(
         repo_id,
         RepoCommandKind::ForcePush,
         move |repo| run_with_git_auth(auth, || repo.push_force_with_output()),
+    );
+}
+
+pub(super) fn schedule_force_push_with_lease(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    lease: ForcePushLease,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_lease = lease.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ForcePushWithLease {
+            lease: command_lease,
+        },
+        move |repo| run_with_git_auth(auth, || repo.push_force_with_lease_with_output(&lease)),
     );
 }
 

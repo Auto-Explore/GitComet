@@ -163,6 +163,52 @@ pub struct BlameLine {
     pub line: String,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommitOperationOutcome {
+    pub local_branch: Option<String>,
+    pub pre_head: Option<CommitId>,
+    pub post_head: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafePushAfterCommitContext {
+    pub amend: bool,
+    pub local_branch: Option<String>,
+    pub pre_head: Option<CommitId>,
+    pub post_head: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafePushAfterCommitTarget {
+    pub remote: String,
+    pub branch: String,
+    pub local_branch: String,
+    pub local_head: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForcePushLease {
+    pub remote: String,
+    pub branch: String,
+    pub expected: CommitId,
+    pub local_branch: String,
+    pub local_head: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SafePushAfterCommitDecision {
+    Push {
+        target: SafePushAfterCommitTarget,
+    },
+    PushSetUpstream {
+        target: SafePushAfterCommitTarget,
+    },
+    Blocked {
+        summary: String,
+        lease: Option<ForcePushLease>,
+    },
+}
+
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
@@ -232,6 +278,11 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    fn recent_commit_messages(&self, _limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "recent commit messages are not implemented for this backend",
+        )))
+    }
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
     fn current_branch_cancellable(&self, cancellation: &CancellationToken) -> Result<String> {
@@ -239,6 +290,11 @@ pub trait GitRepository: Send + Sync {
         let branch = self.current_branch()?;
         cancellation.check_cancelled()?;
         Ok(branch)
+    }
+    fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "reading HEAD commit id is not implemented for this backend",
+        )))
     }
     fn list_branches(&self) -> Result<Vec<Branch>>;
     fn list_branches_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
@@ -413,10 +469,18 @@ pub trait GitRepository: Send + Sync {
     fn stage(&self, paths: &[&Path]) -> Result<()>;
     fn unstage(&self, paths: &[&Path]) -> Result<()>;
     fn commit(&self, message: &str) -> Result<()>;
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit(message)?;
+        Ok(CommitOperationOutcome::default())
+    }
     fn commit_amend(&self, _message: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "commit amend is not implemented for this backend",
         )))
+    }
+    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_amend(message)?;
+        Ok(CommitOperationOutcome::default())
     }
 
     fn rebase_with_output(&self, _onto: &str) -> Result<CommandOutput> {
@@ -550,6 +614,38 @@ pub trait GitRepository: Send + Sync {
     fn push_force_with_output(&self) -> Result<CommandOutput> {
         self.push_force()?;
         Ok(CommandOutput::empty_success("git push --force-with-lease"))
+    }
+
+    fn safe_push_after_commit(
+        &self,
+        _context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "safe push after commit is not implemented for this backend",
+        )))
+    }
+
+    fn push_after_commit_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        validate_safe_push_after_commit_target(self, target)?;
+        self.push_with_output()
+    }
+
+    fn push_after_commit_set_upstream_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        validate_safe_push_after_commit_target(self, target)?;
+        self.push_set_upstream_with_output(&target.remote, &target.branch)
+    }
+
+    fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        let _ = lease;
+        Err(Error::new(ErrorKind::Unsupported(
+            "oid-specific force push with lease is not implemented for this backend",
+        )))
     }
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
@@ -826,6 +922,33 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
+}
+
+fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(
+    repo: &R,
+    target: &SafePushAfterCommitTarget,
+) -> Result<()> {
+    let current_branch = repo.current_branch()?;
+    if current_branch != target.local_branch {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "stale push-after-commit target: expected branch {}, but current branch is {}",
+            target.local_branch, current_branch
+        ))));
+    }
+
+    let current_head = repo.head_commit_id()?.ok_or_else(|| {
+        Error::new(ErrorKind::Backend(
+            "stale push-after-commit target: current HEAD does not point to a commit".to_string(),
+        ))
+    })?;
+    if current_head != target.local_head {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "stale push-after-commit target: expected HEAD {}, but current HEAD is {}",
+            target.local_head, current_head
+        ))));
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

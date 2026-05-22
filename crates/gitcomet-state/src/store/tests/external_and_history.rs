@@ -1,5 +1,23 @@
 use super::*;
 
+fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
+    gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: CommitId("1111111111111111111111111111111111111111".into()),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    }
+}
+
+fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
+    gitcomet_core::domain::RecentCommitMessage {
+        id: CommitId("1111111111111111111111111111111111111111".into()),
+        summary: Arc::from("old message"),
+        message: "old message\n\nbody".to_string(),
+    }
+}
+
 #[test]
 fn external_worktree_change_refreshes_status_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -114,6 +132,44 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
             .any(|e| matches!(e, Effect::LoadRebaseState { .. })),
         "did not expect rebase state refresh on pure worktree changes"
     );
+}
+
+#[test]
+fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
+    let recent_rev = repo_state.recent_commit_messages_rev;
+    state.repos.push(repo_state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert_eq!(
+        state.repos[0].pending_force_push_lease,
+        Some(test_force_push_lease())
+    );
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert!(state.repos[0].recent_commit_messages_rev > recent_rev);
 }
 
 #[test]

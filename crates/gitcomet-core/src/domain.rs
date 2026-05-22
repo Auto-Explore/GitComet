@@ -45,6 +45,13 @@ pub struct Commit {
     pub time: SystemTime,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecentCommitMessage {
+    pub id: CommitId,
+    pub summary: Arc<str>,
+    pub message: String,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum HistoryMode {
     #[default]

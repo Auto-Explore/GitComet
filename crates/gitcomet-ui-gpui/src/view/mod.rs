@@ -656,6 +656,7 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffWhitespaceMode::from_key)
             .unwrap_or_default();
+        let commit_push_after_enabled = ui_session.commit_push_after_enabled.unwrap_or(false);
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -818,6 +819,7 @@ impl GitCometView {
                     change_tracking_height: restored_change_tracking_height,
                     untracked_height: restored_untracked_height,
                     ui_scale_percent: ui_scale.percent,
+                    commit_push_after_enabled,
                     root_view: weak_view.clone(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
@@ -836,6 +838,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 change_tracking_view,
+                commit_push_after_enabled,
                 diff_content_mode,
                 diff_whitespace_mode,
                 weak_view.clone(),
@@ -992,6 +995,7 @@ impl GitCometView {
             timezone,
             show_timezone,
             change_tracking_view,
+            commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
@@ -1229,6 +1233,38 @@ impl GitCometView {
         self.popover_host
             .update(cx, |host, cx| host.sync_change_tracking_view(next, cx));
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_commit_push_after_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_push_after_enabled == enabled {
+            return;
+        }
+
+        self.commit_push_after_enabled = enabled;
+        self.details_pane.update(cx, |pane, cx| {
+            pane.set_commit_push_after_enabled(enabled, cx)
+        });
+        self.popover_host.update(cx, |host, cx| {
+            host.sync_commit_push_after_enabled(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_commit_amend_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_commit_amend_enabled(enabled, cx));
+        self.popover_host
+            .update(cx, |host, cx| host.sync_commit_amend_enabled(enabled, cx));
+        cx.notify();
     }
 
     pub(in crate::view) fn set_diff_scroll_sync(

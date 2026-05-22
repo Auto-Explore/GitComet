@@ -220,6 +220,66 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
 }
 
 #[test]
+fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo_id = RepoId(3);
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    repos.insert(
+        repo_id,
+        Arc::new(UnsupportedRepo {
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        }),
+    );
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: false,
+        local_branch: Some("main".to_string()),
+        pre_head: None,
+        post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+    };
+    let auth = gitcomet_core::auth::StagedGitAuth {
+        kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
+        username: Some("alice".to_string()),
+        secret: "token".to_string(),
+    };
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::SafePushAfterCommit {
+            repo_id,
+            context: context.clone(),
+            auth: Some(auth.clone()),
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected safe-push completion message");
+    match msg {
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id: emitted_repo_id,
+            context: emitted_context,
+            auth: emitted_auth,
+            result,
+        }) => {
+            assert_eq!(emitted_repo_id, repo_id);
+            assert_eq!(emitted_context, context);
+            assert_eq!(emitted_auth, Some(auth));
+            let err = result.expect_err("unsupported test repo should fail safe push");
+            assert!(err.to_string().contains("safe push after commit"));
+        }
+        other => panic!("unexpected message: {other:?}"),
+    }
+}
+
+#[test]
 fn clone_repo_effect_clones_local_repo_and_emits_finished_and_open_repo() {
     if !super::require_git_shell_for_store_tests() {
         return;
@@ -2416,6 +2476,7 @@ fn stash_effect_requests_stash_reload_on_success() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::Stash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2583,6 +2644,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::PopStash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2750,6 +2812,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::PopStash,
                 result: Err(_),
             }) => {
                 saw_finished_err = true;
@@ -2915,6 +2978,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::DropStash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -3078,6 +3142,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::DropStash,
                 result: Err(_),
             }) => {
                 saw_finished_err = true;
@@ -3480,6 +3545,7 @@ fn wait_for_checkout_refresh_messages(
             }
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: rid,
+                action: _,
                 result: Ok(()),
             }) if rid == repo_id => {
                 saw_finished = true;
@@ -4426,6 +4492,19 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::SafePushAfterCommit {
+                repo_id,
+                context: gitcomet_core::services::SafePushAfterCommitContext {
+                    amend: false,
+                    local_branch: None,
+                    pre_head: None,
+                    post_head: None,
+                },
+                auth: None,
+            },
+            1,
+        ),
+        (
             Effect::FetchAll {
                 repo_id,
                 prune: true,
@@ -4474,8 +4553,36 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::PushAfterCommit {
+                repo_id,
+                target: gitcomet_core::services::SafePushAfterCommitTarget {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    local_branch: "main".to_string(),
+                    local_head: CommitId("2222222222222222222222222222222222222222".into()),
+                },
+                set_upstream: false,
+                auth: None,
+            },
+            1,
+        ),
+        (
             Effect::ForcePush {
                 repo_id,
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::ForcePushWithLease {
+                repo_id,
+                lease: gitcomet_core::services::ForcePushLease {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    expected: CommitId("1111111111111111111111111111111111111111".into()),
+                    local_branch: "main".to_string(),
+                    local_head: CommitId("2222222222222222222222222222222222222222".into()),
+                },
                 auth: None,
             },
             1,

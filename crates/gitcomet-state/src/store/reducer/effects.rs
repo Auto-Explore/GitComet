@@ -9,8 +9,9 @@ use crate::model::{
 use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, FileStatusKind, LogPage, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitId, FileStatusKind, LogPage, RecentCommitMessage, ReflogEntry,
+    Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence,
+    Worktree,
 };
 use gitcomet_core::error::Error;
 use std::path::PathBuf;
@@ -408,6 +409,49 @@ pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> 
     } else {
         Vec::new()
     }
+}
+
+pub(super) fn load_recent_commit_messages(
+    state: &mut AppState,
+    repo_id: RepoId,
+    limit: usize,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(()))
+        || matches!(repo_state.recent_commit_messages, Loadable::Loading)
+    {
+        return Vec::new();
+    }
+    repo_state.set_recent_commit_messages(Loadable::Loading);
+    let request_rev = repo_state.recent_commit_messages_rev;
+    vec![Effect::LoadRecentCommitMessages {
+        repo_id,
+        limit,
+        request_rev,
+    }]
+}
+
+pub(super) fn recent_commit_messages_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    request_rev: u64,
+    result: std::result::Result<Vec<RecentCommitMessage>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.recent_commit_messages_rev == request_rev
+    {
+        let value = match result {
+            Ok(v) => Loadable::Ready(v),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.set_recent_commit_messages(value);
+    }
+    Vec::new()
 }
 
 pub(super) fn load_file_history(

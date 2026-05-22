@@ -2,16 +2,17 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, HistoryMode, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
-    RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence,
-    Worktree,
+    FileDiffText, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
-    BlameLine, CancellationToken, CommandOutput, ConflictFileStages, ConflictSide, GitRepository,
-    MergetoolResult, PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
+    ConflictSide, ForcePushLease, GitRepository, MergetoolResult, PullMode, RemoteUrlKind,
+    ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -247,6 +248,10 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        self.recent_commit_messages_impl(limit)
+    }
+
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
         self.reflog_head_impl(limit)
     }
@@ -260,6 +265,10 @@ impl GitRepository for GixRepo {
         let branch = self.current_branch_impl()?;
         cancellation.check_cancelled()?;
         Ok(branch)
+    }
+
+    fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        self.head_commit_id_impl()
     }
 
     fn list_branches(&self) -> Result<Vec<Branch>> {
@@ -484,8 +493,16 @@ impl GitRepository for GixRepo {
         self.commit_impl(message)
     }
 
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_with_outcome_impl(message)
+    }
+
     fn commit_amend(&self, message: &str) -> Result<()> {
         self.commit_amend_impl(message)
+    }
+
+    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_amend_with_outcome_impl(message)
     }
 
     fn fetch_all(&self) -> Result<()> {
@@ -522,6 +539,31 @@ impl GitRepository for GixRepo {
 
     fn push_force_with_output(&self) -> Result<CommandOutput> {
         self.push_force_with_output_impl()
+    }
+
+    fn safe_push_after_commit(
+        &self,
+        context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        self.safe_push_after_commit_impl(context)
+    }
+
+    fn push_after_commit_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_with_output_impl(target)
+    }
+
+    fn push_after_commit_set_upstream_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_set_upstream_with_output_impl(target)
+    }
+
+    fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        self.push_force_with_lease_with_output_impl(lease)
     }
 
     fn reset_with_output(&self, target: &str, mode: ResetMode) -> Result<CommandOutput> {

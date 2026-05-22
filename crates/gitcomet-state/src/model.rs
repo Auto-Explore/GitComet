@@ -6,7 +6,9 @@ use gitcomet_core::conflict_session::{
 };
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
-use gitcomet_core::services::{BlameLine, SubmoduleTrustTarget};
+use gitcomet_core::services::{
+    BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -312,10 +314,15 @@ pub enum AuthRetryOperation {
         repo_id: RepoId,
         command: RepoCommandKind,
     },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+    },
     Commit {
         repo_id: RepoId,
         message: String,
         amend: bool,
+        push_after_commit: bool,
     },
     Clone {
         url: String,
@@ -427,6 +434,7 @@ pub struct CommandLogEntry {
 pub struct PendingCommitRetry {
     pub message: String,
     pub amend: bool,
+    pub push_after_commit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -629,6 +637,8 @@ pub struct RepoState {
     pub stashes: Loadable<Arc<Vec<StashEntry>>>,
     pub stashes_rev: u64,
     pub reflog: Loadable<Vec<ReflogEntry>>,
+    pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
+    pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
     pub merge_message_rev: u64,
@@ -655,6 +665,7 @@ pub struct RepoState {
     pub command_log: Vec<CommandLogEntry>,
     pub pending_commit_retry: Option<PendingCommitRetry>,
     pub load_epoch: u64,
+    pub pending_force_push_lease: Option<ForcePushLease>,
 }
 
 impl RepoState {
@@ -701,6 +712,8 @@ impl RepoState {
             stashes: Loadable::NotLoaded,
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,
+            recent_commit_messages: Loadable::NotLoaded,
+            recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
             merge_message_rev: 0,
@@ -722,6 +735,7 @@ impl RepoState {
             command_log: Vec::new(),
             pending_commit_retry: None,
             load_epoch: 0,
+            pending_force_push_lease: None,
         }
     }
 
@@ -806,6 +820,23 @@ impl RepoState {
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    pub(crate) fn set_recent_commit_messages(
+        &mut self,
+        messages: Loadable<Vec<RecentCommitMessage>>,
+    ) {
+        let messages = loadable_into_arc(messages);
+        if self.recent_commit_messages == messages {
+            return;
+        }
+        self.recent_commit_messages = messages;
+        self.recent_commit_messages_rev = self.recent_commit_messages_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn clear_head_dependent_cached_state(&mut self) {
+        self.pending_force_push_lease = None;
+        self.set_recent_commit_messages(Loadable::NotLoaded);
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {

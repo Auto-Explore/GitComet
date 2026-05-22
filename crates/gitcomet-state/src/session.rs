@@ -42,6 +42,7 @@ pub struct UiSession {
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
+    pub commit_push_after_enabled: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
 }
 
@@ -146,6 +147,7 @@ struct UiSessionFile {
     history_show_tags: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
+    commit_push_after_enabled: Option<bool>,
     git_executable_path: Option<String>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
@@ -225,6 +227,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_tags: file.history_show_tags,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
+        commit_push_after_enabled: file.commit_push_after_enabled,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -512,6 +515,7 @@ pub struct UiSettings {
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
+    pub commit_push_after_enabled: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
 }
 
@@ -601,6 +605,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.default_history_mode {
         file.default_history_mode = Some(value.into());
+    }
+    if let Some(value) = settings.commit_push_after_enabled {
+        file.commit_push_after_enabled = Some(value);
     }
     if let Some(path) = settings.git_executable_path {
         file.git_executable_path = path.map(|path| path_storage_key(&path));
@@ -3136,6 +3143,43 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.git_executable_path, Some(PathBuf::new()));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_commit_push_after_enabled() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                commit_push_after_enabled: Some(true),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.commit_push_after_enabled, Some(true));
     }
 
     #[test]

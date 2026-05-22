@@ -5,7 +5,7 @@ use super::util::{
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
-use crate::msg::{Effect, RepoExternalChange};
+use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
@@ -78,6 +78,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.history_state.blame = Loadable::NotLoaded;
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
+    repo_state.clear_head_dependent_cached_state();
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
 
@@ -97,6 +98,10 @@ pub(super) fn repo_externally_changed(
 
     // Coalesce refreshes while a refresh is already in flight.
     let mut effects = if change.git_state {
+        // A git-state watcher event can be produced by the safety fetch that
+        // prepared a pending force-push lease. Preserve that offer; the force
+        // push command validates the branch and HEAD again before pushing.
+        repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
         if repo_state
             .loads_in_flight
@@ -375,6 +380,7 @@ pub(super) fn log_loaded(
 pub(super) fn repo_action_finished(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
+    action: RepoActionKind,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
     let mut clear_banner = false;
@@ -384,6 +390,9 @@ pub(super) fn repo_action_finished(
         match result {
             Ok(()) => {
                 repo_state.last_error = None;
+                if repo_action_clears_head_dependent_state(action) {
+                    repo_state.clear_head_dependent_cached_state();
+                }
                 clear_banner = true;
             }
             Err(e) => {
@@ -417,6 +426,18 @@ pub(super) fn repo_action_finished(
         }
     }
     effects
+}
+
+fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
+    matches!(
+        action,
+        RepoActionKind::CheckoutBranch
+            | RepoActionKind::CheckoutRemoteBranch
+            | RepoActionKind::CheckoutCommit
+            | RepoActionKind::CherryPickCommit
+            | RepoActionKind::RevertCommit
+            | RepoActionKind::CreateBranchAndCheckout
+    )
 }
 
 #[cfg(test)]

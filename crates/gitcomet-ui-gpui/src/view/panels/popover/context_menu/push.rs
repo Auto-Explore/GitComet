@@ -5,6 +5,18 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let disabled = repo_id.is_none();
     let repo_id = repo_id.unwrap_or(RepoId(0));
     let tracking_branch_name = super::active_branch_tracking_upstream_name(this);
+    let force_push_label = if this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.pending_force_push_lease.as_ref())
+        .is_some()
+    {
+        "Force push published amend with lease…"
+    } else {
+        "Force push (with lease)…"
+    };
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header(
@@ -19,7 +31,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
             action: Box::new(ContextMenuAction::Push { repo_id }),
         },
         ContextMenuItem::Entry {
-            label: "Force push (with lease)…".into(),
+            label: force_push_label.into(),
             icon: Some("icons/warning.svg".into()),
             shortcut: Some("F".into()),
             disabled,

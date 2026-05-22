@@ -65,6 +65,15 @@ pub(in crate::view) enum ContextMenuAction {
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },
+    SetCommitAmendEnabled {
+        enabled: bool,
+    },
+    SetCommitPushAfterEnabled {
+        enabled: bool,
+    },
+    UseCommitMessage {
+        message: String,
+    },
     SetUiScale {
         percent: u32,
     },

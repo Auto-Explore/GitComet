@@ -1,13 +1,15 @@
 use crate::model::GitLogTagFetchMode;
 use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, PullMode, RemoteUrlKind,
+    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+    SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +17,29 @@ use std::sync::Arc;
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
 use super::{RepoPath, RepoPathList};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepoActionKind {
+    CheckoutBranch,
+    CheckoutRemoteBranch,
+    CheckoutCommit,
+    CherryPickCommit,
+    RevertCommit,
+    CreateBranch,
+    CreateBranchAndCheckout,
+    DeleteBranch,
+    ForceDeleteBranch,
+    StagePath,
+    StagePaths,
+    UnstagePath,
+    UnstagePaths,
+    DiscardWorktreeChangesPath,
+    DiscardWorktreeChangesPaths,
+    Stash,
+    ApplyStash,
+    PopStash,
+    DropStash,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictAutosolveMode {
@@ -169,6 +194,10 @@ pub enum Msg {
     },
     LoadReflog {
         repo_id: RepoId,
+    },
+    LoadRecentCommitMessages {
+        repo_id: RepoId,
+        limit: usize,
     },
     LoadFileHistory {
         repo_id: RepoId,
@@ -354,10 +383,16 @@ pub enum Msg {
     Commit {
         repo_id: RepoId,
         message: String,
+        push_after_commit: bool,
     },
     CommitAmend {
         repo_id: RepoId,
         message: String,
+        push_after_commit: bool,
+    },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
     },
     FetchAll {
         repo_id: RepoId,
@@ -388,8 +423,17 @@ pub enum Msg {
     Push {
         repo_id: RepoId,
     },
+    PushAfterCommit {
+        repo_id: RepoId,
+        target: SafePushAfterCommitTarget,
+        set_upstream: bool,
+    },
     ForcePush {
         repo_id: RepoId,
+    },
+    ForcePushWithLease {
+        repo_id: RepoId,
+        lease: ForcePushLease,
     },
     PushSetUpstream {
         repo_id: RepoId,
@@ -624,6 +668,11 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<Vec<ReflogEntry>, Error>,
     },
+    RecentCommitMessagesLoaded {
+        repo_id: RepoId,
+        request_rev: u64,
+        result: Result<Vec<RecentCommitMessage>, Error>,
+    },
     RebaseStateLoaded {
         repo_id: RepoId,
         result: Result<bool, Error>,
@@ -726,15 +775,22 @@ pub enum InternalMsg {
     },
     RepoActionFinished {
         repo_id: RepoId,
+        action: RepoActionKind,
         result: Result<(), Error>,
     },
     CommitFinished {
         repo_id: RepoId,
-        result: Result<(), Error>,
+        result: Result<CommitOperationOutcome, Error>,
     },
     CommitAmendFinished {
         repo_id: RepoId,
-        result: Result<(), Error>,
+        result: Result<CommitOperationOutcome, Error>,
+    },
+    SafePushAfterCommitFinished {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+        auth: Option<StagedGitAuth>,
+        result: Result<SafePushAfterCommitDecision, Error>,
     },
     RepoCommandFinished {
         repo_id: RepoId,
@@ -751,7 +807,7 @@ impl From<InternalMsg> for Msg {
 
 #[cfg(test)]
 mod tests {
-    use super::{InternalMsg, Msg};
+    use super::{InternalMsg, Msg, RepoActionKind};
     use crate::model::RepoId;
     use gitcomet_core::error::{Error, ErrorKind};
     use std::path::PathBuf;
@@ -760,6 +816,7 @@ mod tests {
     fn wraps_internal_messages() {
         let msg: Msg = InternalMsg::RepoActionFinished {
             repo_id: RepoId(7),
+            action: RepoActionKind::CheckoutBranch,
             result: Ok(()),
         }
         .into();
@@ -768,6 +825,7 @@ mod tests {
             msg,
             Msg::Internal(InternalMsg::RepoActionFinished {
                 repo_id: RepoId(7),
+                action: RepoActionKind::CheckoutBranch,
                 result: Ok(())
             })
         ));
