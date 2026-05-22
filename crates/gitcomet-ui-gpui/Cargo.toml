@@ -27,6 +27,8 @@ syntax-web = [
     "dep:tree-sitter-css",
     "dep:tree-sitter-html",
     "dep:tree-sitter-javascript",
+    "dep:tree-sitter-jsdoc",
+    "dep:tree-sitter-regex",
     "dep:tree-sitter-typescript",
 ]
 syntax-rust = ["dep:tree-sitter-rust"]
@@ -107,6 +109,7 @@ tree-sitter-gowork = { workspace = true, optional = true }
 tree-sitter-html = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
 tree-sitter-java = { workspace = true, optional = true }
+tree-sitter-jsdoc = { workspace = true, optional = true }
 tree-sitter-json = { workspace = true, optional = true }
 tree-sitter-kotlin-sg = { workspace = true, optional = true }
 tree-sitter-lua = { workspace = true, optional = true }
@@ -117,6 +120,7 @@ tree-sitter-php = { workspace = true, optional = true }
 tree-sitter-powershell = { workspace = true, optional = true }
 tree-sitter-python = { workspace = true, optional = true }
 tree-sitter-r = { workspace = true, optional = true }
+tree-sitter-regex = { workspace = true, optional = true }
 tree-sitter-ruby = { workspace = true, optional = true }
 tree-sitter-rust = { workspace = true, optional = true }
 tree-sitter-scala = { workspace = true, optional = true }
@@ -163,6 +167,7 @@ tree-sitter-gowork = { workspace = true }
 tree-sitter-html = { workspace = true }
 tree-sitter-javascript = { workspace = true }
 tree-sitter-java = { workspace = true }
+tree-sitter-jsdoc = { workspace = true }
 tree-sitter-json = { workspace = true }
 tree-sitter-kotlin-sg = { workspace = true }
 tree-sitter-lua = { workspace = true }
@@ -173,6 +178,7 @@ tree-sitter-php = { workspace = true }
 tree-sitter-powershell = { workspace = true }
 tree-sitter-python = { workspace = true }
 tree-sitter-r = { workspace = true }
+tree-sitter-regex = { workspace = true }
 tree-sitter-ruby = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-scala = { workspace = true }

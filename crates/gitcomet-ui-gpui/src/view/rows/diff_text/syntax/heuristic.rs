@@ -244,8 +244,10 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         DiffSyntaxLanguage::Markdown
         | DiffSyntaxLanguage::MarkdownInline
         | DiffSyntaxLanguage::Css
+        | DiffSyntaxLanguage::Jsdoc
         | DiffSyntaxLanguage::Json
-        | DiffSyntaxLanguage::Diff => HeuristicCommentConfig {
+        | DiffSyntaxLanguage::Diff
+        | DiffSyntaxLanguage::Regex => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
             block_comment: None,
@@ -1251,6 +1253,8 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
     match language {
         DiffSyntaxLanguage::Markdown
         | DiffSyntaxLanguage::MarkdownInline
+        | DiffSyntaxLanguage::Jsdoc
+        | DiffSyntaxLanguage::Regex
         | DiffSyntaxLanguage::Diff
         | DiffSyntaxLanguage::GitCommit => false,
         DiffSyntaxLanguage::Html

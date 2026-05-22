@@ -152,7 +152,7 @@ downcast-rs	1.2.1	MIT/Apache-2.0
 dunce	1.0.5	CC0-1.0 OR MIT-0 OR Apache-2.0
 dwrote	0.11.5	MPL-2.0
 dyn-clone	1.0.20	MIT OR Apache-2.0
-either	1.15.0	MIT OR Apache-2.0
+either	1.16.0	MIT OR Apache-2.0
 embed-resource	3.0.9	MIT
 encoding_rs	0.8.35	(Apache-2.0 OR MIT) AND BSD-3-Clause
 endi	1.1.1	MIT
@@ -631,6 +631,7 @@ tree-sitter-gowork	0.0.1	MIT
 tree-sitter-html	0.23.2	MIT
 tree-sitter-java	0.23.5	MIT
 tree-sitter-javascript	0.25.0	MIT
+tree-sitter-jsdoc	0.23.2	MIT
 tree-sitter-json	0.24.8	MIT
 tree-sitter-kotlin-sg	0.4.1	MIT
 tree-sitter-language	0.1.7	MIT
@@ -642,6 +643,7 @@ tree-sitter-php	0.24.2	MIT
 tree-sitter-powershell	0.26.4	MIT
 tree-sitter-python	0.25.0	MIT
 tree-sitter-r	1.2.0	MIT
+tree-sitter-regex	0.24.3	MIT
 tree-sitter-ruby	0.23.1	MIT
 tree-sitter-rust	0.24.2	MIT
 tree-sitter-scala	0.26.0	MIT
