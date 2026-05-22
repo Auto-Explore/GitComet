@@ -102,6 +102,12 @@ impl RepoLoadsInFlight {
         self.in_flight != 0
     }
 
+    pub fn clear(&mut self) {
+        self.in_flight = 0;
+        self.pending = 0;
+        self.pending_log = None;
+    }
+
     /// Starts the common primary-refresh batch immediately when no work is already queued or
     /// running. Callers fall back to per-load request coalescing when this returns `false`.
     pub fn request_primary_refresh_batch(&mut self) -> bool {
@@ -648,6 +654,7 @@ pub struct RepoState {
 
     pub command_log: Vec<CommandLogEntry>,
     pub pending_commit_retry: Option<PendingCommitRetry>,
+    pub load_epoch: u64,
 }
 
 impl RepoState {
@@ -714,6 +721,7 @@ impl RepoState {
             diagnostics: Vec::new(),
             command_log: Vec::new(),
             pending_commit_retry: None,
+            load_epoch: 0,
         }
     }
 
@@ -1102,6 +1110,12 @@ impl RepoState {
 
     pub(crate) fn bump_ops_rev(&mut self) {
         self.ops_rev = self.ops_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_load_epoch(&mut self) -> u64 {
+        let previous = self.load_epoch;
+        self.load_epoch = self.load_epoch.wrapping_add(1);
+        previous
     }
 }
 

@@ -1,11 +1,12 @@
 use crate::msg::Msg;
+use gitcomet_core::services::CancellationToken;
 #[cfg(any(test, feature = "test-support"))]
 use gitcomet_core::services::GitRepository;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 
-#[cfg(any(test, feature = "test-support"))]
 use super::RepoId;
+use super::repo_load_trace;
 use super::send_diagnostics::{self, SendFailureKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +45,14 @@ pub(super) struct StoreWorkerSender {
     inner: StoreWorkerSenderInner,
     alive: Arc<AtomicBool>,
     store_id: StoreInstanceId,
+    repo_load_guard: Option<RepoLoadGuard>,
+    cancellation: Option<CancellationToken>,
+}
+
+#[derive(Clone)]
+struct RepoLoadGuard {
+    repo_id: RepoId,
+    load_epoch: u64,
 }
 
 impl StoreWorkerSender {
@@ -56,6 +65,8 @@ impl StoreWorkerSender {
             inner: StoreWorkerSenderInner::Command(tx),
             alive,
             store_id,
+            repo_load_guard: None,
+            cancellation: None,
         }
     }
 
@@ -65,6 +76,8 @@ impl StoreWorkerSender {
             inner: StoreWorkerSenderInner::MsgForTest(tx),
             alive: Arc::new(AtomicBool::new(true)),
             store_id: StoreInstanceId(0),
+            repo_load_guard: None,
+            cancellation: None,
         }
     }
 
@@ -74,6 +87,27 @@ impl StoreWorkerSender {
 
     pub(super) fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
+    }
+
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    }
+
+    pub(super) fn with_repo_load_guard(
+        &self,
+        repo_id: RepoId,
+        load_epoch: u64,
+        cancellation: CancellationToken,
+    ) -> Self {
+        let mut guarded = self.clone();
+        guarded.repo_load_guard = Some(RepoLoadGuard {
+            repo_id,
+            load_epoch,
+        });
+        guarded.cancellation = Some(cancellation);
+        guarded
     }
 
     pub(super) fn dispatch(&self, msg: Msg) {
@@ -86,11 +120,55 @@ impl StoreWorkerSender {
     }
 
     pub(super) fn send_effect_or_log(&self, msg: Msg, context: &'static str) {
+        if self.is_cancelled() {
+            repo_load_trace::trace!(
+                "suppress_effect_message_cancelled msg={} context={}",
+                repo_load_trace::msg_name(&msg),
+                context
+            );
+            return;
+        }
+        repo_load_trace::trace!(
+            "send_effect_message msg={} context={}",
+            repo_load_trace::msg_name(&msg),
+            context
+        );
+        let msg = self.wrap_effect_message(msg);
         self.send_or_log(msg, SendFailureKind::EffectMessage, context, true);
     }
 
     pub(super) fn send_repo_monitor_or_log(&self, msg: Msg, context: &'static str) {
         self.send_or_log(msg, SendFailureKind::RepoMonitorMessage, context, true);
+    }
+
+    fn wrap_effect_message(&self, msg: Msg) -> Msg {
+        #[cfg(test)]
+        if matches!(&self.inner, StoreWorkerSenderInner::MsgForTest(_)) {
+            return msg;
+        }
+
+        let Some(guard) = &self.repo_load_guard else {
+            return msg;
+        };
+        match msg {
+            Msg::Internal(message) => match message {
+                crate::msg::InternalMsg::RepoLoadFinished { .. } => Msg::Internal(message),
+                message => {
+                    repo_load_trace::trace!(
+                        "wrap_repo_load_message repo_id={:?} load_epoch={} inner={}",
+                        guard.repo_id,
+                        guard.load_epoch,
+                        repo_load_trace::internal_msg_name(&message)
+                    );
+                    Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+                        repo_id: guard.repo_id,
+                        load_epoch: guard.load_epoch,
+                        message: Box::new(message),
+                    })
+                }
+            },
+            msg => msg,
+        }
     }
 
     fn send_or_log(

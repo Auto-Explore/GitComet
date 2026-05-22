@@ -555,6 +555,11 @@ pub enum InternalMsg {
         dest: PathBuf,
         result: Result<CommandOutput, Error>,
     },
+    RepoLoadFinished {
+        repo_id: RepoId,
+        load_epoch: u64,
+        message: Box<InternalMsg>,
+    },
     RepoOpenedOk {
         repo_id: RepoId,
         spec: RepoSpec,

@@ -1,7 +1,7 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, StoreEvent};
 use gitcomet_core::path_utils::canonicalize_or_original;
-use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
+use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -15,10 +15,12 @@ mod effects;
 mod executor;
 mod reducer;
 mod reducer_diagnostics;
+mod repo_load_trace;
 mod repo_monitor;
 mod send_diagnostics;
 mod worker_channel;
 
+use effects::RepoTaskToken;
 use effects::schedule_effect;
 use executor::{TaskExecutor, default_worker_threads};
 use reducer::{
@@ -52,7 +54,10 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
 fn is_control_msg(msg: &Msg) -> bool {
     matches!(
         msg,
-        Msg::CloseRepo { .. } | Msg::SetActiveRepo { .. } | Msg::ReorderRepoTabs { .. }
+        Msg::OpenRepo(_)
+            | Msg::CloseRepo { .. }
+            | Msg::SetActiveRepo { .. }
+            | Msg::ReorderRepoTabs { .. }
     )
 }
 
@@ -141,7 +146,7 @@ struct ReducerEffectsContext<'a> {
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     repos: &'a HashMap<RepoId, Arc<dyn GitRepository>>,
-    repo_task_tokens: &'a mut HashMap<RepoId, CancellationToken>,
+    repo_task_tokens: &'a mut HashMap<RepoId, RepoTaskToken>,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
     metadata_executor: &'a TaskExecutor,
@@ -203,6 +208,29 @@ where
     }
 
     for effect in effects {
+        if repo_load_trace::enabled() {
+            let effect_repo_id = repo_load_trace::effect_repo_id(&effect);
+            let (load_epoch, workdir) = effect_repo_id.map_or((None, None), |repo_id| {
+                let state = ctx.thread_state.read().unwrap_or_else(|e| e.into_inner());
+                state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map_or((None, None), |repo| {
+                        (Some(repo.load_epoch), Some(repo.spec.workdir.clone()))
+                    })
+            });
+            repo_load_trace::trace!(
+                "scheduling_effect effect={} repo_id={:?} load_epoch={:?} active_repo={:?} workdir={}",
+                repo_load_trace::effect_name(&effect),
+                effect_repo_id,
+                load_epoch,
+                active_repo,
+                workdir.as_ref().map_or("<unknown>", |workdir| workdir
+                    .to_str()
+                    .unwrap_or("<non-utf8>"))
+            );
+        }
         schedule_effect(
             ctx.executor,
             ctx.session_persist_executor,
@@ -271,7 +299,7 @@ impl AppStore {
             let metadata_executor = TaskExecutor::new(1);
             let session_persist_executor = TaskExecutor::new(1);
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
-            let mut repo_task_tokens: HashMap<RepoId, CancellationToken> = HashMap::default();
+            let mut repo_task_tokens: HashMap<RepoId, RepoTaskToken> = HashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
@@ -292,22 +320,61 @@ impl AppStore {
                     continue;
                 }
 
+                if repo_load_trace::enabled() {
+                    repo_load_trace::trace!(
+                        "worker received msg={} active_repo={:?} queued_tokens={}",
+                        repo_load_trace::msg_name(&msg),
+                        thread_state
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .active_repo,
+                        repo_task_tokens.len()
+                    );
+                }
+
                 match &msg {
                     Msg::RestoreSession { .. } => {
+                        repo_load_trace::trace!(
+                            "restore_session cancelling_all_repo_load_tokens count={}",
+                            repo_task_tokens.len()
+                        );
                         repo_monitors.stop_all();
                         for token in repo_task_tokens.values() {
-                            token.cancel();
+                            token.cancellation.cancel();
                         }
                         repo_task_tokens.clear();
                     }
                     Msg::CloseRepo { repo_id } => {
                         repo_monitors.stop(*repo_id);
                         if let Some(token) = repo_task_tokens.remove(repo_id) {
-                            token.cancel();
+                            repo_load_trace::trace!(
+                                "close_repo cancelling_repo_load_token repo_id={:?} load_epoch={}",
+                                repo_id,
+                                token.load_epoch
+                            );
+                            token.cancellation.cancel();
                         }
                     }
-                    Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr { repo_id, .. }) => {
-                        repo_task_tokens.remove(repo_id);
+                    Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+                        repo_id,
+                        load_epoch,
+                        message,
+                    }) if matches!(
+                        message.as_ref(),
+                        crate::msg::InternalMsg::RepoOpenedErr { .. }
+                    ) =>
+                    {
+                        if repo_task_tokens
+                            .get(repo_id)
+                            .is_some_and(|token| token.load_epoch == *load_epoch)
+                        {
+                            repo_load_trace::trace!(
+                                "repo_opened_err removing_repo_load_token repo_id={:?} load_epoch={}",
+                                repo_id,
+                                load_epoch
+                            );
+                            repo_task_tokens.remove(repo_id);
+                        }
                     }
                     _ => {}
                 }
@@ -611,7 +678,7 @@ impl AppStore {
             }
 
             for token in repo_task_tokens.values() {
-                token.cancel();
+                token.cancellation.cancel();
             }
             repo_monitors.stop_all();
         });

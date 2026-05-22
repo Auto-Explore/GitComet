@@ -31,6 +31,18 @@ fn has_worktree_refresh_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     })
 }
 
+fn has_cancel_repo_loads_effect(effects: &[Effect], repo_id: RepoId, load_epoch: u64) -> bool {
+    effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::CancelRepoLoads {
+                repo_id: candidate,
+                load_epoch: candidate_epoch,
+            } if *candidate == repo_id && *candidate_epoch == load_epoch
+        )
+    })
+}
+
 fn has_submodule_load_effect(effects: &[Effect], repo_id: RepoId) -> bool {
     effects.iter().any(|effect| {
         matches!(
@@ -136,6 +148,46 @@ fn worker_command_prioritizes_close_repo_over_queued_open_error() {
 }
 
 #[test]
+fn worker_command_prioritizes_tab_switch_over_queued_background_result() {
+    let repo_id = RepoId(7);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        },
+    ))))
+    .expect("send background result");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::SetActiveRepo {
+        repo_id,
+    })))
+    .expect("send tab switch");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::SetActiveRepo { repo_id: got } if got == repo_id));
+        }
+        _ => panic!("expected tab switch first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("deferred tags result");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+                    repo_id: got,
+                    ..
+                }) if got == repo_id
+            ));
+        }
+        _ => panic!("expected deferred tags result"),
+    }
+}
+
+#[test]
 fn worker_command_keeps_queued_open_repo_before_close_repo() {
     let repo_id = RepoId(7);
     let path = PathBuf::from("/tmp/repo");
@@ -168,7 +220,7 @@ fn worker_command_keeps_queued_open_repo_before_close_repo() {
 }
 
 #[test]
-fn worker_command_keeps_deferred_open_repo_before_later_close_repo() {
+fn worker_command_prioritizes_open_repo_over_queued_background_result() {
     let repo_id = RepoId(7);
     let path = PathBuf::from("/tmp/repo");
     let (tx, rx) = std::sync::mpsc::channel();
@@ -189,6 +241,22 @@ fn worker_command_keeps_deferred_open_repo_before_later_close_repo() {
     .expect("send close");
 
     let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued open");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::OpenRepo(got) if got == path));
+        }
+        _ => panic!("expected open repo command first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued close");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(*msg, Msg::CloseRepo { repo_id: got } if got == repo_id));
+        }
+        _ => panic!("expected close repo command second"),
+    }
+
     let command = recv_next_worker_command(&rx, &mut deferred).expect("background result");
     assert!(matches!(
         command,
@@ -201,21 +269,48 @@ fn worker_command_keeps_deferred_open_repo_before_later_close_repo() {
                 }) if got == repo_id
             )
     ));
+}
 
-    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued open");
-    match command {
-        StoreWorkerCommand::Msg(msg) => {
-            assert!(matches!(*msg, Msg::OpenRepo(got) if got == path));
-        }
-        _ => panic!("expected open repo command second"),
-    }
+#[test]
+fn guarded_effect_sender_wraps_repository_load_messages() {
+    let repo_id = RepoId(7);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sender = StoreWorkerSender::new(
+        tx,
+        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        StoreInstanceId::next(),
+    );
+    let guarded = sender.with_repo_load_guard(repo_id, 3, CancellationToken::new());
 
-    let command = recv_next_worker_command(&rx, &mut deferred).expect("queued close");
+    guarded.send_effect_or_log(
+        Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+        "guarded effect sender test",
+    );
+
+    let command = rx.recv_timeout(Duration::from_secs(1)).expect("message");
     match command {
-        StoreWorkerCommand::Msg(msg) => {
-            assert!(matches!(*msg, Msg::CloseRepo { repo_id: got } if got == repo_id));
-        }
-        _ => panic!("expected close repo command third"),
+        StoreWorkerCommand::Msg(msg) => match *msg {
+            Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+                repo_id: got_repo_id,
+                load_epoch,
+                message,
+            }) => {
+                assert_eq!(got_repo_id, repo_id);
+                assert_eq!(load_epoch, 3);
+                assert!(matches!(
+                    *message,
+                    crate::msg::InternalMsg::TagsLoaded {
+                        repo_id: got_inner_repo_id,
+                        ..
+                    } if got_inner_repo_id == repo_id
+                ));
+            }
+            other => panic!("expected guarded load message, got {other:?}"),
+        },
+        _ => panic!("expected worker message"),
     }
 }
 
@@ -1040,6 +1135,12 @@ fn close_repo_removes_and_moves_active() {
 
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(11)));
+    let old_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == RepoId(11))
+        .expect("repo 11 exists")
+        .load_epoch;
 
     let effects = reduce(
         &mut repos,
@@ -1050,10 +1151,19 @@ fn close_repo_removes_and_moves_active() {
         },
     );
 
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::PersistSession { .. }]
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        RepoId(11),
+        old_epoch
     ));
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(10))
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
+    );
     assert_eq!(state.repos.len(), 1);
     assert_eq!(state.active_repo, Some(RepoId(10)));
 }
@@ -1090,6 +1200,12 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
             repo_id: RepoId(20),
         },
     );
+    let old_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == RepoId(20))
+        .expect("repo 20 exists")
+        .load_epoch;
 
     let effects = reduce(
         &mut repos,
@@ -1100,10 +1216,19 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
         },
     );
 
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::PersistSession { .. }]
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        RepoId(20),
+        old_epoch
     ));
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(21))
+    ));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
+    );
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(21)));
 }
@@ -1322,7 +1447,7 @@ fn remote_branches_loaded_sets_state() {
 }
 
 #[test]
-fn restore_session_opens_all_and_selects_active_repo() {
+fn restore_session_opens_only_active_repo_and_selects_active_repo() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1358,7 +1483,7 @@ fn restore_session_opens_all_and_selects_active_repo() {
             .iter()
             .filter(|e| matches!(e, Effect::OpenRepo { .. }))
             .count(),
-        2
+        1
     );
     assert_eq!(
         effects
@@ -1379,6 +1504,177 @@ fn restore_session_opens_all_and_selects_active_repo() {
         .clone();
 
     assert_eq!(active_workdir, super::reducer::normalize_repo_path(repo_a));
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == active_repo_id)
+            .expect("active repo exists")
+            .open,
+        Loadable::Loading
+    ));
+    assert!(
+        state
+            .repos
+            .iter()
+            .filter(|repo| repo.id != active_repo_id)
+            .all(|repo| matches!(repo.open, Loadable::NotLoaded))
+    );
+}
+
+#[test]
+fn selecting_inactive_restored_repo_cancels_previous_load_and_starts_open() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    std::fs::create_dir_all(&repo_a).expect("create repo-a");
+    std::fs::create_dir_all(&repo_b).expect("create repo-b");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![repo_a, repo_b],
+            active_repo: None,
+        },
+    );
+
+    let previous_active = state.active_repo.expect("active repo exists");
+    let previous_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == previous_active)
+        .expect("previous active repo exists")
+        .load_epoch;
+    let inactive_repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id != previous_active)
+        .expect("inactive repo exists")
+        .id;
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == inactive_repo)
+            .expect("inactive repo exists")
+            .open,
+        Loadable::NotLoaded
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: inactive_repo,
+        },
+    );
+
+    assert_eq!(state.active_repo, Some(inactive_repo));
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        previous_active,
+        previous_epoch
+    ));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == inactive_repo
+    )));
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == inactive_repo)
+            .expect("inactive repo exists")
+            .open,
+        Loadable::Loading
+    ));
+}
+
+#[test]
+fn selecting_third_restored_repo_while_second_is_opening_cancels_second_open() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    let repo_c = dir.path().join("repo-c");
+    std::fs::create_dir_all(&repo_a).expect("create repo-a");
+    std::fs::create_dir_all(&repo_b).expect("create repo-b");
+    std::fs::create_dir_all(&repo_c).expect("create repo-c");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![repo_a.clone(), repo_b, repo_c],
+            active_repo: Some(repo_a),
+        },
+    );
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    let repo3 = RepoId(3);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo2 },
+    );
+    assert_eq!(state.active_repo, Some(repo2));
+    assert!(has_cancel_repo_loads_effect(&effects, repo1, 0));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == repo2
+    )));
+
+    let repo2_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo2)
+        .expect("repo2 exists")
+        .load_epoch;
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo3 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo3));
+    assert!(has_cancel_repo_loads_effect(&effects, repo2, repo2_epoch));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == repo3
+    )));
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo2)
+            .expect("repo2 exists")
+            .open,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo3)
+            .expect("repo3 exists")
+            .open,
+        Loadable::Loading
+    ));
 }
 
 #[test]
@@ -1511,10 +1807,15 @@ fn set_active_repo_waits_for_repo_open_before_refreshing() {
     );
 
     assert_eq!(state.active_repo, Some(repo1));
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::PersistSession { .. }]
-    ));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == repo1
+    )));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
+    );
     assert!(
         !effects.iter().any(|effect| matches!(
             effect,
@@ -1535,6 +1836,358 @@ fn set_active_repo_waits_for_repo_open_before_refreshing() {
             .worktrees,
         Loadable::NotLoaded
     ));
+}
+
+#[test]
+fn switching_away_from_opening_repo_cancels_loading_and_restarts_on_return() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo1 = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    let repo2 = RepoId(2);
+    assert_eq!(state.active_repo, Some(repo2));
+    assert!(state.repos[1].open.is_loading());
+
+    let old_epoch = state.repos[1].load_epoch;
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    let repo2_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo2)
+        .expect("repo2 exists");
+    assert_eq!(repo2_state.load_epoch, old_epoch.wrapping_add(1));
+    assert!(matches!(repo2_state.open, Loadable::NotLoaded));
+    assert!(has_cancel_repo_loads_effect(&effects, repo2, old_epoch));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo2 },
+    );
+
+    let repo2_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo2)
+        .expect("repo2 exists");
+    assert!(repo2_state.open.is_loading());
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == repo2
+    )));
+}
+
+#[test]
+fn opening_another_repo_cancels_previous_active_repo_loads() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    let repo1 = RepoId(1);
+    let old_epoch = state.repos[0].load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(matches!(repo1_state.open, Loadable::NotLoaded));
+    assert_eq!(repo1_state.load_epoch, old_epoch.wrapping_add(1));
+    assert!(has_cancel_repo_loads_effect(&effects, repo1, old_epoch));
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+}
+
+#[test]
+fn stale_open_result_after_cancel_is_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    let repo1 = RepoId(1);
+    let old_epoch = state.repos[0].load_epoch;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+            repo_id: repo1,
+            load_epoch: old_epoch,
+            message: Box::new(crate::msg::InternalMsg::RepoOpenedOk {
+                repo_id: repo1,
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo1"),
+                },
+                repo: Arc::new(DummyRepo::new("/tmp/repo1")),
+            }),
+        }),
+    );
+
+    assert!(effects.is_empty());
+    assert!(!repos.contains_key(&repo1));
+    assert!(matches!(state.repos[0].open, Loadable::NotLoaded));
+}
+
+#[test]
+fn stale_load_result_after_cancel_is_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo1 = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.set_status(Loadable::Loading);
+    assert!(
+        repo1_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::WORKTREE_STATUS)
+    );
+    let old_epoch = repo1_state.load_epoch;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+            repo_id: repo1,
+            load_epoch: old_epoch,
+            message: Box::new(crate::msg::InternalMsg::StatusLoaded {
+                repo_id: repo1,
+                result: Ok(RepoStatus::default()),
+            }),
+        }),
+    );
+
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(effects.is_empty());
+    assert!(matches!(repo1_state.status, Loadable::NotLoaded));
+    assert!(!repo1_state.loads_in_flight.any_in_flight());
+}
+
+#[test]
+fn inactive_open_result_does_not_schedule_refresh_or_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    let inactive_repo = RepoId(1);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: inactive_repo,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo1"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo1")),
+        }),
+    );
+
+    assert!(effects.is_empty());
+    assert!(repos.contains_key(&inactive_repo));
+    let repo_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == inactive_repo)
+        .expect("inactive repo exists");
+    assert!(matches!(repo_state.open, Loadable::Ready(())));
+    assert!(matches!(repo_state.tags, Loadable::NotLoaded));
+    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
+    assert!(!repo_state.loads_in_flight.any_in_flight());
+}
+
+#[test]
+fn closing_loading_active_repo_cancels_and_opens_neighbor() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    std::fs::create_dir_all(&repo_a).expect("create repo-a");
+    std::fs::create_dir_all(&repo_b).expect("create repo-b");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![repo_a, repo_b],
+            active_repo: None,
+        },
+    );
+
+    let active_repo = state.active_repo.expect("active repo exists");
+    let neighbor_repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id != active_repo)
+        .expect("neighbor repo exists")
+        .id;
+    let old_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == active_repo)
+        .expect("active repo exists")
+        .load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo {
+            repo_id: active_repo,
+        },
+    );
+
+    assert!(state.repos.iter().all(|repo| repo.id != active_repo));
+    assert_eq!(state.active_repo, Some(neighbor_repo));
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        active_repo,
+        old_epoch
+    ));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == neighbor_repo
+    )));
+    assert!(matches!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == neighbor_repo)
+            .expect("neighbor exists")
+            .open,
+        Loadable::Loading
+    ));
+}
+
+#[test]
+fn closing_loading_inactive_repo_cancels_without_changing_active_repo() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    std::fs::create_dir_all(&repo_a).expect("create repo-a");
+    std::fs::create_dir_all(&repo_b).expect("create repo-b");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![repo_a, repo_b],
+            active_repo: None,
+        },
+    );
+
+    let active_repo = state.active_repo.expect("active repo exists");
+    let inactive_repo = state
+        .repos
+        .iter()
+        .find(|repo| repo.id != active_repo)
+        .expect("inactive repo exists")
+        .id;
+    let inactive_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == inactive_repo)
+        .expect("inactive repo exists");
+    inactive_state.set_open(Loadable::Loading);
+    let old_epoch = inactive_state.load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo {
+            repo_id: inactive_repo,
+        },
+    );
+
+    assert_eq!(state.active_repo, Some(active_repo));
+    assert!(state.repos.iter().all(|repo| repo.id != inactive_repo));
+    assert!(has_cancel_repo_loads_effect(
+        &effects,
+        inactive_repo,
+        old_epoch
+    ));
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == active_repo
+    )));
 }
 
 #[test]
@@ -2772,6 +3425,53 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
             .iter()
             .any(|n| n.message.contains("not a git repository"))
     );
+}
+
+#[test]
+fn repo_opened_err_not_a_repository_opens_restored_fallback_tab() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let invalid_repo = dir.path().join("invalid");
+    let fallback_repo = dir.path().join("fallback");
+    std::fs::create_dir_all(&invalid_repo).expect("create invalid repo dir");
+    std::fs::create_dir_all(&fallback_repo).expect("create fallback repo dir");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RestoreSession {
+            open_repos: vec![invalid_repo.clone(), fallback_repo],
+            active_repo: Some(invalid_repo.clone()),
+        },
+    );
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert!(matches!(state.repos[1].open, Loadable::NotLoaded));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id: RepoId(1),
+            spec: RepoSpec {
+                workdir: invalid_repo,
+            },
+            error: Error::new(ErrorKind::NotARepository),
+        }),
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+    assert_eq!(state.repos[0].id, RepoId(2));
+    assert!(matches!(state.repos[0].open, Loadable::Loading));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenRepo { repo_id, .. } if *repo_id == RepoId(2)
+    )));
 }
 
 #[test]

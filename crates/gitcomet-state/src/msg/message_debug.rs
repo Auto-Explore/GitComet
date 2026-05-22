@@ -24,6 +24,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("dest", dest)
                 .field("ok", &result.is_ok())
                 .finish(),
+            InternalMsg::RepoLoadFinished {
+                repo_id,
+                load_epoch,
+                message,
+            } => f
+                .debug_struct("RepoLoadFinished")
+                .field("repo_id", repo_id)
+                .field("load_epoch", load_epoch)
+                .field("message", message)
+                .finish(),
             InternalMsg::RepoOpenedOk { repo_id, spec, .. } => f
                 .debug_struct("RepoOpenedOk")
                 .field("repo_id", repo_id)

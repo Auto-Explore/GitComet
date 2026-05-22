@@ -5,7 +5,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{CommandOutput, PullMode, RemoteUrlKind, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, RemoteUrlKind, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet as HashSet;
 use std::process::Command;
@@ -211,6 +211,14 @@ impl GixRepo {
     }
 
     pub(super) fn list_remote_branches_impl(&self) -> Result<Vec<RemoteBranch>> {
+        self.list_remote_branches_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn list_remote_branches_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let refs = repo
             .references()
@@ -221,6 +229,7 @@ impl GixRepo {
 
         let mut branches = Vec::new();
         for reference in iter {
+            cancellation.check_cancelled()?;
             let mut reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let short_name = reference.name().shorten().to_str_lossy().into_owned();
@@ -244,6 +253,7 @@ impl GixRepo {
         }
 
         branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+        cancellation.check_cancelled()?;
         Ok(branches)
     }
 

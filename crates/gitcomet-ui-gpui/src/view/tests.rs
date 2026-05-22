@@ -2270,6 +2270,59 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
     );
 }
 
+#[gpui::test]
+fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        ..AppState::default()
+    };
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/loading-repo-tab-close-test"),
+        },
+    ));
+    store_for_assert.replace_snapshot_for_test(Arc::new(state));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+
+    let repo_tab_center = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected loading repo tab to be rendered")
+        .center();
+    cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    let close_center = cx
+        .debug_bounds("repo_tab_close_1")
+        .expect("expected loading repo tab close button to be rendered")
+        .center();
+    cx.simulate_mouse_move(close_center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        close_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        close_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+
+    wait_until("loading repo tab to close", || {
+        store_for_assert.snapshot().repos.is_empty()
+    });
+}
+
 #[test]
 fn generic_error_banner_is_hidden_when_auth_prompt_is_active() {
     assert!(GitCometView::should_render_generic_error_banner(false));

@@ -3777,6 +3777,103 @@ fn open_repo_effect_emits_repo_opened_err() {
 }
 
 #[test]
+fn open_repo_effect_suppresses_result_after_cancellation() {
+    use std::sync::{Condvar, Mutex};
+
+    struct Backend {
+        started_tx: std::sync::mpsc::Sender<()>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+        repo: Arc<dyn GitRepository>,
+    }
+
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            let _ = self.started_tx.send(());
+            let (lock, condvar) = &*self.release;
+            let mut released = lock.lock().expect("release mutex");
+            while !*released {
+                released = condvar.wait(released).expect("release condvar");
+            }
+            Ok(Arc::clone(&self.repo))
+        }
+    }
+
+    let repo_id = RepoId(44);
+    let workdir = unique_temp_path("gitcomet-open-repo-cancelled");
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: RepoSpec {
+            workdir: workdir.clone(),
+        },
+    });
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend {
+        started_tx,
+        release: Arc::clone(&release),
+        repo,
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: workdir.clone(),
+        },
+    ));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = HashMap::default();
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        &metadata_executor,
+        Effect::OpenRepo {
+            repo_id,
+            path: workdir,
+        },
+    );
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("open effect did not start");
+
+    super::effects::schedule_effect(
+        &executor,
+        &executor,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        &metadata_executor,
+        Effect::CancelRepoLoads {
+            repo_id,
+            load_epoch: 0,
+        },
+    );
+    {
+        let (lock, condvar) = &*release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+
+    assert!(
+        msg_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "cancelled open effect should not emit a result"
+    );
+}
+
+#[test]
 fn worktree_and_submodule_effects_report_missing_repo_handle() {
     struct Backend;
     impl GitBackend for Backend {
@@ -3903,6 +4000,63 @@ fn load_log_effect_uses_history_mode_api() {
         *calls.lock().expect("log recording mutex"),
         vec!["history NoMerges 20 cursor".to_string()]
     );
+}
+
+#[test]
+fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
+    let repo_id = RepoId(499);
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-foreground-load-effect"),
+        },
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let (block_started_tx, block_started_rx) = std::sync::mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let release_task = Arc::clone(&release);
+    executor.spawn(move || {
+        block_started_tx.send(()).expect("send block started");
+        let (lock, condvar) = &*release_task;
+        let mut released = lock.lock().expect("release mutex");
+        while !*released {
+            released = condvar.wait(released).expect("release wait");
+        }
+    });
+    block_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("executor blocker started");
+
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadStatus { repo_id },
+    );
+
+    let msg = msg_rx.recv_timeout(Duration::from_secs(1));
+    {
+        let (lock, condvar) = &*release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+
+    match msg.expect("foreground load should not wait behind queued executor work") {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id: got_repo_id,
+            ..
+        }) => assert_eq!(got_repo_id, repo_id),
+        other => panic!("expected status load result, got {other:?}"),
+    }
 }
 
 #[test]

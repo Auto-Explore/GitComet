@@ -15,6 +15,7 @@ use crate::model::{
 };
 use crate::msg::Effect;
 use crate::session;
+use crate::store::repo_load_trace;
 use gitcomet_core::domain::RepoSpec;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, GitRepository};
@@ -27,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
-pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 24;
+pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 32;
 pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
 pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type ReorderRepoTabsEffects =
@@ -117,6 +118,144 @@ fn append_repo_switch_worktree_refresh_effect(
     }
 }
 
+fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
+    if matches!(loadable, Loadable::Loading) {
+        *loadable = Loadable::NotLoaded;
+        true
+    } else {
+        false
+    }
+}
+
+fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
+    repo_state.loads_in_flight.clear();
+    if matches!(repo_state.open, Loadable::Loading) {
+        repo_state.set_open(Loadable::NotLoaded);
+    }
+    if repo_state.head_branch.is_loading() {
+        repo_state.set_head_branch(Loadable::NotLoaded);
+    }
+    if repo_state.upstream_divergence.is_loading() {
+        repo_state.set_upstream_divergence(Loadable::NotLoaded);
+    }
+    if repo_state.branches.is_loading() {
+        repo_state.set_branches(Loadable::NotLoaded);
+    }
+    if repo_state.tags.is_loading() {
+        repo_state.set_tags(Loadable::NotLoaded);
+    }
+    if repo_state.remote_tags.is_loading() {
+        repo_state.set_remote_tags(Loadable::NotLoaded);
+    }
+    if repo_state.remotes.is_loading() {
+        repo_state.set_remotes(Loadable::NotLoaded);
+    }
+    if repo_state.remote_branches.is_loading() {
+        repo_state.set_remote_branches(Loadable::NotLoaded);
+    }
+    if repo_state.worktree_status.is_loading() {
+        repo_state.set_worktree_status(Loadable::NotLoaded);
+    }
+    if repo_state.staged_status.is_loading() {
+        repo_state.set_staged_status(Loadable::NotLoaded);
+    }
+    if repo_state.status.is_loading() {
+        repo_state.set_status(Loadable::NotLoaded);
+    }
+    if repo_state.log.is_loading() {
+        repo_state.set_log(Loadable::NotLoaded);
+    }
+    repo_state.set_log_loading_more(false);
+    if repo_state.stashes.is_loading() {
+        repo_state.set_stashes(Loadable::NotLoaded);
+    }
+    clear_loading(&mut repo_state.reflog);
+    if repo_state.rebase_in_progress.is_loading() {
+        repo_state.set_rebase_in_progress(Loadable::NotLoaded);
+    }
+    if repo_state.merge_commit_message.is_loading() {
+        repo_state.set_merge_commit_message(Loadable::NotLoaded);
+    }
+    if repo_state.worktrees.is_loading() {
+        repo_state.set_worktrees(Loadable::NotLoaded);
+    }
+    if repo_state.submodules.is_loading() {
+        repo_state.set_submodules(Loadable::NotLoaded);
+    }
+    clear_loading(&mut repo_state.history_state.file_history);
+    clear_loading(&mut repo_state.history_state.blame);
+    if repo_state.history_state.commit_details.is_loading() {
+        repo_state.set_commit_details(Loadable::NotLoaded);
+    }
+
+    let mut diff_changed = false;
+    diff_changed |= clear_loading(&mut repo_state.diff_state.diff);
+    diff_changed |= clear_loading(&mut repo_state.diff_state.diff_file);
+    diff_changed |= clear_loading(&mut repo_state.diff_state.diff_preview_text_file);
+    diff_changed |= clear_loading(&mut repo_state.diff_state.submodule_summary);
+    diff_changed |= clear_loading(&mut repo_state.diff_state.diff_file_image);
+    if let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() {
+        let mut inline_changed = false;
+        inline_changed |= clear_loading(&mut inline.diff);
+        inline_changed |= clear_loading(&mut inline.diff_file);
+        inline_changed |= clear_loading(&mut inline.diff_file_image);
+        if inline_changed {
+            inline.diff_rev = inline.diff_rev.wrapping_add(1);
+            inline.diff_file_rev = inline.diff_file_rev.wrapping_add(1);
+            repo_state.diff_state.inline_submodule_diff_rev = repo_state
+                .diff_state
+                .inline_submodule_diff_rev
+                .wrapping_add(1);
+            diff_changed = true;
+        }
+    }
+    if diff_changed {
+        repo_state.bump_diff_state_rev();
+    }
+    if repo_state.conflict_state.conflict_file.is_loading() {
+        repo_state.set_conflict_file(Loadable::NotLoaded);
+    }
+}
+
+fn append_cancel_repo_loads_effect_for_repo(
+    state: &mut AppState,
+    repo_id: Option<RepoId>,
+    effects: &mut impl Extend<Effect>,
+) {
+    let Some(repo_id) = repo_id else {
+        return;
+    };
+    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return;
+    };
+    let load_epoch = repo_state.bump_load_epoch();
+    repo_load_trace::trace!(
+        "reducer_cancel_repo_loads repo_id={:?} cancel_epoch={} next_epoch={} workdir={}",
+        repo_id,
+        load_epoch,
+        repo_state.load_epoch,
+        repo_state.spec.workdir.display()
+    );
+    clear_cancelled_repo_loading(repo_state);
+    effects.extend(std::iter::once(Effect::CancelRepoLoads {
+        repo_id,
+        load_epoch,
+    }));
+}
+
+fn append_open_repo_effect_if_not_loaded(
+    repo_state: &mut RepoState,
+    effects: &mut impl Extend<Effect>,
+) {
+    if matches!(repo_state.open, Loadable::NotLoaded) {
+        repo_state.set_open(Loadable::Loading);
+        effects.extend(std::iter::once(Effect::OpenRepo {
+            repo_id: repo_state.id,
+            path: repo_state.spec.workdir.clone(),
+        }));
+    }
+}
+
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
     let now = SystemTime::now();
     let path = normalize_repo_path(path);
@@ -133,6 +272,7 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         return effects;
     }
 
+    let previous_active = state.active_repo;
     let repo_id = RepoId(id_alloc.fetch_add(1, Ordering::Relaxed));
     let spec = RepoSpec { workdir: path };
     let session_preferences = session::load_repo_session_preferences();
@@ -165,10 +305,12 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         repo_state
     });
     state.active_repo = Some(repo_id);
-    let mut effects = vec![Effect::OpenRepo {
+    let mut effects = Vec::new();
+    append_cancel_repo_loads_effect_for_repo(state, previous_active, &mut effects);
+    effects.push(Effect::OpenRepo {
         repo_id,
         path: spec.workdir.clone(),
-    }];
+    });
     effects.push(persist_recent_repo_effect(
         Some(repo_id),
         spec.workdir.clone(),
@@ -207,7 +349,7 @@ pub(super) fn restore_session(
     let mut history_mode_persist_updates = Vec::new();
 
     let open_repos = dedup_paths_in_order(open_repos);
-    let mut effects = Vec::with_capacity(open_repos.len() + 1);
+    let mut effects = Vec::with_capacity(4);
     let mut seen_workdirs: HashSet<PathBuf> = HashSet::default();
     seen_workdirs.reserve(open_repos.len());
 
@@ -238,7 +380,7 @@ pub(super) fn restore_session(
             })
             .unwrap_or(default_history_mode);
 
-        state.repos.push({
+        let mut repo_state = {
             let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
             repo_state.history_state.history_scope = history_mode;
             if let Some(enabled) = session_preferences
@@ -249,14 +391,12 @@ pub(super) fn restore_session(
                 repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
             }
             repo_state
-        });
+        };
+        repo_state.set_open(Loadable::NotLoaded);
+        state.repos.push(repo_state);
         if saved_history_mode.is_none() {
             history_mode_persist_updates.push((spec.workdir.clone(), history_mode));
         }
-        effects.push(Effect::OpenRepo {
-            repo_id,
-            path: spec.workdir.clone(),
-        });
     }
 
     state.active_repo = if let Some(active_repo_id) = active_repo_id {
@@ -271,6 +411,7 @@ pub(super) fn restore_session(
             .find(|repo| repo.id == active_repo_id)
     {
         repo_state.last_active_at = Some(now);
+        append_open_repo_effect_if_not_loaded(repo_state, &mut effects);
     }
 
     if !history_mode_persist_updates.is_empty() {
@@ -295,25 +436,44 @@ pub(super) fn close_repo(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     clear_banner_error_for_repo(state, repo_id);
-    let removed_repo_ix = state.repos.iter().position(|repo| repo.id == repo_id);
-    state.repos.retain(|r| r.id != repo_id);
+    let mut effects = Vec::with_capacity(3);
+    let Some(removed_repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
+        effects.push(persist_session_effect(
+            state,
+            state.active_repo,
+            "closing a repository",
+        ));
+        return effects;
+    };
+
+    append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
+    let was_active = state.active_repo == Some(repo_id);
+    state.repos.remove(removed_repo_ix);
     repos.remove(&repo_id);
-    if state.active_repo == Some(repo_id) {
-        state.active_repo = removed_repo_ix.and_then(|repo_ix| {
-            if state.repos.is_empty() {
-                None
-            } else if repo_ix > 0 {
-                state.repos.get(repo_ix - 1).map(|repo| repo.id)
-            } else {
-                state.repos.first().map(|repo| repo.id)
-            }
-        });
+    if was_active {
+        state.active_repo = if state.repos.is_empty() {
+            None
+        } else if removed_repo_ix > 0 {
+            state.repos.get(removed_repo_ix - 1).map(|repo| repo.id)
+        } else {
+            state.repos.first().map(|repo| repo.id)
+        };
+        if let Some(active_repo_id) = state.active_repo
+            && let Some(repo_state) = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == active_repo_id)
+        {
+            repo_state.last_active_at = Some(SystemTime::now());
+            append_open_repo_effect_if_not_loaded(repo_state, &mut effects);
+        }
     }
-    vec![persist_session_effect(
+    effects.push(persist_session_effect(
         state,
         state.active_repo,
         "closing a repository",
-    )]
+    ));
+    effects
 }
 
 pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -340,7 +500,11 @@ pub(super) fn fill_set_active_repo_inline(
     };
 
     let now = SystemTime::now();
-    let changed = state.active_repo != Some(repo_id);
+    let previous_active = state.active_repo;
+    let changed = previous_active != Some(repo_id);
+    if changed {
+        append_cancel_repo_loads_effect_for_repo(state, previous_active, effects);
+    }
     state.active_repo = Some(repo_id);
     let persist_effect = changed
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
@@ -353,6 +517,7 @@ pub(super) fn fill_set_active_repo_inline(
     // initial refresh for the active repo.
     if !matches!(repo_state.open, Loadable::Ready(())) {
         repo_state.last_active_at = Some(now);
+        append_open_repo_effect_if_not_loaded(repo_state, effects);
         if let Some(effect) = persist_effect {
             effects.push(effect);
         }
@@ -693,51 +858,60 @@ pub(super) fn repo_opened_ok(
         workdir: normalize_repo_path(spec.workdir),
     };
     let mut clear_banner = false;
+    let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
         repo_state.set_open(Loadable::Ready(()));
         repo_state.missing_on_disk = false;
-        repo_state.set_head_branch(Loadable::Loading);
-        repo_state.set_detached_head_commit(None);
-        repo_state.set_upstream_divergence(Loadable::Loading);
-        repo_state.set_branches(Loadable::Loading);
-        repo_state.set_tags(Loadable::NotLoaded);
-        repo_state.set_remote_tags(Loadable::NotLoaded);
-        repo_state.set_remotes(Loadable::Loading);
-        repo_state.set_remote_branches(Loadable::Loading);
-        repo_state.set_status(Loadable::Loading);
-        repo_state.set_log(Loadable::Loading);
-        repo_state.set_log_loading_more(false);
-        repo_state.set_stashes(Loadable::NotLoaded);
-        repo_state.reflog = Loadable::NotLoaded;
-        repo_state.set_rebase_in_progress(Loadable::Loading);
-        repo_state.set_merge_commit_message(Loadable::Loading);
-        repo_state.history_state.file_history_path = None;
-        repo_state.history_state.file_history = Loadable::NotLoaded;
-        repo_state.history_state.blame_path = None;
-        repo_state.history_state.blame_rev = None;
-        repo_state.history_state.blame = Loadable::NotLoaded;
-        repo_state.set_worktrees(Loadable::NotLoaded);
-        repo_state.set_submodules(Loadable::NotLoaded);
-        repo_state.set_selected_commit(None);
-        repo_state.set_commit_details(Loadable::NotLoaded);
-        repo_state.set_diff_target(None);
-        repo_state.diff_state.diff = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file = Loadable::NotLoaded;
-        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-        repo_state.diff_state.inline_submodule_diff = None;
-        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
-        repo_state.bump_diff_state_rev();
-        repo_state.last_error = None;
-        clear_banner = true;
+        if !should_refresh_worktrees {
+            clear_cancelled_repo_loading(repo_state);
+            repo_state.last_error = None;
+            clear_banner = true;
+        } else {
+            repo_state.set_head_branch(Loadable::Loading);
+            repo_state.set_detached_head_commit(None);
+            repo_state.set_upstream_divergence(Loadable::Loading);
+            repo_state.set_branches(Loadable::Loading);
+            repo_state.set_tags(Loadable::NotLoaded);
+            repo_state.set_remote_tags(Loadable::NotLoaded);
+            repo_state.set_remotes(Loadable::Loading);
+            repo_state.set_remote_branches(Loadable::Loading);
+            repo_state.set_status(Loadable::Loading);
+            repo_state.set_log(Loadable::Loading);
+            repo_state.set_log_loading_more(false);
+            repo_state.set_stashes(Loadable::NotLoaded);
+            repo_state.reflog = Loadable::NotLoaded;
+            repo_state.set_rebase_in_progress(Loadable::Loading);
+            repo_state.set_merge_commit_message(Loadable::Loading);
+            repo_state.history_state.file_history_path = None;
+            repo_state.history_state.file_history = Loadable::NotLoaded;
+            repo_state.history_state.blame_path = None;
+            repo_state.history_state.blame_rev = None;
+            repo_state.history_state.blame = Loadable::NotLoaded;
+            repo_state.set_worktrees(Loadable::NotLoaded);
+            repo_state.set_submodules(Loadable::NotLoaded);
+            repo_state.set_selected_commit(None);
+            repo_state.set_commit_details(Loadable::NotLoaded);
+            repo_state.set_diff_target(None);
+            repo_state.diff_state.diff = Loadable::NotLoaded;
+            repo_state.diff_state.diff_file = Loadable::NotLoaded;
+            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
+            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+            repo_state.bump_diff_state_rev();
+            repo_state.last_error = None;
+            clear_banner = true;
+        }
     }
 
     if clear_banner {
         clear_banner_error_for_repo(state, repo_id);
     }
 
-    let should_refresh_worktrees = state.active_repo == Some(repo_id);
+    if !should_refresh_worktrees {
+        return Vec::new();
+    }
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let mut effects = refresh_full_effects(repo_state, git_log_settings);
         if should_refresh_worktrees
@@ -776,6 +950,7 @@ pub(super) fn repo_opened_err(
         error.kind(),
         gitcomet_core::error::ErrorKind::NotARepository
     ) {
+        let mut effects = Vec::new();
         clear_banner_error_for_repo(state, repo_id);
         push_notification(
             state,
@@ -801,6 +976,15 @@ pub(super) fn repo_opened_err(
                 } else {
                     state.repos.get(ix).map(|r| r.id)
                 };
+                if let Some(active_repo_id) = state.active_repo
+                    && let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == active_repo_id)
+                {
+                    repo_state.last_active_at = Some(SystemTime::now());
+                    append_open_repo_effect_if_not_loaded(repo_state, &mut effects);
+                }
             }
             let persist_result = session::persist_from_state(state);
             handle_session_persist_result(
@@ -810,7 +994,7 @@ pub(super) fn repo_opened_err(
                 persist_result,
             );
         }
-        return Vec::new();
+        return effects;
     }
 
     let mut clear_banner = false;

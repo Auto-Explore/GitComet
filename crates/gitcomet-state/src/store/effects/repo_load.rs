@@ -12,7 +12,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
-use super::util::{RepoMap, send_or_log, spawn_with_repo, spawn_with_repo_or_else};
+use super::util::{
+    RepoMap, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
+    spawn_with_repo_or_else,
+};
 
 pub(super) struct SelectedDiffLoadOptions {
     pub(super) load_patch_diff: bool,
@@ -193,13 +196,13 @@ fn conflict_file_current_from_session(session: &ConflictSession) -> Option<Confl
 }
 
 pub(super) fn schedule_load_branches(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-branches",
         repos,
         repo_id,
         msg_tx,
@@ -208,7 +211,7 @@ pub(super) fn schedule_load_branches(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
                     repo_id,
-                    result: repo.list_branches(),
+                    result: repo.list_branches_cancellable(&cancellation),
                 }),
             );
         },
@@ -225,13 +228,13 @@ pub(super) fn schedule_load_branches(
 }
 
 pub(super) fn schedule_load_remotes(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-remotes",
         repos,
         repo_id,
         msg_tx,
@@ -240,7 +243,7 @@ pub(super) fn schedule_load_remotes(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
                     repo_id,
-                    result: repo.list_remotes(),
+                    result: repo.list_remotes_cancellable(&cancellation),
                 }),
             );
         },
@@ -257,13 +260,13 @@ pub(super) fn schedule_load_remotes(
 }
 
 pub(super) fn schedule_load_remote_branches(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-remote-branches",
         repos,
         repo_id,
         msg_tx,
@@ -272,7 +275,7 @@ pub(super) fn schedule_load_remote_branches(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
                     repo_id,
-                    result: repo.list_remote_branches(),
+                    result: repo.list_remote_branches_cancellable(&cancellation),
                 }),
             );
         },
@@ -289,13 +292,13 @@ pub(super) fn schedule_load_remote_branches(
 }
 
 pub(super) fn schedule_load_status(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-status",
         repos,
         repo_id,
         msg_tx,
@@ -304,7 +307,7 @@ pub(super) fn schedule_load_status(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
                     repo_id,
-                    result: repo.status(),
+                    result: repo.status_cancellable(&cancellation),
                 }),
             );
         },
@@ -321,13 +324,13 @@ pub(super) fn schedule_load_status(
 }
 
 pub(super) fn schedule_load_worktree_status(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-worktree-status",
         repos,
         repo_id,
         msg_tx,
@@ -336,7 +339,7 @@ pub(super) fn schedule_load_worktree_status(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
                     repo_id,
-                    result: repo.worktree_status(),
+                    result: repo.worktree_status_cancellable(&cancellation),
                 }),
             );
         },
@@ -353,13 +356,13 @@ pub(super) fn schedule_load_worktree_status(
 }
 
 pub(super) fn schedule_load_staged_status(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-staged-status",
         repos,
         repo_id,
         msg_tx,
@@ -368,7 +371,7 @@ pub(super) fn schedule_load_staged_status(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
                     repo_id,
-                    result: repo.staged_status(),
+                    result: repo.staged_status_cancellable(&cancellation),
                 }),
             );
         },
@@ -385,13 +388,13 @@ pub(super) fn schedule_load_staged_status(
 }
 
 pub(super) fn schedule_load_head_branch(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-head-branch",
         repos,
         repo_id,
         msg_tx,
@@ -400,7 +403,7 @@ pub(super) fn schedule_load_head_branch(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
                     repo_id,
-                    result: repo.current_branch(),
+                    result: repo.current_branch_cancellable(&cancellation),
                 }),
             );
         },
@@ -417,13 +420,13 @@ pub(super) fn schedule_load_head_branch(
 }
 
 pub(super) fn schedule_load_upstream_divergence(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-upstream-divergence",
         repos,
         repo_id,
         msg_tx,
@@ -432,7 +435,7 @@ pub(super) fn schedule_load_upstream_divergence(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded {
                     repo_id,
-                    result: repo.upstream_divergence(),
+                    result: repo.upstream_divergence_cancellable(&cancellation),
                 }),
             );
         },
@@ -449,24 +452,24 @@ pub(super) fn schedule_load_upstream_divergence(
 }
 
 pub(super) fn schedule_load_log(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     scope: LogScope,
     limit: usize,
     cursor: Option<LogCursor>,
+    cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-log",
         repos,
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                repo.log_history_mode_page(scope, limit, cursor_ref)
+                repo.log_history_mode_page_cancellable(scope, limit, cursor_ref, &cancellation)
             };
             send_or_log(
                 &msg_tx,
@@ -559,19 +562,19 @@ pub(super) fn schedule_load_remote_tags(
 }
 
 pub(super) fn schedule_load_stashes(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-stashes",
         repos,
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let mut entries = repo.stash_list();
+            let mut entries = repo.stash_list_cancellable(&cancellation);
             if let Ok(v) = &mut entries {
                 v.truncate(limit);
             }
@@ -836,13 +839,13 @@ pub(super) fn schedule_load_blame(
 }
 
 pub(super) fn schedule_load_worktrees(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-worktrees",
         repos,
         repo_id,
         msg_tx,
@@ -851,7 +854,7 @@ pub(super) fn schedule_load_worktrees(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                     repo_id,
-                    result: repo.list_worktrees(),
+                    result: repo.list_worktrees_cancellable(&cancellation),
                 }),
             );
         },
@@ -901,13 +904,13 @@ pub(super) fn schedule_load_submodules(
 }
 
 pub(super) fn schedule_load_rebase_state(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-rebase-state",
         repos,
         repo_id,
         msg_tx,
@@ -916,7 +919,7 @@ pub(super) fn schedule_load_rebase_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress(),
+                    result: repo.rebase_in_progress_cancellable(&cancellation),
                 }),
             );
         },
@@ -933,13 +936,13 @@ pub(super) fn schedule_load_rebase_state(
 }
 
 pub(super) fn schedule_load_rebase_and_merge_state(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-rebase-and-merge-state",
         repos,
         repo_id,
         msg_tx,
@@ -948,14 +951,14 @@ pub(super) fn schedule_load_rebase_and_merge_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress(),
+                    result: repo.rebase_in_progress_cancellable(&cancellation),
                 }),
             );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message(),
+                    result: repo.merge_commit_message_cancellable(&cancellation),
                 }),
             );
         },
@@ -979,13 +982,13 @@ pub(super) fn schedule_load_rebase_and_merge_state(
 }
 
 pub(super) fn schedule_load_merge_commit_message(
-    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
-        executor,
+    spawn_detached_with_repo_or_else(
+        "load-merge-commit-message",
         repos,
         repo_id,
         msg_tx,
@@ -994,7 +997,7 @@ pub(super) fn schedule_load_merge_commit_message(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message(),
+                    result: repo.merge_commit_message_cancellable(&cancellation),
                 }),
             );
         },

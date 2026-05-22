@@ -180,12 +180,46 @@ pub trait GitRepository: Send + Sync {
             | HistoryMode::MergesOnly => self.log_head_page(limit, cursor),
         }
     }
+    fn log_history_mode_page_cancellable(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_history_mode_page(mode, limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
+    }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
+    fn log_head_page_cancellable(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_head_page(limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
+    }
     fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
         Err(Error::new(ErrorKind::Unsupported(
             "all-branches history is not implemented for this backend",
         )))
+    }
+    fn log_all_branches_page_cancellable(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_all_branches_page(limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
     }
     fn log_file_page(
         &self,
@@ -200,7 +234,19 @@ pub trait GitRepository: Send + Sync {
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
+    fn current_branch_cancellable(&self, cancellation: &CancellationToken) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let branch = self.current_branch()?;
+        cancellation.check_cancelled()?;
+        Ok(branch)
+    }
     fn list_branches(&self) -> Result<Vec<Branch>>;
+    fn list_branches_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let branches = self.list_branches()?;
+        cancellation.check_cancelled()?;
+        Ok(branches)
+    }
     fn list_tags(&self) -> Result<Vec<Tag>> {
         Err(Error::new(ErrorKind::Unsupported(
             "tag listing is not implemented for this backend",
@@ -227,16 +273,64 @@ pub trait GitRepository: Send + Sync {
         Ok(tags)
     }
     fn list_remotes(&self) -> Result<Vec<Remote>>;
+    fn list_remotes_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let remotes = self.list_remotes()?;
+        cancellation.check_cancelled()?;
+        Ok(remotes)
+    }
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
+    fn list_remote_branches_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let branches = self.list_remote_branches()?;
+        cancellation.check_cancelled()?;
+        Ok(branches)
+    }
     fn worktree_status(&self) -> Result<Vec<FileStatus>> {
         self.status().map(|status| status.unstaged)
+    }
+    fn worktree_status_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        cancellation.check_cancelled()?;
+        let status = self.worktree_status()?;
+        cancellation.check_cancelled()?;
+        Ok(status)
     }
     fn staged_status(&self) -> Result<Vec<FileStatus>> {
         self.status().map(|status| status.staged)
     }
+    fn staged_status_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        cancellation.check_cancelled()?;
+        let status = self.staged_status()?;
+        cancellation.check_cancelled()?;
+        Ok(status)
+    }
     fn status(&self) -> Result<RepoStatus>;
+    fn status_cancellable(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let status = self.status()?;
+        cancellation.check_cancelled()?;
+        Ok(status)
+    }
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         Ok(None)
+    }
+    fn upstream_divergence_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<UpstreamDivergence>> {
+        cancellation.check_cancelled()?;
+        let divergence = self.upstream_divergence()?;
+        cancellation.check_cancelled()?;
+        Ok(divergence)
     }
     fn diff_unified(&self, target: &DiffTarget) -> Result<String>;
     /// Load and parse unified diff rows for the target.
@@ -307,6 +401,12 @@ pub trait GitRepository: Send + Sync {
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
+    fn stash_list_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let stashes = self.stash_list()?;
+        cancellation.check_cancelled()?;
+        Ok(stashes)
+    }
     fn stash_apply(&self, index: usize) -> Result<()>;
     fn stash_drop(&self, index: usize) -> Result<()>;
 
@@ -342,9 +442,24 @@ pub trait GitRepository: Send + Sync {
     fn rebase_in_progress(&self) -> Result<bool> {
         Ok(false)
     }
+    fn rebase_in_progress_cancellable(&self, cancellation: &CancellationToken) -> Result<bool> {
+        cancellation.check_cancelled()?;
+        let in_progress = self.rebase_in_progress()?;
+        cancellation.check_cancelled()?;
+        Ok(in_progress)
+    }
 
     fn merge_commit_message(&self) -> Result<Option<String>> {
         Ok(None)
+    }
+    fn merge_commit_message_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<String>> {
+        cancellation.check_cancelled()?;
+        let message = self.merge_commit_message()?;
+        cancellation.check_cancelled()?;
+        Ok(message)
     }
 
     fn create_tag_with_output(&self, _name: &str, _target: &str) -> Result<CommandOutput> {
@@ -583,6 +698,15 @@ pub trait GitRepository: Send + Sync {
             "worktree listing is not implemented for this backend",
         )))
     }
+    fn list_worktrees_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Worktree>> {
+        cancellation.check_cancelled()?;
+        let worktrees = self.list_worktrees()?;
+        cancellation.check_cancelled()?;
+        Ok(worktrees)
+    }
 
     fn add_worktree_with_output(
         &self,
@@ -715,6 +839,17 @@ pub enum PullMode {
 
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    fn open_cancellable(
+        &self,
+        workdir: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<dyn GitRepository>> {
+        cancellation.check_cancelled()?;
+        let repo = self.open(workdir)?;
+        cancellation.check_cancelled()?;
+        Ok(repo)
+    }
 }
 
 #[cfg(test)]

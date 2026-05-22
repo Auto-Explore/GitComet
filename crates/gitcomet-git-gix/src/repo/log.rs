@@ -10,7 +10,7 @@ use gitcomet_core::domain::{
     LogPage, ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::services::Result;
+use gitcomet_core::services::{CancellationToken, Result};
 use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
@@ -465,6 +465,7 @@ fn log_page_from_walk<'repo, E>(
     walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
     limit: usize,
     cursor: Option<&LogCursor>,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<LogPage>
 where
     E: std::fmt::Display,
@@ -475,6 +476,9 @@ where
     let mut next_cursor = None;
 
     for result in walk {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         let info = result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
         if cursor_gate.should_skip_oid(info.id().as_ref()) {
             continue;
@@ -502,6 +506,7 @@ fn log_page_from_walk_filtered<'repo, E>(
     walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
     limit: usize,
     cursor: Option<&LogCursor>,
+    cancellation: Option<&CancellationToken>,
     mut include: impl FnMut(&gix::revision::walk::Info<'repo>) -> bool,
 ) -> Result<LogPage>
 where
@@ -513,6 +518,9 @@ where
     let mut next_cursor = None;
 
     for result in walk {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         let info = result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
         if cursor_gate.should_skip_oid(info.id().as_ref()) {
             continue;
@@ -544,6 +552,7 @@ fn log_page_from_paged_walk_state(
     walk_state: &mut super::LogPagedWalkState,
     limit: usize,
     mut cursor_gate: Option<&mut CursorGate<'_>>,
+    cancellation: Option<&CancellationToken>,
     mut include: impl FnMut(&gix::traverse::commit::Info) -> bool,
 ) -> Result<(Vec<Commit>, bool)> {
     fn process_paged_walk_info(
@@ -591,6 +600,9 @@ fn log_page_from_paged_walk_state(
     }
 
     for result in walk_state.walk.by_ref() {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         let info = result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
         if let Some(info) = process_paged_walk_info(
             repo,
@@ -761,18 +773,55 @@ impl GixRepo {
         self.log_history_mode_page_impl(HistoryMode::FirstParent, limit, cursor)
     }
 
+    pub(super) fn log_head_page_cancellable_impl(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        self.log_history_mode_page_cancellable_impl(
+            HistoryMode::FirstParent,
+            limit,
+            cursor,
+            cancellation,
+        )
+    }
+
     pub(super) fn log_history_mode_page_impl(
         &self,
         mode: HistoryMode,
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
+        self.log_history_mode_page_impl_inner(mode, limit, cursor, None)
+    }
+
+    pub(super) fn log_history_mode_page_cancellable_impl(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        self.log_history_mode_page_impl_inner(mode, limit, cursor, Some(cancellation))
+    }
+
+    fn log_history_mode_page_impl_inner(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<LogPage> {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         if limit == 0 {
             return Ok(empty_log_page());
         }
 
         if mode == HistoryMode::AllBranches {
-            return self.log_all_branches_page_impl(limit, cursor);
+            return self.log_all_branches_page_impl_inner(limit, cursor, cancellation);
         }
 
         let repo = self._repo.to_thread_local();
@@ -798,7 +847,7 @@ impl GixRepo {
                         .map_err(|e| {
                             Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
                         })?;
-                    let mut page = log_page_from_walk(walk, limit, None)?;
+                    let mut page = log_page_from_walk(walk, limit, None, cancellation)?;
                     apply_first_parent_resume_hint(&mut page);
                     page
                 } else if let Some(head_id) = head_id {
@@ -812,7 +861,7 @@ impl GixRepo {
                         .map_err(|e| {
                             Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
                         })?;
-                    let mut page = log_page_from_walk(walk, limit, cursor)?;
+                    let mut page = log_page_from_walk(walk, limit, cursor, cancellation)?;
                     apply_first_parent_resume_hint(&mut page);
                     page
                 } else {
@@ -834,17 +883,23 @@ impl GixRepo {
                             Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
                         })?;
                     match mode {
-                        HistoryMode::FullReachable => log_page_from_walk(walk, limit, cursor)?,
-                        HistoryMode::NoMerges => {
-                            log_page_from_walk_filtered(walk, limit, cursor, |info| {
-                                info.parent_ids.len() < 2
-                            })?
+                        HistoryMode::FullReachable => {
+                            log_page_from_walk(walk, limit, cursor, cancellation)?
                         }
-                        HistoryMode::MergesOnly => {
-                            log_page_from_walk_filtered(walk, limit, cursor, |info| {
-                                info.parent_ids.len() > 1
-                            })?
-                        }
+                        HistoryMode::NoMerges => log_page_from_walk_filtered(
+                            walk,
+                            limit,
+                            cursor,
+                            cancellation,
+                            |info| info.parent_ids.len() < 2,
+                        )?,
+                        HistoryMode::MergesOnly => log_page_from_walk_filtered(
+                            walk,
+                            limit,
+                            cursor,
+                            cancellation,
+                            |info| info.parent_ids.len() > 1,
+                        )?,
                         HistoryMode::FirstParent | HistoryMode::AllBranches => unreachable!(),
                     }
                 } else {
@@ -866,6 +921,7 @@ impl GixRepo {
                         &mut walk_state,
                         limit,
                         cursor_gate.as_mut(),
+                        cancellation,
                         |info| match mode {
                             HistoryMode::FullReachable => true,
                             HistoryMode::NoMerges => info.parent_ids.len() < 2,
@@ -894,6 +950,9 @@ impl GixRepo {
         };
 
         self.store_log_head_page(cache_key, &page);
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         Ok(page)
     }
 
@@ -902,6 +961,27 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
+        self.log_all_branches_page_impl_inner(limit, cursor, None)
+    }
+
+    pub(super) fn log_all_branches_page_cancellable_impl(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        self.log_all_branches_page_impl_inner(limit, cursor, Some(cancellation))
+    }
+
+    fn log_all_branches_page_impl_inner(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<LogPage> {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         if limit == 0 {
             return Ok(empty_log_page());
         }
@@ -927,6 +1007,9 @@ impl GixRepo {
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references(all): {e}"))))?;
         for reference in iter {
+            if let Some(cancellation) = cancellation {
+                cancellation.check_cancelled()?;
+            }
             let reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             if matches!(
@@ -963,7 +1046,7 @@ impl GixRepo {
             ))
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-        log_page_from_walk(walk, limit, cursor)
+        log_page_from_walk(walk, limit, cursor, cancellation)
     }
 
     pub(super) fn log_file_page_impl(

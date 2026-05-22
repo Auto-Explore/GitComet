@@ -10,11 +10,11 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{
     GitExecutablePreference, current_git_executable_preference, install_git_executable_preference,
 };
-use gitcomet_core::services::{CommandOutput, PullMode, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 struct DummyRepo {
