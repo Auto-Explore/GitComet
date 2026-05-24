@@ -1,7 +1,8 @@
 use super::*;
 use std::io::Read;
 
-pub(super) fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
+#[cfg(test)]
+fn build_inline_text(lines: &[AnnotatedDiffLine]) -> SharedString {
     let total_len = lines
         .iter()
         .map(|line| line.text.len().saturating_add(1))
@@ -1140,6 +1141,7 @@ impl StreamedFileDiffSource {
         scrollbar_markers_from_row_ranges(self.plan.inline_row_count, ranges)
     }
 
+    #[cfg(test)]
     fn build_inline_text(&self) -> SharedString {
         let mut text = String::with_capacity(self.plan.inline_row_count.saturating_mul(2));
         let mut push_line = |prefix: char, line: gitcomet_core::file_diff::FileDiffLineText| {
@@ -1424,6 +1426,7 @@ pub(in crate::view) struct PagedFileDiffInlineRows {
     source: Arc<StreamedFileDiffSource>,
     page_size: usize,
     pages: std::sync::Mutex<rows::LruCache<usize, Arc<[AnnotatedDiffLine]>>>,
+    #[cfg(test)]
     full_text: std::sync::OnceLock<SharedString>,
 }
 
@@ -1433,6 +1436,7 @@ impl PagedFileDiffInlineRows {
             source,
             page_size: page_size.max(1),
             pages: std::sync::Mutex::new(rows::new_lru_cache(FILE_DIFF_MAX_CACHED_PAGES)),
+            #[cfg(test)]
             full_text: std::sync::OnceLock::new(),
         }
     }
@@ -1510,7 +1514,8 @@ impl PagedFileDiffInlineRows {
         self.source.inline_row_render_data(inline_ix)
     }
 
-    pub(super) fn build_full_text(&self) -> SharedString {
+    #[cfg(test)]
+    fn build_full_text(&self) -> SharedString {
         self.full_text
             .get_or_init(|| self.source.build_inline_text())
             .clone()

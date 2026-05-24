@@ -522,7 +522,7 @@ impl MainPaneView {
     fn diff_text_wrap_range_for_text(&self, visible_ix: usize, text: &str) -> Option<Range<usize>> {
         let wrap = self.diff_text_wrap_for_visible_ix(visible_ix)?;
         crate::view::rows::diff_wrap_range_for_text(text, wrap.wrap_columns, wrap.wrap_ix)
-            .or_else(|| Some(0..0))
+            .or(Some(0..0))
     }
 
     fn diff_text_apply_wrap_to_line(&self, visible_ix: usize, text: SharedString) -> SharedString {

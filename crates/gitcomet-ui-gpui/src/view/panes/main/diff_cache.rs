@@ -13,10 +13,10 @@ mod word_highlight;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
+use self::file_diff::file_diff_text_signature;
 pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
-use self::file_diff::{build_inline_text, file_diff_text_signature};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
@@ -364,17 +364,6 @@ impl MainPaneView {
         self.file_diff_inline_row_provider
             .as_ref()
             .and_then(|provider| provider.modify_pair_texts(inline_ix))
-    }
-
-    pub(in crate::view) fn ensure_file_diff_inline_text_materialized(&mut self) {
-        if !self.file_diff_inline_text.is_empty() || self.file_diff_inline_row_len() == 0 {
-            return;
-        }
-        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
-            self.file_diff_inline_text = provider.build_full_text();
-        } else {
-            self.file_diff_inline_text = build_inline_text(self.file_diff_inline_cache.as_slice());
-        }
     }
 
     pub(in crate::view) fn patch_diff_row_len(&self) -> usize {

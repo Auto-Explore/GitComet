@@ -172,6 +172,7 @@ impl TextInput {
         cx.notify();
     }
 
+    #[allow(dead_code)]
     pub fn set_selected_range(
         &mut self,
         range: Range<usize>,
@@ -799,6 +800,7 @@ impl TextInput {
         self.select_to(self.content.len(), cx);
     }
 
+    #[allow(dead_code)]
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         if self.soft_wrap == soft_wrap {
             return;

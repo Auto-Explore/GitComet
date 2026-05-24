@@ -244,35 +244,6 @@ fn next_char_boundary_after(s: &str, ix: usize) -> Option<usize> {
     Some(ix + s[ix..].chars().next()?.len_utf8())
 }
 
-fn diff_word_wrap_line_starts(text: &str) -> Vec<usize> {
-    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
-    starts.push(0);
-    for (ix, byte) in text.bytes().enumerate() {
-        if byte == b'\n' {
-            starts.push(ix + 1);
-        }
-    }
-    starts
-}
-
-fn diff_word_wrap_line_range(
-    text: &str,
-    line_starts: &[usize],
-    line_ix: usize,
-    include_newline: bool,
-) -> Option<Range<usize>> {
-    let start = (*line_starts.get(line_ix)?).min(text.len());
-    let mut end = line_starts
-        .get(line_ix.saturating_add(1))
-        .copied()
-        .unwrap_or(text.len())
-        .min(text.len());
-    if !include_newline && end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
-        end -= 1;
-    }
-    Some(start..end)
-}
-
 #[derive(Clone, Copy)]
 pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
     bytes: &'a [u8],
@@ -1645,12 +1616,8 @@ impl MainPaneView {
             };
             let rows: Vec<_> = (0..total)
                 .filter_map(|visible_ix| {
-                    let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return None;
-                    };
-                    let Some((left, right)) = provider.split_row_texts(mapped_ix) else {
-                        return None;
-                    };
+                    let mapped_ix = self.diff_mapped_ix_for_visible_ix(visible_ix)?;
+                    let (left, right) = provider.split_row_texts(mapped_ix)?;
                     Some((
                         visible_ix,
                         left.map(|left| Cow::Owned(expand_tabs_to_string(left.as_ref()))),
@@ -2025,145 +1992,6 @@ impl MainPaneView {
             .map(|ix| self.diff_search_matches[ix.min(len - 1)])
     }
 
-    fn diff_word_wrap_input_line_ix_for_visible_ix(&self, visible_ix: usize) -> Option<usize> {
-        if self.is_file_diff_view_active() && self.diff_view == DiffViewMode::Split {
-            let row_ix = self.diff_mapped_ix_for_visible_ix(visible_ix)?;
-            let row = self.file_diff_split_row(row_ix)?;
-            let old_inline = row
-                .old_line
-                .and_then(|line| line.checked_sub(1))
-                .and_then(|line| {
-                    self.file_diff_old_line_to_inline_row
-                        .get(line as usize)
-                        .copied()
-                        .flatten()
-                });
-            let new_inline = row
-                .new_line
-                .and_then(|line| line.checked_sub(1))
-                .and_then(|line| {
-                    self.file_diff_new_line_to_inline_row
-                        .get(line as usize)
-                        .copied()
-                        .flatten()
-                });
-            return match row.kind {
-                gitcomet_core::file_diff::FileDiffRowKind::Add
-                | gitcomet_core::file_diff::FileDiffRowKind::Modify => new_inline.or(old_inline),
-                gitcomet_core::file_diff::FileDiffRowKind::Remove => old_inline.or(new_inline),
-                gitcomet_core::file_diff::FileDiffRowKind::Context => new_inline.or(old_inline),
-            };
-        }
-
-        (self.diff_view == DiffViewMode::Inline).then_some(())?;
-        self.diff_mapped_ix_for_visible_ix(visible_ix)
-    }
-
-    fn diff_word_wrap_visible_range_in_text(
-        &self,
-        text: &str,
-        line_starts: &[usize],
-        visible_start: usize,
-        visible_end: usize,
-    ) -> Option<Range<usize>> {
-        let start_line =
-            self.diff_word_wrap_input_line_ix_for_visible_ix(visible_start.min(visible_end))?;
-        let end_line =
-            self.diff_word_wrap_input_line_ix_for_visible_ix(visible_start.max(visible_end))?;
-        let start = diff_word_wrap_line_range(text, line_starts, start_line, false)?.start;
-        let end = diff_word_wrap_line_range(text, line_starts, end_line, false)?.end;
-        Some(start.min(end)..start.max(end))
-    }
-
-    fn diff_word_wrap_selection_range_in_text(
-        &self,
-        text: &str,
-        line_starts: &[usize],
-    ) -> Option<Range<usize>> {
-        self.diff_selection_range
-            .or_else(|| {
-                self.diff_search_current_match_visible_ix()
-                    .map(|ix| (ix, ix))
-            })
-            .and_then(|(start, end)| {
-                self.diff_word_wrap_visible_range_in_text(text, line_starts, start, end)
-            })
-    }
-
-    fn diff_word_wrap_query_highlights(
-        &mut self,
-        theme: AppTheme,
-        text: &str,
-        line_starts: &[usize],
-    ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-        let matcher = self.diff_search_current_matcher();
-        if !self.diff_search_active
-            || matcher.is_empty()
-            || matcher.regex_error().is_some()
-            || self.diff_search_matches.is_empty()
-        {
-            return Vec::new();
-        }
-
-        let query_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
-        let mut highlights = Vec::new();
-        let mut row_ranges = Vec::new();
-        for &visible_ix in &self.diff_search_matches {
-            let Some(line_ix) = self.diff_word_wrap_input_line_ix_for_visible_ix(visible_ix) else {
-                continue;
-            };
-            let Some(line_range) = diff_word_wrap_line_range(text, line_starts, line_ix, false)
-            else {
-                continue;
-            };
-            let Some(line_text) = text.get(line_range.clone()) else {
-                continue;
-            };
-
-            matcher.find_row_overlay_ranges_into(line_text, &mut row_ranges, 64);
-            highlights.extend(row_ranges.iter().cloned().map(|range| {
-                (
-                    line_range.start.saturating_add(range.start)
-                        ..line_range.start.saturating_add(range.end),
-                    gpui::HighlightStyle {
-                        background_color: Some(query_bg),
-                        ..gpui::HighlightStyle::default()
-                    },
-                )
-            }));
-        }
-        highlights
-    }
-
-    pub(in crate::view) fn update_diff_word_wrap_input(
-        &mut self,
-        theme: AppTheme,
-        text: SharedString,
-        scroll_handle: gpui::ScrollHandle,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let line_starts = diff_word_wrap_line_starts(text.as_ref());
-        let highlights =
-            self.diff_word_wrap_query_highlights(theme, text.as_ref(), line_starts.as_slice());
-        let selection_range =
-            self.diff_word_wrap_selection_range_in_text(text.as_ref(), line_starts.as_slice());
-
-        self.diff_raw_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_soft_wrap(true, cx);
-            input.set_vertical_scroll_handle(Some(scroll_handle));
-            if input.text() != text.as_ref() {
-                input.set_text(text.clone(), cx);
-            }
-            input.set_highlights(highlights, cx);
-            if let Some(range) = selection_range {
-                input.set_selected_range(range, true, cx);
-            }
-            input.set_read_only(true, cx);
-        });
-    }
-
     fn diff_search_finalize_matches(&mut self, mode: DiffSearchFinalizeMode) {
         if self.diff_search_matches.is_empty() {
             self.diff_search_match_ix = None;
@@ -2458,13 +2286,8 @@ fn conflict_resolver_visible_match_indices_with_matcher(
                 two_way_split_projection,
             } = ctx.two_way_rows;
             let rows = (0..two_way_split_projection.visible_len()).filter_map(|visible_ix| {
-                let Some((source_row, _conflict_ix)) = two_way_split_projection.get(visible_ix)
-                else {
-                    return None;
-                };
-                let Some(row) = split_row_index.row_at(ctx.marker_segments, source_row) else {
-                    return None;
-                };
+                let (source_row, _conflict_ix) = two_way_split_projection.get(visible_ix)?;
+                let row = split_row_index.row_at(ctx.marker_segments, source_row)?;
                 Some((
                     visible_ix,
                     row.old

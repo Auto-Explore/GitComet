@@ -112,6 +112,7 @@ pub(in crate::view) fn whitespace_visible_line_text(text: &str) -> SharedString 
     whitespace_visible_line_text_and_highlights(text, &[]).0
 }
 
+#[cfg(test)]
 pub(in crate::view) fn whitespace_visible_multiline_text(text: &str) -> SharedString {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -241,7 +242,7 @@ pub(in crate::view) fn slice_cached_diff_styled_text(
 
 fn diff_wrap_ranges_for_text(text: &str, wrap_columns: usize) -> Vec<Range<usize>> {
     if text.is_empty() {
-        return vec![0..0];
+        return std::iter::once(0..0).collect();
     }
 
     let wrap_columns = wrap_columns.max(1);

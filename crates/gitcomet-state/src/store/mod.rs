@@ -371,19 +371,16 @@ impl AppStore {
                     }) if matches!(
                         message.as_ref(),
                         crate::msg::InternalMsg::RepoOpenedErr { .. }
-                    ) =>
+                    ) && repo_task_tokens
+                        .get(repo_id)
+                        .is_some_and(|token| token.load_epoch == *load_epoch) =>
                     {
-                        if repo_task_tokens
-                            .get(repo_id)
-                            .is_some_and(|token| token.load_epoch == *load_epoch)
-                        {
-                            repo_load_trace::trace!(
-                                "repo_opened_err removing_repo_load_token repo_id={:?} load_epoch={}",
-                                repo_id,
-                                load_epoch
-                            );
-                            repo_task_tokens.remove(repo_id);
-                        }
+                        repo_load_trace::trace!(
+                            "repo_opened_err removing_repo_load_token repo_id={:?} load_epoch={}",
+                            repo_id,
+                            load_epoch
+                        );
+                        repo_task_tokens.remove(repo_id);
                     }
                     _ => {}
                 }

@@ -3833,11 +3833,15 @@ impl MainPaneView {
         let visual_ix = self
             .diff_wrap_visible_rows
             .partition_point(|row| row.source_visible_ix < source_visible_ix);
-        self.diff_wrap_visible_rows
+        if self
+            .diff_wrap_visible_rows
             .get(visual_ix)
             .is_some_and(|row| row.source_visible_ix == source_visible_ix)
-            .then_some(visual_ix)
-            .unwrap_or(source_visible_ix)
+        {
+            visual_ix
+        } else {
+            source_visible_ix
+        }
     }
 
     pub(in crate::view) fn diff_source_mapped_ix_for_visible_ix(

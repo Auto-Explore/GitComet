@@ -1300,6 +1300,7 @@ pub(super) fn patch_split_column_row_canvas(
     .into_any_element()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn worktree_preview_row_canvas(
     theme: AppTheme,
     view: Entity<MainPaneView>,

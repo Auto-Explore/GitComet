@@ -1553,38 +1553,36 @@ pub(super) fn schedule_effect(
             load_submodule_summary,
             load_file_image,
         } => {
-            if let Some((target, target_rev)) = selected_diff_target(thread_state, repo_id) {
-                if let Some((msg_tx, _)) =
+            if let Some((target, target_rev)) = selected_diff_target(thread_state, repo_id)
+                && let Some((msg_tx, _)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-                {
-                    repo_load::schedule_load_selected_diff(
-                        executor,
-                        repos,
-                        Arc::clone(thread_state),
-                        msg_tx,
-                        repo_id,
-                        target,
-                        target_rev,
-                        repo_load::SelectedDiffLoadOptions {
-                            load_patch_diff,
-                            load_file_text,
-                            preview_text_side,
-                            load_submodule_summary,
-                            load_file_image,
-                        },
-                    );
-                }
+            {
+                repo_load::schedule_load_selected_diff(
+                    executor,
+                    repos,
+                    Arc::clone(thread_state),
+                    msg_tx,
+                    repo_id,
+                    target,
+                    target_rev,
+                    repo_load::SelectedDiffLoadOptions {
+                        load_patch_diff,
+                        load_file_text,
+                        preview_text_side,
+                        load_submodule_summary,
+                        load_file_image,
+                    },
+                );
             }
         }
         Effect::LoadSelectedConflictFile { repo_id, mode } => {
-            if let Some(path) = selected_conflict_file_path(thread_state, repo_id) {
-                if let Some((msg_tx, _)) =
+            if let Some(path) = selected_conflict_file_path(thread_state, repo_id)
+                && let Some((msg_tx, _)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
-                {
-                    repo_load::schedule_load_conflict_file(
-                        executor, repos, msg_tx, repo_id, path, mode,
-                    );
-                }
+            {
+                repo_load::schedule_load_conflict_file(
+                    executor, repos, msg_tx, repo_id, path, mode,
+                );
             }
         }
         Effect::CheckoutBranch { repo_id, name } => {
