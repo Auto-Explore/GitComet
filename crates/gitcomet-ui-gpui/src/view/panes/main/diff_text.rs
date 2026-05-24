@@ -96,6 +96,11 @@ impl MainPaneView {
                 .min(layout.len())
                 .min(hitbox.text_len)
         };
+        let local_offset = hitbox
+            .offset_map
+            .as_ref()
+            .map(|map| map.source_offset_for_display(local_offset))
+            .unwrap_or(local_offset);
         Some(DiffTextPos {
             source_visible_ix: hitbox.source_visible_ix,
             region,

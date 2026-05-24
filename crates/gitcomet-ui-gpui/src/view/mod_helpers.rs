@@ -536,7 +536,38 @@ pub(super) struct DiffTextHitbox {
     pub(super) source_visible_ix: usize,
     pub(super) text_start_offset: usize,
     pub(super) text_len: usize,
+    pub(super) offset_map: Option<DiffTextOffsetMap>,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DiffTextOffsetMap {
+    pub(super) display_to_source: Arc<[usize]>,
+    pub(super) source_to_display: Arc<[usize]>,
+}
+
+impl DiffTextOffsetMap {
+    pub(super) fn display_len(&self) -> usize {
+        self.display_to_source.len().saturating_sub(1)
+    }
+
+    pub(super) fn source_len(&self) -> usize {
+        self.source_to_display.len().saturating_sub(1)
+    }
+
+    pub(super) fn source_offset_for_display(&self, offset: usize) -> usize {
+        self.display_to_source
+            .get(offset.min(self.display_len()))
+            .copied()
+            .unwrap_or_else(|| self.source_len())
+    }
+
+    pub(super) fn display_offset_for_source(&self, offset: usize) -> usize {
+        self.source_to_display
+            .get(offset.min(self.source_len()))
+            .copied()
+            .unwrap_or_else(|| self.display_len())
+    }
 }
 
 #[derive(Clone)]

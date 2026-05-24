@@ -1920,6 +1920,80 @@ index 1111111..2222222 100644
             "the active search match should point at the wrapped slice that contains the query"
         );
     });
+
+    let boundary_query_start = continuation_start.saturating_sub(8);
+    let boundary_query_end = (continuation_start + 8).min(full_wrapped_line.len());
+    assert!(
+        boundary_query_start < continuation_start && continuation_start < boundary_query_end,
+        "expected enough text around the soft-wrap boundary"
+    );
+    let soft_wrap_boundary_literal_query = format!(
+        "{}{}",
+        &full_wrapped_line[boundary_query_start..continuation_start],
+        &full_wrapped_line[continuation_start..boundary_query_end]
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = soft_wrap_boundary_literal_query.clone().into();
+                let query_for_input = soft_wrap_boundary_literal_query.clone();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query_for_input, cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "literal search should match across a soft-wrap boundary in the source row"
+        );
+        let match_ix = pane.diff_search_matches[0];
+        assert_eq!(
+            pane.diff_wrap_visible_rows
+                .get(match_ix)
+                .map(|row| row.source_visible_ix),
+            Some(source_visible_ix),
+            "wrapped boundary matches should map back to the source row"
+        );
+    });
+
+    let soft_wrap_boundary_query = format!(
+        "{}\n{}",
+        &full_wrapped_line[boundary_query_start..continuation_start],
+        &full_wrapped_line[continuation_start..boundary_query_end]
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = soft_wrap_boundary_query.clone().into();
+                let query_for_input = soft_wrap_boundary_query.clone();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query_for_input, cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "search should not treat a soft-wrap boundary as a real newline"
+        );
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "softwrapneedle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("softwrapneedle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+
     let paint_log = rows::diff_paint_log_for_tests();
     let highlighted_text = paint_log
         .iter()

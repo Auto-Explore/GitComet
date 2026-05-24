@@ -230,6 +230,7 @@ impl Element for DiffTextSelectionOverlay {
             source_visible_ix,
             text_start_offset: visual_range.start,
             text_len: self.text.len(),
+            offset_map: None,
             streamed_ascii_monospace_cell_width: None,
         };
 

@@ -1065,10 +1065,10 @@ fn collect_file_diff_line_text_stream_match_visible_rows(
     }
 }
 
-fn collect_stream_match_visible_rows<'a>(
+fn collect_stream_match_row_offsets<'a>(
     rows: impl IntoIterator<Item = (usize, Cow<'a, str>)>,
     matcher: &DiffSearchMatcher,
-    out: &mut Vec<usize>,
+    out: &mut Vec<(usize, usize)>,
 ) {
     let mut text = String::new();
     let mut line_starts = Vec::new();
@@ -1095,7 +1095,8 @@ fn collect_stream_match_visible_rows<'a>(
             Err(ix) => ix.saturating_sub(1),
         };
         if let Some(visible_ix) = visible_indices.get(line_ix).copied() {
-            out.push(visible_ix);
+            let line_start = line_starts.get(line_ix).copied().unwrap_or(start);
+            out.push((visible_ix, start.saturating_sub(line_start)));
         }
 
         search_start = line_starts.get(line_ix + 1).copied().unwrap_or(text.len());
@@ -1103,6 +1104,16 @@ fn collect_stream_match_visible_rows<'a>(
             break;
         }
     }
+}
+
+fn collect_stream_match_visible_rows<'a>(
+    rows: impl IntoIterator<Item = (usize, Cow<'a, str>)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    let mut row_offsets = Vec::new();
+    collect_stream_match_row_offsets(rows, matcher, &mut row_offsets);
+    out.extend(row_offsets.into_iter().map(|(visible_ix, _)| visible_ix));
 }
 
 fn collect_split_stream_match_visible_rows<'a>(
@@ -1232,7 +1243,9 @@ impl MainPaneView {
             return;
         }
 
-        let can_refine = matcher.can_use_ascii_case_insensitive_fast_path()
+        // Wrapped diffs need source-row scanning so literals can cross soft-wrap boundaries.
+        let can_refine = !self.diff_word_wrap
+            && matcher.can_use_ascii_case_insensitive_fast_path()
             && self.diff_search_can_refine_current_matches();
 
         match diff_search_query_reuse(previous_query, matcher.query()) {
@@ -1362,7 +1375,9 @@ impl MainPaneView {
     }
 
     fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
-        if matcher.can_use_ascii_case_insensitive_fast_path()
+        // Wrapped diffs need source-row scanning so literals can cross soft-wrap boundaries.
+        if !self.diff_word_wrap
+            && matcher.can_use_ascii_case_insensitive_fast_path()
             && let Some(query) = AsciiCaseInsensitiveNeedle::new(matcher.query())
         {
             self.diff_search_scan_current_view_with_needle(query);
@@ -1370,6 +1385,67 @@ impl MainPaneView {
         }
 
         self.diff_search_scan_current_view_general(matcher);
+    }
+
+    fn diff_search_visual_ix_for_source_match(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+        offset: usize,
+    ) -> usize {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return source_visible_ix;
+        }
+
+        let first_visible_ix = self
+            .diff_wrap_visible_rows
+            .partition_point(|row| row.source_visible_ix < source_visible_ix);
+        let mut boundary_candidate = None;
+        let mut fallback = None;
+        for visible_ix in first_visible_ix..self.diff_wrap_visible_rows.len() {
+            let Some(row) = self.diff_wrap_visible_rows.get(visible_ix) else {
+                break;
+            };
+            if row.source_visible_ix != source_visible_ix {
+                break;
+            }
+            fallback.get_or_insert(visible_ix);
+            let (_, range) = self.diff_text_visual_source_range_for_region(visible_ix, region);
+            if range.is_empty() {
+                if offset == range.start {
+                    return visible_ix;
+                }
+                continue;
+            }
+            if range.start <= offset && offset < range.end {
+                return visible_ix;
+            }
+            if offset == range.end {
+                boundary_candidate = Some(visible_ix);
+            }
+        }
+
+        boundary_candidate.or(fallback).unwrap_or(source_visible_ix)
+    }
+
+    fn diff_search_collect_wrapped_source_matches(
+        &self,
+        source_len: usize,
+        region: DiffTextRegion,
+        matcher: &DiffSearchMatcher,
+        out: &mut Vec<usize>,
+    ) {
+        let rows: Vec<_> = (0..source_len)
+            .map(|source_visible_ix| {
+                let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+                (source_visible_ix, Cow::Owned(text.as_ref().to_string()))
+            })
+            .collect();
+        let mut row_offsets = Vec::new();
+        collect_stream_match_row_offsets(rows, matcher, &mut row_offsets);
+        out.extend(row_offsets.into_iter().map(|(source_visible_ix, offset)| {
+            self.diff_search_visual_ix_for_source_match(source_visible_ix, region, offset)
+        }));
     }
 
     fn diff_search_scan_current_view_with_needle(&mut self, query: AsciiCaseInsensitiveNeedle<'_>) {
@@ -1553,43 +1629,36 @@ impl MainPaneView {
 
         let total = self.diff_visible_len();
         if self.diff_word_wrap {
+            let source_len = self
+                .diff_wrap_visible_cache_key
+                .map(|key| key.source_len)
+                .unwrap_or(total);
             match self.diff_view {
                 DiffViewMode::Inline => {
-                    let rows: Vec<_> = (0..total)
-                        .map(|visible_ix| {
-                            let text =
-                                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
-                            (visible_ix, Cow::Owned(text.as_ref().to_string()))
-                        })
-                        .collect();
-                    collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+                    let mut matches = Vec::new();
+                    self.diff_search_collect_wrapped_source_matches(
+                        source_len,
+                        DiffTextRegion::Inline,
+                        matcher,
+                        &mut matches,
+                    );
+                    self.diff_search_matches.extend(matches);
                 }
                 DiffViewMode::Split => {
-                    let left_rows: Vec<_> = (0..total)
-                        .map(|visible_ix| {
-                            let text = self
-                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
-                            (visible_ix, Cow::Owned(text.as_ref().to_string()))
-                        })
-                        .collect();
-                    collect_stream_match_visible_rows(
-                        left_rows,
+                    let mut matches = Vec::new();
+                    self.diff_search_collect_wrapped_source_matches(
+                        source_len,
+                        DiffTextRegion::SplitLeft,
                         matcher,
-                        &mut self.diff_search_matches,
+                        &mut matches,
                     );
-
-                    let right_rows: Vec<_> = (0..total)
-                        .map(|visible_ix| {
-                            let text = self
-                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
-                            (visible_ix, Cow::Owned(text.as_ref().to_string()))
-                        })
-                        .collect();
-                    collect_stream_match_visible_rows(
-                        right_rows,
+                    self.diff_search_collect_wrapped_source_matches(
+                        source_len,
+                        DiffTextRegion::SplitRight,
                         matcher,
-                        &mut self.diff_search_matches,
+                        &mut matches,
                     );
+                    self.diff_search_matches.extend(matches);
                 }
             }
             self.diff_search_matches.sort_unstable();

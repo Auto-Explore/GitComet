@@ -38,6 +38,14 @@ const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
+struct DiffTextPaintPayload {
+    text: SharedString,
+    highlights: HighlightSpans,
+    highlights_hash: u64,
+    text_hash: u64,
+    offset_map: Option<DiffTextOffsetMap>,
+}
+
 thread_local! {
     static GUTTER_TEXT_LAYOUT_CACHE: RefCell<FxLruCache<u64, gpui::ShapedLine>> =
         RefCell::new(new_fx_lru_cache(GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES));
@@ -366,6 +374,135 @@ fn streamed_diff_text_visible_text_hash(
     base.hash(&mut hasher);
     reveal_whitespace_chars.hash(&mut hasher);
     hasher.finish()
+}
+
+fn whitespace_marker_len(ch: char) -> usize {
+    match ch {
+        ' ' => '\u{00B7}'.len_utf8(),
+        '\t' => '\u{2192}'.len_utf8(),
+        '\r' => '\u{240D}'.len_utf8(),
+        '\n' => '\u{21B5}'.len_utf8(),
+        _ if ch.is_whitespace() => '\u{2420}'.len_utf8(),
+        _ => ch.len_utf8(),
+    }
+}
+
+fn diff_display_source_len_for_char(ch: char) -> usize {
+    match ch {
+        '\t' => 4,
+        _ => ch.len_utf8(),
+    }
+}
+
+fn whitespace_visible_diff_offset_map(text: &str, append_eol_marker: bool) -> DiffTextOffsetMap {
+    let source_len = crate::view::diff_utils::diff_text_display_len(text);
+    let mut display_len = text.chars().map(whitespace_marker_len).sum::<usize>();
+    let append_synthetic_eol = append_eol_marker && !text.ends_with('\n');
+    if append_synthetic_eol {
+        display_len = display_len.saturating_add('\u{21B5}'.len_utf8());
+    }
+
+    let mut display_to_source = vec![0usize; display_len.saturating_add(1)];
+    let mut source_to_display = vec![0usize; source_len.saturating_add(1)];
+    let mut source = 0usize;
+    let mut display = 0usize;
+
+    for ch in text.chars() {
+        let source_start = source;
+        let display_start = display;
+        source = source.saturating_add(diff_display_source_len_for_char(ch));
+        display = display.saturating_add(whitespace_marker_len(ch));
+
+        if let Some(slot) = display_to_source.get_mut(display_start) {
+            *slot = source_start;
+        }
+        for slot in display_to_source
+            .iter_mut()
+            .take(display.saturating_add(1))
+            .skip(display_start.saturating_add(1))
+        {
+            *slot = source;
+        }
+
+        if let Some(slot) = source_to_display.get_mut(source_start) {
+            *slot = display_start;
+        }
+        for slot in source_to_display
+            .iter_mut()
+            .take(source.saturating_add(1))
+            .skip(source_start.saturating_add(1))
+        {
+            *slot = display;
+        }
+    }
+
+    if append_synthetic_eol {
+        let display_start = display;
+        display = display.saturating_add('\u{21B5}'.len_utf8());
+        if let Some(slot) = display_to_source.get_mut(display_start) {
+            *slot = source;
+        }
+        for slot in display_to_source
+            .iter_mut()
+            .take(display.saturating_add(1))
+            .skip(display_start.saturating_add(1))
+        {
+            *slot = source;
+        }
+    }
+
+    DiffTextOffsetMap {
+        display_to_source: Arc::from(display_to_source),
+        source_to_display: Arc::from(source_to_display),
+    }
+}
+
+fn display_range_for_source_range(
+    map: &DiffTextOffsetMap,
+    source_range: &Range<usize>,
+) -> Range<usize> {
+    let source_start = source_range.start.min(map.source_len());
+    let source_end = source_range.end.min(map.source_len());
+    let display_start = map.display_offset_for_source(source_start);
+    let display_end = if source_end >= map.source_len() {
+        map.display_len()
+    } else {
+        map.display_offset_for_source(source_end)
+    };
+    display_start.min(map.display_len())..display_end.min(map.display_len())
+}
+
+fn slice_diff_text_offset_map(
+    map: &DiffTextOffsetMap,
+    display_range: Range<usize>,
+    source_range: Range<usize>,
+) -> DiffTextOffsetMap {
+    let display_start = display_range.start.min(map.display_len());
+    let display_end = display_range.end.min(map.display_len()).max(display_start);
+    let source_start = source_range.start.min(map.source_len());
+    let source_end = source_range.end.min(map.source_len()).max(source_start);
+    let display_len = display_end.saturating_sub(display_start);
+    let source_len = source_end.saturating_sub(source_start);
+
+    let display_to_source = (0..=display_len)
+        .map(|offset| {
+            map.source_offset_for_display(display_start.saturating_add(offset))
+                .clamp(source_start, source_end)
+                .saturating_sub(source_start)
+        })
+        .collect::<Vec<_>>();
+    let source_to_display = (0..=source_len)
+        .map(|offset| {
+            map.display_offset_for_source(source_start.saturating_add(offset))
+                .clamp(display_start, display_end)
+                .saturating_sub(display_start)
+        })
+        .collect::<Vec<_>>();
+
+    DiffTextOffsetMap {
+        display_to_source: Arc::from(display_to_source),
+        source_to_display: Arc::from(source_to_display),
+    }
 }
 
 fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
@@ -717,46 +854,71 @@ fn diff_text_paint_payload(
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
     wrap: Option<DiffTextWrapSlice>,
-) -> (SharedString, HighlightSpans, u64, u64) {
+) -> DiffTextPaintPayload {
     if reveal_whitespace_chars {
         if should_stream_diff_text(streamed_spec) {
             let spec = streamed_spec.expect("streamed spec checked above");
-            return (
-                SharedString::default(),
-                empty_highlights(),
-                streamed_diff_text_highlights_hash(spec),
-                streamed_diff_text_visible_text_hash(spec, true),
-            );
+            return DiffTextPaintPayload {
+                text: SharedString::default(),
+                highlights: empty_highlights(),
+                highlights_hash: streamed_diff_text_highlights_hash(spec),
+                text_hash: streamed_diff_text_visible_text_hash(spec, true),
+                offset_map: None,
+            };
         }
 
-        let styled = styled
-            .map(|styled| {
-                raw_text
-                    .map(|raw_text| whitespace_visible_line_styled_text_for_raw(styled, raw_text))
-                    .unwrap_or_else(|| whitespace_visible_line_styled_text(styled))
+        let mut source_text_for_wrap: Option<&str> = None;
+        let mut offset_map: Option<DiffTextOffsetMap> = None;
+        let styled = if let Some(styled) = styled {
+            source_text_for_wrap = Some(styled.text.as_ref());
+            let visible = if let Some(raw_text) = raw_text {
+                offset_map = Some(whitespace_visible_diff_offset_map(raw_text, true));
+                whitespace_visible_line_styled_text_for_raw(styled, raw_text)
+            } else {
+                offset_map = Some(whitespace_visible_diff_offset_map(
+                    styled.text.as_ref(),
+                    true,
+                ));
+                whitespace_visible_line_styled_text(styled)
+            };
+            Some(visible)
+        } else if let Some(spec) = streamed_spec {
+            let raw_text = spec.raw_text.as_ref();
+            source_text_for_wrap = Some(raw_text);
+            offset_map = Some(whitespace_visible_diff_offset_map(raw_text, true));
+            let text = whitespace_visible_line_text(raw_text);
+            let text_hash = {
+                let mut hasher = FxHasher::default();
+                text.as_ref().hash(&mut hasher);
+                hasher.finish()
+            };
+            Some(CachedDiffStyledText {
+                text,
+                highlights: empty_highlights(),
+                highlights_hash: 0,
+                text_hash,
             })
-            .or_else(|| {
-                streamed_spec.map(|spec| {
-                    let text = whitespace_visible_line_text(spec.raw_text.as_ref());
-                    let text_hash = {
-                        let mut hasher = FxHasher::default();
-                        text.as_ref().hash(&mut hasher);
-                        hasher.finish()
-                    };
-                    CachedDiffStyledText {
-                        text,
-                        highlights: empty_highlights(),
-                        highlights_hash: 0,
-                        text_hash,
-                    }
-                })
-            });
+        } else {
+            None
+        };
+
         let wrapped;
+        let mut offset_map = offset_map;
         let styled = if let (Some(styled), Some(wrap)) = (styled.as_ref(), wrap) {
-            wrapped =
-                diff_wrap_range_for_text(styled.text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
-                    .map(|range| slice_cached_diff_styled_text(styled, range))
-                    .unwrap_or_else(|| slice_cached_diff_styled_text(styled, 0..0));
+            let source_range = source_text_for_wrap
+                .and_then(|text| diff_wrap_range_for_text(text, wrap.wrap_columns, wrap.wrap_ix))
+                .unwrap_or(0..0);
+            let display_range = offset_map
+                .as_ref()
+                .map(|map| display_range_for_source_range(map, &source_range))
+                .or_else(|| {
+                    diff_wrap_range_for_text(styled.text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
+                })
+                .unwrap_or(0..0);
+            wrapped = slice_cached_diff_styled_text(styled, display_range.clone());
+            offset_map = offset_map
+                .as_ref()
+                .map(|map| slice_diff_text_offset_map(map, display_range, source_range));
             Some(&wrapped)
         } else {
             styled.as_ref()
@@ -767,17 +929,24 @@ fn diff_text_paint_payload(
             .unwrap_or_else(empty_highlights);
         let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
         let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
-        return (text, highlights, highlights_hash, text_hash);
+        return DiffTextPaintPayload {
+            text,
+            highlights,
+            highlights_hash,
+            text_hash,
+            offset_map,
+        };
     }
 
     if should_stream_diff_text(streamed_spec) {
         let spec = streamed_spec.expect("streamed spec checked above");
-        return (
-            SharedString::default(),
-            empty_highlights(),
-            streamed_diff_text_highlights_hash(spec),
-            streamed_diff_text_visible_text_hash(spec, false),
-        );
+        return DiffTextPaintPayload {
+            text: SharedString::default(),
+            highlights: empty_highlights(),
+            highlights_hash: streamed_diff_text_highlights_hash(spec),
+            text_hash: streamed_diff_text_visible_text_hash(spec, false),
+            offset_map: None,
+        };
     }
 
     let wrapped;
@@ -795,7 +964,13 @@ fn diff_text_paint_payload(
         .unwrap_or_else(empty_highlights);
     let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
     let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
-    (text, highlights, highlights_hash, text_hash)
+    DiffTextPaintPayload {
+        text,
+        highlights,
+        highlights_hash,
+        text_hash,
+        offset_map: None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -818,15 +993,27 @@ pub(super) fn inline_diff_line_row_canvas(
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
-    let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
+    let paint_payload = diff_text_paint_payload(
         styled,
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
         wrap,
     );
-    let revision =
-        inline_row_canvas_revision_key(&old, &new, bg, fg, gutter_fg, text_hash, highlights_hash);
+    let revision = inline_row_canvas_revision_key(
+        &old,
+        &new,
+        bg,
+        fg,
+        gutter_fg,
+        paint_payload.text_hash,
+        paint_payload.highlights_hash,
+    );
+    let text = paint_payload.text;
+    let highlights = paint_payload.highlights;
+    let highlights_hash = paint_payload.highlights_hash;
+    let text_hash = paint_payload.text_hash;
+    let offset_map = paint_payload.offset_map;
     let canvas_id: gpui::ElementId = ("diff_row_canvas_inline", visible_ix).into();
     let test_row_bg = semantic_diff_row_bg(theme, bg);
 
@@ -891,6 +1078,7 @@ pub(super) fn inline_diff_line_row_canvas(
                     test_row_bg,
                     highlights_hash,
                     text_hash,
+                    offset_map.as_ref(),
                     reveal_whitespace_chars,
                     y,
                     fg,
@@ -968,22 +1156,20 @@ pub(super) fn split_diff_line_row_canvas(
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
-    let (left_text, left_highlights, left_highlights_hash, left_text_hash) =
-        diff_text_paint_payload(
-            left_styled,
-            left_streamed_spec.as_ref(),
-            left_raw_text,
-            reveal_whitespace_chars,
-            wrap,
-        );
-    let (right_text, right_highlights, right_highlights_hash, right_text_hash) =
-        diff_text_paint_payload(
-            right_styled,
-            right_streamed_spec.as_ref(),
-            right_raw_text,
-            reveal_whitespace_chars,
-            wrap,
-        );
+    let left_payload = diff_text_paint_payload(
+        left_styled,
+        left_streamed_spec.as_ref(),
+        left_raw_text,
+        reveal_whitespace_chars,
+        wrap,
+    );
+    let right_payload = diff_text_paint_payload(
+        right_styled,
+        right_streamed_spec.as_ref(),
+        right_raw_text,
+        reveal_whitespace_chars,
+        wrap,
+    );
     let revision = split_row_canvas_revision_key(
         &old,
         &new,
@@ -993,11 +1179,21 @@ pub(super) fn split_diff_line_row_canvas(
         right_bg,
         right_fg,
         right_gutter,
-        left_text_hash,
-        left_highlights_hash,
-        right_text_hash,
-        right_highlights_hash,
+        left_payload.text_hash,
+        left_payload.highlights_hash,
+        right_payload.text_hash,
+        right_payload.highlights_hash,
     );
+    let left_text = left_payload.text;
+    let left_highlights = left_payload.highlights;
+    let left_highlights_hash = left_payload.highlights_hash;
+    let left_text_hash = left_payload.text_hash;
+    let left_offset_map = left_payload.offset_map;
+    let right_text = right_payload.text;
+    let right_highlights = right_payload.highlights;
+    let right_highlights_hash = right_payload.highlights_hash;
+    let right_text_hash = right_payload.text_hash;
+    let right_offset_map = right_payload.offset_map;
     let canvas_id: gpui::ElementId = ("diff_row_canvas_split", visible_ix).into();
     let left_test_row_bg = semantic_diff_row_bg(theme, left_bg);
     let right_test_row_bg = semantic_diff_row_bg(theme, right_bg);
@@ -1077,6 +1273,7 @@ pub(super) fn split_diff_line_row_canvas(
                     left_test_row_bg,
                     left_highlights_hash,
                     left_text_hash,
+                    left_offset_map.as_ref(),
                     reveal_whitespace_chars,
                     y,
                     left_fg,
@@ -1102,6 +1299,7 @@ pub(super) fn split_diff_line_row_canvas(
                     right_test_row_bg,
                     right_highlights_hash,
                     right_text_hash,
+                    right_offset_map.as_ref(),
                     reveal_whitespace_chars,
                     y,
                     right_fg,
@@ -1178,13 +1376,18 @@ pub(super) fn patch_split_column_row_canvas(
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
         super::diff::PatchSplitColumn::Right => DiffTextRegion::SplitRight,
     };
-    let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
+    let paint_payload = diff_text_paint_payload(
         styled,
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
         wrap,
     );
+    let text = paint_payload.text;
+    let highlights = paint_payload.highlights;
+    let highlights_hash = paint_payload.highlights_hash;
+    let text_hash = paint_payload.text_hash;
+    let offset_map = paint_payload.offset_map;
     let revision = patch_split_row_canvas_revision_key(
         &line_no,
         bg,
@@ -1253,6 +1456,7 @@ pub(super) fn patch_split_column_row_canvas(
                     test_row_bg,
                     highlights_hash,
                     text_hash,
+                    offset_map.as_ref(),
                     reveal_whitespace_chars,
                     y,
                     fg,
@@ -1314,13 +1518,18 @@ pub(super) fn worktree_preview_row_canvas(
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
 ) -> AnyElement {
-    let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
+    let paint_payload = diff_text_paint_payload(
         styled,
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
         None,
     );
+    let text = paint_payload.text;
+    let highlights = paint_payload.highlights;
+    let highlights_hash = paint_payload.highlights_hash;
+    let text_hash = paint_payload.text_hash;
+    let offset_map = paint_payload.offset_map;
 
     keyed_canvas(
         ("worktree_preview_row_canvas", ix),
@@ -1387,6 +1596,7 @@ pub(super) fn worktree_preview_row_canvas(
                     None,
                     highlights_hash,
                     text_hash,
+                    offset_map.as_ref(),
                     reveal_whitespace_chars,
                     y,
                     theme.colors.text,
@@ -1829,6 +2039,7 @@ fn paint_selectable_diff_text(
     row_bg: Option<gpui::Rgba>,
     highlights_hash: u64,
     text_hash: u64,
+    offset_map: Option<&DiffTextOffsetMap>,
     reveal_whitespace_chars: bool,
     y: Pixels,
     base_fg: gpui::Rgba,
@@ -1858,6 +2069,9 @@ fn paint_selectable_diff_text(
         .filter(|spec| should_stream_diff_text(Some(spec)))
         .map(|spec| spec.raw_text.len())
         .unwrap_or_else(|| text.len());
+    let source_text_len = offset_map
+        .map(DiffTextOffsetMap::source_len)
+        .unwrap_or(total_text_len);
     let (source_visible_ix, visual_text_range) = view
         .read(cx)
         .diff_text_visual_source_range_for_region(visible_ix, region);
@@ -1980,6 +2194,10 @@ fn paint_selectable_diff_text(
                 (start, end)
             };
             (cell_width * start as f32, cell_width * end as f32)
+        } else if let Some(offset_map) = offset_map {
+            let start = offset_map.display_offset_for_source(r.start.min(source_text_len));
+            let end = offset_map.display_offset_for_source(r.end.min(source_text_len));
+            (layout.x_for_index(start), layout.x_for_index(end))
         } else {
             (
                 layout.x_for_index(r.start.min(total_text_len)),
@@ -2016,9 +2234,12 @@ fn paint_selectable_diff_text(
                 .as_ref()
                 .map(|range| range.end.saturating_sub(range.start))
                 .unwrap_or(text.len())
+        } else if let Some(offset_map) = offset_map {
+            offset_map.display_len()
         } else {
             total_text_len
         },
+        offset_map: offset_map.cloned(),
         streamed_ascii_monospace_cell_width: hitbox_cell_width,
     };
 
@@ -2207,12 +2428,18 @@ mod tests {
             text_hash: 11,
         };
 
-        let (text, highlights, _highlights_hash, text_hash) =
-            diff_text_paint_payload(Some(&styled), None, Some("a b\t"), true, None);
+        let payload = diff_text_paint_payload(Some(&styled), None, Some("a b\t"), true, None);
 
-        assert_eq!(text.as_ref(), "a·b→↵");
-        assert_eq!(highlights[0].0, 1..7);
-        assert_ne!(text_hash, styled.text_hash);
+        assert_eq!(payload.text.as_ref(), "a·b→↵");
+        assert_eq!(payload.highlights[0].0, 1..7);
+        assert_ne!(payload.text_hash, styled.text_hash);
+
+        let offset_map = payload.offset_map.expect("reveal whitespace offset map");
+        assert_eq!(offset_map.source_offset_for_display(0), 0);
+        assert_eq!(offset_map.source_offset_for_display("a·".len()), 2);
+        assert_eq!(offset_map.source_offset_for_display("a·b→".len()), 7);
+        assert_eq!(offset_map.display_offset_for_source(2), "a·".len());
+        assert_eq!(offset_map.display_offset_for_source(7), "a·b→".len());
     }
 
     #[test]
@@ -2222,12 +2449,12 @@ mod tests {
 
         assert!(should_stream_diff_text(Some(&spec)));
 
-        let (text, highlights, _highlights_hash, text_hash) =
-            diff_text_paint_payload(None, Some(&spec), None, true, None);
+        let payload = diff_text_paint_payload(None, Some(&spec), None, true, None);
 
-        assert!(text.is_empty());
-        assert!(highlights.is_empty());
-        assert_ne!(text_hash, 0);
+        assert!(payload.text.is_empty());
+        assert!(payload.highlights.is_empty());
+        assert_ne!(payload.text_hash, 0);
+        assert!(payload.offset_map.is_none());
     }
 
     #[test]
