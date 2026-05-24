@@ -135,7 +135,6 @@ crossbeam-utils	0.8.21	MIT OR Apache-2.0
 crunchy	0.2.4	MIT
 crypto-common	0.1.7	MIT OR Apache-2.0
 ctor	1.0.6	Apache-2.0 OR MIT
-cty	0.2.2	MIT OR Apache-2.0
 dashmap	6.2.1	MIT
 data-url	0.3.2	MIT OR Apache-2.0
 deflate64	0.1.12	MIT

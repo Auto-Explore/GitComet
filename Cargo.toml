@@ -51,8 +51,7 @@ http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"
 lru = "0.18"
 memchr = "2.8.0"
-mimalloc = { version = "0.1.52", features = ["extended"] }
-libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
+mimalloc = "0.1.52"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
