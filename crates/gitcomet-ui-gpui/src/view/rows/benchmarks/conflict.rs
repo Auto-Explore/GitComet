@@ -922,6 +922,7 @@ pub struct ConflictSearchQueryUpdateFixture {
     stable_cache: ConflictSplitStyledTextCache,
     query_cache: ConflictSplitStyledTextCache,
     query_cache_query: SharedString,
+    query_cache_matcher: Option<crate::view::panes::main::diff_search::DiffSearchMatcher>,
 }
 
 impl ConflictSearchQueryUpdateFixture {
@@ -948,6 +949,7 @@ impl ConflictSearchQueryUpdateFixture {
             stable_cache: ConflictSplitStyledTextCache::with_row_capacity(row_count),
             query_cache: ConflictSplitStyledTextCache::with_row_capacity(row_count),
             query_cache_query: SharedString::default(),
+            query_cache_matcher: None,
         };
         fixture.prewarm_stable_cache();
         fixture
@@ -970,6 +972,7 @@ impl ConflictSearchQueryUpdateFixture {
                 row.old.as_ref(),
                 old_word_ranges,
                 "",
+                None,
                 self.language,
                 self.syntax_mode,
             );
@@ -982,17 +985,26 @@ impl ConflictSearchQueryUpdateFixture {
                 row.new.as_ref(),
                 new_word_ranges,
                 "",
+                None,
                 self.language,
                 self.syntax_mode,
             );
         }
         self.query_cache.clear();
         self.query_cache_query = SharedString::default();
+        self.query_cache_matcher = None;
     }
 
     fn sync_query_cache(&mut self, query: &str) {
+        let query = query.trim();
         if self.query_cache_query.as_ref() != query {
             self.query_cache_query = query.to_string().into();
+            self.query_cache_matcher = (!query.is_empty()).then(|| {
+                crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+                    query,
+                    Default::default(),
+                )
+            });
             self.query_cache.clear();
         }
     }
@@ -1007,6 +1019,7 @@ impl ConflictSearchQueryUpdateFixture {
         text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
+        query_matcher: Option<&crate::view::panes::main::diff_search::DiffSearchMatcher>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
     ) -> Option<ConflictSearchQueryStyledSource> {
@@ -1044,8 +1057,7 @@ impl ConflictSearchQueryUpdateFixture {
                     super::diff_text::build_cached_diff_query_overlay_styled_text(
                         theme,
                         base,
-                        query,
-                        Default::default(),
+                        query_matcher?,
                     )
                 } else {
                     super::diff_text::build_cached_diff_styled_text_with_source_identity(
@@ -1080,6 +1092,7 @@ impl ConflictSearchQueryUpdateFixture {
         let start = start % self.visible_row_indices.len();
         let end = (start + window).min(self.visible_row_indices.len());
         let query = self.query_cache_query.as_ref();
+        let query_matcher = self.query_cache_matcher.as_ref();
 
         let mut h = FxHasher::default();
         for &row_ix in &self.visible_row_indices[start..end] {
@@ -1099,6 +1112,7 @@ impl ConflictSearchQueryUpdateFixture {
                 row.old.as_ref(),
                 old_word_ranges,
                 query,
+                query_matcher,
                 self.language,
                 self.syntax_mode,
             );
@@ -1123,6 +1137,7 @@ impl ConflictSearchQueryUpdateFixture {
                 row.new.as_ref(),
                 new_word_ranges,
                 query,
+                query_matcher,
                 self.language,
                 self.syntax_mode,
             );

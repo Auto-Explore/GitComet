@@ -2392,6 +2392,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
     pub(in crate::view) diff_text_query_cache_options: super::diff_search::DiffSearchOptions,
+    pub(in crate::view) diff_text_query_cache_matcher:
+        Option<super::diff_search::DiffSearchMatcher>,
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,

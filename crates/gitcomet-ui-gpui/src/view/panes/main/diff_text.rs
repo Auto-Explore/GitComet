@@ -176,8 +176,8 @@ impl MainPaneView {
         let source_visible_ix = self
             .diff_source_visible_ix_for_visible_ix(visible_ix)
             .unwrap_or(visible_ix);
-        let text = self.diff_text_full_line_for_region(source_visible_ix, region);
         let range = if let Some(wrap) = self.diff_text_wrap_for_visible_ix(visible_ix) {
+            let text = self.diff_text_full_line_for_region(source_visible_ix, region);
             crate::view::rows::diff_wrap_range_for_text(
                 text.as_ref(),
                 wrap.wrap_columns,
@@ -185,7 +185,7 @@ impl MainPaneView {
             )
             .unwrap_or(0..0)
         } else {
-            0..text.len()
+            0..self.diff_text_line_len_for_region(visible_ix, region)
         };
         (source_visible_ix, range)
     }

@@ -1,7 +1,5 @@
 use super::*;
-use crate::view::panes::main::diff_search::{
-    DiffSearchMatcher, DiffSearchOptions, normalize_diff_search_query,
-};
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
@@ -800,10 +798,8 @@ fn build_cached_diff_styled_text_with_optional_palette(
 pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
     theme: AppTheme,
     base: &CachedDiffStyledText,
-    query: &str,
-    options: DiffSearchOptions,
+    matcher: &DiffSearchMatcher,
 ) -> CachedDiffStyledText {
-    let matcher = DiffSearchMatcher::new(query, options);
     if matcher.is_empty() || matcher.regex_error().is_some() || base.text.is_empty() {
         return base.clone();
     }

@@ -1,7 +1,7 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
-use crate::view::panes::main::diff_search::DiffSearchOptions;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::panes::main::{
     CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
     DiffHorizontalScrollColumn,
@@ -338,6 +338,7 @@ fn streamed_diff_text_spec_with_syntax(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
     query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
@@ -347,6 +348,7 @@ fn streamed_diff_text_spec_with_syntax(
             raw_text,
             query: query.clone(),
             query_options,
+            query_matcher,
             word_ranges: Arc::from(word_ranges),
             word_color,
             syntax,
@@ -358,6 +360,7 @@ fn heuristic_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
     query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -371,6 +374,7 @@ fn heuristic_streamed_diff_text_spec(
         raw_text,
         query,
         query_options,
+        query_matcher,
         word_ranges,
         word_color,
         syntax,
@@ -382,6 +386,7 @@ fn prepared_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
     query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -408,6 +413,7 @@ fn prepared_streamed_diff_text_spec(
         raw_text,
         query,
         query_options,
+        query_matcher,
         word_ranges,
         word_color,
         syntax,
@@ -538,8 +544,11 @@ impl MainPaneView {
             let base = self
                 .diff_text_segments_cache_get(key, syntax_epoch)?
                 .clone();
-            let overlaid =
-                build_cached_diff_query_overlay_styled_text(self.theme, &base, query, options);
+            let overlaid = build_cached_diff_query_overlay_styled_text(
+                self.theme,
+                &base,
+                self.diff_text_query_cache_matcher.as_ref()?,
+            );
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
                 syntax_epoch,
                 query_generation,
@@ -565,6 +574,8 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
@@ -709,6 +720,7 @@ impl MainPaneView {
                                     row.text.clone(),
                                     &query,
                                     query_options,
+                                    query_matcher.clone(),
                                     row_word_ranges.clone(),
                                     word_color,
                                     line_language,
@@ -953,6 +965,7 @@ impl MainPaneView {
                             row.text.clone(),
                             &query,
                             query_options,
+                            query_matcher.clone(),
                             row_word_ranges.clone(),
                             word_color,
                             line_language,
@@ -1145,6 +1158,7 @@ impl MainPaneView {
                             crate::view::diff_utils::diff_content_line_text(&line),
                             &query,
                             query_options,
+                            query_matcher.clone(),
                             word_ranges.to_vec(),
                             diff_line_word_color(visual_kind, theme),
                             language,
@@ -1273,6 +1287,8 @@ impl MainPaneView {
             });
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
@@ -1400,6 +1416,7 @@ impl MainPaneView {
                                             raw_text,
                                             &query,
                                             query_options,
+                                            query_matcher.clone(),
                                             row_word_ranges.clone(),
                                             row_word_color,
                                             language,
@@ -1521,6 +1538,7 @@ impl MainPaneView {
                                 raw_text,
                                 &query,
                                 query_options,
+                                query_matcher.clone(),
                                 row_word_ranges.clone(),
                                 row_word_color,
                                 language,
@@ -1660,6 +1678,7 @@ impl MainPaneView {
                                         raw_text,
                                         &query,
                                         query_options,
+                                        query_matcher.clone(),
                                         word_ranges.clone(),
                                         word_color,
                                         language,

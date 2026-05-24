@@ -9,7 +9,7 @@ use super::diff_text::{
 };
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
-use crate::view::panes::main::diff_search::DiffSearchOptions;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, Window, fill, point, px, size,
@@ -74,6 +74,7 @@ pub(super) struct StreamedDiffTextPaintSpec {
     pub(super) raw_text: gitcomet_core::file_diff::FileDiffLineText,
     pub(super) query: SharedString,
     pub(super) query_options: DiffSearchOptions,
+    pub(super) query_matcher: Option<Arc<DiffSearchMatcher>>,
     pub(super) word_ranges: Arc<[Range<usize>]>,
     pub(super) word_color: Option<gpui::Rgba>,
     pub(super) syntax: StreamedDiffTextSyntaxSource,
@@ -830,19 +831,14 @@ fn build_streamed_diff_slice_styled_text(
         }
     }
 
-    if !spec.query.as_ref().is_empty()
+    if let Some(matcher) = spec.query_matcher.as_deref()
         && should_apply_query_overlay_to_streamed_slice(
             spec.query_options,
             &resolved_slice_range,
             spec.raw_text.len(),
         )
     {
-        base = build_cached_diff_query_overlay_styled_text(
-            theme,
-            &base,
-            spec.query.as_ref(),
-            spec.query_options,
-        );
+        base = build_cached_diff_query_overlay_styled_text(theme, &base, matcher);
     }
 
     (base, pending, resolved_slice_range)
@@ -903,7 +899,6 @@ fn diff_text_paint_payload(
         };
 
         let wrapped;
-        let mut offset_map = offset_map;
         let styled = if let (Some(styled), Some(wrap)) = (styled.as_ref(), wrap) {
             let source_range = source_text_for_wrap
                 .and_then(|text| diff_wrap_range_for_text(text, wrap.wrap_columns, wrap.wrap_ix))
@@ -2404,6 +2399,8 @@ mod tests {
             raw_text: gitcomet_core::file_diff::FileDiffLineText::from(raw_text),
             query: query.to_owned().into(),
             query_options,
+            query_matcher: (!query.is_empty())
+                .then(|| Arc::new(DiffSearchMatcher::new(query, query_options))),
             word_ranges: Arc::from(Vec::<Range<usize>>::new()),
             word_color: None,
             syntax: StreamedDiffTextSyntaxSource::None,

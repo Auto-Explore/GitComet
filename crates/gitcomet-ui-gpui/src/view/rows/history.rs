@@ -7,6 +7,7 @@ use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewDocument,
     MarkdownPreviewRow, MarkdownPreviewRowKind,
 };
+use crate::view::panes::main::diff_search::DiffSearchMatcher;
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use rustc_hash::FxHasher;
 
@@ -20,14 +21,11 @@ struct WorktreePreviewPreparedSyntaxSource {
 fn worktree_preview_apply_query_overlay(
     theme: AppTheme,
     styled: CachedDiffStyledText,
-    query: &str,
-    query_options: super::super::panes::main::diff_search::DiffSearchOptions,
+    query_matcher: Option<&DiffSearchMatcher>,
 ) -> CachedDiffStyledText {
-    if query.is_empty() {
-        return styled;
-    }
-
-    build_cached_diff_query_overlay_styled_text(theme, &styled, query, query_options)
+    query_matcher
+        .map(|matcher| build_cached_diff_query_overlay_styled_text(theme, &styled, matcher))
+        .unwrap_or(styled)
 }
 
 fn worktree_preview_streamed_spec(
@@ -35,6 +33,7 @@ fn worktree_preview_streamed_spec(
     line_ix: usize,
     query: &SharedString,
     query_options: super::super::panes::main::diff_search::DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     language: Option<rows::DiffSyntaxLanguage>,
     syntax_mode: rows::DiffSyntaxMode,
     prepared_syntax_source: Option<&WorktreePreviewPreparedSyntaxSource>,
@@ -60,6 +59,7 @@ fn worktree_preview_streamed_spec(
             raw_text,
             query: query.clone(),
             query_options,
+            query_matcher,
             word_ranges: Arc::from([]),
             word_color: None,
             syntax,
@@ -77,6 +77,8 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_content_width();
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let theme = this.theme;
@@ -139,6 +141,7 @@ impl MainPaneView {
                     ix,
                     &query,
                     query_options,
+                    query_matcher.clone(),
                     language,
                     syntax_mode,
                     prepared_syntax_source.as_ref(),
@@ -171,8 +174,7 @@ impl MainPaneView {
                     let styled = worktree_preview_apply_query_overlay(
                         theme,
                         styled,
-                        query.as_ref(),
-                        query_options,
+                        query_matcher.as_deref(),
                     );
                     if is_pending {
                         this.ensure_prepared_syntax_chunk_poll(cx);
@@ -2208,7 +2210,7 @@ mod tests {
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::history_graph;
     use crate::view::markdown_preview::MarkdownInlineSpan;
-    use crate::view::panes::main::diff_search::DiffSearchOptions;
+    use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gitcomet_core::domain::LogScope;
     use gpui::{FontWeight, SharedString};
@@ -2247,14 +2249,15 @@ mod tests {
             None,
         );
 
+        let case_sensitive_options = DiffSearchOptions {
+            match_case: true,
+            ..Default::default()
+        };
+        let case_sensitive_matcher = DiffSearchMatcher::new("render", case_sensitive_options);
         let case_sensitive = worktree_preview_apply_query_overlay(
             theme,
             base.clone(),
-            "render",
-            DiffSearchOptions {
-                match_case: true,
-                ..Default::default()
-            },
+            Some(&case_sensitive_matcher),
         );
         let case_sensitive_ranges: Vec<_> = case_sensitive
             .highlights
@@ -2263,15 +2266,13 @@ mod tests {
             .collect();
         assert_eq!(case_sensitive_ranges, vec![7..13]);
 
-        let whole_word = worktree_preview_apply_query_overlay(
-            theme,
-            base.clone(),
-            "cat",
-            DiffSearchOptions {
-                whole_word: true,
-                ..Default::default()
-            },
-        );
+        let whole_word_options = DiffSearchOptions {
+            whole_word: true,
+            ..Default::default()
+        };
+        let whole_word_matcher = DiffSearchMatcher::new("cat", whole_word_options);
+        let whole_word =
+            worktree_preview_apply_query_overlay(theme, base.clone(), Some(&whole_word_matcher));
         let whole_word_ranges: Vec<_> = whole_word
             .highlights
             .iter()
@@ -2279,15 +2280,12 @@ mod tests {
             .collect();
         assert_eq!(whole_word_ranges, vec![14..17, 25..28]);
 
-        let regex = worktree_preview_apply_query_overlay(
-            theme,
-            base,
-            r"r.n.e.",
-            DiffSearchOptions {
-                regex: true,
-                ..Default::default()
-            },
-        );
+        let regex_options = DiffSearchOptions {
+            regex: true,
+            ..Default::default()
+        };
+        let regex_matcher = DiffSearchMatcher::new(r"r.n.e.", regex_options);
+        let regex = worktree_preview_apply_query_overlay(theme, base, Some(&regex_matcher));
         let regex_ranges: Vec<_> = regex
             .highlights
             .iter()

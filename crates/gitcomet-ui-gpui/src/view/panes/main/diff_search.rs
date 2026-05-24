@@ -78,6 +78,10 @@ impl DiffSearchMatcher {
             && !self.query.contains('\n')
     }
 
+    fn can_use_single_row_literal_path(&self) -> bool {
+        !self.options.regex && !self.query.contains('\n')
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn is_match(&self, haystack: &str) -> bool {
         self.find_range_at_or_after(haystack, 0).is_some()
@@ -1070,6 +1074,17 @@ fn collect_stream_match_row_offsets<'a>(
     matcher: &DiffSearchMatcher,
     out: &mut Vec<(usize, usize)>,
 ) {
+    if matcher.can_use_single_row_literal_path() {
+        for (visible_ix, row_text) in rows {
+            if let Some(range) =
+                matcher.find_range_at_or_after(normalized_stream_row_text(row_text.as_ref()), 0)
+            {
+                out.push((visible_ix, range.start));
+            }
+        }
+        return;
+    }
+
     let mut text = String::new();
     let mut line_starts = Vec::new();
     let mut visible_indices = Vec::new();
@@ -1121,6 +1136,25 @@ fn collect_split_stream_match_visible_rows<'a>(
     matcher: &DiffSearchMatcher,
     out: &mut Vec<usize>,
 ) {
+    if matcher.can_use_single_row_literal_path() {
+        for (visible_ix, left, right) in rows {
+            let left_matches = left.as_ref().is_some_and(|left| {
+                matcher
+                    .find_range_at_or_after(normalized_stream_row_text(left.as_ref()), 0)
+                    .is_some()
+            });
+            let right_matches = right.as_ref().is_some_and(|right| {
+                matcher
+                    .find_range_at_or_after(normalized_stream_row_text(right.as_ref()), 0)
+                    .is_some()
+            });
+            if left_matches || right_matches {
+                out.push(visible_ix);
+            }
+        }
+        return;
+    }
+
     let mut left_rows = Vec::new();
     let mut right_rows = Vec::new();
 
@@ -2999,6 +3033,84 @@ mod tests {
         );
 
         assert_eq!(matches, vec![10, 12]);
+    }
+
+    #[test]
+    fn diff_search_single_line_literal_stream_collector_avoids_concat_allocations() {
+        let rows = (0..2048)
+            .map(|ix| (ix, format!("row_{ix:04}_alpha_beta_gamma_delta")))
+            .collect::<Vec<_>>();
+        let matcher = DiffSearchMatcher::new(
+            "NEEDLE",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+
+        let (_, materialized_metrics) = measure_allocations(|| {
+            let mut text = String::new();
+            let mut line_starts = Vec::new();
+            let mut visible_indices = Vec::new();
+            for (visible_ix, row_text) in &rows {
+                if !visible_indices.is_empty() {
+                    text.push('\n');
+                }
+                line_starts.push(text.len());
+                visible_indices.push(*visible_ix);
+                text.push_str(row_text);
+            }
+            std::hint::black_box((text.len(), line_starts.len(), visible_indices.len()));
+        });
+
+        let mut matches = Vec::new();
+        let (_, fast_metrics) = measure_allocations(|| {
+            collect_stream_match_visible_rows(
+                rows.iter()
+                    .map(|(visible_ix, text)| (*visible_ix, Cow::Borrowed(text.as_str()))),
+                &matcher,
+                &mut matches,
+            );
+        });
+
+        assert!(matches.is_empty());
+        assert!(
+            fast_metrics.alloc_bytes.saturating_mul(16) < materialized_metrics.alloc_bytes,
+            "single-line literal search should avoid concatenating visible rows: fast={fast_metrics:?} materialized={materialized_metrics:?}"
+        );
+    }
+
+    #[test]
+    fn diff_search_single_line_literal_split_collector_honors_whole_word_boundaries() {
+        let matcher = DiffSearchMatcher::new(
+            "cat",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+
+        collect_split_stream_match_visible_rows(
+            [
+                (
+                    10,
+                    Some(Cow::Borrowed("concatenate")),
+                    Some(Cow::Borrowed("bobcat")),
+                ),
+                (11, Some(Cow::Borrowed("cat")), None),
+                (12, None, Some(Cow::Borrowed("dog cat mouse"))),
+                (
+                    13,
+                    Some(Cow::Borrowed("cat_thing")),
+                    Some(Cow::Borrowed("copycat")),
+                ),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![11, 12]);
     }
 
     #[test]

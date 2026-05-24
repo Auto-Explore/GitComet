@@ -3,7 +3,7 @@ use super::super::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use super::conflict_canvas::{self, ConflictChunkContext};
 use super::diff_text::*;
 use super::*;
-use crate::view::panes::main::diff_search::DiffSearchOptions;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 const CONFLICT_ROW_FONT_SCALE: f32 = 0.80;
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
@@ -722,6 +722,9 @@ impl MainPaneView {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
+        let query_matcher_query = query.trim();
+        let query_matcher = (!query_matcher_query.is_empty())
+            .then(|| DiffSearchMatcher::new(query_matcher_query, query_options));
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
@@ -818,6 +821,7 @@ impl MainPaneView {
                     word_ranges,
                     query,
                     query_options,
+                    query_matcher.as_ref(),
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(document, line_no),
@@ -1462,6 +1466,9 @@ impl MainPaneView {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
+        let query_matcher_query = query.trim();
+        let query_matcher = (!query_matcher_query.is_empty())
+            .then(|| DiffSearchMatcher::new(query_matcher_query, query_options));
         let syntax_lang = this.conflict_row_syntax_language();
         // Streamed conflicts may or may not have prepared side documents; Auto
         // remains the safe fallback when a row is not backed by one.
@@ -1489,6 +1496,7 @@ impl MainPaneView {
                     row,
                     syntax_lang,
                     syntax_mode,
+                    query_matcher.as_ref(),
                     cx,
                 )
             })
@@ -1505,7 +1513,8 @@ impl MainPaneView {
         text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
-        query_options: DiffSearchOptions,
+        _query_options: DiffSearchOptions,
+        query_matcher: Option<&DiffSearchMatcher>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         prepared_line: PreparedDiffSyntaxLine,
@@ -1550,6 +1559,9 @@ impl MainPaneView {
         }
 
         if query_active {
+            let Some(query_matcher) = query_matcher else {
+                return result;
+            };
             if !result.pending
                 && let Some(cached) = query_cache.get(&key)
             {
@@ -1562,7 +1574,7 @@ impl MainPaneView {
                 Some(ConflictRowStyledTextValue::Owned(styled)) => Some(styled),
                 _ => stable_cache.get(&key),
             } {
-                build_cached_diff_query_overlay_styled_text(theme, base, query, query_options)
+                build_cached_diff_query_overlay_styled_text(theme, base, query_matcher)
             } else {
                 let base = build_conflict_cached_diff_styled_text_with_source_identity(
                     theme,
@@ -1574,7 +1586,7 @@ impl MainPaneView {
                     syntax_mode,
                     None,
                 );
-                build_cached_diff_query_overlay_styled_text(theme, &base, query, query_options)
+                build_cached_diff_query_overlay_styled_text(theme, &base, query_matcher)
             };
             if !result.pending {
                 query_cache.insert(key, styled);
@@ -1594,6 +1606,7 @@ impl MainPaneView {
         row: gitcomet_core::file_diff::FileDiffRow,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
+        query_matcher: Option<&DiffSearchMatcher>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -1650,6 +1663,7 @@ impl MainPaneView {
                     old_word_ranges,
                     query,
                     query_options,
+                    query_matcher,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
@@ -1664,6 +1678,7 @@ impl MainPaneView {
                     new_word_ranges,
                     query,
                     query_options,
+                    query_matcher,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line),

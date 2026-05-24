@@ -193,7 +193,25 @@ pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
 }
 
 pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: usize) -> usize {
-    diff_wrap_ranges_for_text(text, wrap_columns).len().max(1)
+    if text.is_empty() {
+        return 1;
+    }
+
+    let mut row_start = 0usize;
+    let mut count = 0usize;
+    let wrap_columns = wrap_columns.max(1);
+    while row_start < text.len() {
+        let Some((_, next_start)) = diff_wrap_next_range_for_text(text, wrap_columns, row_start)
+        else {
+            break;
+        };
+        count += 1;
+        if next_start <= row_start {
+            break;
+        }
+        row_start = next_start;
+    }
+    count.max(1)
 }
 
 pub(in crate::view) fn diff_wrap_range_for_text(
@@ -201,9 +219,25 @@ pub(in crate::view) fn diff_wrap_range_for_text(
     wrap_columns: usize,
     wrap_ix: usize,
 ) -> Option<Range<usize>> {
-    diff_wrap_ranges_for_text(text, wrap_columns)
-        .into_iter()
-        .nth(wrap_ix)
+    if text.is_empty() {
+        return (wrap_ix == 0).then_some(0..0);
+    }
+
+    let mut row_start = 0usize;
+    let mut row_ix = 0usize;
+    let wrap_columns = wrap_columns.max(1);
+    while row_start < text.len() {
+        let (range, next_start) = diff_wrap_next_range_for_text(text, wrap_columns, row_start)?;
+        if row_ix == wrap_ix {
+            return Some(range);
+        }
+        if next_start <= row_start {
+            break;
+        }
+        row_start = next_start;
+        row_ix += 1;
+    }
+    None
 }
 
 pub(in crate::view) fn slice_cached_diff_styled_text(
@@ -240,87 +274,100 @@ pub(in crate::view) fn slice_cached_diff_styled_text(
     }
 }
 
+#[cfg(test)]
 fn diff_wrap_ranges_for_text(text: &str, wrap_columns: usize) -> Vec<Range<usize>> {
     if text.is_empty() {
         return std::iter::once(0..0).collect();
     }
 
     let wrap_columns = wrap_columns.max(1);
-    let chars = text
-        .char_indices()
-        .map(|(start, ch)| {
-            let end = start + ch.len_utf8();
-            let width = if ch == '\t' { None } else { Some(1) };
-            (start, end, ch, width)
-        })
-        .collect::<Vec<_>>();
     let mut ranges = Vec::new();
-    let mut row_start_ix = 0usize;
+    let mut row_start = 0usize;
 
-    while row_start_ix < chars.len() {
-        let mut end_ix = row_start_ix;
-        let mut column = 0usize;
-        let mut last_break_ix = None;
-        let mut forced_newline = false;
-
-        while end_ix < chars.len() {
-            let (_, _, ch, width) = chars[end_ix];
-            let width = width.unwrap_or_else(|| {
-                let rem = column % DIFF_WRAP_TAB_STOP_COLUMNS;
-                if rem == 0 {
-                    DIFF_WRAP_TAB_STOP_COLUMNS
-                } else {
-                    DIFF_WRAP_TAB_STOP_COLUMNS - rem
-                }
-            });
-            if column > 0 && column + width > wrap_columns {
-                break;
-            }
-
-            column += width;
-            end_ix += 1;
-            if ch.is_whitespace() {
-                last_break_ix = Some(end_ix);
-            }
-            if ch == '\n' {
-                forced_newline = true;
-                break;
-            }
-            if column >= wrap_columns {
-                break;
-            }
-        }
-
-        if end_ix >= chars.len() {
-            ranges.push(chars[row_start_ix].0..text.len());
+    while row_start < text.len() {
+        let Some((range, next_start)) =
+            diff_wrap_next_range_for_text(text, wrap_columns, row_start)
+        else {
+            break;
+        };
+        ranges.push(range);
+        if next_start <= row_start {
             break;
         }
-
-        let break_ix = if forced_newline {
-            end_ix
-        } else {
-            last_break_ix
-                .filter(|ix| *ix > row_start_ix)
-                .unwrap_or_else(|| end_ix.max(row_start_ix + 1))
-        };
-        let start = chars[row_start_ix].0;
-        let end = if break_ix >= chars.len() {
-            text.len()
-        } else {
-            chars[break_ix - 1].1
-        };
-        if start < end {
-            ranges.push(start..end);
-        } else if let Some((_, end, _, _)) = chars.get(row_start_ix).copied() {
-            ranges.push(start..end);
-        }
-        row_start_ix = break_ix.max(row_start_ix + 1);
+        row_start = next_start;
     }
 
     if ranges.is_empty() {
         ranges.push(0..0);
     }
     ranges
+}
+
+fn diff_wrap_next_range_for_text(
+    text: &str,
+    wrap_columns: usize,
+    row_start: usize,
+) -> Option<(Range<usize>, usize)> {
+    if row_start >= text.len() || !text.is_char_boundary(row_start) {
+        return None;
+    }
+
+    let mut end = row_start;
+    let mut column = 0usize;
+    let mut last_break = None;
+    let mut forced_newline = false;
+    let mut saw_char = false;
+
+    for (rel_start, ch) in text[row_start..].char_indices() {
+        let start = row_start + rel_start;
+        let char_end = start + ch.len_utf8();
+        let width = if ch == '\t' {
+            let rem = column % DIFF_WRAP_TAB_STOP_COLUMNS;
+            if rem == 0 {
+                DIFF_WRAP_TAB_STOP_COLUMNS
+            } else {
+                DIFF_WRAP_TAB_STOP_COLUMNS - rem
+            }
+        } else {
+            1
+        };
+        if column > 0 && column + width > wrap_columns {
+            break;
+        }
+
+        saw_char = true;
+        column += width;
+        end = char_end;
+        if ch.is_whitespace() {
+            last_break = Some(char_end);
+        }
+        if ch == '\n' {
+            forced_newline = true;
+            break;
+        }
+        if column >= wrap_columns {
+            break;
+        }
+    }
+
+    if !saw_char {
+        return None;
+    }
+
+    let next_start = if end >= text.len() || forced_newline {
+        end
+    } else {
+        last_break
+            .filter(|break_ix| *break_ix > row_start)
+            .unwrap_or(end)
+    };
+    let next_start = if next_start > row_start {
+        next_start
+    } else {
+        row_start + text[row_start..].chars().next()?.len_utf8()
+    };
+
+    Some((row_start..next_start, next_start))
 }
 
 fn clamp_to_char_boundary(text: &str, mut ix: usize) -> usize {
@@ -854,6 +901,16 @@ pub(in crate::view) struct PreparedDiffSyntaxLine {
 mod tests {
     use super::*;
 
+    fn query_overlay_for_test(
+        theme: AppTheme,
+        base: &CachedDiffStyledText,
+        query: &str,
+        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+    ) -> CachedDiffStyledText {
+        let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(query, options);
+        build_cached_diff_query_overlay_styled_text(theme, base, &matcher)
+    }
+
     fn test_line_starts(text: &str) -> Arc<[usize]> {
         let mut line_starts = Vec::with_capacity(
             text.as_bytes()
@@ -992,6 +1049,20 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(rows, ["abcde", "fghij", "kl"]);
+    }
+
+    #[test]
+    fn diff_wrap_range_matches_full_range_builder() {
+        let text = "alpha beta γamma\nnext\trow";
+        let ranges = diff_wrap_ranges_for_text(text, 9);
+
+        for (wrap_ix, range) in ranges.iter().cloned().enumerate() {
+            assert!(text.is_char_boundary(range.start));
+            assert!(text.is_char_boundary(range.end));
+            assert_eq!(diff_wrap_range_for_text(text, 9, wrap_ix), Some(range));
+        }
+        assert_eq!(diff_wrap_row_count_for_text(text, 9), ranges.len());
+        assert_eq!(diff_wrap_range_for_text(text, 9, ranges.len()), None);
     }
 
     #[test]
@@ -2426,13 +2497,11 @@ mod tests {
             text_hash,
         };
 
-        let empty_query =
-            build_cached_diff_query_overlay_styled_text(theme, &base, "", Default::default());
+        let empty_query = query_overlay_for_test(theme, &base, "", Default::default());
         assert!(Arc::ptr_eq(&empty_query.highlights, &base.highlights));
         assert_eq!(empty_query.highlights_hash, base.highlights_hash);
 
-        let missing_query =
-            build_cached_diff_query_overlay_styled_text(theme, &base, "xyz", Default::default());
+        let missing_query = query_overlay_for_test(theme, &base, "xyz", Default::default());
         assert!(Arc::ptr_eq(&missing_query.highlights, &base.highlights));
         assert_eq!(missing_query.highlights_hash, base.highlights_hash);
     }
@@ -2455,8 +2524,7 @@ mod tests {
             text_hash,
         };
 
-        let overlaid =
-            build_cached_diff_query_overlay_styled_text(theme, &base, "cd", Default::default());
+        let overlaid = query_overlay_for_test(theme, &base, "cd", Default::default());
         assert_eq!(overlaid.highlights.len(), 3);
         assert_eq!(overlaid.highlights[1].0, 2..4);
         assert_eq!(
@@ -2480,7 +2548,7 @@ mod tests {
             None,
         );
 
-        let case_sensitive = build_cached_diff_query_overlay_styled_text(
+        let case_sensitive = query_overlay_for_test(
             theme,
             &base,
             "render",
@@ -2496,7 +2564,7 @@ mod tests {
             .collect();
         assert_eq!(case_sensitive_ranges, vec![7..13]);
 
-        let whole_word = build_cached_diff_query_overlay_styled_text(
+        let whole_word = query_overlay_for_test(
             theme,
             &base,
             "cat",
@@ -2512,7 +2580,7 @@ mod tests {
             .collect();
         assert_eq!(whole_word_ranges, vec![14..17, 25..28]);
 
-        let regex = build_cached_diff_query_overlay_styled_text(
+        let regex = query_overlay_for_test(
             theme,
             &base,
             r"r.n.e.",
@@ -2535,23 +2603,13 @@ mod tests {
 
         let first_base =
             build_cached_diff_styled_text(theme, "foo", &[], "", None, DiffSyntaxMode::Auto, None);
-        let first = build_cached_diff_query_overlay_styled_text(
-            theme,
-            &first_base,
-            "foo\nbar",
-            Default::default(),
-        );
+        let first = query_overlay_for_test(theme, &first_base, "foo\nbar", Default::default());
         assert!(Arc::ptr_eq(&first.highlights, &first_base.highlights));
         assert_eq!(first.highlights_hash, first_base.highlights_hash);
 
         let second_base =
             build_cached_diff_styled_text(theme, "bar", &[], "", None, DiffSyntaxMode::Auto, None);
-        let second = build_cached_diff_query_overlay_styled_text(
-            theme,
-            &second_base,
-            "foo\nbar",
-            Default::default(),
-        );
+        let second = query_overlay_for_test(theme, &second_base, "foo\nbar", Default::default());
         assert!(Arc::ptr_eq(&second.highlights, &second_base.highlights));
         assert_eq!(second.highlights_hash, second_base.highlights_hash);
     }
@@ -2578,8 +2636,7 @@ mod tests {
             text_hash,
         };
 
-        let overlaid =
-            build_cached_diff_query_overlay_styled_text(theme, &base, "cdefg", Default::default());
+        let overlaid = query_overlay_for_test(theme, &base, "cdefg", Default::default());
         assert_eq!(overlaid.highlights.len(), 5);
 
         assert_eq!(overlaid.highlights[0], (1..2, left));
@@ -2609,5 +2666,51 @@ mod tests {
         );
         assert!(overlaid.highlights[3].1.background_color.is_some());
         assert_eq!(overlaid.highlights[4], (7..8, right));
+    }
+
+    #[test]
+    fn query_overlay_reuses_prebuilt_regex_matcher_for_multiple_rows() {
+        let theme = AppTheme::gitcomet_dark();
+        let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+            r"r.n.e.",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        let first_base = build_cached_diff_styled_text(
+            theme,
+            "Render first",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+        let second_base = build_cached_diff_styled_text(
+            theme,
+            "render second",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+
+        let first = build_cached_diff_query_overlay_styled_text(theme, &first_base, &matcher);
+        let second = build_cached_diff_query_overlay_styled_text(theme, &second_base, &matcher);
+
+        let first_ranges: Vec<_> = first
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        let second_ranges: Vec<_> = second
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(first_ranges, vec![0..6]);
+        assert_eq!(second_ranges, vec![0..6]);
     }
 }

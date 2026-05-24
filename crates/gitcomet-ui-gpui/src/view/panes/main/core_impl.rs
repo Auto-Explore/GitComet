@@ -1096,6 +1096,7 @@ impl MainPaneView {
             diff_text_query_segments_cache: Vec::new(),
             diff_text_query_cache_query: SharedString::default(),
             diff_text_query_cache_options: Default::default(),
+            diff_text_query_cache_matcher: None,
             diff_text_query_cache_generation: 0,
             diff_selection_anchor: None,
             diff_selection_range: None,
@@ -1819,6 +1820,7 @@ impl MainPaneView {
         self.diff_text_query_segments_cache.clear();
         self.diff_text_query_cache_query = SharedString::default();
         self.diff_text_query_cache_options = Default::default();
+        self.diff_text_query_cache_matcher = None;
         self.diff_text_query_cache_generation =
             self.diff_text_query_cache_generation.wrapping_add(1);
     }
@@ -1833,6 +1835,8 @@ impl MainPaneView {
         {
             self.diff_text_query_cache_query = query.to_string().into();
             self.diff_text_query_cache_options = options;
+            self.diff_text_query_cache_matcher = (!query.is_empty())
+                .then(|| super::diff_search::DiffSearchMatcher::new(query, options));
             self.diff_text_query_cache_generation =
                 self.diff_text_query_cache_generation.wrapping_add(1);
         }
