@@ -244,6 +244,35 @@ fn next_char_boundary_after(s: &str, ix: usize) -> Option<usize> {
     Some(ix + s[ix..].chars().next()?.len_utf8())
 }
 
+fn diff_word_wrap_line_starts(text: &str) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(text.len().saturating_div(64).saturating_add(1));
+    starts.push(0);
+    for (ix, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            starts.push(ix + 1);
+        }
+    }
+    starts
+}
+
+fn diff_word_wrap_line_range(
+    text: &str,
+    line_starts: &[usize],
+    line_ix: usize,
+    include_newline: bool,
+) -> Option<Range<usize>> {
+    let start = (*line_starts.get(line_ix)?).min(text.len());
+    let mut end = line_starts
+        .get(line_ix.saturating_add(1))
+        .copied()
+        .unwrap_or(text.len())
+        .min(text.len());
+    if !include_newline && end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
+        end -= 1;
+    }
+    Some(start..end)
+}
+
 #[derive(Clone, Copy)]
 pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
     bytes: &'a [u8],
@@ -1423,12 +1452,36 @@ impl MainPaneView {
             if self.diff_view == DiffViewMode::Inline
                 && !self.is_file_diff_view_active()
                 && !self.is_collapsed_diff_projection_active()
+                && !self.diff_word_wrap
                 && self.diff_search_scan_inline_patch_diff_with_needle(query)
             {
                 return;
             }
 
             let total = self.diff_visible_len();
+            if self.diff_word_wrap {
+                for visible_ix in 0..total {
+                    match self.diff_view {
+                        DiffViewMode::Inline => {
+                            let text =
+                                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                            if query.is_match(text.as_ref()) {
+                                self.diff_search_matches.push(visible_ix);
+                            }
+                        }
+                        DiffViewMode::Split => {
+                            let left = self
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                            let right = self
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                            if query.is_match(left.as_ref()) || query.is_match(right.as_ref()) {
+                                self.diff_search_matches.push(visible_ix);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
                 for visible_ix in 0..total {
                     if self
@@ -1521,12 +1574,57 @@ impl MainPaneView {
         if self.diff_view == DiffViewMode::Inline
             && !self.is_file_diff_view_active()
             && !self.is_collapsed_diff_projection_active()
+            && !self.diff_word_wrap
             && self.diff_search_scan_inline_patch_diff_general(matcher)
         {
             return;
         }
 
         let total = self.diff_visible_len();
+        if self.diff_word_wrap {
+            match self.diff_view {
+                DiffViewMode::Inline => {
+                    let rows: Vec<_> = (0..total)
+                        .map(|visible_ix| {
+                            let text =
+                                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                            (visible_ix, Cow::Owned(text.as_ref().to_string()))
+                        })
+                        .collect();
+                    collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+                }
+                DiffViewMode::Split => {
+                    let left_rows: Vec<_> = (0..total)
+                        .map(|visible_ix| {
+                            let text = self
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                            (visible_ix, Cow::Owned(text.as_ref().to_string()))
+                        })
+                        .collect();
+                    collect_stream_match_visible_rows(
+                        left_rows,
+                        matcher,
+                        &mut self.diff_search_matches,
+                    );
+
+                    let right_rows: Vec<_> = (0..total)
+                        .map(|visible_ix| {
+                            let text = self
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                            (visible_ix, Cow::Owned(text.as_ref().to_string()))
+                        })
+                        .collect();
+                    collect_stream_match_visible_rows(
+                        right_rows,
+                        matcher,
+                        &mut self.diff_search_matches,
+                    );
+                }
+            }
+            self.diff_search_matches.sort_unstable();
+            self.diff_search_matches.dedup();
+            return;
+        }
         if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
             let rows: Vec<_> = (0..total)
                 .filter_map(|visible_ix| {
@@ -1750,6 +1848,11 @@ impl MainPaneView {
         if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Split {
             return false;
         }
+        if self.diff_word_wrap {
+            let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+            let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+            return query.is_match(left.as_ref()) || query.is_match(right.as_ref());
+        }
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
             return false;
         };
@@ -1775,6 +1878,12 @@ impl MainPaneView {
         if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Inline {
             return false;
         }
+        if self.diff_word_wrap {
+            return query.is_match(
+                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+                    .as_ref(),
+            );
+        }
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
             return false;
         };
@@ -1796,6 +1905,7 @@ impl MainPaneView {
             || self.diff_view != DiffViewMode::Inline
             || self.is_file_diff_view_active()
             || self.is_collapsed_diff_projection_active()
+            || self.diff_word_wrap
         {
             return false;
         }
@@ -1868,6 +1978,12 @@ impl MainPaneView {
 
         match self.diff_view {
             DiffViewMode::Inline => {
+                if self.diff_word_wrap {
+                    return query.is_match(
+                        self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+                            .as_ref(),
+                    );
+                }
                 if self.is_file_diff_view_active() {
                     return self
                         .diff_search_file_diff_inline_visible_row_matches_query(query, visible_ix);
@@ -1878,6 +1994,13 @@ impl MainPaneView {
                 )
             }
             DiffViewMode::Split => {
+                if self.diff_word_wrap {
+                    let left =
+                        self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                    let right =
+                        self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                    return query.is_match(left.as_ref()) || query.is_match(right.as_ref());
+                }
                 if self.is_file_diff_view_active() {
                     let mut expanded_tabs = String::new();
                     return self.diff_search_file_diff_split_visible_row_matches_query(
@@ -1900,6 +2023,145 @@ impl MainPaneView {
         }
         self.diff_search_match_ix
             .map(|ix| self.diff_search_matches[ix.min(len - 1)])
+    }
+
+    fn diff_word_wrap_input_line_ix_for_visible_ix(&self, visible_ix: usize) -> Option<usize> {
+        if self.is_file_diff_view_active() && self.diff_view == DiffViewMode::Split {
+            let row_ix = self.diff_mapped_ix_for_visible_ix(visible_ix)?;
+            let row = self.file_diff_split_row(row_ix)?;
+            let old_inline = row
+                .old_line
+                .and_then(|line| line.checked_sub(1))
+                .and_then(|line| {
+                    self.file_diff_old_line_to_inline_row
+                        .get(line as usize)
+                        .copied()
+                        .flatten()
+                });
+            let new_inline = row
+                .new_line
+                .and_then(|line| line.checked_sub(1))
+                .and_then(|line| {
+                    self.file_diff_new_line_to_inline_row
+                        .get(line as usize)
+                        .copied()
+                        .flatten()
+                });
+            return match row.kind {
+                gitcomet_core::file_diff::FileDiffRowKind::Add
+                | gitcomet_core::file_diff::FileDiffRowKind::Modify => new_inline.or(old_inline),
+                gitcomet_core::file_diff::FileDiffRowKind::Remove => old_inline.or(new_inline),
+                gitcomet_core::file_diff::FileDiffRowKind::Context => new_inline.or(old_inline),
+            };
+        }
+
+        (self.diff_view == DiffViewMode::Inline).then_some(())?;
+        self.diff_mapped_ix_for_visible_ix(visible_ix)
+    }
+
+    fn diff_word_wrap_visible_range_in_text(
+        &self,
+        text: &str,
+        line_starts: &[usize],
+        visible_start: usize,
+        visible_end: usize,
+    ) -> Option<Range<usize>> {
+        let start_line =
+            self.diff_word_wrap_input_line_ix_for_visible_ix(visible_start.min(visible_end))?;
+        let end_line =
+            self.diff_word_wrap_input_line_ix_for_visible_ix(visible_start.max(visible_end))?;
+        let start = diff_word_wrap_line_range(text, line_starts, start_line, false)?.start;
+        let end = diff_word_wrap_line_range(text, line_starts, end_line, false)?.end;
+        Some(start.min(end)..start.max(end))
+    }
+
+    fn diff_word_wrap_selection_range_in_text(
+        &self,
+        text: &str,
+        line_starts: &[usize],
+    ) -> Option<Range<usize>> {
+        self.diff_selection_range
+            .or_else(|| {
+                self.diff_search_current_match_visible_ix()
+                    .map(|ix| (ix, ix))
+            })
+            .and_then(|(start, end)| {
+                self.diff_word_wrap_visible_range_in_text(text, line_starts, start, end)
+            })
+    }
+
+    fn diff_word_wrap_query_highlights(
+        &mut self,
+        theme: AppTheme,
+        text: &str,
+        line_starts: &[usize],
+    ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+        let matcher = self.diff_search_current_matcher();
+        if !self.diff_search_active
+            || matcher.is_empty()
+            || matcher.regex_error().is_some()
+            || self.diff_search_matches.is_empty()
+        {
+            return Vec::new();
+        }
+
+        let query_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
+        let mut highlights = Vec::new();
+        let mut row_ranges = Vec::new();
+        for &visible_ix in &self.diff_search_matches {
+            let Some(line_ix) = self.diff_word_wrap_input_line_ix_for_visible_ix(visible_ix) else {
+                continue;
+            };
+            let Some(line_range) = diff_word_wrap_line_range(text, line_starts, line_ix, false)
+            else {
+                continue;
+            };
+            let Some(line_text) = text.get(line_range.clone()) else {
+                continue;
+            };
+
+            matcher.find_row_overlay_ranges_into(line_text, &mut row_ranges, 64);
+            highlights.extend(row_ranges.iter().cloned().map(|range| {
+                (
+                    line_range.start.saturating_add(range.start)
+                        ..line_range.start.saturating_add(range.end),
+                    gpui::HighlightStyle {
+                        background_color: Some(query_bg),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )
+            }));
+        }
+        highlights
+    }
+
+    pub(in crate::view) fn update_diff_word_wrap_input(
+        &mut self,
+        theme: AppTheme,
+        text: SharedString,
+        scroll_handle: gpui::ScrollHandle,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let line_starts = diff_word_wrap_line_starts(text.as_ref());
+        let highlights =
+            self.diff_word_wrap_query_highlights(theme, text.as_ref(), line_starts.as_slice());
+        let selection_range =
+            self.diff_word_wrap_selection_range_in_text(text.as_ref(), line_starts.as_slice());
+
+        self.diff_raw_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_soft_wrap(true, cx);
+            input.set_vertical_scroll_handle(Some(scroll_handle));
+            if input.text() != text.as_ref() {
+                input.set_text(text.clone(), cx);
+            }
+            input.set_highlights(highlights, cx);
+            if let Some(range) = selection_range {
+                input.set_selected_range(range, true, cx);
+            }
+            input.set_read_only(true, cx);
+        });
     }
 
     fn diff_search_finalize_matches(&mut self, mode: DiffSearchFinalizeMode) {

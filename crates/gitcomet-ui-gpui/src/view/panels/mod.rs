@@ -68,6 +68,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffWordWrap {
         enabled: bool,
     },
+    SetDiffShowLineNumbers {
+        enabled: bool,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

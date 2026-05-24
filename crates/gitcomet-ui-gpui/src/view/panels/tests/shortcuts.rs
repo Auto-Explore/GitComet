@@ -380,12 +380,12 @@ fn set_diff_text_selection_on_row(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
-                    visible_ix,
+                    source_visible_ix: visible_ix,
                     region: DiffTextRegion::Inline,
                     offset: 0,
                 });
                 pane.diff_text_head = Some(DiffTextPos {
-                    visible_ix,
+                    source_visible_ix: visible_ix,
                     region: DiffTextRegion::Inline,
                     offset: 1,
                 });

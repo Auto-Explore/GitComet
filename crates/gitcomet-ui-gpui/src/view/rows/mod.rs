@@ -368,6 +368,7 @@ pub(in crate::view) use diff_text::{
     DiffSyntaxMode, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, PrepareDiffSyntaxDocumentResult,
     PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
+    diff_wrap_range_for_text, diff_wrap_row_count_for_text,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds,
@@ -377,13 +378,18 @@ pub(in crate::view) use diff_text::{
     prepare_diff_syntax_document_with_budget_reuse_text,
     prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,
-    resolved_output_line_text, syntax_highlights_for_line, whitespace_visible_multiline_text,
+    resolved_output_line_text, syntax_highlights_for_line,
 };
 
-pub(in crate::view) use self::diff_canvas::is_streamable_diff_text;
 #[cfg(test)]
 pub(in crate::view) use self::diff_canvas::{
     DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,
+};
+pub(in crate::view) use self::diff_canvas::{
+    DiffTextWrapSlice, diff_inline_text_start as diff_canvas_inline_text_start,
+    diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
+    diff_single_column_text_start as diff_canvas_single_column_text_start,
+    diff_text_wrap_char_width as diff_canvas_text_wrap_char_width, is_streamable_diff_text,
 };
 
 #[cfg(test)]

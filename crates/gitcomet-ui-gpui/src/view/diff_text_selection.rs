@@ -160,11 +160,10 @@ impl Element for DiffTextSelectionOverlay {
     ) {
         use std::hash::{Hash, Hasher};
 
-        let selection = self.view.read(cx).diff_text_local_selection_range(
-            self.visible_ix,
-            self.region,
-            self.text.len(),
-        );
+        let selection = self
+            .view
+            .read(cx)
+            .diff_text_local_selection_range(self.visible_ix, self.region);
 
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -221,9 +220,15 @@ impl Element for DiffTextSelectionOverlay {
             ));
         }
 
+        let (source_visible_ix, visual_range) = self
+            .view
+            .read(cx)
+            .diff_text_visual_source_range_for_region(self.visible_ix, self.region);
         let hitbox = DiffTextHitbox {
             bounds,
             layout_key,
+            source_visible_ix,
+            text_start_offset: visual_range.start,
             text_len: self.text.len(),
             streamed_ascii_monospace_cell_width: None,
         };

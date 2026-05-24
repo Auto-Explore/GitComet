@@ -119,6 +119,7 @@ pub(in super::super) struct PopoverHost {
     diff_whitespace_mode: DiffWhitespaceMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
+    diff_show_line_numbers: bool,
     _ui_model_subscription: gpui::Subscription,
     _clone_repo_url_input_subscription: gpui::Subscription,
     _clone_repo_parent_dir_input_subscription: gpui::Subscription,
@@ -552,6 +553,7 @@ impl PopoverHost {
         diff_whitespace_mode: DiffWhitespaceMode,
         diff_reveal_whitespace_chars: bool,
         diff_word_wrap: bool,
+        diff_show_line_numbers: bool,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
@@ -985,6 +987,7 @@ impl PopoverHost {
             diff_whitespace_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_show_line_numbers,
             _ui_model_subscription: subscription,
             _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
             _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
@@ -2051,6 +2054,21 @@ impl PopoverHost {
         }
 
         self.diff_word_wrap = next;
+        if matches!(self.popover, Some(PopoverKind::DiffActionMenu)) {
+            cx.notify();
+        }
+    }
+
+    pub(in super::super) fn sync_diff_show_line_numbers(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_show_line_numbers == next {
+            return;
+        }
+
+        self.diff_show_line_numbers = next;
         if matches!(self.popover, Some(PopoverKind::DiffActionMenu)) {
             cx.notify();
         }

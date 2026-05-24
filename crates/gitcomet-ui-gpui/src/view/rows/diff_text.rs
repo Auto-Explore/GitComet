@@ -145,12 +145,14 @@ pub(in crate::view) fn whitespace_visible_line_text_and_highlights(
     whitespace_visible_text_and_highlights_impl(text, highlights, true)
 }
 
-pub(in crate::view) fn whitespace_visible_line_styled_text(
+pub(in crate::view) fn whitespace_visible_styled_text(
     styled: &CachedDiffStyledText,
+    append_eol_marker: bool,
 ) -> CachedDiffStyledText {
-    let (text, highlights) = whitespace_visible_line_text_and_highlights(
+    let (text, highlights) = whitespace_visible_text_and_highlights_impl(
         styled.text.as_ref(),
         styled.highlights.as_ref(),
+        append_eol_marker,
     );
     let text_hash = hash_text_content(text.as_ref());
     let highlights_hash = hash_visible_highlights(&highlights);
@@ -160,6 +162,12 @@ pub(in crate::view) fn whitespace_visible_line_styled_text(
         highlights_hash,
         text_hash,
     }
+}
+
+pub(in crate::view) fn whitespace_visible_line_styled_text(
+    styled: &CachedDiffStyledText,
+) -> CachedDiffStyledText {
+    whitespace_visible_styled_text(styled, true)
 }
 
 pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
@@ -181,6 +189,144 @@ pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
     }
 
     whitespace_visible_line_styled_text(styled)
+}
+
+pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: usize) -> usize {
+    diff_wrap_ranges_for_text(text, wrap_columns).len().max(1)
+}
+
+pub(in crate::view) fn diff_wrap_range_for_text(
+    text: &str,
+    wrap_columns: usize,
+    wrap_ix: usize,
+) -> Option<Range<usize>> {
+    diff_wrap_ranges_for_text(text, wrap_columns)
+        .into_iter()
+        .nth(wrap_ix)
+}
+
+pub(in crate::view) fn slice_cached_diff_styled_text(
+    styled: &CachedDiffStyledText,
+    range: Range<usize>,
+) -> CachedDiffStyledText {
+    let start = clamp_to_char_boundary(styled.text.as_ref(), range.start.min(styled.text.len()));
+    let end = clamp_to_char_boundary(styled.text.as_ref(), range.end.min(styled.text.len()));
+    if start >= end {
+        return CachedDiffStyledText {
+            text: SharedString::default(),
+            highlights: Arc::from(Vec::new()),
+            highlights_hash: 0,
+            text_hash: hash_text_content(""),
+        };
+    }
+
+    let text: SharedString = styled.text.as_ref()[start..end].to_string().into();
+    let mut highlights = Vec::new();
+    for (range, style) in styled.highlights.as_ref() {
+        let clipped_start = range.start.max(start);
+        let clipped_end = range.end.min(end);
+        if clipped_start < clipped_end {
+            highlights.push((clipped_start - start..clipped_end - start, *style));
+        }
+    }
+    let text_hash = hash_text_content(text.as_ref());
+    let highlights_hash = hash_visible_highlights(&highlights);
+    CachedDiffStyledText {
+        text,
+        highlights: Arc::from(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+fn diff_wrap_ranges_for_text(text: &str, wrap_columns: usize) -> Vec<Range<usize>> {
+    if text.is_empty() {
+        return vec![0..0];
+    }
+
+    let wrap_columns = wrap_columns.max(1);
+    let chars = text
+        .char_indices()
+        .map(|(start, ch)| {
+            let end = start + ch.len_utf8();
+            let width = if ch == '\t' { None } else { Some(1) };
+            (start, end, ch, width)
+        })
+        .collect::<Vec<_>>();
+    let mut ranges = Vec::new();
+    let mut row_start_ix = 0usize;
+
+    while row_start_ix < chars.len() {
+        let mut end_ix = row_start_ix;
+        let mut column = 0usize;
+        let mut last_break_ix = None;
+        let mut forced_newline = false;
+
+        while end_ix < chars.len() {
+            let (_, _, ch, width) = chars[end_ix];
+            let width = width.unwrap_or_else(|| {
+                let rem = column % DIFF_WRAP_TAB_STOP_COLUMNS;
+                if rem == 0 {
+                    DIFF_WRAP_TAB_STOP_COLUMNS
+                } else {
+                    DIFF_WRAP_TAB_STOP_COLUMNS - rem
+                }
+            });
+            if column > 0 && column + width > wrap_columns {
+                break;
+            }
+
+            column += width;
+            end_ix += 1;
+            if ch.is_whitespace() {
+                last_break_ix = Some(end_ix);
+            }
+            if ch == '\n' {
+                forced_newline = true;
+                break;
+            }
+            if column >= wrap_columns {
+                break;
+            }
+        }
+
+        if end_ix >= chars.len() {
+            ranges.push(chars[row_start_ix].0..text.len());
+            break;
+        }
+
+        let break_ix = if forced_newline {
+            end_ix
+        } else {
+            last_break_ix
+                .filter(|ix| *ix > row_start_ix)
+                .unwrap_or_else(|| end_ix.max(row_start_ix + 1))
+        };
+        let start = chars[row_start_ix].0;
+        let end = if break_ix >= chars.len() {
+            text.len()
+        } else {
+            chars[break_ix - 1].1
+        };
+        if start < end {
+            ranges.push(start..end);
+        } else if let Some((_, end, _, _)) = chars.get(row_start_ix).copied() {
+            ranges.push(start..end);
+        }
+        row_start_ix = break_ix.max(row_start_ix + 1);
+    }
+
+    if ranges.is_empty() {
+        ranges.push(0..0);
+    }
+    ranges
+}
+
+fn clamp_to_char_boundary(text: &str, mut ix: usize) -> usize {
+    while ix > 0 && !text.is_char_boundary(ix) {
+        ix -= 1;
+    }
+    ix
 }
 
 fn expanded_highlights_to_raw_text(
@@ -327,6 +473,7 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 43] = [
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
 const PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 32_768;
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
+const DIFF_WRAP_TAB_STOP_COLUMNS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DiffTextSourceIdentity {
@@ -808,6 +955,42 @@ mod tests {
         assert_eq!(visible.text.as_ref(), "x·y↵");
         assert_eq!(visible.highlights[0].0, 1..4);
         assert_ne!(visible.text_hash, styled.text_hash);
+    }
+
+    #[test]
+    fn whitespace_visible_styled_text_can_omit_synthetic_eol_marker() {
+        let styled = CachedDiffStyledText {
+            text: "x y".into(),
+            highlights: Arc::from(Vec::<(Range<usize>, gpui::HighlightStyle)>::new()),
+            highlights_hash: 0,
+            text_hash: 11,
+        };
+
+        let visible = whitespace_visible_styled_text(&styled, false);
+
+        assert_eq!(visible.text.as_ref(), "x·y");
+    }
+
+    #[test]
+    fn diff_wrap_ranges_prefer_word_boundaries() {
+        let text = "alpha beta gamma";
+        let rows = diff_wrap_ranges_for_text(text, 9)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["alpha ", "beta ", "gamma"]);
+    }
+
+    #[test]
+    fn diff_wrap_ranges_hard_break_long_words() {
+        let text = "abcdefghijkl";
+        let rows = diff_wrap_ranges_for_text(text, 5)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["abcde", "fghij", "kl"]);
     }
 
     #[test]

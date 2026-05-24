@@ -159,11 +159,42 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        if self.highlight.provider.is_none()
+            && self.highlight.highlights.as_slice() == highlights.as_slice()
+        {
+            return;
+        }
         self.highlight.highlights = Arc::new(highlights);
         self.highlight.provider = None;
         self.highlight.provider_binding_key = None;
         self.highlight.provider_poll_task.take();
         self.invalidate_highlights(false);
+        cx.notify();
+    }
+
+    pub fn set_selected_range(
+        &mut self,
+        range: Range<usize>,
+        autoscroll: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let start = self.clamp_to_char_boundary(range.start.min(range.end));
+        let end = self.clamp_to_char_boundary(range.start.max(range.end));
+        let next = start..end;
+        if self.selection.range == next && !self.selection.reversed {
+            if autoscroll {
+                self.queue_cursor_autoscroll();
+            }
+            return;
+        }
+
+        self.selection.range = next;
+        self.selection.reversed = false;
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        if autoscroll {
+            self.queue_cursor_autoscroll();
+        }
         cx.notify();
     }
 

@@ -583,7 +583,18 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
-                    let Some(row) = this.collapsed_visible_row(visible_ix) else {
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                    let Some(source_visible_ix) =
+                        this.diff_source_visible_ix_for_visible_ix(visible_ix)
+                    else {
+                        return diff_placeholder_row(
+                            ("collapsed_diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+                    let Some(row) = this.collapsed_visible_row(source_visible_ix) else {
                         return diff_placeholder_row(
                             ("collapsed_diff_missing", visible_ix),
                             theme,
@@ -769,6 +780,8 @@ impl MainPaneView {
                                 Some(row.text.as_ref()),
                                 reveal_whitespace_chars,
                                 false,
+                                show_line_numbers,
+                                wrap,
                                 cx,
                             )
                         }
@@ -881,6 +894,8 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return diff_placeholder_row(
@@ -1076,6 +1091,8 @@ impl MainPaneView {
                             .or_else(|| Some(diff_content_text(&line))),
                         reveal_whitespace_chars,
                         false,
+                        show_line_numbers,
+                        wrap,
                         cx,
                     )
                 })
@@ -1092,6 +1109,8 @@ impl MainPaneView {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                let show_line_numbers = this.diff_show_line_numbers;
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                 let Some(src_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                     return diff_placeholder_row(
@@ -1214,6 +1233,8 @@ impl MainPaneView {
                     }),
                     reveal_whitespace_chars,
                     context_menu_active,
+                    show_line_numbers,
+                    wrap,
                     cx,
                 )
             })
@@ -1310,7 +1331,14 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
-                    let Some(visible_row) = this.collapsed_visible_row(visible_ix) else {
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                    let Some(source_visible_ix) =
+                        this.diff_source_visible_ix_for_visible_ix(visible_ix)
+                    else {
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
+                    };
+                    let Some(visible_row) = this.collapsed_visible_row(source_visible_ix) else {
                         return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                     };
 
@@ -1443,6 +1471,8 @@ impl MainPaneView {
                                 styled,
                                 streamed_spec,
                                 reveal_whitespace_chars,
+                                show_line_numbers,
+                                wrap,
                                 cx,
                             )
                         }
@@ -1473,6 +1503,8 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                     let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
@@ -1566,6 +1598,8 @@ impl MainPaneView {
                         styled,
                         streamed_spec,
                         reveal_whitespace_chars,
+                        show_line_numbers,
+                        wrap,
                         cx,
                     )
                 })
@@ -1580,6 +1614,8 @@ impl MainPaneView {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                let show_line_numbers = this.diff_show_line_numbers;
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                 let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                     return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
@@ -1688,6 +1724,8 @@ impl MainPaneView {
                             styled,
                             streamed_spec,
                             reveal_whitespace_chars,
+                            show_line_numbers,
+                            wrap,
                             cx,
                         )
                     }
@@ -1788,6 +1826,8 @@ fn diff_row(
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
     context_menu_active: bool,
+    show_line_numbers: bool,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1909,8 +1949,17 @@ fn diff_row(
         bg = focused_diff_line_bg(theme, visual_kind);
     }
 
-    let old = line_number_string(line.old_line);
-    let new = line_number_string(line.new_line);
+    let show_row_numbers = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    let old = if show_row_numbers {
+        line_number_string(line.old_line)
+    } else {
+        SharedString::default()
+    };
+    let new = if show_row_numbers {
+        line_number_string(line.new_line)
+    } else {
+        SharedString::default()
+    };
 
     match mode {
         DiffViewMode::Inline => diff_canvas::inline_diff_line_row_canvas(
@@ -1929,6 +1978,8 @@ fn diff_row(
             streamed_spec,
             raw_text,
             reveal_whitespace_chars,
+            show_line_numbers,
+            wrap,
         ),
         DiffViewMode::Split => {
             let left_kind = if visual_kind == DiffLineKind::Remove {
@@ -1994,6 +2045,8 @@ fn diff_row(
                 left_raw_text,
                 right_raw_text,
                 reveal_whitespace_chars,
+                show_line_numbers,
+                wrap,
             )
         }
     }
@@ -2271,6 +2324,8 @@ fn patch_split_column_row(
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
     reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2287,9 +2342,14 @@ fn patch_split_column_row(
         bg = focused_diff_line_bg(theme, line_kind);
     }
 
-    let line_no = match column {
-        PatchSplitColumn::Left => line_number_string(row.old_line),
-        PatchSplitColumn::Right => line_number_string(row.new_line),
+    let show_row_number = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    let line_no = if show_row_number {
+        match column {
+            PatchSplitColumn::Left => line_number_string(row.old_line),
+            PatchSplitColumn::Right => line_number_string(row.new_line),
+        }
+    } else {
+        SharedString::default()
     };
 
     diff_canvas::patch_split_column_row_canvas(
@@ -2312,6 +2372,8 @@ fn patch_split_column_row(
         }
         .map(|text| text.as_ref()),
         reveal_whitespace_chars,
+        show_line_numbers,
+        wrap,
     )
 }
 

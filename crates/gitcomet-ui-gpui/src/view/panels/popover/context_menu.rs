@@ -550,6 +550,17 @@ impl PopoverHost {
                     });
                 });
             }
+            ContextMenuAction::SetDiffShowLineNumbers { enabled } => {
+                close_after_action = false;
+                restore_diff_panel_focus_after_action = true;
+                self.diff_show_line_numbers = enabled;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_diff_show_line_numbers_and_persist(enabled, cx);
+                    });
+                });
+            }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
                 let root_view = self.root_view.clone();

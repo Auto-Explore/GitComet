@@ -1,5 +1,23 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum DiffTextOffsetBias {
+    Start,
+    End,
+}
+
+fn diff_text_local_range_from_source_ranges(
+    selected: Range<usize>,
+    visual: Range<usize>,
+) -> Option<Range<usize>> {
+    let start = selected.start.max(visual.start);
+    let end = selected.end.min(visual.end);
+    if start >= end {
+        return None;
+    }
+    Some(start.saturating_sub(visual.start)..end.saturating_sub(visual.start))
+}
+
 impl MainPaneView {
     fn diff_text_normalized_selection(&self) -> Option<(DiffTextPos, DiffTextPos)> {
         let a = self.diff_text_anchor?;
@@ -15,12 +33,20 @@ impl MainPaneView {
         &self,
     ) -> Option<(usize, usize)> {
         let (start, end) = self.diff_text_normalized_selection()?;
-        (start != end).then_some((start.visible_ix, end.visible_ix))
+        if start == end {
+            return None;
+        }
+        let start_ix = self.diff_text_visible_ix_for_source_pos(start, DiffTextOffsetBias::Start);
+        let end_ix = self.diff_text_visible_ix_for_source_pos(end, DiffTextOffsetBias::End);
+        Some((start_ix.min(end_ix), start_ix.max(end_ix)))
     }
 
     pub(in super::super::super) fn sync_diff_focus_to_text_selection(&mut self) {
-        if let Some((_start, end)) = self.diff_text_selection_visible_range() {
-            self.diff_selection_anchor = Some(end);
+        if let Some((start, end)) = self.diff_text_normalized_selection()
+            && start != end
+        {
+            self.diff_selection_anchor =
+                Some(self.diff_text_visible_ix_for_source_pos(end, DiffTextOffsetBias::End));
             self.diff_selection_range = None;
         }
     }
@@ -57,7 +83,7 @@ impl MainPaneView {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
         let local = hitbox.bounds.localize(&position)?;
         let x = local.x.max(px(0.0));
-        let offset = if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+        let local_offset = if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
             if cell_width <= px(0.0) {
                 0
             } else {
@@ -71,9 +97,9 @@ impl MainPaneView {
                 .min(hitbox.text_len)
         };
         Some(DiffTextPos {
-            visible_ix,
+            source_visible_ix: hitbox.source_visible_ix,
             region,
-            offset,
+            offset: hitbox.text_start_offset.saturating_add(local_offset),
         })
     }
 
@@ -137,6 +163,100 @@ impl MainPaneView {
             .map(|pos| pos.offset)
     }
 
+    pub(in super::super::super) fn diff_text_visual_source_range_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> (usize, Range<usize>) {
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+        let range = if let Some(wrap) = self.diff_text_wrap_for_visible_ix(visible_ix) {
+            crate::view::rows::diff_wrap_range_for_text(
+                text.as_ref(),
+                wrap.wrap_columns,
+                wrap.wrap_ix,
+            )
+            .unwrap_or(0..0)
+        } else {
+            0..text.len()
+        };
+        (source_visible_ix, range)
+    }
+
+    fn diff_text_full_line_len_for_region(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> usize {
+        self.diff_text_full_line_for_region(source_visible_ix, region)
+            .len()
+    }
+
+    fn diff_text_visible_ix_for_source_pos(
+        &self,
+        pos: DiffTextPos,
+        bias: DiffTextOffsetBias,
+    ) -> usize {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return pos.source_visible_ix;
+        }
+
+        let target_offset = match bias {
+            DiffTextOffsetBias::Start => pos.offset,
+            DiffTextOffsetBias::End => pos.offset.saturating_sub(1),
+        };
+        let mut first_for_source = None;
+        let mut last_for_source = None;
+        for (visible_ix, row) in self.diff_wrap_visible_rows.iter().enumerate() {
+            if row.source_visible_ix != pos.source_visible_ix {
+                continue;
+            }
+            first_for_source.get_or_insert(visible_ix);
+            last_for_source = Some(visible_ix);
+            let (_, range) = self.diff_text_visual_source_range_for_region(visible_ix, pos.region);
+            if range.is_empty() {
+                if pos.offset == range.start {
+                    return visible_ix;
+                }
+                continue;
+            }
+            if range.start <= target_offset && target_offset < range.end {
+                return visible_ix;
+            }
+        }
+
+        match bias {
+            DiffTextOffsetBias::Start => first_for_source,
+            DiffTextOffsetBias::End => last_for_source.or(first_for_source),
+        }
+        .unwrap_or(pos.source_visible_ix)
+    }
+
+    fn diff_text_visible_range_for_source_range(
+        &self,
+        start_source_visible_ix: usize,
+        end_source_visible_ix: usize,
+    ) -> Option<(usize, usize)> {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return Some((start_source_visible_ix, end_source_visible_ix));
+        }
+
+        let mut start_visible_ix = None;
+        let mut end_visible_ix = None;
+        for (visible_ix, row) in self.diff_wrap_visible_rows.iter().enumerate() {
+            if row.source_visible_ix < start_source_visible_ix
+                || row.source_visible_ix > end_source_visible_ix
+            {
+                continue;
+            }
+            start_visible_ix.get_or_insert(visible_ix);
+            end_visible_ix = Some(visible_ix);
+        }
+        Some((start_visible_ix?, end_visible_ix?))
+    }
+
     fn set_diff_text_selection(
         &mut self,
         anchor: DiffTextPos,
@@ -160,15 +280,15 @@ impl MainPaneView {
         let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
             return;
         };
-        let text = self.diff_text_line_for_region(pos.visible_ix, pos.region);
+        let text = self.diff_text_full_line_for_region(pos.source_visible_ix, pos.region);
         let range = crate::text_selection::token_range_for_offset(text.as_ref(), pos.offset);
         let anchor = DiffTextPos {
-            visible_ix: pos.visible_ix,
+            source_visible_ix: pos.source_visible_ix,
             region: pos.region,
             offset: range.start,
         };
         let head = DiffTextPos {
-            visible_ix: pos.visible_ix,
+            source_visible_ix: pos.source_visible_ix,
             region: pos.region,
             offset: range.end,
         };
@@ -184,14 +304,14 @@ impl MainPaneView {
         let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
             return;
         };
-        let line_len = self.diff_text_line_len_for_region(pos.visible_ix, pos.region);
+        let line_len = self.diff_text_full_line_len_for_region(pos.source_visible_ix, pos.region);
         let anchor = DiffTextPos {
-            visible_ix: pos.visible_ix,
+            source_visible_ix: pos.source_visible_ix,
             region: pos.region,
             offset: 0,
         };
         let head = DiffTextPos {
-            visible_ix: pos.visible_ix,
+            source_visible_ix: pos.source_visible_ix,
             region: pos.region,
             offset: line_len,
         };
@@ -324,13 +444,26 @@ impl MainPaneView {
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
+    ) -> Option<Range<usize>> {
+        let (source_visible_ix, visual_range) =
+            self.diff_text_visual_source_range_for_region(visible_ix, region);
+        let selected =
+            self.diff_text_source_selection_range(source_visible_ix, region, visual_range.end)?;
+        diff_text_local_range_from_source_ranges(selected, visual_range)
+    }
+
+    fn diff_text_source_selection_range(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
         text_len: usize,
     ) -> Option<Range<usize>> {
         let (start, end) = self.diff_text_normalized_selection()?;
         if start == end {
             return None;
         }
-        if visible_ix < start.visible_ix || visible_ix > end.visible_ix {
+        if source_visible_ix < start.source_visible_ix || source_visible_ix > end.source_visible_ix
+        {
             return None;
         }
 
@@ -352,7 +485,9 @@ impl MainPaneView {
         let mut a = 0usize;
         let mut b = text_len;
 
-        if start.visible_ix == end.visible_ix && visible_ix == start.visible_ix {
+        if start.source_visible_ix == end.source_visible_ix
+            && source_visible_ix == start.source_visible_ix
+        {
             if region_order < start_order || region_order > end_order {
                 return None;
             }
@@ -362,14 +497,14 @@ impl MainPaneView {
             if region == end.region {
                 b = end.offset.min(text_len);
             }
-        } else if visible_ix == start.visible_ix {
+        } else if source_visible_ix == start.source_visible_ix {
             if region_order < start_order {
                 return None;
             }
             if region == start.region {
                 a = start.offset.min(text_len);
             }
-        } else if visible_ix == end.visible_ix {
+        } else if source_visible_ix == end.source_visible_ix {
             if region_order > end_order {
                 return None;
             }
@@ -384,7 +519,38 @@ impl MainPaneView {
         Some(a..b)
     }
 
+    fn diff_text_wrap_range_for_text(&self, visible_ix: usize, text: &str) -> Option<Range<usize>> {
+        let wrap = self.diff_text_wrap_for_visible_ix(visible_ix)?;
+        crate::view::rows::diff_wrap_range_for_text(text, wrap.wrap_columns, wrap.wrap_ix)
+            .or_else(|| Some(0..0))
+    }
+
+    fn diff_text_apply_wrap_to_line(&self, visible_ix: usize, text: SharedString) -> SharedString {
+        let Some(range) = self.diff_text_wrap_range_for_text(visible_ix, text.as_ref()) else {
+            return text;
+        };
+        if range.start >= range.end {
+            return SharedString::default();
+        }
+        text.as_ref()
+            .get(range)
+            .map(|slice| SharedString::from(slice.to_owned()))
+            .unwrap_or_default()
+    }
+
     pub(in super::super::super) fn diff_text_line_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> SharedString {
+        let source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(visible_ix)
+            .unwrap_or(visible_ix);
+        let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+        self.diff_text_apply_wrap_to_line(visible_ix, text)
+    }
+
+    pub(in crate::view) fn diff_text_full_line_for_region(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
@@ -486,7 +652,7 @@ impl MainPaneView {
             }
         }
 
-        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(visible_ix) else {
             return fallback;
         };
 
@@ -591,6 +757,10 @@ impl MainPaneView {
         region: DiffTextRegion,
     ) -> usize {
         let display_len = crate::view::diff_utils::diff_text_display_len;
+
+        if self.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
+            return self.diff_text_line_for_region(visible_ix, region).len();
+        }
 
         // Markdown preview rows already come from pre-rendered preview text, so
         // fall back to the existing materialized path there.
@@ -786,6 +956,46 @@ impl MainPaneView {
         }
     }
 
+    fn diff_text_source_combined_selection_range(
+        &self,
+        source_visible_ix: usize,
+        left_len: usize,
+        right_len: usize,
+    ) -> Option<Range<usize>> {
+        let (start, end) = self.diff_text_normalized_selection()?;
+        if start == end
+            || source_visible_ix < start.source_visible_ix
+            || source_visible_ix > end.source_visible_ix
+        {
+            return None;
+        }
+
+        let combined_len = left_len.saturating_add(1).saturating_add(right_len);
+        let mut a = 0usize;
+        let mut b = combined_len;
+
+        if start.source_visible_ix == end.source_visible_ix
+            && source_visible_ix == start.source_visible_ix
+        {
+            a = self
+                .diff_text_combined_offset(start, left_len)
+                .min(combined_len);
+            b = self
+                .diff_text_combined_offset(end, left_len)
+                .min(combined_len);
+        } else if source_visible_ix == start.source_visible_ix {
+            a = self
+                .diff_text_combined_offset(start, left_len)
+                .min(combined_len);
+        } else if source_visible_ix == end.source_visible_ix {
+            b = self
+                .diff_text_combined_offset(end, left_len)
+                .min(combined_len);
+        }
+
+        (a < b).then_some(a..b)
+    }
+
     fn append_diff_text_region_slice(
         &self,
         out: &mut String,
@@ -798,8 +1008,29 @@ impl MainPaneView {
             return;
         }
 
+        if self.diff_text_wrap_for_visible_ix(visible_ix).is_some() {
+            let text = self.diff_text_line_for_region(visible_ix, region);
+            append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
+            return;
+        }
+
+        self.append_diff_text_source_region_slice(out, visible_ix, region, range, expanded_tabs);
+    }
+
+    fn append_diff_text_source_region_slice(
+        &self,
+        out: &mut String,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+        range: Range<usize>,
+        expanded_tabs: &mut String,
+    ) {
+        if range.start >= range.end {
+            return;
+        }
+
         if self.is_markdown_preview_active() {
-            let text = self.markdown_preview_row_text(visible_ix, region);
+            let text = self.markdown_preview_row_text(source_visible_ix, region);
             append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
             return;
         }
@@ -808,14 +1039,14 @@ impl MainPaneView {
             if region != DiffTextRegion::Inline {
                 return;
             }
-            if let Some(raw_text) = self.worktree_preview_line_raw_text(visible_ix) {
+            if let Some(raw_text) = self.worktree_preview_line_raw_text(source_visible_ix) {
                 append_file_diff_display_text_slice(out, &raw_text, range, expanded_tabs);
             }
             return;
         }
 
         if self.is_collapsed_diff_projection_active() {
-            if let Some(row) = self.collapsed_visible_row(visible_ix) {
+            if let Some(row) = self.collapsed_visible_row(source_visible_ix) {
                 match (row, self.diff_view, region) {
                     (
                         CollapsedDiffVisibleRow::FileRow { row_ix },
@@ -857,12 +1088,12 @@ impl MainPaneView {
                     _ => {}
                 }
             }
-            let text = self.diff_text_line_for_region(visible_ix, region);
+            let text = self.diff_text_full_line_for_region(source_visible_ix, region);
             append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
             return;
         }
 
-        let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
             return;
         };
 
@@ -891,47 +1122,8 @@ impl MainPaneView {
             return;
         }
 
-        let text = self.diff_text_line_for_region(visible_ix, region);
+        let text = self.diff_text_full_line_for_region(source_visible_ix, region);
         append_diff_display_text_slice(out, text.as_ref(), range, expanded_tabs);
-    }
-
-    fn append_diff_text_split_combined_slice(
-        &self,
-        out: &mut String,
-        visible_ix: usize,
-        range: Range<usize>,
-        expanded_tabs: &mut String,
-    ) {
-        if range.start >= range.end {
-            return;
-        }
-
-        let left_len = self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::SplitLeft);
-        let right_start = left_len.saturating_add(1);
-
-        if range.start < left_len {
-            self.append_diff_text_region_slice(
-                out,
-                visible_ix,
-                DiffTextRegion::SplitLeft,
-                range.start..range.end.min(left_len),
-                expanded_tabs,
-            );
-        }
-
-        if range.start < right_start && range.end > left_len {
-            out.push('\t');
-        }
-
-        if range.end > right_start {
-            self.append_diff_text_region_slice(
-                out,
-                visible_ix,
-                DiffTextRegion::SplitRight,
-                range.start.saturating_sub(right_start)..range.end.saturating_sub(right_start),
-                expanded_tabs,
-            );
-        }
     }
 
     fn diff_text_string_for_region(
@@ -964,36 +1156,33 @@ impl MainPaneView {
 
         let force_inline = self.is_file_preview_active();
         let selected_line_count = end
-            .visible_ix
-            .saturating_sub(start.visible_ix)
+            .source_visible_ix
+            .saturating_sub(start.source_visible_ix)
             .saturating_add(1);
 
         let mut out = String::with_capacity(
             crate::view::diff_utils::multiline_text_copy_capacity_hint(selected_line_count),
         );
         let mut expanded_tabs = String::new();
-        for visible_ix in start.visible_ix..=end.visible_ix {
+        for source_visible_ix in start.source_visible_ix..=end.source_visible_ix {
             if force_inline || self.diff_view == DiffViewMode::Inline {
-                let line_len =
-                    self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::Inline);
-                let a = if visible_ix == start.visible_ix {
-                    start.offset.min(line_len)
-                } else {
-                    0
-                };
-                let b = if visible_ix == end.visible_ix {
-                    end.offset.min(line_len)
-                } else {
-                    line_len
+                let line_len = self
+                    .diff_text_full_line_len_for_region(source_visible_ix, DiffTextRegion::Inline);
+                let Some(range) = self.diff_text_source_selection_range(
+                    source_visible_ix,
+                    DiffTextRegion::Inline,
+                    line_len,
+                ) else {
+                    continue;
                 };
                 if !out.is_empty() {
                     out.push('\n');
                 }
-                self.append_diff_text_region_slice(
+                self.append_diff_text_source_region_slice(
                     &mut out,
-                    visible_ix,
+                    source_visible_ix,
                     DiffTextRegion::Inline,
-                    a..b,
+                    range,
                     &mut expanded_tabs,
                 );
                 continue;
@@ -1007,56 +1196,77 @@ impl MainPaneView {
             .then_some(start.region);
 
             if let Some(region) = split_region {
-                let line_len = self.diff_text_line_len_for_region(visible_ix, region);
-                let a = if visible_ix == start.visible_ix {
-                    start.offset.min(line_len)
-                } else {
-                    0
-                };
-                let b = if visible_ix == end.visible_ix {
-                    end.offset.min(line_len)
-                } else {
-                    line_len
+                let line_len = self.diff_text_full_line_len_for_region(source_visible_ix, region);
+                let Some(range) =
+                    self.diff_text_source_selection_range(source_visible_ix, region, line_len)
+                else {
+                    continue;
                 };
                 if !out.is_empty() {
                     out.push('\n');
                 }
-                self.append_diff_text_region_slice(
+                self.append_diff_text_source_region_slice(
                     &mut out,
-                    visible_ix,
+                    source_visible_ix,
                     region,
-                    a..b,
+                    range,
                     &mut expanded_tabs,
                 );
             } else {
-                let left_len =
-                    self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::SplitLeft);
-                let right_len =
-                    self.diff_text_line_len_for_region(visible_ix, DiffTextRegion::SplitRight);
-                let combined_len = left_len.saturating_add(1).saturating_add(right_len);
-
-                let a = if visible_ix == start.visible_ix {
-                    self.diff_text_combined_offset(start, left_len)
-                        .min(combined_len)
-                } else {
-                    0
-                };
-                let b = if visible_ix == end.visible_ix {
-                    self.diff_text_combined_offset(end, left_len)
-                        .min(combined_len)
-                } else {
-                    combined_len
-                };
+                let left_full_len = self.diff_text_full_line_len_for_region(
+                    source_visible_ix,
+                    DiffTextRegion::SplitLeft,
+                );
+                let right_full_len = self.diff_text_full_line_len_for_region(
+                    source_visible_ix,
+                    DiffTextRegion::SplitRight,
+                );
+                let combined_source_range = self.diff_text_source_combined_selection_range(
+                    source_visible_ix,
+                    left_full_len,
+                    right_full_len,
+                );
+                let left_range = self.diff_text_source_selection_range(
+                    source_visible_ix,
+                    DiffTextRegion::SplitLeft,
+                    left_full_len,
+                );
+                let right_range = self.diff_text_source_selection_range(
+                    source_visible_ix,
+                    DiffTextRegion::SplitRight,
+                    right_full_len,
+                );
+                let include_tab = combined_source_range.as_ref().is_some_and(|range| {
+                    range.start < left_full_len.saturating_add(1) && range.end > left_full_len
+                });
+                if left_range.is_none() && right_range.is_none() && !include_tab {
+                    continue;
+                }
 
                 if !out.is_empty() {
                     out.push('\n');
                 }
-                self.append_diff_text_split_combined_slice(
-                    &mut out,
-                    visible_ix,
-                    a..b,
-                    &mut expanded_tabs,
-                );
+                if let Some(range) = left_range {
+                    self.append_diff_text_source_region_slice(
+                        &mut out,
+                        source_visible_ix,
+                        DiffTextRegion::SplitLeft,
+                        range,
+                        &mut expanded_tabs,
+                    );
+                }
+                if include_tab {
+                    out.push('\t');
+                }
+                if let Some(range) = right_range {
+                    self.append_diff_text_source_region_slice(
+                        &mut out,
+                        source_visible_ix,
+                        DiffTextRegion::SplitRight,
+                        range,
+                        &mut expanded_tabs,
+                    );
+                }
             }
         }
 
@@ -1140,6 +1350,9 @@ impl MainPaneView {
             visible_ix.min(list_len - 1)
         };
 
+        let clicked_source_visible_ix = self
+            .diff_source_visible_ix_for_visible_ix(clicked_visible_ix)
+            .unwrap_or(clicked_visible_ix);
         let text_selection = context_menu_selection_range_from_diff_text(
             self.diff_text_normalized_selection(),
             if is_file_preview {
@@ -1147,9 +1360,10 @@ impl MainPaneView {
             } else {
                 self.diff_view
             },
-            clicked_visible_ix,
+            clicked_source_visible_ix,
             region,
-        );
+        )
+        .and_then(|(a, b)| self.diff_text_visible_range_for_source_range(a, b));
 
         if list_len > 0 && text_selection.is_none() {
             let existing = self
@@ -1524,5 +1738,27 @@ fn autoscroll_delta_for_axis(cursor: Pixels, min: Pixels, max: Pixels) -> Pixels
         -speed(cursor - max)
     } else {
         px(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diff_text_local_range_from_source_ranges;
+
+    #[test]
+    fn local_selection_range_returns_none_when_selection_ends_before_visual_slice() {
+        assert_eq!(diff_text_local_range_from_source_ranges(4..8, 12..20), None);
+    }
+
+    #[test]
+    fn local_selection_range_clips_to_visual_slice() {
+        assert_eq!(
+            diff_text_local_range_from_source_ranges(8..16, 12..20),
+            Some(0..4)
+        );
+        assert_eq!(
+            diff_text_local_range_from_source_ranges(14..24, 12..20),
+            Some(2..8)
+        );
     }
 }

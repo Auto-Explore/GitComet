@@ -680,6 +680,7 @@ impl GitCometView {
             .unwrap_or_default();
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
+        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
         let commit_push_after_enabled = ui_session.commit_push_after_enabled.unwrap_or(false);
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
@@ -817,6 +818,7 @@ impl GitCometView {
                 diff_whitespace_mode,
                 diff_reveal_whitespace_chars,
                 diff_word_wrap,
+                diff_show_line_numbers,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -869,6 +871,7 @@ impl GitCometView {
                 diff_whitespace_mode,
                 diff_reveal_whitespace_chars,
                 diff_word_wrap,
+                diff_show_line_numbers,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 main_pane.clone(),
@@ -1029,6 +1032,7 @@ impl GitCometView {
             diff_whitespace_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
+            diff_show_line_numbers,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1459,6 +1463,43 @@ impl GitCometView {
 
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
+    }
+
+    fn apply_diff_show_line_numbers_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_show_line_numbers == next {
+            return false;
+        }
+
+        self.diff_show_line_numbers = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_show_line_numbers(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_show_line_numbers_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_show_line_numbers_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_show_line_numbers(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_show_line_numbers_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
     }
 
     pub(in crate::view) fn set_history_column_preferences(

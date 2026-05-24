@@ -2,8 +2,10 @@ use super::canvas::keyed_canvas;
 use super::diff_text::{
     PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
     build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
+    diff_wrap_range_for_text, slice_cached_diff_styled_text,
     syntax_highlights_for_streamed_line_slice_heuristic, whitespace_visible_line_styled_text,
     whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text,
+    whitespace_visible_styled_text,
 };
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
@@ -26,6 +28,7 @@ const GUTTER_TEXT_LAYOUT_CACHE_MAX_ENTRIES: usize = 16_384;
 const STREAMED_DIFF_TEXT_MIN_BYTES: usize = LARGE_DIFF_TEXT_MIN_BYTES;
 const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
 const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
+const DIFF_TEXT_WRAP_WIDTH_SAMPLE: &str = "WWWWWWWWWW";
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 44.0;
 const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
@@ -66,6 +69,12 @@ pub(super) struct StreamedDiffTextPaintSpec {
     pub(super) word_ranges: Arc<[Range<usize>]>,
     pub(super) word_color: Option<gpui::Rgba>,
     pub(super) syntax: StreamedDiffTextSyntaxSource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffTextWrapSlice {
+    pub(in crate::view) wrap_ix: usize,
+    pub(in crate::view) wrap_columns: usize,
 }
 
 fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
@@ -342,6 +351,21 @@ fn hash_range(hasher: &mut FxHasher, range: &Range<usize>) {
 
 fn streamed_diff_text_text_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
     spec.raw_text.identity_hash_without_loading()
+}
+
+fn streamed_diff_text_visible_text_hash(
+    spec: &StreamedDiffTextPaintSpec,
+    reveal_whitespace_chars: bool,
+) -> u64 {
+    let base = streamed_diff_text_text_hash(spec);
+    if !reveal_whitespace_chars {
+        return base;
+    }
+
+    let mut hasher = FxHasher::default();
+    base.hash(&mut hasher);
+    reveal_whitespace_chars.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
@@ -692,8 +716,19 @@ fn diff_text_paint_payload(
     streamed_spec: Option<&StreamedDiffTextPaintSpec>,
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
+    wrap: Option<DiffTextWrapSlice>,
 ) -> (SharedString, HighlightSpans, u64, u64) {
     if reveal_whitespace_chars {
+        if should_stream_diff_text(streamed_spec) {
+            let spec = streamed_spec.expect("streamed spec checked above");
+            return (
+                SharedString::default(),
+                empty_highlights(),
+                streamed_diff_text_highlights_hash(spec),
+                streamed_diff_text_visible_text_hash(spec, true),
+            );
+        }
+
         let styled = styled
             .map(|styled| {
                 raw_text
@@ -716,13 +751,22 @@ fn diff_text_paint_payload(
                     }
                 })
             });
-        let text = styled.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        let wrapped;
+        let styled = if let (Some(styled), Some(wrap)) = (styled.as_ref(), wrap) {
+            wrapped =
+                diff_wrap_range_for_text(styled.text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
+                    .map(|range| slice_cached_diff_styled_text(styled, range))
+                    .unwrap_or_else(|| slice_cached_diff_styled_text(styled, 0..0));
+            Some(&wrapped)
+        } else {
+            styled.as_ref()
+        };
+        let text = styled.map(|s| s.text.clone()).unwrap_or_default();
         let highlights = styled
-            .as_ref()
             .map(|s| Arc::clone(&s.highlights))
             .unwrap_or_else(empty_highlights);
-        let highlights_hash = styled.as_ref().map(|s| s.highlights_hash).unwrap_or(0);
-        let text_hash = styled.as_ref().map(|s| s.text_hash).unwrap_or(0);
+        let highlights_hash = styled.map(|s| s.highlights_hash).unwrap_or(0);
+        let text_hash = styled.map(|s| s.text_hash).unwrap_or(0);
         return (text, highlights, highlights_hash, text_hash);
     }
 
@@ -732,10 +776,19 @@ fn diff_text_paint_payload(
             SharedString::default(),
             empty_highlights(),
             streamed_diff_text_highlights_hash(spec),
-            streamed_diff_text_text_hash(spec),
+            streamed_diff_text_visible_text_hash(spec, false),
         );
     }
 
+    let wrapped;
+    let styled = if let (Some(styled), Some(wrap)) = (styled, wrap) {
+        wrapped = diff_wrap_range_for_text(styled.text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
+            .map(|range| slice_cached_diff_styled_text(styled, range))
+            .unwrap_or_else(|| slice_cached_diff_styled_text(styled, 0..0));
+        Some(&wrapped)
+    } else {
+        styled
+    };
     let text = styled.map(|s| s.text.clone()).unwrap_or_default();
     let highlights = styled
         .map(|s| Arc::clone(&s.highlights))
@@ -762,12 +815,15 @@ pub(super) fn inline_diff_line_row_canvas(
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
     let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
         styled,
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
+        wrap,
     );
     let revision =
         inline_row_canvas_revision_key(&old, &new, bg, fg, gutter_fg, text_hash, highlights_hash);
@@ -778,7 +834,11 @@ pub(super) fn inline_diff_line_row_canvas(
         (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
+            let gutter_total = if show_line_numbers {
+                gutter_cell_total_width(pad, ui_scale_percent)
+            } else {
+                px(0.0)
+            };
             let text_bounds = inline_text_bounds(bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
 
@@ -798,24 +858,26 @@ pub(super) fn inline_diff_line_row_canvas(
 
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
 
-            paint_gutter_text(
-                &old,
-                prepaint.bounds.left() + prepaint.pad,
-                y,
-                gutter_fg,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &new,
-                prepaint.bounds.left() + prepaint.gutter_total + prepaint.pad,
-                y,
-                gutter_fg,
-                line_metrics,
-                window,
-                cx,
-            );
+            if show_line_numbers {
+                paint_gutter_text(
+                    &old,
+                    prepaint.bounds.left() + prepaint.pad,
+                    y,
+                    gutter_fg,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+                paint_gutter_text(
+                    &new,
+                    prepaint.bounds.left() + prepaint.gutter_total + prepaint.pad,
+                    y,
+                    gutter_fg,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+            }
 
             window.paint_layer(prepaint.text_bounds, |window| {
                 paint_selectable_diff_text(
@@ -829,10 +891,13 @@ pub(super) fn inline_diff_line_row_canvas(
                     test_row_bg,
                     highlights_hash,
                     text_hash,
+                    reveal_whitespace_chars,
                     y,
                     fg,
                     line_metrics,
                     ui_scale_percent,
+                    show_line_numbers,
+                    wrap,
                     theme,
                     window,
                     cx,
@@ -900,6 +965,8 @@ pub(super) fn split_diff_line_row_canvas(
     left_raw_text: Option<&str>,
     right_raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
     let (left_text, left_highlights, left_highlights_hash, left_text_hash) =
         diff_text_paint_payload(
@@ -907,6 +974,7 @@ pub(super) fn split_diff_line_row_canvas(
             left_streamed_spec.as_ref(),
             left_raw_text,
             reveal_whitespace_chars,
+            wrap,
         );
     let (right_text, right_highlights, right_highlights_hash, right_text_hash) =
         diff_text_paint_payload(
@@ -914,6 +982,7 @@ pub(super) fn split_diff_line_row_canvas(
             right_streamed_spec.as_ref(),
             right_raw_text,
             reveal_whitespace_chars,
+            wrap,
         );
     let revision = split_row_canvas_revision_key(
         &old,
@@ -937,7 +1006,11 @@ pub(super) fn split_diff_line_row_canvas(
         (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
+            let gutter_total = if show_line_numbers {
+                gutter_cell_total_width(pad, ui_scale_percent)
+            } else {
+                px(0.0)
+            };
             let (left_col, sep_bounds, right_col) = split_columns(bounds);
             let left_text_bounds = column_text_bounds(left_col, gutter_total, pad);
             let right_text_bounds = column_text_bounds(right_col, gutter_total, pad);
@@ -971,24 +1044,26 @@ pub(super) fn split_diff_line_row_canvas(
             ));
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.right_col), right_bg));
 
-            paint_gutter_text(
-                &old,
-                prepaint.left_col.left() + prepaint.pad,
-                y,
-                left_gutter,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &new,
-                prepaint.right_col.left() + prepaint.pad,
-                y,
-                right_gutter,
-                line_metrics,
-                window,
-                cx,
-            );
+            if show_line_numbers {
+                paint_gutter_text(
+                    &old,
+                    prepaint.left_col.left() + prepaint.pad,
+                    y,
+                    left_gutter,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+                paint_gutter_text(
+                    &new,
+                    prepaint.right_col.left() + prepaint.pad,
+                    y,
+                    right_gutter,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+            }
 
             window.paint_layer(prepaint.left_text_bounds, |window| {
                 paint_selectable_diff_text(
@@ -1002,10 +1077,13 @@ pub(super) fn split_diff_line_row_canvas(
                     left_test_row_bg,
                     left_highlights_hash,
                     left_text_hash,
+                    reveal_whitespace_chars,
                     y,
                     left_fg,
                     line_metrics,
                     ui_scale_percent,
+                    show_line_numbers,
+                    wrap,
                     theme,
                     window,
                     cx,
@@ -1024,10 +1102,13 @@ pub(super) fn split_diff_line_row_canvas(
                     right_test_row_bg,
                     right_highlights_hash,
                     right_text_hash,
+                    reveal_whitespace_chars,
                     y,
                     right_fg,
                     line_metrics,
                     ui_scale_percent,
+                    show_line_numbers,
+                    wrap,
                     theme,
                     window,
                     cx,
@@ -1090,6 +1171,8 @@ pub(super) fn patch_split_column_row_canvas(
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
     let region = match column {
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
@@ -1100,6 +1183,7 @@ pub(super) fn patch_split_column_row_canvas(
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
+        wrap,
     );
     let revision = patch_split_row_canvas_revision_key(
         &line_no,
@@ -1123,7 +1207,11 @@ pub(super) fn patch_split_column_row_canvas(
         (canvas_id, format!("{revision:016x}")),
         move |bounds, window, _cx| {
             let pad = px_2(window);
-            let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
+            let gutter_total = if show_line_numbers {
+                gutter_cell_total_width(pad, ui_scale_percent)
+            } else {
+                px(0.0)
+            };
             let text_bounds = single_column_text_bounds(bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
             SingleColumnRowPrepaintState {
@@ -1141,15 +1229,17 @@ pub(super) fn patch_split_column_row_canvas(
 
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
 
-            paint_gutter_text(
-                &line_no,
-                prepaint.bounds.left() + prepaint.pad,
-                y,
-                gutter_fg,
-                line_metrics,
-                window,
-                cx,
-            );
+            if show_line_numbers {
+                paint_gutter_text(
+                    &line_no,
+                    prepaint.bounds.left() + prepaint.pad,
+                    y,
+                    gutter_fg,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+            }
 
             window.paint_layer(prepaint.text_bounds, |window| {
                 paint_selectable_diff_text(
@@ -1163,10 +1253,13 @@ pub(super) fn patch_split_column_row_canvas(
                     test_row_bg,
                     highlights_hash,
                     text_hash,
+                    reveal_whitespace_chars,
                     y,
                     fg,
                     line_metrics,
                     ui_scale_percent,
+                    show_line_numbers,
+                    wrap,
                     theme,
                     window,
                     cx,
@@ -1225,6 +1318,7 @@ pub(super) fn worktree_preview_row_canvas(
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
+        None,
     );
 
     keyed_canvas(
@@ -1292,10 +1386,13 @@ pub(super) fn worktree_preview_row_canvas(
                     None,
                     highlights_hash,
                     text_hash,
+                    reveal_whitespace_chars,
                     y,
                     theme.colors.text,
                     line_metrics,
                     ui_scale_percent,
+                    true,
+                    None,
                     theme,
                     window,
                     cx,
@@ -1574,6 +1671,23 @@ fn line_metrics(window: &Window) -> LineMetrics {
     }
 }
 
+pub(in crate::view) fn diff_text_wrap_char_width(window: &mut Window) -> Pixels {
+    let style = diff_text_style(window);
+    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
+    let run = style.to_run(DIFF_TEXT_WRAP_WIDTH_SAMPLE.len());
+    let layout = window.text_system().shape_line(
+        DIFF_TEXT_WRAP_WIDTH_SAMPLE.into(),
+        font_size,
+        &[run],
+        None,
+    );
+    if DIFF_TEXT_WRAP_WIDTH_SAMPLE.is_empty() {
+        px(1.0)
+    } else {
+        (layout.width / DIFF_TEXT_WRAP_WIDTH_SAMPLE.len() as f32).max(px(1.0))
+    }
+}
+
 fn center_text_y(bounds: Bounds<Pixels>, line_height: Pixels) -> Pixels {
     let extra = (bounds.size.height - line_height).max(px(0.0));
     bounds.top() + extra * 0.5
@@ -1591,7 +1705,7 @@ fn diff_row_height(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
 }
 
-pub(super) fn diff_row_horizontal_padding(ui_scale_percent: u32) -> Pixels {
+pub(in crate::view) fn diff_row_horizontal_padding(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_ROW_HORIZONTAL_PADDING_PX, ui_scale_percent)
 }
 
@@ -1602,11 +1716,11 @@ pub(super) fn diff_gutter_total_width(ui_scale_percent: u32) -> Pixels {
     )
 }
 
-pub(super) fn diff_single_column_text_start(ui_scale_percent: u32) -> Pixels {
+pub(in crate::view) fn diff_single_column_text_start(ui_scale_percent: u32) -> Pixels {
     diff_gutter_total_width(ui_scale_percent) + diff_row_horizontal_padding(ui_scale_percent)
 }
 
-pub(super) fn diff_inline_text_start(ui_scale_percent: u32) -> Pixels {
+pub(in crate::view) fn diff_inline_text_start(ui_scale_percent: u32) -> Pixels {
     diff_gutter_total_width(ui_scale_percent) * 2.0 + diff_row_horizontal_padding(ui_scale_percent)
 }
 
@@ -1714,10 +1828,13 @@ fn paint_selectable_diff_text(
     row_bg: Option<gpui::Rgba>,
     highlights_hash: u64,
     text_hash: u64,
+    reveal_whitespace_chars: bool,
     y: Pixels,
     base_fg: gpui::Rgba,
     metrics: LineMetrics,
     ui_scale_percent: u32,
+    show_line_numbers: bool,
+    wrap: Option<DiffTextWrapSlice>,
     theme: AppTheme,
     window: &mut Window,
     cx: &mut App,
@@ -1730,19 +1847,26 @@ fn paint_selectable_diff_text(
     let pad = px_2(window);
     let gutter_total = gutter_cell_total_width(pad, ui_scale_percent);
     let row_extra = match region {
-        DiffTextRegion::Inline => gutter_total * 2.0 + pad * 2.0,
-        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight => gutter_total + pad * 2.0,
+        DiffTextRegion::Inline if show_line_numbers => gutter_total * 2.0 + pad * 2.0,
+        DiffTextRegion::SplitLeft | DiffTextRegion::SplitRight if show_line_numbers => {
+            gutter_total + pad * 2.0
+        }
+        _ => pad * 2.0,
     };
     let total_text_len = streamed_spec
         .filter(|spec| should_stream_diff_text(Some(spec)))
         .map(|spec| spec.raw_text.len())
         .unwrap_or_else(|| text.len());
-    let selection =
-        view.read(cx)
-            .diff_text_local_selection_range(visible_ix, region, total_text_len);
+    let (source_visible_ix, visual_text_range) = view
+        .read(cx)
+        .diff_text_visual_source_range_for_region(visible_ix, region);
+    let selection = view
+        .read(cx)
+        .diff_text_local_selection_range(visible_ix, region);
 
     let mut streamed_styled = None;
     let mut streamed_slice_range = None;
+    let mut streamed_slice_is_wrap = false;
     let mut paint_x = bounds.left();
     let mut hitbox_cell_width = None;
     let mut pending_prepared_syntax = false;
@@ -1754,15 +1878,25 @@ fn paint_selectable_diff_text(
             streamed_diff_text_ascii_cell_width(&base_style, metrics.font_size, window);
         let clip_bounds = window.content_mask().bounds;
         let overscan_columns = STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS.max(spec.query.as_ref().len());
-        let slice_range = streamed_diff_text_visible_slice_range(
-            bounds,
-            clip_bounds,
-            spec.raw_text.len(),
-            cell_width,
-            overscan_columns,
-        );
-        let (slice_styled, pending, resolved_slice_range) =
+        let wrap_range = wrap.and_then(|wrap| {
+            diff_wrap_range_for_text(spec.raw_text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
+        });
+        streamed_slice_is_wrap = wrap_range.is_some();
+        let slice_range = wrap_range.clone().unwrap_or_else(|| {
+            streamed_diff_text_visible_slice_range(
+                bounds,
+                clip_bounds,
+                spec.raw_text.len(),
+                cell_width,
+                overscan_columns,
+            )
+        });
+        let (mut slice_styled, pending, resolved_slice_range) =
             build_streamed_diff_slice_styled_text(theme, spec, &slice_range);
+        if reveal_whitespace_chars {
+            let append_eol_marker = resolved_slice_range.end >= spec.raw_text.len();
+            slice_styled = whitespace_visible_styled_text(&slice_styled, append_eol_marker);
+        }
         let (layout_key, layout, shaped_new) = ensure_layout_cached(
             view,
             slice_styled.text_hash,
@@ -1775,12 +1909,20 @@ fn paint_selectable_diff_text(
             window,
             cx,
         );
-        paint_x = bounds.left() + cell_width * resolved_slice_range.start as f32;
+        paint_x = if wrap_range.is_some() {
+            bounds.left()
+        } else {
+            bounds.left() + cell_width * resolved_slice_range.start as f32
+        };
         hitbox_cell_width = Some(cell_width);
         pending_prepared_syntax = pending;
         streamed_slice_range = Some(resolved_slice_range);
+        let total_text_cells = spec
+            .raw_text
+            .len()
+            .saturating_add(usize::from(reveal_whitespace_chars));
         let required_row_w = (row_extra
-            + cell_width * spec.raw_text.len() as f32
+            + cell_width * total_text_cells as f32
             + diff_scaled_px(DIFF_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
         .round();
         streamed_styled = Some(slice_styled);
@@ -1821,16 +1963,21 @@ fn paint_selectable_diff_text(
 
     if let Some(r) = selection {
         let (x0, x1) = if let Some(cell_width) = hitbox_cell_width {
-            let start = streamed_slice_range
-                .as_ref()
-                .map(|slice_range| r.start.max(slice_range.start))
-                .unwrap_or(r.start)
-                .min(total_text_len);
-            let end = streamed_slice_range
-                .as_ref()
-                .map(|slice_range| r.end.min(slice_range.end))
-                .unwrap_or(r.end)
-                .min(total_text_len);
+            let (start, end) = if streamed_slice_is_wrap {
+                (r.start.min(total_text_len), r.end.min(total_text_len))
+            } else {
+                let start = streamed_slice_range
+                    .as_ref()
+                    .map(|slice_range| r.start.max(slice_range.start))
+                    .unwrap_or(r.start)
+                    .min(total_text_len);
+                let end = streamed_slice_range
+                    .as_ref()
+                    .map(|slice_range| r.end.min(slice_range.end))
+                    .unwrap_or(r.end)
+                    .min(total_text_len);
+                (start, end)
+            };
             (cell_width * start as f32, cell_width * end as f32)
         } else {
             (
@@ -1854,7 +2001,23 @@ fn paint_selectable_diff_text(
     let hitbox = DiffTextHitbox {
         bounds,
         layout_key,
-        text_len: total_text_len,
+        source_visible_ix,
+        text_start_offset: if streamed_slice_is_wrap {
+            streamed_slice_range
+                .as_ref()
+                .map(|range| range.start)
+                .unwrap_or(visual_text_range.start)
+        } else {
+            visual_text_range.start
+        },
+        text_len: if streamed_slice_is_wrap {
+            streamed_slice_range
+                .as_ref()
+                .map(|range| range.end.saturating_sub(range.start))
+                .unwrap_or(text.len())
+        } else {
+            total_text_len
+        },
         streamed_ascii_monospace_cell_width: hitbox_cell_width,
     };
 
@@ -2044,11 +2207,26 @@ mod tests {
         };
 
         let (text, highlights, _highlights_hash, text_hash) =
-            diff_text_paint_payload(Some(&styled), None, Some("a b\t"), true);
+            diff_text_paint_payload(Some(&styled), None, Some("a b\t"), true, None);
 
         assert_eq!(text.as_ref(), "a·b→↵");
         assert_eq!(highlights[0].0, 1..7);
         assert_ne!(text_hash, styled.text_hash);
+    }
+
+    #[test]
+    fn diff_text_paint_payload_keeps_streamed_whitespace_rows_unmaterialized() {
+        let raw = "a ".repeat((STREAMED_DIFF_TEXT_MIN_BYTES / 2).saturating_add(1));
+        let spec = streamed_query_spec(raw.as_str(), "", DiffSearchOptions::default());
+
+        assert!(should_stream_diff_text(Some(&spec)));
+
+        let (text, highlights, _highlights_hash, text_hash) =
+            diff_text_paint_payload(None, Some(&spec), None, true, None);
+
+        assert!(text.is_empty());
+        assert!(highlights.is_empty());
+        assert_ne!(text_hash, 0);
     }
 
     #[test]

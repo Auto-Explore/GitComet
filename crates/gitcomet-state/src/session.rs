@@ -35,6 +35,7 @@ pub struct UiSession {
     pub diff_whitespace_mode: Option<String>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
+    pub diff_show_line_numbers: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -142,6 +143,7 @@ struct UiSessionFile {
     diff_whitespace_mode: Option<String>,
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
+    diff_show_line_numbers: Option<bool>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
     history_show_graph: Option<bool>,
@@ -224,6 +226,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_whitespace_mode: file.diff_whitespace_mode,
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
+        diff_show_line_numbers: file.diff_show_line_numbers,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
         history_show_graph: file.history_show_graph,
@@ -514,6 +517,7 @@ pub struct UiSettings {
     pub diff_whitespace_mode: Option<String>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
+    pub diff_show_line_numbers: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -592,6 +596,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.diff_word_wrap {
         file.diff_word_wrap = Some(value);
+    }
+    if let Some(value) = settings.diff_show_line_numbers {
+        file.diff_show_line_numbers = Some(value);
     }
     if let Some(value) = settings.change_tracking_height {
         file.change_tracking_height = Some(value);
@@ -2954,7 +2961,7 @@ mod tests {
     }
 
     #[test]
-    fn persist_ui_settings_round_trips_diff_reveal_and_word_wrap() {
+    fn persist_ui_settings_round_trips_diff_render_settings() {
         let dir = env::temp_dir().join(format!(
             "gitcomet-ui-settings-test-{}-{}",
             std::process::id(),
@@ -2981,6 +2988,7 @@ mod tests {
             UiSettings {
                 diff_reveal_whitespace_chars: Some(true),
                 diff_word_wrap: Some(true),
+                diff_show_line_numbers: Some(false),
                 ..UiSettings::default()
             },
             &path,
@@ -2990,6 +2998,7 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.diff_reveal_whitespace_chars, Some(true));
         assert_eq!(loaded.diff_word_wrap, Some(true));
+        assert_eq!(loaded.diff_show_line_numbers, Some(false));
     }
 
     #[test]

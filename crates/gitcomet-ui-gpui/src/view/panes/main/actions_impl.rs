@@ -331,40 +331,49 @@ impl MainPaneView {
         match self.diff_view {
             DiffViewMode::Inline => {
                 if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
-                    return provider.change_visible_indices();
+                    return provider
+                        .change_visible_indices()
+                        .into_iter()
+                        .map(|source_visible_ix| {
+                            self.diff_visual_ix_for_source_visible_ix(source_visible_ix)
+                        })
+                        .collect();
                 }
-                (0..self.diff_visible_len())
-                    .filter(|&visible_ix| {
-                        let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                            return false;
-                        };
-                        matches!(
-                            self.file_diff_inline_visual_kind(inline_ix),
-                            gitcomet_core::domain::DiffLineKind::Add
-                                | gitcomet_core::domain::DiffLineKind::Remove
-                        ) && self.file_diff_inline_row(inline_ix).is_some_and(|l| {
+                (0..self.file_diff_inline_row_len())
+                    .filter_map(|inline_ix| {
+                        let is_change =
                             matches!(
-                                l.kind,
+                                self.file_diff_inline_visual_kind(inline_ix),
                                 gitcomet_core::domain::DiffLineKind::Add
                                     | gitcomet_core::domain::DiffLineKind::Remove
-                            )
-                        })
+                            ) && self.file_diff_inline_row(inline_ix).is_some_and(|l| {
+                                matches!(
+                                    l.kind,
+                                    gitcomet_core::domain::DiffLineKind::Add
+                                        | gitcomet_core::domain::DiffLineKind::Remove
+                                )
+                            });
+                        is_change.then(|| self.diff_visual_ix_for_source_visible_ix(inline_ix))
                     })
                     .collect()
             }
             DiffViewMode::Split => {
                 if let Some(provider) = self.file_diff_row_provider.as_ref() {
-                    return provider.change_visible_indices();
+                    return provider
+                        .change_visible_indices()
+                        .into_iter()
+                        .map(|source_visible_ix| {
+                            self.diff_visual_ix_for_source_visible_ix(source_visible_ix)
+                        })
+                        .collect();
                 }
-                (0..self.diff_visible_len())
-                    .filter(|&visible_ix| {
-                        let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                            return false;
-                        };
-                        !matches!(
+                (0..self.file_diff_split_row_len())
+                    .filter_map(|row_ix| {
+                        let is_change = !matches!(
                             self.file_diff_split_visual_kind(row_ix),
                             gitcomet_core::file_diff::FileDiffRowKind::Context
-                        )
+                        );
+                        is_change.then(|| self.diff_visual_ix_for_source_visible_ix(row_ix))
                     })
                     .collect()
             }
@@ -420,8 +429,10 @@ impl MainPaneView {
                 .enumerate()
                 .filter_map(|(hunk_ix, &visible_ix)| {
                     self.collapsed_diff_hunks.get(hunk_ix).and_then(|hunk| {
-                        (hunk.has_additions || hunk.has_removals)
-                            .then_some((visible_ix, hunk.src_ix))
+                        (hunk.has_additions || hunk.has_removals).then_some((
+                            self.diff_visual_ix_for_source_visible_ix(visible_ix),
+                            hunk.src_ix,
+                        ))
                     })
                 })
                 .collect();
@@ -480,7 +491,8 @@ impl MainPaneView {
                 .enumerate()
                 .filter_map(|(hunk_ix, visible_ix)| {
                     self.collapsed_diff_hunks.get(hunk_ix).and_then(|hunk| {
-                        (hunk.has_additions || hunk.has_removals).then_some(*visible_ix)
+                        (hunk.has_additions || hunk.has_removals)
+                            .then(|| self.diff_visual_ix_for_source_visible_ix(*visible_ix))
                     })
                 })
                 .collect();

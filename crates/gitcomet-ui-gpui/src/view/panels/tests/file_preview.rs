@@ -1478,12 +1478,12 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
                     offset: start,
                 });
                 pane.diff_text_head = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
                     offset: end,
                 });

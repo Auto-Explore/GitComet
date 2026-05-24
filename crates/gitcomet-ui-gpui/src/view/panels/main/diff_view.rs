@@ -1356,7 +1356,11 @@ impl MainPaneView {
         }
     }
 
-    pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    pub(in crate::view) fn diff_view(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let repo_id = self.active_repo_id();
@@ -3631,7 +3635,7 @@ impl MainPaneView {
                 }
             }
         } else if wants_file_diff || wants_collapsed_diff {
-            self.render_selected_file_diff(theme, cx)
+            self.render_selected_file_diff(theme, window, cx)
         } else {
             match repo {
                 None => components::empty_state(theme, "Diff", "No repository.").into_any_element(),
@@ -3659,45 +3663,15 @@ impl MainPaneView {
                             .child(self.diff_raw_input.clone())
                             .into_any_element()
                     }
-                    Some(Loadable::Ready(diff)) => {
+                    Some(Loadable::Ready(_diff)) => {
                         if wants_file_diff || wants_collapsed_diff {
-                            self.render_selected_file_diff(theme, cx)
+                            self.render_selected_file_diff(theme, window, cx)
                         } else {
-                            if self.diff_word_wrap {
-                                let approx_len: usize = diff
-                                    .lines
-                                    .iter()
-                                    .map(|l| l.text.len().saturating_add(1))
-                                    .sum();
-                                let mut raw = String::with_capacity(approx_len);
-                                for line in &diff.lines {
-                                    raw.push_str(line.text.as_ref());
-                                    raw.push('\n');
-                                }
-                                if self.reveal_whitespace_chars {
-                                    raw = rows::whitespace_visible_multiline_text(&raw).to_string();
-                                }
-                                self.diff_raw_input.update(cx, |input, cx| {
-                                    input.set_theme(theme, cx);
-                                    input.set_soft_wrap(true, cx);
-                                    input.set_text(raw, cx);
-                                    input.set_read_only(true, cx);
-                                });
-                                div()
-                                    .id("diff_word_wrap_scroll")
-                                    .debug_selector(|| "diff_word_wrap_scroll".to_string())
-                                    .bg(theme.colors.window_bg)
-                                    .font_family(editor_font_family.clone())
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .overflow_y_scroll()
-                                    .child(self.diff_raw_input.clone())
-                                    .into_any_element()
-                            } else {
-                                self.ensure_diff_visible_indices();
-                                self.maybe_autoscroll_diff_to_first_change();
+                            self.ensure_diff_visible_indices();
+                            self.ensure_diff_wrap_visible_rows(window, cx);
+                            self.maybe_autoscroll_diff_to_first_change();
+
+                            {
                                 if self.patch_diff_row_len() == 0 {
                                     components::empty_state(theme, "Diff", "No differences.")
                                         .into_any_element()
@@ -3724,11 +3698,17 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .pb(horizontal_scrollbar_gutter)
+                                            .pb(if self.diff_word_wrap {
+                                                px(0.0)
+                                            } else {
+                                                horizontal_scrollbar_gutter
+                                            })
                                             .track_scroll(&self.diff_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
+                                            .when(!self.diff_word_wrap, |list| {
+                                                list.with_horizontal_sizing_behavior(
+                                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                                )
+                                            });
                                             div()
                                                 .id("diff_scroll_container")
                                                 .relative()
@@ -3752,13 +3732,15 @@ impl MainPaneView {
                                                     .always_visible()
                                                     .render(theme),
                                                 )
-                                                .child(Self::render_diff_horizontal_scrollbar(
-                                                    theme,
-                                                    "diff_hscrollbar",
-                                                    self.diff_scroll.clone(),
-                                                    scrollbar_gutter,
-                                                    "diff_hscrollbar",
-                                                ))
+                                                .when(!self.diff_word_wrap, |d| {
+                                                    d.child(Self::render_diff_horizontal_scrollbar(
+                                                        theme,
+                                                        "diff_hscrollbar",
+                                                        self.diff_scroll.clone(),
+                                                        scrollbar_gutter,
+                                                        "diff_hscrollbar",
+                                                    ))
+                                                })
                                                 .into_any_element()
                                         }
                                         DiffViewMode::Split => {
@@ -3801,11 +3783,17 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .pb(horizontal_scrollbar_gutter)
+                                            .pb(if self.diff_word_wrap {
+                                                px(0.0)
+                                            } else {
+                                                horizontal_scrollbar_gutter
+                                            })
                                             .track_scroll(&self.diff_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
+                                            .when(!self.diff_word_wrap, |list| {
+                                                list.with_horizontal_sizing_behavior(
+                                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                                )
+                                            });
                                             let right = uniform_list(
                                                 "diff_split_right",
                                                 count,
@@ -3813,11 +3801,17 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
-                                            .pb(horizontal_scrollbar_gutter)
+                                            .pb(if self.diff_word_wrap {
+                                                px(0.0)
+                                            } else {
+                                                horizontal_scrollbar_gutter
+                                            })
                                             .track_scroll(&self.diff_split_right_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
+                                            .when(!self.diff_word_wrap, |list| {
+                                                list.with_horizontal_sizing_behavior(
+                                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                                )
+                                            });
                                             let collapsed_file_stat = self
                                                 .is_collapsed_diff_projection_active()
                                                 .then(|| self.collapsed_diff_total_file_stat())
@@ -4040,18 +4034,23 @@ impl MainPaneView {
                                                                                 )
                                                                             },
                                                                         )
-                                                                        .child(
-                                                                            Self::render_diff_horizontal_scrollbar(
-                                                                                theme,
-                                                                                "diff_split_left_hscrollbar",
-                                                                                self.diff_scroll.clone(),
-                                                                                if vertical_sync_enabled {
-                                                                                    px(0.0)
-                                                                                } else {
-                                                                                    left_scrollbar_gutter
-                                                                                },
-                                                                                "diff_split_left_hscrollbar",
-                                                                            )
+                                                                        .when(
+                                                                            !self.diff_word_wrap,
+                                                                            |d| {
+                                                                                d.child(
+                                                                                    Self::render_diff_horizontal_scrollbar(
+                                                                                        theme,
+                                                                                        "diff_split_left_hscrollbar",
+                                                                                        self.diff_scroll.clone(),
+                                                                                        if vertical_sync_enabled {
+                                                                                            px(0.0)
+                                                                                        } else {
+                                                                                            left_scrollbar_gutter
+                                                                                        },
+                                                                                        "diff_split_left_hscrollbar",
+                                                                                    ),
+                                                                                )
+                                                                            },
                                                                         ),
                                                                 )
                                                                 .child(resize_handle(
@@ -4093,18 +4092,23 @@ impl MainPaneView {
                                                                                 )
                                                                             },
                                                                         )
-                                                                        .child(
-                                                                            Self::render_diff_horizontal_scrollbar(
-                                                                                theme,
-                                                                                "diff_split_right_hscrollbar",
-                                                                                self.diff_split_right_scroll.clone(),
-                                                                                if vertical_sync_enabled {
-                                                                                    px(0.0)
-                                                                                } else {
-                                                                                    right_scrollbar_gutter
-                                                                                },
-                                                                                "diff_split_right_hscrollbar",
-                                                                            )
+                                                                        .when(
+                                                                            !self.diff_word_wrap,
+                                                                            |d| {
+                                                                                d.child(
+                                                                                    Self::render_diff_horizontal_scrollbar(
+                                                                                        theme,
+                                                                                        "diff_split_right_hscrollbar",
+                                                                                        self.diff_split_right_scroll.clone(),
+                                                                                        if vertical_sync_enabled {
+                                                                                            px(0.0)
+                                                                                        } else {
+                                                                                            right_scrollbar_gutter
+                                                                                        },
+                                                                                        "diff_split_right_hscrollbar",
+                                                                                    ),
+                                                                                )
+                                                                            },
                                                                         ),
                                                                 ),
                                                         ),

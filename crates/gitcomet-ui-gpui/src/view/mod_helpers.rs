@@ -519,20 +519,22 @@ impl DiffTextRegion {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct DiffTextPos {
-    pub(super) visible_ix: usize,
+    pub(super) source_visible_ix: usize,
     pub(super) region: DiffTextRegion,
     pub(super) offset: usize,
 }
 
 impl DiffTextPos {
     pub(super) fn cmp_key(self) -> (usize, u8, usize) {
-        (self.visible_ix, self.region.order(), self.offset)
+        (self.source_visible_ix, self.region.order(), self.offset)
     }
 }
 
 pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
+    pub(super) source_visible_ix: usize,
+    pub(super) text_start_offset: usize,
     pub(super) text_len: usize,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
 }
@@ -3226,6 +3228,7 @@ pub struct GitCometView {
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
+    pub(super) diff_show_line_numbers: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

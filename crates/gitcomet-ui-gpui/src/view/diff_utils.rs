@@ -847,14 +847,16 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_d
 pub(super) fn context_menu_selection_range_from_diff_text(
     selection: Option<(DiffTextPos, DiffTextPos)>,
     diff_view: DiffViewMode,
-    clicked_visible_ix: usize,
+    clicked_source_visible_ix: usize,
     clicked_region: DiffTextRegion,
 ) -> Option<(usize, usize)> {
     let (start, end) = selection?;
     if start == end {
         return None;
     }
-    if clicked_visible_ix < start.visible_ix || clicked_visible_ix > end.visible_ix {
+    if clicked_source_visible_ix < start.source_visible_ix
+        || clicked_source_visible_ix > end.source_visible_ix
+    {
         return None;
     }
 
@@ -869,7 +871,7 @@ pub(super) fn context_menu_selection_range_from_diff_text(
         return None;
     }
 
-    Some((start.visible_ix, end.visible_ix))
+    Some((start.source_visible_ix, end.source_visible_ix))
 }
 
 #[cfg(test)]
@@ -1184,12 +1186,12 @@ mod tests {
     fn context_menu_selection_range_from_diff_text_requires_click_in_selection() {
         let selection = Some((
             DiffTextPos {
-                visible_ix: 2,
+                source_visible_ix: 2,
                 region: DiffTextRegion::Inline,
                 offset: 0,
             },
             DiffTextPos {
-                visible_ix: 5,
+                source_visible_ix: 5,
                 region: DiffTextRegion::Inline,
                 offset: 3,
             },
@@ -1218,12 +1220,12 @@ mod tests {
     fn context_menu_selection_range_from_diff_text_restricts_split_region() {
         let selection = Some((
             DiffTextPos {
-                visible_ix: 1,
+                source_visible_ix: 1,
                 region: DiffTextRegion::SplitLeft,
                 offset: 0,
             },
             DiffTextPos {
-                visible_ix: 3,
+                source_visible_ix: 3,
                 region: DiffTextRegion::SplitLeft,
                 offset: 2,
             },

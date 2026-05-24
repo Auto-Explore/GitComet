@@ -129,6 +129,7 @@ impl GitCometView {
                                 this.diff_reveal_whitespace_chars,
                             ),
                             diff_word_wrap: Some(this.diff_word_wrap),
+                            diff_show_line_numbers: Some(this.diff_show_line_numbers),
                             change_tracking_height,
                             untracked_height,
                             history_show_graph: Some(history_show_graph),

@@ -13,6 +13,25 @@ fn line_ranges_intersect(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
+fn diff_wrap_columns_for_width(width: Pixels, char_width: Pixels) -> usize {
+    let char_width = f32::from(char_width.max(px(1.0)));
+    ((f32::from(width.max(px(0.0))) / char_width).floor() as usize).max(1)
+}
+
+fn diff_wrap_split_row_count(row: &gitcomet_core::file_diff::FileDiffRow, columns: usize) -> usize {
+    let left = row
+        .old
+        .as_ref()
+        .map(|text| rows::diff_wrap_row_count_for_text(text.as_ref(), columns))
+        .unwrap_or(1);
+    let right = row
+        .new
+        .as_ref()
+        .map(|text| rows::diff_wrap_row_count_for_text(text.as_ref(), columns))
+        .unwrap_or(1);
+    left.max(right)
+}
+
 pub(in crate::view::panes::main) fn resolved_output_highlight_provider_binding_key(
     theme_epoch: u64,
     language: rows::DiffSyntaxLanguage,
@@ -804,6 +823,7 @@ impl MainPaneView {
         diff_whitespace_mode: DiffWhitespaceMode,
         diff_reveal_whitespace_chars: bool,
         diff_word_wrap: bool,
+        diff_show_line_numbers: bool,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -1022,6 +1042,7 @@ impl MainPaneView {
             diff_view: DiffViewMode::Split,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
+            diff_show_line_numbers,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
@@ -1053,6 +1074,8 @@ impl MainPaneView {
             submodule_hash_inputs,
             diff_visible_indices: Vec::new(),
             diff_visible_inline_map: None,
+            diff_wrap_visible_rows: Vec::new(),
+            diff_wrap_visible_cache_key: None,
             collapsed_diff_hunks: Vec::new(),
             collapsed_diff_hunk_ix_by_src_ix: HashMap::default(),
             collapsed_diff_reveals: HashMap::default(),
@@ -1369,6 +1392,10 @@ impl MainPaneView {
         width: Pixels,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.diff_word_wrap {
+            return;
+        }
+
         if self
             .diff_horizontal_scroll
             .record_content_width(column, width)
@@ -2747,6 +2774,24 @@ impl MainPaneView {
         }
 
         self.diff_word_wrap = next;
+        self.diff_wrap_visible_cache_key = None;
+        self.diff_wrap_visible_rows.clear();
+        self.reset_diff_horizontal_scroll_state();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_diff_show_line_numbers(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_show_line_numbers == next {
+            return;
+        }
+
+        self.diff_show_line_numbers = next;
+        self.diff_wrap_visible_cache_key = None;
+        self.reset_diff_horizontal_scroll_state();
         cx.notify();
     }
 
@@ -3053,6 +3098,20 @@ impl MainPaneView {
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
             root.sync_diff_word_wrap_from_pane(next, cx);
+        });
+    }
+
+    pub(in crate::view) fn set_diff_show_line_numbers_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_show_line_numbers != next {
+            self.set_diff_show_line_numbers(next, cx);
+        }
+        let root_view = self.root_view.clone();
+        let _ = root_view.update(cx, |root, cx| {
+            root.sync_diff_show_line_numbers_from_pane(next, cx);
         });
     }
 
@@ -3733,7 +3792,7 @@ impl MainPaneView {
         false
     }
 
-    pub(in crate::view) fn diff_visible_len(&self) -> usize {
+    fn diff_source_visible_len(&self) -> usize {
         if self.is_collapsed_diff_projection_active() {
             return self.collapsed_diff_visible_rows.len();
         }
@@ -3743,7 +3802,45 @@ impl MainPaneView {
             .unwrap_or_else(|| self.diff_visible_indices.len())
     }
 
-    pub(in crate::view) fn diff_mapped_ix_for_visible_ix(
+    pub(in crate::view) fn diff_visible_len(&self) -> usize {
+        if self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some() {
+            return self.diff_wrap_visible_rows.len();
+        }
+        self.diff_source_visible_len()
+    }
+
+    pub(in crate::view) fn diff_source_visible_ix_for_visible_ix(
+        &self,
+        visible_ix: usize,
+    ) -> Option<usize> {
+        if self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some() {
+            return self
+                .diff_wrap_visible_rows
+                .get(visible_ix)
+                .map(|row| row.source_visible_ix);
+        }
+        Some(visible_ix)
+    }
+
+    pub(in crate::view) fn diff_visual_ix_for_source_visible_ix(
+        &self,
+        source_visible_ix: usize,
+    ) -> usize {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return source_visible_ix;
+        }
+
+        let visual_ix = self
+            .diff_wrap_visible_rows
+            .partition_point(|row| row.source_visible_ix < source_visible_ix);
+        self.diff_wrap_visible_rows
+            .get(visual_ix)
+            .is_some_and(|row| row.source_visible_ix == source_visible_ix)
+            .then_some(visual_ix)
+            .unwrap_or(source_visible_ix)
+    }
+
+    pub(in crate::view) fn diff_source_mapped_ix_for_visible_ix(
         &self,
         visible_ix: usize,
     ) -> Option<usize> {
@@ -3758,9 +3855,242 @@ impl MainPaneView {
         self.diff_visible_indices.get(visible_ix).copied()
     }
 
+    pub(in crate::view) fn diff_mapped_ix_for_visible_ix(
+        &self,
+        visible_ix: usize,
+    ) -> Option<usize> {
+        if self.diff_word_wrap
+            && let Some(row) = self.diff_wrap_visible_rows.get(visible_ix)
+        {
+            return self.diff_source_mapped_ix_for_visible_ix(row.source_visible_ix);
+        }
+        self.diff_source_mapped_ix_for_visible_ix(visible_ix)
+    }
+
+    pub(in crate::view) fn diff_text_wrap_for_visible_ix(
+        &self,
+        visible_ix: usize,
+    ) -> Option<rows::DiffTextWrapSlice> {
+        if !self.diff_word_wrap {
+            return None;
+        }
+        let row = self.diff_wrap_visible_rows.get(visible_ix)?;
+        let is_split_source = row.wrap_ix > 0
+            || self
+                .diff_wrap_visible_rows
+                .get(visible_ix.saturating_add(1))
+                .is_some_and(|next| next.source_visible_ix == row.source_visible_ix);
+        if !is_split_source {
+            return None;
+        }
+        let columns = match self.diff_view {
+            DiffViewMode::Inline => self
+                .diff_wrap_visible_cache_key
+                .map(|key| key.inline_columns)?,
+            DiffViewMode::Split => self
+                .diff_wrap_visible_cache_key
+                .map(|key| key.split_columns)?,
+        };
+        Some(rows::DiffTextWrapSlice {
+            wrap_ix: row.wrap_ix,
+            wrap_columns: columns,
+        })
+    }
+
+    pub(in crate::view) fn ensure_diff_wrap_visible_rows(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_word_wrap {
+            if self.diff_wrap_visible_cache_key.take().is_some()
+                || !self.diff_wrap_visible_rows.is_empty()
+            {
+                self.diff_wrap_visible_rows.clear();
+                self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
+                if self.diff_search_has_query() {
+                    self.diff_search_recompute_matches_for_current_view_preserving_current();
+                }
+            }
+            return;
+        }
+
+        let source_len = self.diff_source_visible_len();
+        let (inline_columns, split_columns) = self.diff_wrap_columns(window, cx);
+        let key = DiffWrapVisibleCacheKey {
+            source_len,
+            diff_view: self.diff_view,
+            is_file_view: self.is_file_diff_view_active(),
+            collapsed_projection_active: self.is_collapsed_diff_projection_active(),
+            projection_rev: if self.is_collapsed_diff_projection_active() {
+                self.diff_visible_projection_rev
+            } else {
+                0
+            },
+            diff_cache_rev: self.diff_cache_rev,
+            file_diff_cache_seq: self.file_diff_cache_seq,
+            inline_columns,
+            split_columns,
+        };
+        if self.diff_wrap_visible_cache_key == Some(key) {
+            return;
+        }
+
+        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_rows.reserve(source_len);
+        for source_visible_ix in 0..source_len {
+            let row_count = self
+                .diff_wrap_row_count_for_source_visible_ix(
+                    source_visible_ix,
+                    inline_columns,
+                    split_columns,
+                )
+                .max(1);
+            for wrap_ix in 0..row_count {
+                self.diff_wrap_visible_rows.push(DiffWrapVisualRow {
+                    source_visible_ix,
+                    wrap_ix,
+                });
+            }
+        }
+        self.diff_wrap_visible_cache_key = Some(key);
+        self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
+        if self.diff_search_has_query() {
+            self.diff_search_recompute_matches_for_current_view_preserving_current();
+        }
+    }
+
+    fn diff_wrap_columns(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> (usize, usize) {
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
+        let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
+        let char_width = rows::diff_canvas_text_wrap_char_width(window);
+        let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
+        let inline_text_start = if self.diff_show_line_numbers {
+            rows::diff_canvas_inline_text_start(ui_scale_percent)
+        } else {
+            pad
+        };
+        let single_text_start = if self.diff_show_line_numbers {
+            rows::diff_canvas_single_column_text_start(ui_scale_percent)
+        } else {
+            pad
+        };
+        let inline_columns =
+            diff_wrap_columns_for_width(content_width - inline_text_start - pad, char_width);
+
+        let (left_w, right_w) =
+            crate::view::diff_split_column_widths(content_width, self.diff_split_ratio);
+        let split_text_width = left_w.min(right_w).max(px(0.0)) - single_text_start - pad;
+        let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
+        (inline_columns, split_columns)
+    }
+
+    fn diff_wrap_row_count_for_source_visible_ix(
+        &self,
+        source_visible_ix: usize,
+        inline_columns: usize,
+        split_columns: usize,
+    ) -> usize {
+        if self.is_collapsed_diff_projection_active() {
+            let Some(row) = self.collapsed_visible_row(source_visible_ix) else {
+                return 1;
+            };
+            return match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => 1,
+                CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
+                    DiffViewMode::Inline => self
+                        .file_diff_inline_render_data(row_ix)
+                        .map(|row| {
+                            rows::diff_wrap_row_count_for_text(row.text.as_ref(), inline_columns)
+                        })
+                        .unwrap_or(1),
+                    DiffViewMode::Split => self
+                        .file_diff_split_render_data(row_ix)
+                        .map(|row| diff_wrap_split_row_count(&row, split_columns))
+                        .unwrap_or(1),
+                },
+            };
+        }
+
+        let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return 1;
+        };
+        if self.is_file_diff_view_active() {
+            return match self.diff_view {
+                DiffViewMode::Inline => self
+                    .file_diff_inline_render_data(mapped_ix)
+                    .map(|row| {
+                        rows::diff_wrap_row_count_for_text(row.text.as_ref(), inline_columns)
+                    })
+                    .or_else(|| {
+                        self.file_diff_inline_row(mapped_ix).map(|line| {
+                            rows::diff_wrap_row_count_for_text(
+                                crate::view::diff_utils::diff_content_text(&line),
+                                inline_columns,
+                            )
+                        })
+                    })
+                    .unwrap_or(1),
+                DiffViewMode::Split => self
+                    .file_diff_split_render_data(mapped_ix)
+                    .map(|row| diff_wrap_split_row_count(&row, split_columns))
+                    .unwrap_or(1),
+            };
+        }
+
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                let click_kind = self
+                    .diff_click_kinds
+                    .get(mapped_ix)
+                    .copied()
+                    .unwrap_or(DiffClickKind::Line);
+                if click_kind != DiffClickKind::Line {
+                    return 1;
+                }
+                self.patch_diff_row(mapped_ix)
+                    .map(|line| {
+                        rows::diff_wrap_row_count_for_text(
+                            crate::view::diff_utils::diff_content_text(&line),
+                            inline_columns,
+                        )
+                    })
+                    .unwrap_or(1)
+            }
+            DiffViewMode::Split => match self.patch_diff_split_row(mapped_ix) {
+                Some(PatchSplitRow::Aligned { row, .. }) => {
+                    diff_wrap_split_row_count(&row, split_columns)
+                }
+                Some(PatchSplitRow::Raw { src_ix, click_kind }) => {
+                    if click_kind != DiffClickKind::Line {
+                        return 1;
+                    }
+                    self.patch_diff_row(src_ix)
+                        .map(|line| {
+                            rows::diff_wrap_row_count_for_text(
+                                crate::view::diff_utils::diff_content_text(&line),
+                                split_columns,
+                            )
+                        })
+                        .unwrap_or(1)
+                }
+                None => 1,
+            },
+        }
+    }
+
     pub(super) fn diff_src_ixs_for_visible_ix(&self, visible_ix: usize) -> Vec<usize> {
         if self.is_collapsed_diff_projection_active() {
-            let Some(row) = self.collapsed_visible_row(visible_ix) else {
+            let Some(source_visible_ix) = self.diff_source_visible_ix_for_visible_ix(visible_ix)
+            else {
+                return Vec::new();
+            };
+            let Some(row) = self.collapsed_visible_row(source_visible_ix) else {
                 return Vec::new();
             };
             match row {
@@ -3911,12 +4241,12 @@ impl MainPaneView {
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
-                visible_ix: 0,
+                source_visible_ix: 0,
                 region,
                 offset: 0,
             });
             self.diff_text_head = Some(DiffTextPos {
-                visible_ix: end_visible_ix,
+                source_visible_ix: end_visible_ix,
                 region,
                 offset: end_offset,
             });
@@ -3937,12 +4267,12 @@ impl MainPaneView {
 
             self.diff_text_selecting = false;
             self.diff_text_anchor = Some(DiffTextPos {
-                visible_ix: 0,
+                source_visible_ix: 0,
                 region: DiffTextRegion::Inline,
                 offset: 0,
             });
             self.diff_text_head = Some(DiffTextPos {
-                visible_ix: end_visible_ix,
+                source_visible_ix: end_visible_ix,
                 region: DiffTextRegion::Inline,
                 offset: end_offset,
             });
@@ -3950,7 +4280,7 @@ impl MainPaneView {
             return;
         }
 
-        if self.diff_visible_len() == 0 {
+        if self.diff_source_visible_len() == 0 {
             return;
         }
 
@@ -3964,18 +4294,20 @@ impl MainPaneView {
                 .unwrap_or(DiffTextRegion::SplitLeft),
         };
 
-        let end_visible_ix = self.diff_visible_len() - 1;
+        let end_visible_ix = self.diff_source_visible_len() - 1;
         let end_region = start_region;
-        let end_offset = self.diff_text_line_len_for_region(end_visible_ix, end_region);
+        let end_offset = self
+            .diff_text_full_line_for_region(end_visible_ix, end_region)
+            .len();
 
         self.diff_text_selecting = false;
         self.diff_text_anchor = Some(DiffTextPos {
-            visible_ix: 0,
+            source_visible_ix: 0,
             region: start_region,
             offset: 0,
         });
         self.diff_text_head = Some(DiffTextPos {
-            visible_ix: end_visible_ix,
+            source_visible_ix: end_visible_ix,
             region: end_region,
             offset: end_offset,
         });

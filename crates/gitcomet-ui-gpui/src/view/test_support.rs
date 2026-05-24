@@ -87,3 +87,7 @@ pub(in crate::view) fn diff_reveal_whitespace_chars(view: &GitCometView) -> bool
 pub(in crate::view) fn diff_word_wrap(view: &GitCometView) -> bool {
     view.diff_word_wrap
 }
+
+pub(in crate::view) fn diff_show_line_numbers(view: &GitCometView) -> bool {
+    view.diff_show_line_numbers
+}
