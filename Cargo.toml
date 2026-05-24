@@ -51,8 +51,8 @@ http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"
 lru = "0.18"
 memchr = "2.8.0"
-mimalloc = { version = "0.1.51", features = ["extended"] }
-libmimalloc-sys = { version = "0.1.48", features = ["extended"] }
+mimalloc = { version = "0.1.52", features = ["extended"] }
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
@@ -63,7 +63,7 @@ rustix = { version = "1.1.4", default-features = false, features = ["std", "proc
 semver = "1.0.28"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 smallvec = "1.15.1"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
@@ -87,7 +87,7 @@ tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-w
 tree-sitter-html = "0.23.2"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
-tree-sitter-jsdoc = "0.23.2"
+tree-sitter-jsdoc = "0.25.0"
 tree-sitter-json = "0.24.8"
 tree-sitter-kotlin-sg = "0.4.1"
 tree-sitter-lua = "0.5.0"
@@ -98,7 +98,7 @@ tree-sitter-php = "0.24.2"
 tree-sitter-powershell = "0.26.4"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.2.0"
-tree-sitter-regex = "0.24.3"
+tree-sitter-regex = "0.25.0"
 tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-scala = "0.26.0"
