@@ -90,6 +90,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
         Msg::OpenRepo(_)
             | Msg::RestoreSession { .. }
             | Msg::ReloadRepo { .. }
+            | Msg::RepoActivated { .. }
             | Msg::RepoExternallyChanged { .. }
             | Msg::SetHistoryScope { .. }
             | Msg::LoadMoreHistory { .. }
@@ -695,6 +696,7 @@ pub(super) fn reduce(
             Vec::new()
         }
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
+        Msg::RepoActivated { .. } => Vec::new(),
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(state, repo_id, change)
         }

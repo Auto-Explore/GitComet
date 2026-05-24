@@ -97,7 +97,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Raw diff and conflict diff views. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
-| Toggle whitespace visibility | `Option-W` | `Alt-W` | Raw diff / conflict diff only. |
+| Toggle whitespace characters | `Option-W` | `Alt-W` | Text diff / conflict diff only. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |

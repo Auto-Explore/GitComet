@@ -130,6 +130,8 @@ impl MainPaneView {
                         line_number_string(u32::try_from(ix + 1).ok()),
                         None,
                         None,
+                        None,
+                        this.reveal_whitespace_chars,
                     );
                 };
                 let streamed_spec = worktree_preview_streamed_spec(
@@ -198,6 +200,8 @@ impl MainPaneView {
                     line_no,
                     styled,
                     streamed_spec,
+                    Some(raw_text.as_ref()),
+                    this.reveal_whitespace_chars,
                 )
             })
             .collect()

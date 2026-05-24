@@ -2990,6 +2990,15 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
     let whitespace_bounds = cx
         .debug_bounds("context_menu_show_whitespace_changes")
         .expect("expected whitespace setting to be rendered in the diff action menu");
+    assert!(
+        cx.debug_bounds("context_menu_reveal_whitespace_characters")
+            .is_some(),
+        "expected reveal whitespace characters setting to be rendered in the diff action menu"
+    );
+    assert!(
+        cx.debug_bounds("context_menu_word_wrap").is_some(),
+        "expected word wrap setting to be rendered in the diff action menu"
+    );
     cx.simulate_click(whitespace_bounds.center(), Modifiers::default());
     draw_and_drain_test_window(cx);
 
@@ -3012,6 +3021,44 @@ fn diff_action_menu_contains_whitespace_setting(cx: &mut gpui::TestAppContext) {
         cx.debug_bounds("context_menu_show_whitespace_changes")
             .is_some(),
         "expected the whitespace setting to remain visible after toggling"
+    );
+
+    let reveal_bounds = cx
+        .debug_bounds("context_menu_reveal_whitespace_characters")
+        .expect("expected reveal whitespace setting to remain visible");
+    cx.simulate_click(reveal_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(
+            |_window, app| crate::view::test_support::diff_reveal_whitespace_chars(view.read(app))
+        ),
+        "expected selecting reveal whitespace to toggle the global reveal preference"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the diff action menu to remain open after selecting reveal whitespace"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected selecting reveal whitespace to restore diff-panel focus"
+    );
+
+    let word_wrap_bounds = cx
+        .debug_bounds("context_menu_word_wrap")
+        .expect("expected word wrap setting to remain visible");
+    cx.simulate_click(word_wrap_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| crate::view::test_support::diff_word_wrap(view.read(app))),
+        "expected selecting word wrap to toggle the global word wrap preference"
+    );
+    assert!(
+        popover_is_open(cx, &view),
+        "expected the diff action menu to remain open after selecting word wrap"
+    );
+    assert!(
+        diff_panel_is_focused(cx, &view),
+        "expected selecting word wrap to restore diff-panel focus"
     );
 }
 

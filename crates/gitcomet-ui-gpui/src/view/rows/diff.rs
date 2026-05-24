@@ -565,6 +565,7 @@ impl MainPaneView {
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
+        let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         if this.is_collapsed_diff_projection_active() {
@@ -765,6 +766,8 @@ impl MainPaneView {
                                 None,
                                 styled,
                                 streamed_spec,
+                                Some(row.text.as_ref()),
+                                reveal_whitespace_chars,
                                 false,
                                 cx,
                             )
@@ -1067,6 +1070,11 @@ impl MainPaneView {
                         None,
                         styled,
                         streamed_spec,
+                        render_data
+                            .as_ref()
+                            .map(|row| row.text.as_ref())
+                            .or_else(|| Some(diff_content_text(&line))),
+                        reveal_whitespace_chars,
                         false,
                         cx,
                     )
@@ -1199,6 +1207,12 @@ impl MainPaneView {
                     header_display,
                     styled,
                     streamed_spec,
+                    Some(if matches!(click_kind, DiffClickKind::Line) {
+                        diff_content_text(&line)
+                    } else {
+                        line.text.as_ref()
+                    }),
+                    reveal_whitespace_chars,
                     context_menu_active,
                     cx,
                 )
@@ -1238,6 +1252,7 @@ impl MainPaneView {
             });
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
+        let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
@@ -1427,6 +1442,7 @@ impl MainPaneView {
                                 visual_kind,
                                 styled,
                                 streamed_spec,
+                                reveal_whitespace_chars,
                                 cx,
                             )
                         }
@@ -1549,6 +1565,7 @@ impl MainPaneView {
                         visual_kind,
                         styled,
                         streamed_spec,
+                        reveal_whitespace_chars,
                         cx,
                     )
                 })
@@ -1670,6 +1687,7 @@ impl MainPaneView {
                             visual_kind,
                             styled,
                             streamed_spec,
+                            reveal_whitespace_chars,
                             cx,
                         )
                     }
@@ -1767,6 +1785,8 @@ fn diff_row(
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
     context_menu_active: bool,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
@@ -1907,6 +1927,8 @@ fn diff_row(
             gutter_fg,
             styled,
             streamed_spec,
+            raw_text,
+            reveal_whitespace_chars,
         ),
         DiffViewMode::Split => {
             let left_kind = if visual_kind == DiffLineKind::Remove {
@@ -1941,6 +1963,14 @@ fn diff_row(
                 DiffLineKind::Add | DiffLineKind::Context => streamed_spec,
                 _ => None,
             };
+            let left_raw_text = match line.kind {
+                DiffLineKind::Remove | DiffLineKind::Context => raw_text,
+                _ => None,
+            };
+            let right_raw_text = match line.kind {
+                DiffLineKind::Add | DiffLineKind::Context => raw_text,
+                _ => None,
+            };
 
             diff_canvas::split_diff_line_row_canvas(
                 theme,
@@ -1961,6 +1991,9 @@ fn diff_row(
                 right_text,
                 left_streamed_spec,
                 right_streamed_spec,
+                left_raw_text,
+                right_raw_text,
+                reveal_whitespace_chars,
             )
         }
     }
@@ -2237,6 +2270,7 @@ fn patch_split_column_row(
     visual_kind: FileDiffRowKind,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
+    reveal_whitespace_chars: bool,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2272,6 +2306,12 @@ fn patch_split_column_row(
         line_no,
         styled,
         streamed_spec,
+        match column {
+            PatchSplitColumn::Left => row.old.as_ref(),
+            PatchSplitColumn::Right => row.new.as_ref(),
+        }
+        .map(|text| text.as_ref()),
+        reveal_whitespace_chars,
     )
 }
 

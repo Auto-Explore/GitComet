@@ -123,9 +123,9 @@ fn conflict_display_text(
     reveal_whitespace_chars: bool,
 ) -> SharedString {
     match styled {
-        Some(styled) if reveal_whitespace_chars => whitespace_visible_text(styled.text.as_ref()),
+        Some(_styled) if reveal_whitespace_chars => whitespace_visible_line_text(text.as_ref()),
         Some(styled) => styled.text.clone(),
-        None if reveal_whitespace_chars => whitespace_visible_text(text.as_ref()),
+        None if reveal_whitespace_chars => whitespace_visible_line_text(text.as_ref()),
         None => text.clone(),
     }
 }
@@ -1149,6 +1149,7 @@ impl MainPaneView {
         let requested_rows = range.len();
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let show_ws = this.reveal_whitespace_chars;
         if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
             let unresolved_row_bg =
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
@@ -1160,7 +1161,11 @@ impl MainPaneView {
             let mut elements = Vec::with_capacity(requested_rows);
 
             let push_row = |ix: usize, line: &str| {
-                let line_text = SharedString::new(line);
+                let line_text = if show_ws {
+                    whitespace_visible_line_text(line)
+                } else {
+                    SharedString::new(line)
+                };
                 let min_width = conflict_resolved_output_row_min_width(
                     window,
                     &line_text,
@@ -1300,9 +1305,14 @@ impl MainPaneView {
                         .child("")
                         .into_any_element();
                 }
+                let display_line_text = if show_ws {
+                    whitespace_visible_line_text(line_text.as_ref())
+                } else {
+                    line_text.clone()
+                };
                 let min_width = conflict_resolved_output_row_min_width(
                     window,
-                    &line_text,
+                    &display_line_text,
                     editor_font_family.as_str(),
                 );
 
@@ -1343,7 +1353,30 @@ impl MainPaneView {
                         .as_ref()
                         .or(cached_styled)
                         .expect("resolved preview row style should exist after populate");
-                    if styled.highlights.is_empty() {
+                    if show_ws {
+                        let visible =
+                            whitespace_visible_line_styled_text_for_raw(styled, line_text.as_ref());
+                        if visible.highlights.is_empty() {
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .child(visible.text)
+                                .into_any_element()
+                        } else {
+                            let visible_text = visible.text;
+                            let visible_highlights = visible.highlights;
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .child(
+                                    gpui::StyledText::new(visible_text)
+                                        .with_highlights(visible_highlights.iter().cloned()),
+                                )
+                                .into_any_element()
+                        }
+                    } else if styled.highlights.is_empty() {
                         div()
                             .w_full()
                             .min_w(px(0.0))
@@ -1366,7 +1399,7 @@ impl MainPaneView {
                         .w_full()
                         .min_w(px(0.0))
                         .overflow_hidden()
-                        .child(line_text)
+                        .child(display_line_text)
                         .into_any_element()
                 };
 
@@ -1776,7 +1809,7 @@ fn conflict_diff_text_cell(
 ) -> AnyElement {
     let Some(styled) = styled else {
         let display = if reveal_whitespace_chars {
-            whitespace_visible_text(text.as_ref())
+            whitespace_visible_line_text(text.as_ref())
         } else {
             text
         };
@@ -1790,7 +1823,7 @@ fn conflict_diff_text_cell(
 
     if styled.highlights.is_empty() {
         let display = if reveal_whitespace_chars {
-            whitespace_visible_text(styled.text.as_ref())
+            whitespace_visible_line_text(text.as_ref())
         } else {
             styled.text.clone()
         };
@@ -1803,23 +1836,25 @@ fn conflict_diff_text_cell(
     }
 
     if reveal_whitespace_chars {
-        let (display, highlights) = whitespace_visible_text_and_highlights(
-            styled.text.as_ref(),
-            styled.highlights.as_ref(),
-        );
-        if highlights.is_empty() {
+        let visible = whitespace_visible_line_styled_text_for_raw(styled, text.as_ref());
+        if visible.highlights.is_empty() {
             return div()
                 .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .child(display)
+                .child(visible.text)
                 .into_any_element();
         }
+        let visible_text = visible.text;
+        let visible_highlights = visible.highlights;
         return div()
             .flex_1()
             .min_w(px(0.0))
             .overflow_hidden()
-            .child(gpui::StyledText::new(display).with_highlights(highlights))
+            .child(
+                gpui::StyledText::new(visible_text)
+                    .with_highlights(visible_highlights.iter().cloned()),
+            )
             .into_any_element();
     }
 
@@ -1834,10 +1869,12 @@ fn conflict_diff_text_cell(
         .into_any_element()
 }
 
+#[cfg(test)]
 fn whitespace_visible_text(text: &str) -> SharedString {
     whitespace_visible_text_and_highlights(text, &[]).0
 }
 
+#[cfg(test)]
 fn whitespace_visible_text_and_highlights(
     text: &str,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
@@ -2020,6 +2057,14 @@ mod tests {
     fn whitespace_visible_text_marks_all_whitespace_kinds() {
         let display = whitespace_visible_text(" \t\r\n");
         assert_eq!(display.as_ref(), "·→␍↵");
+    }
+
+    #[test]
+    fn conflict_display_text_reveals_implicit_line_break_marker() {
+        let text: SharedString = "a b\t".into();
+        let display = conflict_display_text(&text, None, true);
+
+        assert_eq!(display.as_ref(), "a·b→↵");
     }
 
     #[test]

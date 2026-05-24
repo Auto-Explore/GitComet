@@ -381,12 +381,15 @@ impl MainPaneView {
                         self.ensure_diff_visible_indices();
                         self.maybe_autoscroll_diff_to_first_change();
 
-                        if self.diff_word_wrap
-                            && self.diff_content_mode == DiffContentMode::Full
-                            && !self.is_file_diff_view_active()
-                        {
+                        if self.diff_word_wrap && self.diff_content_mode == DiffContentMode::Full {
                             self.ensure_file_diff_inline_text_materialized();
-                            let raw = self.file_diff_inline_text.clone();
+                            let raw = if self.reveal_whitespace_chars {
+                                rows::whitespace_visible_multiline_text(
+                                    self.file_diff_inline_text.as_ref(),
+                                )
+                            } else {
+                                self.file_diff_inline_text.clone()
+                            };
                             self.diff_raw_input.update(cx, |input, cx| {
                                 input.set_theme(theme, cx);
                                 input.set_soft_wrap(true, cx);
@@ -398,6 +401,7 @@ impl MainPaneView {
 
                             return div()
                                 .id("diff_word_wrap_scroll")
+                                .debug_selector(|| "diff_word_wrap_scroll".to_string())
                                 .bg(theme.colors.window_bg)
                                 .font_family(editor_font_family.clone())
                                 .flex()

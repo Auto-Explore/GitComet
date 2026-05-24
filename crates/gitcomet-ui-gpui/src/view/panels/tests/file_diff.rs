@@ -1625,6 +1625,199 @@ fn diff_content_mode_main_pane_persist_path_does_not_reenter_main_pane_updates(
 }
 
 #[gpui::test]
+fn diff_word_wrap_toggles_full_file_diff_soft_wrap_path(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let path = PathBuf::from("src/lib.rs");
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+ first line
+-old line
++new line with enough text to exercise the soft wrap render path
+"
+    .to_string();
+    let old_text = "first line\nold line\n".to_string();
+    let new_text =
+        "first line\nnew line with enough text to exercise the soft wrap render path\n".to_string();
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(187),
+        "word_wrap_full_file_diff",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.set_diff_word_wrap(false, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full file diff ready for word wrap toggle",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.is_file_diff_view_active()
+                && pane.diff_visible_len() > 0
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} file_active={} visible_len={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active(),
+                pane.diff_visible_len(),
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_word_wrap_scroll").is_none(),
+        "word wrap off should render the file diff row list, not the soft-wrap input"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    cx.update(|_window, app| {
+        assert!(crate::view::test_support::diff_word_wrap(view.read(app)));
+        assert!(view.read(app).main_pane.read(app).diff_word_wrap);
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_word_wrap_scroll").is_some(),
+        "word wrap on should render the soft-wrap diff input"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(false, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_word_wrap_scroll").is_none(),
+        "turning word wrap off should restore the file diff row list"
+    );
+}
+
+#[gpui::test]
+fn reveal_whitespace_chars_marks_file_diff_paint_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let path = PathBuf::from("src/lib.rs");
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-alpha
++a b\t
+"
+    .to_string();
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(188),
+        "reveal_whitespace_file_diff",
+        path,
+        unified,
+        "alpha\n".to_string(),
+        "a b\t\n".to_string(),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.set_diff_word_wrap(false, cx);
+            this.set_diff_reveal_whitespace_chars(true, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "file diff ready for whitespace reveal",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.is_file_diff_view_active()
+                && pane.file_diff_inline_cache.iter().any(|line| {
+                    line.kind == gitcomet_core::domain::DiffLineKind::Add
+                        && line.text.as_ref().contains("a b\t")
+                })
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} file_active={} inline_rows={:?}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_inline_cache
+                    .iter()
+                    .map(|line| format!("{:?}:{}", line.kind, line.text.as_ref()))
+                    .collect::<Vec<_>>(),
+            )
+        },
+    );
+
+    let visible_ix = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (0..pane.diff_visible_len())
+            .find(|&visible_ix| {
+                let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                    return false;
+                };
+                pane.file_diff_inline_row(inline_ix).is_some_and(|line| {
+                    line.kind == gitcomet_core::domain::DiffLineKind::Add
+                        && line.text.as_ref().contains("a b\t")
+                })
+            })
+            .expect("expected visible added row with whitespace")
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    let record = cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        let _ = window.draw(app);
+        rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| {
+                record.visible_ix == visible_ix && record.region == DiffTextRegion::Inline
+            })
+            .expect("expected paint record for visible whitespace row")
+    });
+    assert_eq!(record.text.as_ref(), "a·b→↵");
+}
+
+#[gpui::test]
 fn diff_content_mode_switches_regular_file_diff_between_patch_and_content(
     cx: &mut gpui::TestAppContext,
 ) {

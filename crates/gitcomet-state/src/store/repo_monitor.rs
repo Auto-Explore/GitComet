@@ -311,6 +311,12 @@ impl RepoMonitorManager {
         self.handles.keys().copied().collect()
     }
 
+    pub(super) fn is_running(&self, repo_id: RepoId) -> bool {
+        self.handles
+            .get(&repo_id)
+            .is_some_and(|handle| handle.monitor_enabled.load(Ordering::Relaxed))
+    }
+
     pub(super) fn start(
         &mut self,
         repo_id: RepoId,
@@ -612,6 +618,7 @@ fn repo_monitor_thread(
     let mut watcher: RecommendedWatcher = match watcher {
         Ok(w) => w,
         Err(error) => {
+            monitor_enabled.store(false, Ordering::Relaxed);
             record_monitor_failure(
                 MonitorFailureKind::Start,
                 "repo_monitor_thread initialize watcher",
@@ -663,7 +670,9 @@ fn repo_monitor_thread(
     let mut debouncer = DebouncedChange::new(debounce, max_delay);
 
     let flush = |change: RepoExternalChange| {
-        if active_repo_id.load(Ordering::Relaxed) == repo_id.0 {
+        let active = active_repo_id.load(Ordering::Relaxed);
+        if active == repo_id.0 {
+            trace_repo_monitor_flush("flush", repo_id, change, active);
             msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
                 "repo monitor flush",
@@ -672,9 +681,12 @@ fn repo_monitor_thread(
     };
 
     let flush_if_active = |pending: Option<RepoExternalChange>| {
-        if let Some(change) = pending
-            && active_repo_id.load(Ordering::Relaxed) == repo_id.0
-        {
+        let Some(change) = pending else {
+            return;
+        };
+        let active = active_repo_id.load(Ordering::Relaxed);
+        if active == repo_id.0 {
+            trace_repo_monitor_flush("flush_if_active", repo_id, change, active);
             msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
                 "repo monitor flush_if_active",
@@ -736,6 +748,23 @@ fn repo_monitor_thread(
         }
     }
     monitor_enabled.store(false, Ordering::Relaxed);
+}
+
+fn trace_repo_monitor_flush(
+    source: &'static str,
+    repo_id: RepoId,
+    change: RepoExternalChange,
+    active_repo: u64,
+) {
+    repo_load_trace::trace!(
+        "repo_monitor_flush source={} repo_id={:?} change_worktree={} change_index={} change_git_state={} active_repo={}",
+        source,
+        repo_id,
+        change.worktree,
+        change.index,
+        change.git_state,
+        active_repo
+    );
 }
 
 fn resolve_git_dir(workdir: &Path) -> Option<PathBuf> {

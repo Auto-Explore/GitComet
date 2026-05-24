@@ -528,6 +528,28 @@ impl PopoverHost {
                     });
                 });
             }
+            ContextMenuAction::SetDiffRevealWhitespaceChars { enabled } => {
+                close_after_action = false;
+                restore_diff_panel_focus_after_action = true;
+                self.diff_reveal_whitespace_chars = enabled;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_diff_reveal_whitespace_chars_and_persist(enabled, cx);
+                    });
+                });
+            }
+            ContextMenuAction::SetDiffWordWrap { enabled } => {
+                close_after_action = false;
+                restore_diff_panel_focus_after_action = true;
+                self.diff_word_wrap = enabled;
+                let main_pane = self.main_pane.clone();
+                cx.defer(move |cx| {
+                    main_pane.update(cx, |pane, cx| {
+                        pane.set_diff_word_wrap_and_persist(enabled, cx);
+                    });
+                });
+            }
             ContextMenuAction::SetChangeTrackingView { view } => {
                 self.change_tracking_view = view;
                 let root_view = self.root_view.clone();

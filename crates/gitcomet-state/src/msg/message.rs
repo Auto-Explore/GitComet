@@ -133,6 +133,9 @@ pub enum Msg {
     ReloadRepo {
         repo_id: RepoId,
     },
+    RepoActivated {
+        repo_id: RepoId,
+    },
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,

@@ -802,6 +802,8 @@ impl MainPaneView {
         diff_scroll_sync: DiffScrollSync,
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
+        diff_reveal_whitespace_chars: bool,
+        diff_word_wrap: bool,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -1016,10 +1018,10 @@ impl MainPaneView {
             layout_details_render_width: px(420.0),
             layout_sidebar_collapsed: false,
             layout_details_collapsed: false,
-            reveal_whitespace_chars: false,
+            reveal_whitespace_chars: diff_reveal_whitespace_chars,
             diff_view: DiffViewMode::Split,
             rendered_preview_modes: RenderedPreviewModes::default(),
-            diff_word_wrap: false,
+            diff_word_wrap,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
@@ -2722,6 +2724,32 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_diff_reveal_whitespace_chars(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.reveal_whitespace_chars == next {
+            return;
+        }
+
+        self.reveal_whitespace_chars = next;
+        self.clear_diff_text_style_caches();
+        self.clear_conflict_diff_style_caches();
+        self.conflict_three_way_segments_cache.clear();
+        self.conflict_resolved_preview_segments_cache.clear();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_diff_word_wrap(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.diff_word_wrap == next {
+            return;
+        }
+
+        self.diff_word_wrap = next;
+        cx.notify();
+    }
+
     pub(in crate::view) fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -2997,6 +3025,34 @@ impl MainPaneView {
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
             root.sync_diff_whitespace_mode_from_pane(next, cx);
+        });
+    }
+
+    pub(in crate::view) fn set_diff_reveal_whitespace_chars_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.reveal_whitespace_chars != next {
+            self.set_diff_reveal_whitespace_chars(next, cx);
+        }
+        let root_view = self.root_view.clone();
+        let _ = root_view.update(cx, |root, cx| {
+            root.sync_diff_reveal_whitespace_chars_from_pane(next, cx);
+        });
+    }
+
+    pub(in crate::view) fn set_diff_word_wrap_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_word_wrap != next {
+            self.set_diff_word_wrap(next, cx);
+        }
+        let root_view = self.root_view.clone();
+        let _ = root_view.update(cx, |root, cx| {
+            root.sync_diff_word_wrap_from_pane(next, cx);
         });
     }
 

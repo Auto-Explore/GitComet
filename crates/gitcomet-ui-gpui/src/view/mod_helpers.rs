@@ -3214,6 +3214,7 @@ pub struct GitCometView {
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
+    pub(super) last_repo_activation_dispatch_at: HashMap<RepoId, Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
@@ -3223,6 +3224,8 @@ pub struct GitCometView {
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
+    pub(super) diff_reveal_whitespace_chars: bool,
+    pub(super) diff_word_wrap: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

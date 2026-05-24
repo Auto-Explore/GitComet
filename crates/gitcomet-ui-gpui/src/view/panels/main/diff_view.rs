@@ -354,7 +354,7 @@ impl MainPaneView {
                     }
                 }
                 "w" if !markdown_preview_active && !conflict_preview_active => {
-                    self.toggle_reveal_whitespace_chars();
+                    self.toggle_reveal_whitespace_chars(cx);
                     handled = true;
                 }
                 "up" => {
@@ -437,12 +437,8 @@ impl MainPaneView {
         handled
     }
 
-    fn toggle_reveal_whitespace_chars(&mut self) {
-        self.reveal_whitespace_chars = !self.reveal_whitespace_chars;
-        // Clear styled text caches so they rebuild with new whitespace setting.
-        self.clear_diff_text_style_caches();
-        self.clear_conflict_diff_style_caches();
-        self.conflict_three_way_segments_cache.clear();
+    fn toggle_reveal_whitespace_chars(&mut self, cx: &mut gpui::Context<Self>) {
+        self.set_diff_reveal_whitespace_chars_and_persist(!self.reveal_whitespace_chars, cx);
     }
 
     fn prepare_source_mode_for_diff_search(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2206,63 +2202,6 @@ impl MainPaneView {
                                 if theme.is_dark { 0.38 } else { 0.28 },
                             );
                             let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
-                            let reveal_whitespace_chars = self.reveal_whitespace_chars;
-                            let ws_pill_border_hover = if reveal_whitespace_chars {
-                                theme.colors.accent
-                            } else {
-                                view_toggle_border
-                            };
-                            let ws_pill_text = if theme.is_dark {
-                                theme.colors.text
-                            } else {
-                                gpui::rgba(0xffffffff)
-                            };
-                            let reveal_whitespace_control = div()
-                                .id("conflict_reveal_whitespace_chars_pill")
-                                .h(components::control_height(ui_scale_percent))
-                                .px(crate::ui_scale::design_px_from_percent(
-                                    8.0,
-                                    ui_scale_percent,
-                                ))
-                                .py(crate::ui_scale::design_px_from_percent(
-                                    2.0,
-                                    ui_scale_percent,
-                                ))
-                                .rounded(px(theme.radii.pill))
-                                .bg(gpui::rgba(0x000000ff))
-                                .border_1()
-                                .border_color(gpui::rgba(0x00000000))
-                                .text_xs()
-                                .line_height(crate::ui_scale::design_px_from_percent(
-                                    14.0,
-                                    ui_scale_percent,
-                                ))
-                                .text_color(ws_pill_text)
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(move |pill| pill.border_color(ws_pill_border_hover))
-                                .active(move |pill| pill.border_color(ws_pill_border_hover))
-                                .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
-                                .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                                    this.toggle_reveal_whitespace_chars();
-                                    cx.notify();
-                                }))
-                                .gitcomet_tooltip(theme, "Reveal whitespace characters (Alt+W)".into())
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child("Reveal whitespace")
-                                        .when(reveal_whitespace_chars, |d| {
-                                            d.child(
-                                                div().child(svg_icon(
-                                                    "icons/check.svg",
-                                                    theme.colors.success,
-                                                    px(12.0),
-                                                )),
-                                            )
-                                        }),
-                                );
 
                             let view_mode_controls = div()
                                 .id("conflict_view_mode_toggle")
@@ -2519,8 +2458,7 @@ impl MainPaneView {
                                         .items_center()
                                         .gap_2()
                                         .when(!is_rendered_preview_active, |d| {
-                                            d.child(reveal_whitespace_control)
-                                                .child(view_mode_controls)
+                                            d.child(view_mode_controls)
                                         }),
                                 );
 
@@ -3736,6 +3674,9 @@ impl MainPaneView {
                                     raw.push_str(line.text.as_ref());
                                     raw.push('\n');
                                 }
+                                if self.reveal_whitespace_chars {
+                                    raw = rows::whitespace_visible_multiline_text(&raw).to_string();
+                                }
                                 self.diff_raw_input.update(cx, |input, cx| {
                                     input.set_theme(theme, cx);
                                     input.set_soft_wrap(true, cx);
@@ -3744,6 +3685,7 @@ impl MainPaneView {
                                 });
                                 div()
                                     .id("diff_word_wrap_scroll")
+                                    .debug_selector(|| "diff_word_wrap_scroll".to_string())
                                     .bg(theme.colors.window_bg)
                                     .font_family(editor_font_family.clone())
                                     .flex()

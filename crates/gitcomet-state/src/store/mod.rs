@@ -1,5 +1,5 @@
 use crate::model::{AppState, RepoId};
-use crate::msg::{Msg, StoreEvent};
+use crate::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
@@ -321,9 +321,18 @@ impl AppStore {
                 }
 
                 if repo_load_trace::enabled() {
+                    let msg_repo_id = repo_load_trace::msg_repo_id(&msg);
+                    let change_flags = repo_load_trace::msg_external_change(&msg).map(|change| {
+                        format!(
+                            "worktree={},index={},git_state={}",
+                            change.worktree, change.index, change.git_state
+                        )
+                    });
                     repo_load_trace::trace!(
-                        "worker received msg={} active_repo={:?} queued_tokens={}",
+                        "worker received msg={} repo_id={:?} change={} active_repo={:?} queued_tokens={}",
                         repo_load_trace::msg_name(&msg),
+                        msg_repo_id,
+                        change_flags.as_deref().unwrap_or("-"),
                         thread_state
                             .read()
                             .unwrap_or_else(|e| e.into_inner())
@@ -632,6 +641,53 @@ impl AppStore {
                         }
                         handle_reducer_effects(
                             std::iter::empty::<crate::msg::Effect>(),
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                metadata_executor: &metadata_executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
+                        );
+                    }
+                    Msg::RepoActivated { repo_id } => {
+                        if repo_monitors.is_running(repo_id) {
+                            repo_load_trace::trace!(
+                                "repo_activated_monitor_active_skip_refresh repo_id={:?} monitor_running=true",
+                                repo_id
+                            );
+                            continue;
+                        }
+
+                        repo_load_trace::trace!(
+                            "repo_activated_monitor_unavailable_fallback_refresh repo_id={:?} monitor_running=false",
+                            repo_id
+                        );
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            let effects = reduce(
+                                &mut repos,
+                                &id_alloc,
+                                app_state,
+                                Msg::RepoExternallyChanged {
+                                    repo_id,
+                                    change: RepoExternalChange::GitState,
+                                },
+                            );
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
                             ReducerEffectsContext {
                                 thread_state: &thread_state,
                                 active_repo_id: &active_repo_id,

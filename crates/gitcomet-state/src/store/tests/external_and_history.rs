@@ -19,6 +19,65 @@ fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
 }
 
 #[test]
+fn repo_activated_is_reducer_noop_by_itself() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoActivated { repo_id },
+    );
+
+    assert!(effects.is_empty());
+    assert!(!state.repos[0].status.is_loading());
+    assert!(!state.repos[0].log.is_loading());
+}
+
+#[test]
+fn repo_load_trace_names_repo_activation_and_refresh_messages() {
+    let repo_id = RepoId(1);
+
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::RepoActivated { repo_id }),
+        "RepoActivated"
+    );
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        }),
+        "RepoExternallyChanged"
+    );
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::ReloadRepo { repo_id }),
+        "ReloadRepo"
+    );
+    assert_eq!(
+        repo_load_trace::msg_repo_id(&Msg::RepoActivated { repo_id }),
+        Some(repo_id)
+    );
+    assert_eq!(
+        repo_load_trace::msg_external_change(&Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        }),
+        Some(crate::msg::RepoExternalChange::GitState)
+    );
+}
+
+#[test]
 fn external_worktree_change_refreshes_status_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

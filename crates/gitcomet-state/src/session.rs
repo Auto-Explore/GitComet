@@ -33,6 +33,8 @@ pub struct UiSession {
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
+    pub diff_reveal_whitespace_chars: Option<bool>,
+    pub diff_word_wrap: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -138,6 +140,8 @@ struct UiSessionFile {
     diff_scroll_sync: Option<String>,
     diff_content_mode: Option<String>,
     diff_whitespace_mode: Option<String>,
+    diff_reveal_whitespace_chars: Option<bool>,
+    diff_word_wrap: Option<bool>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
     history_show_graph: Option<bool>,
@@ -218,6 +222,8 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_scroll_sync: file.diff_scroll_sync,
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
+        diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
+        diff_word_wrap: file.diff_word_wrap,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
         history_show_graph: file.history_show_graph,
@@ -506,6 +512,8 @@ pub struct UiSettings {
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
+    pub diff_reveal_whitespace_chars: Option<bool>,
+    pub diff_word_wrap: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -578,6 +586,12 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     }
     if let Some(value) = settings.diff_whitespace_mode {
         file.diff_whitespace_mode = Some(value);
+    }
+    if let Some(value) = settings.diff_reveal_whitespace_chars {
+        file.diff_reveal_whitespace_chars = Some(value);
+    }
+    if let Some(value) = settings.diff_word_wrap {
+        file.diff_word_wrap = Some(value);
     }
     if let Some(value) = settings.change_tracking_height {
         file.change_tracking_height = Some(value);
@@ -2937,6 +2951,45 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.diff_whitespace_mode.as_deref(), Some("ignore"));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_diff_reveal_and_word_wrap() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                diff_reveal_whitespace_chars: Some(true),
+                diff_word_wrap: Some(true),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(loaded.diff_reveal_whitespace_chars, Some(true));
+        assert_eq!(loaded.diff_word_wrap, Some(true));
     }
 
     #[test]

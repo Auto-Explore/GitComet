@@ -64,6 +64,61 @@ fn unavailable_git_runtime_state() -> GitRuntimeState {
     }
 }
 
+fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn window_activation_dispatches_repo_activated_message() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    let msg = repo_activation_msg(&state, &mut last_activation_dispatch, now)
+        .expect("ready active repo should produce activation message");
+
+    assert!(matches!(msg, Msg::RepoActivated { repo_id: got } if got == repo_id));
+    assert!(!matches!(msg, Msg::RepoExternallyChanged { .. }));
+}
+
+#[test]
+fn window_activation_dispatch_is_throttled_per_repo() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    assert!(repo_activation_msg(&state, &mut last_activation_dispatch, now).is_some());
+    assert!(
+        repo_activation_msg(
+            &state,
+            &mut last_activation_dispatch,
+            now + Duration::from_secs(1),
+        )
+        .is_none()
+    );
+    assert!(matches!(
+        repo_activation_msg(
+            &state,
+            &mut last_activation_dispatch,
+            now + REPO_ACTIVATION_THROTTLE,
+        ),
+        Some(Msg::RepoActivated { repo_id: got }) if got == repo_id
+    ));
+}
+
 #[test]
 fn toast_total_lifetime_includes_fade_in_and_out() {
     let ttl = Duration::from_secs(6);

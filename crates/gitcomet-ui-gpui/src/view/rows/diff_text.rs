@@ -103,6 +103,169 @@ pub(in crate::view) fn resolved_output_line_text<'a>(
     text.get(start..end).unwrap_or("")
 }
 
+#[cfg(test)]
+pub(in crate::view) fn whitespace_visible_text(text: &str) -> SharedString {
+    whitespace_visible_text_and_highlights(text, &[]).0
+}
+
+pub(in crate::view) fn whitespace_visible_line_text(text: &str) -> SharedString {
+    whitespace_visible_line_text_and_highlights(text, &[]).0
+}
+
+pub(in crate::view) fn whitespace_visible_multiline_text(text: &str) -> SharedString {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            ' ' => out.push('\u{00B7}'),
+            '\t' => out.push('\u{2192}'),
+            '\r' => out.push('\u{240D}'),
+            '\n' => {
+                out.push('\u{21B5}');
+                out.push('\n');
+            }
+            _ if ch.is_whitespace() => out.push('\u{2420}'),
+            _ => out.push(ch),
+        }
+    }
+    out.into()
+}
+
+#[cfg(test)]
+pub(in crate::view) fn whitespace_visible_text_and_highlights(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    whitespace_visible_text_and_highlights_impl(text, highlights, false)
+}
+
+pub(in crate::view) fn whitespace_visible_line_text_and_highlights(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    whitespace_visible_text_and_highlights_impl(text, highlights, true)
+}
+
+pub(in crate::view) fn whitespace_visible_line_styled_text(
+    styled: &CachedDiffStyledText,
+) -> CachedDiffStyledText {
+    let (text, highlights) = whitespace_visible_line_text_and_highlights(
+        styled.text.as_ref(),
+        styled.highlights.as_ref(),
+    );
+    let text_hash = hash_text_content(text.as_ref());
+    let highlights_hash = hash_visible_highlights(&highlights);
+    CachedDiffStyledText {
+        text,
+        highlights: Arc::from(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
+    styled: &CachedDiffStyledText,
+    raw_text: &str,
+) -> CachedDiffStyledText {
+    if raw_text.contains('\t') && styled.text.as_ref() != raw_text {
+        let raw_highlights = expanded_highlights_to_raw_text(raw_text, styled.highlights.as_ref());
+        let (text, highlights) =
+            whitespace_visible_line_text_and_highlights(raw_text, &raw_highlights);
+        let text_hash = hash_text_content(text.as_ref());
+        let highlights_hash = hash_visible_highlights(&highlights);
+        return CachedDiffStyledText {
+            text,
+            highlights: Arc::from(highlights),
+            highlights_hash,
+            text_hash,
+        };
+    }
+
+    whitespace_visible_line_styled_text(styled)
+}
+
+fn expanded_highlights_to_raw_text(
+    raw_text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let mut expanded_to_raw = Vec::with_capacity(raw_text.len() + 1);
+    expanded_to_raw.push(0);
+    for (raw_start, ch) in raw_text.char_indices() {
+        let raw_end = raw_start + ch.len_utf8();
+        let expanded_len = if ch == '\t' { 4 } else { ch.len_utf8() };
+        for _ in 0..expanded_len {
+            expanded_to_raw.push(raw_end);
+        }
+    }
+
+    let mut remapped = Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        let Some(&start) = expanded_to_raw.get(range.start) else {
+            continue;
+        };
+        let Some(&end) = expanded_to_raw.get(range.end) else {
+            continue;
+        };
+        if start < end {
+            remapped.push((start..end, *style));
+        }
+    }
+    remapped
+}
+
+fn whitespace_visible_text_and_highlights_impl(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+    append_eol_marker: bool,
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    let mut out = String::with_capacity(text.len() + usize::from(append_eol_marker));
+    let mut byte_map = vec![0usize; text.len() + 1];
+
+    for (start, ch) in text.char_indices() {
+        byte_map[start] = out.len();
+        match ch {
+            ' ' => out.push('\u{00B7}'),
+            '\t' => out.push('\u{2192}'),
+            '\r' => out.push('\u{240D}'),
+            '\n' => out.push('\u{21B5}'),
+            _ if ch.is_whitespace() => out.push('\u{2420}'),
+            _ => out.push(ch),
+        }
+        let end = start + ch.len_utf8();
+        let mapped_end = out.len();
+        for mapped in byte_map.iter_mut().take(end + 1).skip(start + 1) {
+            *mapped = mapped_end;
+        }
+    }
+
+    if append_eol_marker && !text.ends_with('\n') {
+        out.push('\u{21B5}');
+    }
+
+    let mut remapped = Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        let start = *byte_map.get(range.start).unwrap_or(&out.len());
+        let end = *byte_map.get(range.end).unwrap_or(&out.len());
+        if start < end {
+            remapped.push((start..end, *style));
+        }
+    }
+
+    (out.into(), remapped)
+}
+
+fn hash_visible_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
+    if highlights.is_empty() {
+        return 0;
+    }
+
+    let mut hasher = FxHasher::default();
+    for (range, style) in highlights {
+        range.hash(&mut hasher);
+        style.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Returns `Auto` when a prepared document exists (full-document syntax),
 /// `HeuristicOnly` when it doesn't (per-line fallback).
 pub(super) fn syntax_mode_for_prepared_document(
@@ -614,6 +777,50 @@ mod tests {
 
         assert!(!segment_overlaps_sorted_ranges(8, 9, &ranges, &mut cursor));
         assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn whitespace_visible_text_maps_spaces_tabs_cr_and_line_breaks() {
+        assert_eq!(whitespace_visible_text(" \t\r\n").as_ref(), "·→␍↵");
+        assert_eq!(
+            whitespace_visible_multiline_text("a b\r\nc\t").as_ref(),
+            "a·b␍↵\nc→"
+        );
+    }
+
+    #[test]
+    fn whitespace_visible_line_text_appends_eol_marker_and_remaps_highlights() {
+        let style = gpui::HighlightStyle::default();
+        let (display, highlights) =
+            whitespace_visible_line_text_and_highlights("a b\t", &[(1..4, style)]);
+
+        assert_eq!(display.as_ref(), "a·b→↵");
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 1..7);
+
+        let styled = CachedDiffStyledText {
+            text: "x y".into(),
+            highlights: Arc::from(vec![(1..3, style)]),
+            highlights_hash: 7,
+            text_hash: 11,
+        };
+        let visible = whitespace_visible_line_styled_text(&styled);
+        assert_eq!(visible.text.as_ref(), "x·y↵");
+        assert_eq!(visible.highlights[0].0, 1..4);
+        assert_ne!(visible.text_hash, styled.text_hash);
+    }
+
+    #[test]
+    fn whitespace_visible_line_styled_text_for_raw_preserves_tab_markers() {
+        let style = gpui::HighlightStyle::default();
+        let styled =
+            build_cached_diff_styled_text_from_relative_highlights("a b\t", &[(3..4, style)]);
+
+        assert_eq!(styled.text.as_ref(), "a b    ");
+        let visible = whitespace_visible_line_styled_text_for_raw(&styled, "a b\t");
+
+        assert_eq!(visible.text.as_ref(), "a·b→↵");
+        assert_eq!(visible.highlights[0].0, 4..7);
     }
 
     #[test]

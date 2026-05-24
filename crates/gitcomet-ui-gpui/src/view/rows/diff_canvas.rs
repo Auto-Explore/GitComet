@@ -2,7 +2,8 @@ use super::canvas::keyed_canvas;
 use super::diff_text::{
     PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
     build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
-    syntax_highlights_for_streamed_line_slice_heuristic,
+    syntax_highlights_for_streamed_line_slice_heuristic, whitespace_visible_line_styled_text,
+    whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text,
 };
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
@@ -689,7 +690,42 @@ fn build_streamed_diff_slice_styled_text(
 fn diff_text_paint_payload(
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<&StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
 ) -> (SharedString, HighlightSpans, u64, u64) {
+    if reveal_whitespace_chars {
+        let styled = styled
+            .map(|styled| {
+                raw_text
+                    .map(|raw_text| whitespace_visible_line_styled_text_for_raw(styled, raw_text))
+                    .unwrap_or_else(|| whitespace_visible_line_styled_text(styled))
+            })
+            .or_else(|| {
+                streamed_spec.map(|spec| {
+                    let text = whitespace_visible_line_text(spec.raw_text.as_ref());
+                    let text_hash = {
+                        let mut hasher = FxHasher::default();
+                        text.as_ref().hash(&mut hasher);
+                        hasher.finish()
+                    };
+                    CachedDiffStyledText {
+                        text,
+                        highlights: empty_highlights(),
+                        highlights_hash: 0,
+                        text_hash,
+                    }
+                })
+            });
+        let text = styled.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        let highlights = styled
+            .as_ref()
+            .map(|s| Arc::clone(&s.highlights))
+            .unwrap_or_else(empty_highlights);
+        let highlights_hash = styled.as_ref().map(|s| s.highlights_hash).unwrap_or(0);
+        let text_hash = styled.as_ref().map(|s| s.text_hash).unwrap_or(0);
+        return (text, highlights, highlights_hash, text_hash);
+    }
+
     if should_stream_diff_text(streamed_spec) {
         let spec = streamed_spec.expect("streamed spec checked above");
         return (
@@ -724,9 +760,15 @@ pub(super) fn inline_diff_line_row_canvas(
     gutter_fg: gpui::Rgba,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
 ) -> AnyElement {
-    let (text, highlights, highlights_hash, text_hash) =
-        diff_text_paint_payload(styled, streamed_spec.as_ref());
+    let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
+        styled,
+        streamed_spec.as_ref(),
+        raw_text,
+        reveal_whitespace_chars,
+    );
     let revision =
         inline_row_canvas_revision_key(&old, &new, bg, fg, gutter_fg, text_hash, highlights_hash);
     let canvas_id: gpui::ElementId = ("diff_row_canvas_inline", visible_ix).into();
@@ -855,11 +897,24 @@ pub(super) fn split_diff_line_row_canvas(
     right_styled: Option<&CachedDiffStyledText>,
     left_streamed_spec: Option<StreamedDiffTextPaintSpec>,
     right_streamed_spec: Option<StreamedDiffTextPaintSpec>,
+    left_raw_text: Option<&str>,
+    right_raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
 ) -> AnyElement {
     let (left_text, left_highlights, left_highlights_hash, left_text_hash) =
-        diff_text_paint_payload(left_styled, left_streamed_spec.as_ref());
+        diff_text_paint_payload(
+            left_styled,
+            left_streamed_spec.as_ref(),
+            left_raw_text,
+            reveal_whitespace_chars,
+        );
     let (right_text, right_highlights, right_highlights_hash, right_text_hash) =
-        diff_text_paint_payload(right_styled, right_streamed_spec.as_ref());
+        diff_text_paint_payload(
+            right_styled,
+            right_streamed_spec.as_ref(),
+            right_raw_text,
+            reveal_whitespace_chars,
+        );
     let revision = split_row_canvas_revision_key(
         &old,
         &new,
@@ -1033,13 +1088,19 @@ pub(super) fn patch_split_column_row_canvas(
     line_no: SharedString,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
 ) -> AnyElement {
     let region = match column {
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
         super::diff::PatchSplitColumn::Right => DiffTextRegion::SplitRight,
     };
-    let (text, highlights, highlights_hash, text_hash) =
-        diff_text_paint_payload(styled, streamed_spec.as_ref());
+    let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
+        styled,
+        streamed_spec.as_ref(),
+        raw_text,
+        reveal_whitespace_chars,
+    );
     let revision = patch_split_row_canvas_revision_key(
         &line_no,
         bg,
@@ -1156,9 +1217,15 @@ pub(super) fn worktree_preview_row_canvas(
     line_no: SharedString,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
 ) -> AnyElement {
-    let (text, highlights, highlights_hash, text_hash) =
-        diff_text_paint_payload(styled, streamed_spec.as_ref());
+    let (text, highlights, highlights_hash, text_hash) = diff_text_paint_payload(
+        styled,
+        streamed_spec.as_ref(),
+        raw_text,
+        reveal_whitespace_chars,
+    );
 
     keyed_canvas(
         ("worktree_preview_row_canvas", ix),
@@ -1964,6 +2031,24 @@ mod tests {
             .iter()
             .map(|(range, _)| range.clone())
             .collect()
+    }
+
+    #[test]
+    fn diff_text_paint_payload_reveals_whitespace_markers() {
+        let style = HighlightStyle::default();
+        let styled = CachedDiffStyledText {
+            text: "a b\t".into(),
+            highlights: Arc::from(vec![(1..4, style)]),
+            highlights_hash: 7,
+            text_hash: 11,
+        };
+
+        let (text, highlights, _highlights_hash, text_hash) =
+            diff_text_paint_payload(Some(&styled), None, Some("a b\t"), true);
+
+        assert_eq!(text.as_ref(), "a·b→↵");
+        assert_eq!(highlights[0].0, 1..7);
+        assert_ne!(text_hash, styled.text_hash);
     }
 
     #[test]

@@ -117,6 +117,8 @@ pub(in super::super) struct PopoverHost {
     commit_push_after_enabled: bool,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
+    diff_reveal_whitespace_chars: bool,
+    diff_word_wrap: bool,
     _ui_model_subscription: gpui::Subscription,
     _clone_repo_url_input_subscription: gpui::Subscription,
     _clone_repo_parent_dir_input_subscription: gpui::Subscription,
@@ -548,6 +550,8 @@ impl PopoverHost {
         commit_push_after_enabled: bool,
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
+        diff_reveal_whitespace_chars: bool,
+        diff_word_wrap: bool,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
@@ -979,6 +983,8 @@ impl PopoverHost {
             commit_push_after_enabled,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_reveal_whitespace_chars,
+            diff_word_wrap,
             _ui_model_subscription: subscription,
             _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
             _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
@@ -2015,6 +2021,36 @@ impl PopoverHost {
         }
 
         self.diff_whitespace_mode = next;
+        if matches!(self.popover, Some(PopoverKind::DiffActionMenu)) {
+            cx.notify();
+        }
+    }
+
+    pub(in super::super) fn sync_diff_reveal_whitespace_chars(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_reveal_whitespace_chars == next {
+            return;
+        }
+
+        self.diff_reveal_whitespace_chars = next;
+        if matches!(self.popover, Some(PopoverKind::DiffActionMenu)) {
+            cx.notify();
+        }
+    }
+
+    pub(in super::super) fn sync_diff_word_wrap(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_word_wrap == next {
+            return;
+        }
+
+        self.diff_word_wrap = next;
         if matches!(self.popover, Some(PopoverKind::DiffActionMenu)) {
             cx.notify();
         }

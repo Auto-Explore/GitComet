@@ -84,8 +84,30 @@ pub(super) fn msg_name(msg: &Msg) -> &'static str {
         Msg::CloseRepo { .. } => "CloseRepo",
         Msg::SetActiveRepo { .. } => "SetActiveRepo",
         Msg::ReorderRepoTabs { .. } => "ReorderRepoTabs",
+        Msg::ReloadRepo { .. } => "ReloadRepo",
+        Msg::RepoActivated { .. } => "RepoActivated",
+        Msg::RepoExternallyChanged { .. } => "RepoExternallyChanged",
         Msg::Internal(message) => internal_msg_name(message),
         _ => "Msg",
+    }
+}
+
+pub(super) fn msg_repo_id(msg: &Msg) -> Option<RepoId> {
+    match msg {
+        Msg::CloseRepo { repo_id }
+        | Msg::SetActiveRepo { repo_id }
+        | Msg::ReorderRepoTabs { repo_id, .. }
+        | Msg::ReloadRepo { repo_id }
+        | Msg::RepoActivated { repo_id }
+        | Msg::RepoExternallyChanged { repo_id, .. } => Some(*repo_id),
+        _ => None,
+    }
+}
+
+pub(super) fn msg_external_change(msg: &Msg) -> Option<crate::msg::RepoExternalChange> {
+    match msg {
+        Msg::RepoExternallyChanged { change, .. } => Some(*change),
+        _ => None,
     }
 }
 
