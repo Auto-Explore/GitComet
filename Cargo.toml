@@ -45,7 +45,7 @@ criterion = "0.8.2"
 fontdb = "0.23.0"
 futures = "0.3.32"
 gix = { version = "0.83.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "a95a721341989fb391f56c4e4e5521b8b5196cfa" }
+gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "6d8a02e2e75b629b32ea0491f35fbc99e68b53a2" }
 http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"
 lru = "0.18"

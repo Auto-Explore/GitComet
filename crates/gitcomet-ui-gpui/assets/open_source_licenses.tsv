@@ -331,8 +331,8 @@ is_terminal_polyfill	1.70.2	MIT OR Apache-2.0
 itertools	0.13.0	MIT OR Apache-2.0
 itertools	0.14.0	MIT OR Apache-2.0
 itoa	1.0.18	MIT OR Apache-2.0
-jiff	0.2.24	Unlicense OR MIT
-jiff-static	0.2.24	Unlicense OR MIT
+jiff	0.2.25	Unlicense OR MIT
+jiff-static	0.2.25	Unlicense OR MIT
 jiff-tzdb	0.1.6	Unlicense OR MIT
 jiff-tzdb-platform	0.1.3	Unlicense OR MIT
 jni-sys	0.3.1	MIT OR Apache-2.0
@@ -368,7 +368,7 @@ linux-raw-sys	0.4.15	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 litemap	0.8.2	Unicode-3.0
 litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
-log	0.4.29	MIT OR Apache-2.0
+log	0.4.30	MIT OR Apache-2.0
 loop9	0.1.5	MIT
 lru	0.18.0	MIT
 lyon	1.0.19	MIT OR Apache-2.0
