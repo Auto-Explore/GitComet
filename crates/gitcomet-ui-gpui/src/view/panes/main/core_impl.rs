@@ -4085,7 +4085,7 @@ impl MainPaneView {
                     };
                     let text = crate::view::diff_utils::diff_content_text(&line);
                     (
-                        diff_wrap_byte_ranges_for_text(text.as_ref(), inline_columns),
+                        diff_wrap_byte_ranges_for_text(text, inline_columns),
                         diff_wrap_empty_byte_ranges(),
                     )
                 }

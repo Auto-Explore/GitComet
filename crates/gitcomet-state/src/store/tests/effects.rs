@@ -50,15 +50,17 @@ fn schedule_effect_with_state_for_test(
     let repo_load_executor = super::executor::TaskExecutor::new(1);
     let metadata_executor = super::executor::TaskExecutor::new(1);
     super::effects::schedule_effect(
-        executor,
-        &repo_load_executor,
-        session_persist_executor,
+        super::effects::EffectExecutors {
+            executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor,
+            metadata_executor: &metadata_executor,
+        },
         &thread_state,
         backend,
         repos,
         &mut repo_task_tokens,
         msg_tx,
-        &metadata_executor,
         effect,
     );
 }
@@ -3898,15 +3900,17 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
     let metadata_executor = super::executor::TaskExecutor::new(1);
 
     super::effects::schedule_effect(
-        &executor,
-        &repo_load_executor,
-        &executor,
+        super::effects::EffectExecutors {
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor: &executor,
+            metadata_executor: &metadata_executor,
+        },
         &thread_state,
         &backend,
         &repos,
         &mut repo_task_tokens,
         msg_tx.clone(),
-        &metadata_executor,
         Effect::OpenRepo {
             repo_id,
             path: workdir,
@@ -3917,15 +3921,17 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
         .expect("open effect did not start");
 
     super::effects::schedule_effect(
-        &executor,
-        &repo_load_executor,
-        &executor,
+        super::effects::EffectExecutors {
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor: &executor,
+            metadata_executor: &metadata_executor,
+        },
         &thread_state,
         &backend,
         &repos,
         &mut repo_task_tokens,
         msg_tx,
-        &metadata_executor,
         Effect::CancelRepoLoads {
             repo_id,
             load_epoch: 0,

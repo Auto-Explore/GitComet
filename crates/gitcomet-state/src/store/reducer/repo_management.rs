@@ -436,7 +436,7 @@ pub(super) fn close_repo(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     clear_banner_error_for_repo(state, repo_id);
-    let mut effects = Vec::with_capacity(3);
+    let mut effects = Vec::with_capacity(3 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
     let Some(removed_repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         effects.push(persist_session_effect(
             state,
@@ -451,21 +451,19 @@ pub(super) fn close_repo(
     state.repos.remove(removed_repo_ix);
     repos.remove(&repo_id);
     if was_active {
-        state.active_repo = if state.repos.is_empty() {
+        let next_active_repo = if state.repos.is_empty() {
             None
         } else if removed_repo_ix > 0 {
             state.repos.get(removed_repo_ix - 1).map(|repo| repo.id)
         } else {
             state.repos.first().map(|repo| repo.id)
         };
-        if let Some(active_repo_id) = state.active_repo
-            && let Some(repo_state) = state
-                .repos
-                .iter_mut()
-                .find(|repo| repo.id == active_repo_id)
-        {
-            repo_state.last_active_at = Some(SystemTime::now());
-            append_open_repo_effect_if_not_loaded(repo_state, &mut effects);
+        if let Some(active_repo_id) = next_active_repo {
+            let mut activation_effects = SetActiveRepoEffects::new();
+            fill_set_active_repo_inline_impl(state, active_repo_id, &mut activation_effects, false);
+            effects.extend(activation_effects);
+        } else {
+            state.active_repo = None;
         }
     }
     effects.push(persist_session_effect(
@@ -487,6 +485,15 @@ pub(super) fn fill_set_active_repo_inline(
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
 ) {
+    fill_set_active_repo_inline_impl(state, repo_id, effects, true);
+}
+
+fn fill_set_active_repo_inline_impl(
+    state: &mut AppState,
+    repo_id: RepoId,
+    effects: &mut SetActiveRepoEffects,
+    persist_on_change: bool,
+) {
     enum SelectedDiffReload {
         Conflict(PathBuf),
         ConflictCurrent,
@@ -506,7 +513,7 @@ pub(super) fn fill_set_active_repo_inline(
         append_cancel_repo_loads_effect_for_repo(state, previous_active, effects);
     }
     state.active_repo = Some(repo_id);
-    let persist_effect = changed
+    let persist_effect = (changed && persist_on_change)
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
     let git_log_settings = state.git_log_settings;
 

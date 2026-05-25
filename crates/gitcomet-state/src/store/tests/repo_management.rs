@@ -1925,6 +1925,82 @@ fn opening_another_repo_cancels_previous_active_repo_loads() {
 }
 
 #[test]
+fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo1 = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    {
+        let repo1_state = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo1)
+            .expect("repo1 exists");
+        repo1_state.set_branches(Loadable::Loading);
+        repo1_state.set_status(Loadable::Loading);
+        repo1_state.set_log(Loadable::Loading);
+        assert!(
+            repo1_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::BRANCHES)
+        );
+        assert!(
+            repo1_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::WORKTREE_STATUS)
+        );
+        assert!(
+            repo1_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::STAGED_STATUS)
+        );
+        assert!(repo1_state.loads_in_flight.request_log(
+            repo1_state.history_state.history_scope,
+            50,
+            None,
+        ));
+    }
+
+    let repo2 = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(matches!(repo1_state.open, Loadable::Ready(())));
+    assert!(matches!(repo1_state.branches, Loadable::NotLoaded));
+    assert!(matches!(repo1_state.status, Loadable::NotLoaded));
+    assert!(matches!(repo1_state.log, Loadable::NotLoaded));
+    assert!(!repo1_state.loads_in_flight.any_in_flight());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id: repo2 },
+    );
+
+    assert_eq!(state.active_repo, Some(repo1));
+    assert!(
+        has_status_refresh_effects(&effects, repo1),
+        "expected status refresh when close selects already-open repo"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadLog { repo_id, .. } if *repo_id == repo1)),
+        "expected log refresh when close selects already-open repo"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id } if *repo_id == repo1)),
+        "expected branch refresh when close selects already-open repo"
+    );
+}
+
+#[test]
 fn stale_open_result_after_cancel_is_ignored() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

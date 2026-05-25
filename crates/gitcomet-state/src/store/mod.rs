@@ -21,7 +21,7 @@ mod send_diagnostics;
 mod worker_channel;
 
 use effects::RepoTaskToken;
-use effects::schedule_effect;
+use effects::{EffectExecutors, schedule_effect};
 use executor::{TaskExecutor, default_worker_threads};
 use reducer::{
     fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
@@ -233,15 +233,17 @@ where
             );
         }
         schedule_effect(
-            ctx.executor,
-            ctx.repo_load_executor,
-            ctx.session_persist_executor,
+            EffectExecutors {
+                executor: ctx.executor,
+                repo_load_executor: ctx.repo_load_executor,
+                session_persist_executor: ctx.session_persist_executor,
+                metadata_executor: ctx.metadata_executor,
+            },
             ctx.thread_state,
             ctx.backend,
             ctx.repos,
             ctx.repo_task_tokens,
             ctx.thread_msg_tx.clone(),
-            ctx.metadata_executor,
             effect,
         );
     }

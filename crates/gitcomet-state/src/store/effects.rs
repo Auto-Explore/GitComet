@@ -35,6 +35,14 @@ impl RepoTaskToken {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct EffectExecutors<'a> {
+    pub(super) executor: &'a TaskExecutor,
+    pub(super) repo_load_executor: &'a TaskExecutor,
+    pub(super) session_persist_executor: &'a TaskExecutor,
+    pub(super) metadata_executor: &'a TaskExecutor,
+}
+
 fn selected_diff_target(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     repo_id: RepoId,
@@ -1076,17 +1084,21 @@ fn send_unavailable_git_effect_result(
 }
 
 pub(super) fn schedule_effect(
-    executor: &TaskExecutor,
-    repo_load_executor: &TaskExecutor,
-    session_persist_executor: &TaskExecutor,
+    executors: EffectExecutors<'_>,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     repo_task_tokens: &mut HashMap<RepoId, RepoTaskToken>,
     msg_tx: StoreWorkerSender,
-    metadata_executor: &TaskExecutor,
     effect: Effect,
 ) {
+    let EffectExecutors {
+        executor,
+        repo_load_executor,
+        session_persist_executor,
+        metadata_executor,
+    } = executors;
+
     if effect_requires_available_git(&effect) {
         let runtime = {
             let state = thread_state.read().unwrap_or_else(|e| e.into_inner());
