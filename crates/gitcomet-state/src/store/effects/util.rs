@@ -54,6 +54,7 @@ pub(super) fn spawn_with_repo_or_else(
 }
 
 pub(super) fn spawn_detached_with_repo_or_else(
+    executor: &TaskExecutor,
     task_name: &'static str,
     repos: &RepoMap,
     repo_id: RepoId,
@@ -67,7 +68,7 @@ pub(super) fn spawn_detached_with_repo_or_else(
             task_name,
             repo_id
         );
-        TaskExecutor::spawn_detached(format!("gitcomet-{task_name}-{}", repo_id.0), move || {
+        executor.spawn(move || {
             if msg_tx.is_cancelled() {
                 repo_load_trace::trace!(
                     "skip_detached_repo_task_cancelled_before_start task={} repo_id={:?}",

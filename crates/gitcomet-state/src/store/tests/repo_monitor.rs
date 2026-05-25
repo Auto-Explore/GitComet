@@ -425,6 +425,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     let thread_msg_tx =
         super::super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
     let executor = TaskExecutor::new(1);
+    let repo_load_executor = TaskExecutor::new(1);
     let metadata_executor = TaskExecutor::new(1);
     let session_persist_executor = TaskExecutor::new(1);
     let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
@@ -449,6 +450,7 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
             repo_task_tokens: &mut repo_task_tokens,
             thread_msg_tx: &thread_msg_tx,
             executor: &executor,
+            repo_load_executor: &repo_load_executor,
             metadata_executor: &metadata_executor,
             session_persist_executor: &session_persist_executor,
             backend: &backend,

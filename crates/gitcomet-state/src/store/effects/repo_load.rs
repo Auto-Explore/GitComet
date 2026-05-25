@@ -196,12 +196,14 @@ fn conflict_file_current_from_session(session: &ConflictSession) -> Option<Confl
 }
 
 pub(super) fn schedule_load_branches(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-branches",
         repos,
         repo_id,
@@ -228,12 +230,14 @@ pub(super) fn schedule_load_branches(
 }
 
 pub(super) fn schedule_load_remotes(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-remotes",
         repos,
         repo_id,
@@ -260,12 +264,14 @@ pub(super) fn schedule_load_remotes(
 }
 
 pub(super) fn schedule_load_remote_branches(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-remote-branches",
         repos,
         repo_id,
@@ -292,12 +298,14 @@ pub(super) fn schedule_load_remote_branches(
 }
 
 pub(super) fn schedule_load_status(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-status",
         repos,
         repo_id,
@@ -324,12 +332,14 @@ pub(super) fn schedule_load_status(
 }
 
 pub(super) fn schedule_load_worktree_status(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-worktree-status",
         repos,
         repo_id,
@@ -356,12 +366,14 @@ pub(super) fn schedule_load_worktree_status(
 }
 
 pub(super) fn schedule_load_staged_status(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-staged-status",
         repos,
         repo_id,
@@ -388,12 +400,14 @@ pub(super) fn schedule_load_staged_status(
 }
 
 pub(super) fn schedule_load_head_branch(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-head-branch",
         repos,
         repo_id,
@@ -420,12 +434,14 @@ pub(super) fn schedule_load_head_branch(
 }
 
 pub(super) fn schedule_load_upstream_divergence(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-upstream-divergence",
         repos,
         repo_id,
@@ -452,6 +468,7 @@ pub(super) fn schedule_load_upstream_divergence(
 }
 
 pub(super) fn schedule_load_log(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -462,6 +479,7 @@ pub(super) fn schedule_load_log(
 ) {
     let cursor_on_missing = cursor.clone();
     spawn_detached_with_repo_or_else(
+        executor,
         "load-log",
         repos,
         repo_id,
@@ -562,6 +580,7 @@ pub(super) fn schedule_load_remote_tags(
 }
 
 pub(super) fn schedule_load_stashes(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
@@ -569,6 +588,7 @@ pub(super) fn schedule_load_stashes(
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-stashes",
         repos,
         repo_id,
@@ -839,12 +859,14 @@ pub(super) fn schedule_load_blame(
 }
 
 pub(super) fn schedule_load_worktrees(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-worktrees",
         repos,
         repo_id,
@@ -904,12 +926,14 @@ pub(super) fn schedule_load_submodules(
 }
 
 pub(super) fn schedule_load_rebase_state(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-rebase-state",
         repos,
         repo_id,
@@ -936,12 +960,14 @@ pub(super) fn schedule_load_rebase_state(
 }
 
 pub(super) fn schedule_load_rebase_and_merge_state(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-rebase-and-merge-state",
         repos,
         repo_id,
@@ -982,12 +1008,14 @@ pub(super) fn schedule_load_rebase_and_merge_state(
 }
 
 pub(super) fn schedule_load_merge_commit_message(
+    executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     cancellation: CancellationToken,
 ) {
     spawn_detached_with_repo_or_else(
+        executor,
         "load-merge-commit-message",
         repos,
         repo_id,

@@ -177,13 +177,7 @@ impl MainPaneView {
             .diff_source_visible_ix_for_visible_ix(visible_ix)
             .unwrap_or(visible_ix);
         let range = if let Some(wrap) = self.diff_text_wrap_for_visible_ix(visible_ix) {
-            let text = self.diff_text_full_line_for_region(source_visible_ix, region);
-            crate::view::rows::diff_wrap_range_for_text(
-                text.as_ref(),
-                wrap.wrap_columns,
-                wrap.wrap_ix,
-            )
-            .unwrap_or(0..0)
+            wrap.range_for_region(region)
         } else {
             0..self.diff_text_line_len_for_region(visible_ix, region)
         };
@@ -524,14 +518,22 @@ impl MainPaneView {
         Some(a..b)
     }
 
-    fn diff_text_wrap_range_for_text(&self, visible_ix: usize, text: &str) -> Option<Range<usize>> {
+    fn diff_text_wrap_range_for_region(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<Range<usize>> {
         let wrap = self.diff_text_wrap_for_visible_ix(visible_ix)?;
-        crate::view::rows::diff_wrap_range_for_text(text, wrap.wrap_columns, wrap.wrap_ix)
-            .or(Some(0..0))
+        Some(wrap.range_for_region(region))
     }
 
-    fn diff_text_apply_wrap_to_line(&self, visible_ix: usize, text: SharedString) -> SharedString {
-        let Some(range) = self.diff_text_wrap_range_for_text(visible_ix, text.as_ref()) else {
+    fn diff_text_apply_wrap_to_line(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        text: SharedString,
+    ) -> SharedString {
+        let Some(range) = self.diff_text_wrap_range_for_region(visible_ix, region) else {
             return text;
         };
         if range.start >= range.end {
@@ -552,7 +554,7 @@ impl MainPaneView {
             .diff_source_visible_ix_for_visible_ix(visible_ix)
             .unwrap_or(visible_ix);
         let text = self.diff_text_full_line_for_region(source_visible_ix, region);
-        self.diff_text_apply_wrap_to_line(visible_ix, text)
+        self.diff_text_apply_wrap_to_line(visible_ix, region, text)
     }
 
     pub(in crate::view) fn diff_text_full_line_for_region(

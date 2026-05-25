@@ -56,16 +56,4 @@ impl TaskExecutor {
             "TaskExecutor::spawn",
         );
     }
-
-    pub(super) fn spawn_detached(name: String, task: impl FnOnce() + Send + 'static) {
-        let mergetool_trace_context = mergetool_trace::current_capture_context();
-        if let Err(error) = thread::Builder::new().name(name).spawn(move || {
-            let _mergetool_trace = mergetool_trace_context
-                .as_ref()
-                .map(mergetool_trace::attach_capture);
-            task();
-        }) {
-            eprintln!("failed to spawn detached store task: {error}");
-        }
-    }
 }

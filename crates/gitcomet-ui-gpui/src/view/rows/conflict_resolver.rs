@@ -79,6 +79,13 @@ impl ConflictRowStyledText {
     }
 }
 
+fn conflict_diff_query_matcher(
+    query: &str,
+    query_options: DiffSearchOptions,
+) -> Option<DiffSearchMatcher> {
+    (!query.is_empty()).then(|| DiffSearchMatcher::new(query, query_options))
+}
+
 fn build_conflict_row_base_styled(
     theme: AppTheme,
     text: &str,
@@ -722,9 +729,7 @@ impl MainPaneView {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
-        let query_matcher_query = query.trim();
-        let query_matcher = (!query_matcher_query.is_empty())
-            .then(|| DiffSearchMatcher::new(query_matcher_query, query_options));
+        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
@@ -1466,9 +1471,7 @@ impl MainPaneView {
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
-        let query_matcher_query = query.trim();
-        let query_matcher = (!query_matcher_query.is_empty())
-            .then(|| DiffSearchMatcher::new(query_matcher_query, query_options));
+        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
         let syntax_lang = this.conflict_row_syntax_language();
         // Streamed conflicts may or may not have prepared side documents; Auto
         // remains the safe fallback when a row is not backed by one.
@@ -2080,6 +2083,22 @@ mod tests {
         let display = conflict_display_text(&text, None, true);
 
         assert_eq!(display.as_ref(), "a·b→↵");
+    }
+
+    #[test]
+    fn conflict_diff_query_matcher_preserves_significant_whitespace() {
+        let space_matcher =
+            conflict_diff_query_matcher(" ", DiffSearchOptions::default()).expect("space query");
+        assert_eq!(space_matcher.query(), " ");
+        assert!(space_matcher.is_match("a b"));
+
+        let padded_matcher = conflict_diff_query_matcher(" foo ", DiffSearchOptions::default())
+            .expect("padded query");
+        assert_eq!(padded_matcher.query(), " foo ");
+        assert!(padded_matcher.is_match("x foo y"));
+        assert!(!padded_matcher.is_match("foo"));
+
+        assert!(conflict_diff_query_matcher("", DiffSearchOptions::default()).is_none());
     }
 
     #[test]

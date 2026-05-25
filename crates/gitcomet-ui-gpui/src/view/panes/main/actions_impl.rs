@@ -334,9 +334,7 @@ impl MainPaneView {
                     return provider
                         .change_visible_indices()
                         .into_iter()
-                        .map(|source_visible_ix| {
-                            self.diff_visual_ix_for_source_visible_ix(source_visible_ix)
-                        })
+                        .filter_map(|inline_ix| self.diff_visual_ix_for_mapped_ix(inline_ix))
                         .collect();
                 }
                 (0..self.file_diff_inline_row_len())
@@ -353,7 +351,10 @@ impl MainPaneView {
                                         | gitcomet_core::domain::DiffLineKind::Remove
                                 )
                             });
-                        is_change.then(|| self.diff_visual_ix_for_source_visible_ix(inline_ix))
+                        if !is_change {
+                            return None;
+                        }
+                        self.diff_visual_ix_for_mapped_ix(inline_ix)
                     })
                     .collect()
             }
@@ -362,9 +363,7 @@ impl MainPaneView {
                     return provider
                         .change_visible_indices()
                         .into_iter()
-                        .map(|source_visible_ix| {
-                            self.diff_visual_ix_for_source_visible_ix(source_visible_ix)
-                        })
+                        .filter_map(|row_ix| self.diff_visual_ix_for_mapped_ix(row_ix))
                         .collect();
                 }
                 (0..self.file_diff_split_row_len())
@@ -373,11 +372,37 @@ impl MainPaneView {
                             self.file_diff_split_visual_kind(row_ix),
                             gitcomet_core::file_diff::FileDiffRowKind::Context
                         );
-                        is_change.then(|| self.diff_visual_ix_for_source_visible_ix(row_ix))
+                        is_change.then(|| self.diff_visual_ix_for_mapped_ix(row_ix))?
                     })
                     .collect()
             }
         }
+    }
+
+    fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
+        if let Some(map) = self.diff_visible_inline_map.as_ref() {
+            return map.visible_ix_for_src_ix(mapped_ix);
+        }
+        if self.diff_visible_indices.is_empty()
+            || self
+                .diff_visible_indices
+                .get(mapped_ix)
+                .is_some_and(|visible_mapped_ix| *visible_mapped_ix == mapped_ix)
+        {
+            return Some(mapped_ix);
+        }
+        let visible_ix = self
+            .diff_visible_indices
+            .partition_point(|visible_mapped_ix| *visible_mapped_ix < mapped_ix);
+        self.diff_visible_indices
+            .get(visible_ix)
+            .is_some_and(|visible_mapped_ix| *visible_mapped_ix == mapped_ix)
+            .then_some(visible_ix)
+    }
+
+    fn diff_visual_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
+        self.diff_source_visible_ix_for_mapped_ix(mapped_ix)
+            .map(|source_visible_ix| self.diff_visual_ix_for_source_visible_ix(source_visible_ix))
     }
 
     fn markdown_preview_visible_len(&self) -> usize {

@@ -1069,8 +1069,8 @@ fn collect_file_diff_line_text_stream_match_visible_rows(
     }
 }
 
-fn collect_stream_match_row_offsets<'a>(
-    rows: impl IntoIterator<Item = (usize, Cow<'a, str>)>,
+fn collect_stream_match_row_offsets<T: AsRef<str>>(
+    rows: impl IntoIterator<Item = (usize, T)>,
     matcher: &DiffSearchMatcher,
     out: &mut Vec<(usize, usize)>,
 ) {
@@ -1121,14 +1121,41 @@ fn collect_stream_match_row_offsets<'a>(
     }
 }
 
-fn collect_stream_match_visible_rows<'a>(
-    rows: impl IntoIterator<Item = (usize, Cow<'a, str>)>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamMatchCollectionMode {
+    SingleRowLiteral,
+    MaterializedRows,
+}
+
+fn collect_stream_match_visible_rows_with_mode<T: AsRef<str>>(
+    rows: impl IntoIterator<Item = (usize, T)>,
     matcher: &DiffSearchMatcher,
     out: &mut Vec<usize>,
-) {
+) -> StreamMatchCollectionMode {
+    if matcher.can_use_single_row_literal_path() {
+        for (visible_ix, row_text) in rows {
+            if matcher
+                .find_range_at_or_after(normalized_stream_row_text(row_text.as_ref()), 0)
+                .is_some()
+            {
+                out.push(visible_ix);
+            }
+        }
+        return StreamMatchCollectionMode::SingleRowLiteral;
+    }
+
     let mut row_offsets = Vec::new();
     collect_stream_match_row_offsets(rows, matcher, &mut row_offsets);
     out.extend(row_offsets.into_iter().map(|(visible_ix, _)| visible_ix));
+    StreamMatchCollectionMode::MaterializedRows
+}
+
+fn collect_stream_match_visible_rows<T: AsRef<str>>(
+    rows: impl IntoIterator<Item = (usize, T)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    let _ = collect_stream_match_visible_rows_with_mode(rows, matcher, out);
 }
 
 fn collect_split_stream_match_visible_rows<'a>(
@@ -1469,12 +1496,10 @@ impl MainPaneView {
         matcher: &DiffSearchMatcher,
         out: &mut Vec<usize>,
     ) {
-        let rows: Vec<_> = (0..source_len)
-            .map(|source_visible_ix| {
-                let text = self.diff_text_full_line_for_region(source_visible_ix, region);
-                (source_visible_ix, Cow::Owned(text.as_ref().to_string()))
-            })
-            .collect();
+        let rows = (0..source_len).map(|source_visible_ix| {
+            let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+            (source_visible_ix, text)
+        });
         let mut row_offsets = Vec::new();
         collect_stream_match_row_offsets(rows, matcher, &mut row_offsets);
         out.extend(row_offsets.into_iter().map(|(source_visible_ix, offset)| {
@@ -2650,15 +2675,14 @@ mod tests {
         AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
         ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchMatcher,
         DiffSearchOptions, DiffSearchQueryReuse, FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES,
-        collect_file_diff_line_text_stream_match_visible_rows,
+        StreamMatchCollectionMode, collect_file_diff_line_text_stream_match_visible_rows,
         collect_split_stream_match_visible_rows, collect_stream_match_visible_rows,
-        conflict_resolver_visible_match_indices,
+        collect_stream_match_visible_rows_with_mode, conflict_resolver_visible_match_indices,
         conflict_resolver_visible_match_indices_with_matcher, contains_ascii_case_insensitive,
         diff_search_query_reuse, diff_search_resume_match_ix,
         diff_search_split_row_texts_match_query, empty_conflict_resolver_search_two_way_rows,
         three_way_visible_item_matches_query,
     };
-    use crate::perf_alloc::measure_allocations;
     use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
         ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
@@ -2909,29 +2933,25 @@ mod tests {
     fn diff_search_file_slice_general_collector_does_not_materialize_large_rows() {
         let mut file = tempfile::NamedTempFile::new().expect("temp file");
         let payload_bytes = FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES * 128;
-        let mut source = String::with_capacity(payload_bytes);
-        source.push_str("needle ");
-        source.push_str(&"x".repeat(payload_bytes));
-        file.write_all(source.as_bytes()).expect("write temp file");
+        let mut source = Vec::with_capacity(payload_bytes);
+        source.extend_from_slice(b"needle ");
+        source.extend(std::iter::repeat(b'x').take(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES));
+        source.push(0xff);
+        source.resize(payload_bytes, b'x');
+        file.write_all(source.as_slice()).expect("write temp file");
         let path = Arc::new(file.path().to_path_buf());
 
         let materialized = gitcomet_core::file_diff::FileDiffLineText::file_slice(
             Arc::clone(&path),
             0..source.len(),
-            true,
+            false,
             false,
         );
-        let (_, materialized_metrics) = measure_allocations(|| {
-            let copy = materialized.as_ref().to_string();
-            let _ = std::hint::black_box(copy.as_str()).len();
-        });
+        assert!(
+            materialized.as_ref().is_empty(),
+            "invalid UTF-8 sentinel should make full-row materialization unusable"
+        );
 
-        let streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
-            Arc::clone(&path),
-            0..source.len(),
-            true,
-            false,
-        );
         let matcher = DiffSearchMatcher::new(
             "needle",
             DiffSearchOptions {
@@ -2940,26 +2960,20 @@ mod tests {
             },
         );
         let mut matches = Vec::new();
-        let (_, streamed_metrics) = measure_allocations(|| {
-            collect_file_diff_line_text_stream_match_visible_rows(
-                [(77, streamed)],
-                &matcher,
-                &mut matches,
-            );
-        });
-
-        assert_eq!(matches, vec![77]);
-        assert!(
-            streamed_metrics.alloc_bytes.saturating_mul(8) < materialized_metrics.alloc_bytes,
-            "streamed search should stay far below materializing the row: streamed={streamed_metrics:?} materialized={materialized_metrics:?}"
-        );
-
-        let regex_streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+        let streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
             Arc::clone(&path),
             0..source.len(),
-            true,
+            false,
             false,
         );
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(77, streamed)],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![77]);
+
         let regex_matcher = DiffSearchMatcher::new(
             r"^needle",
             DiffSearchOptions {
@@ -2968,19 +2982,19 @@ mod tests {
             },
         );
         let mut regex_matches = Vec::new();
-        let (_, regex_streamed_metrics) = measure_allocations(|| {
-            collect_file_diff_line_text_stream_match_visible_rows(
-                [(78, regex_streamed)],
-                &regex_matcher,
-                &mut regex_matches,
-            );
-        });
+        let regex_streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(78, regex_streamed)],
+            &regex_matcher,
+            &mut regex_matches,
+        );
 
         assert_eq!(regex_matches, vec![78]);
-        assert!(
-            regex_streamed_metrics.alloc_bytes.saturating_mul(2) < materialized_metrics.alloc_bytes,
-            "regex streamed search should stay far below materializing the row: streamed={regex_streamed_metrics:?} materialized={materialized_metrics:?}"
-        );
     }
 
     #[test]
@@ -3037,7 +3051,7 @@ mod tests {
 
     #[test]
     fn diff_search_single_line_literal_stream_collector_avoids_concat_allocations() {
-        let rows = (0..2048)
+        let rows = (0..8192)
             .map(|ix| (ix, format!("row_{ix:04}_alpha_beta_gamma_delta")))
             .collect::<Vec<_>>();
         let matcher = DiffSearchMatcher::new(
@@ -3048,36 +3062,16 @@ mod tests {
             },
         );
 
-        let (_, materialized_metrics) = measure_allocations(|| {
-            let mut text = String::new();
-            let mut line_starts = Vec::new();
-            let mut visible_indices = Vec::new();
-            for (visible_ix, row_text) in &rows {
-                if !visible_indices.is_empty() {
-                    text.push('\n');
-                }
-                line_starts.push(text.len());
-                visible_indices.push(*visible_ix);
-                text.push_str(row_text);
-            }
-            std::hint::black_box((text.len(), line_starts.len(), visible_indices.len()));
-        });
-
         let mut matches = Vec::new();
-        let (_, fast_metrics) = measure_allocations(|| {
-            collect_stream_match_visible_rows(
-                rows.iter()
-                    .map(|(visible_ix, text)| (*visible_ix, Cow::Borrowed(text.as_str()))),
-                &matcher,
-                &mut matches,
-            );
-        });
+        let mode = collect_stream_match_visible_rows_with_mode(
+            rows.iter()
+                .map(|(visible_ix, text)| (*visible_ix, Cow::Borrowed(text.as_str()))),
+            &matcher,
+            &mut matches,
+        );
 
         assert!(matches.is_empty());
-        assert!(
-            fast_metrics.alloc_bytes.saturating_mul(16) < materialized_metrics.alloc_bytes,
-            "single-line literal search should avoid concatenating visible rows: fast={fast_metrics:?} materialized={materialized_metrics:?}"
-        );
+        assert_eq!(mode, StreamMatchCollectionMode::SingleRowLiteral);
     }
 
     #[test]

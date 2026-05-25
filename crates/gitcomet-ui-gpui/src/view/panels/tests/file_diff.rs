@@ -2,6 +2,7 @@
 #![allow(clippy::type_complexity)]
 
 use super::*;
+use crate::view::panes::main::diff_cache::PatchInlineVisibleMap;
 use std::path::PathBuf;
 
 fn fixture_repo_root() -> std::path::PathBuf {
@@ -3219,17 +3220,19 @@ fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
             second_row.source_visible_ix > first_row.source_visible_ix,
             "second navigation entry should advance to the next changed logical row"
         );
+        let has_wrapped_continuation_between_entries = pane
+            .diff_wrap_visible_rows
+            .iter()
+            .enumerate()
+            .any(|(visible_ix, row)| {
+                visible_ix > first_entry
+                    && visible_ix < second_entry
+                    && row.source_visible_ix == first_row.source_visible_ix
+                    && row.wrap_ix > 0
+            });
         assert!(
-            pane.diff_wrap_visible_rows
-                .iter()
-                .enumerate()
-                .any(|(visible_ix, row)| {
-                    visible_ix > first_entry
-                        && visible_ix < second_entry
-                        && row.source_visible_ix == first_row.source_visible_ix
-                        && row.wrap_ix > 0
-                }),
-            "fixture should put wrapped continuation rows between the first two navigation entries"
+            has_wrapped_continuation_between_entries,
+            "fixture should put wrapped continuation rows between the first two navigation entries; entries={entries:?}, first_row={first_row:?}, second_row={second_row:?}"
         );
         (first_entry, second_entry)
     });
@@ -3282,6 +3285,159 @@ fn full_diff_word_wrap_inline_change_shortcuts_skip_continuation_rows(
         "full_diff_word_wrap_inline_nav",
         DiffViewMode::Inline,
     );
+}
+
+#[gpui::test]
+fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible_map(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(760.0), px(420.0)));
+    let path = PathBuf::from("src/lib.rs");
+    let (unified, old_text, new_text) = build_full_diff_word_wrap_navigation_fixture_texts();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70607),
+        "full_diff_word_wrap_inline_visible_map_nav",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full diff word-wrap visible-map fixture activates file diff view",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight.is_some(),
+                pane.file_diff_cache_target.clone(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.diff_autoscroll_pending = false;
+                pane.clear_diff_text_selection();
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full diff word-wrap visible-map fixture has wrapped inline rows",
+        |pane| {
+            pane.diff_content_mode == DiffContentMode::Full
+                && pane.diff_view == DiffViewMode::Inline
+                && pane.diff_word_wrap
+                && pane.diff_wrap_visible_cache_key.is_some()
+                && pane
+                    .diff_wrap_visible_rows
+                    .iter()
+                    .any(|row| row.wrap_ix > 0)
+                && pane
+                    .file_diff_inline_row_provider
+                    .as_ref()
+                    .is_some_and(|provider| !provider.change_visible_indices().is_empty())
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.diff_visible_len(),
+                pane.diff_wrap_visible_cache_key,
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let inline_len = pane.file_diff_inline_row_len();
+                assert!(inline_len > 1, "fixture should expose file inline rows");
+                let mut hidden = vec![false; inline_len];
+                hidden[0] = true;
+                pane.diff_visible_inline_map =
+                    Some(PatchInlineVisibleMap::from_hidden_flags(hidden.as_slice()));
+                pane.diff_visible_indices.clear();
+                pane.diff_wrap_visible_rows.clear();
+                pane.diff_wrap_visible_cache_key = None;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.clear_diff_text_selection();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let provider = pane
+            .file_diff_inline_row_provider
+            .as_ref()
+            .expect("fixture should use the paged inline file provider");
+        let first_changed_provider_ix = provider
+            .change_visible_indices()
+            .into_iter()
+            .next()
+            .expect("fixture should contain a changed inline row");
+        let visible_map = pane
+            .diff_visible_inline_map
+            .as_ref()
+            .expect("test should install a non-identity inline visible map");
+        let first_changed_source_visible_ix = visible_map
+            .visible_ix_for_src_ix(first_changed_provider_ix)
+            .expect("changed provider row should remain visible");
+        assert_ne!(
+            first_changed_provider_ix, first_changed_source_visible_ix,
+            "fixture should exercise a non-identity provider-to-visible mapping"
+        );
+
+        let entries = pane.diff_nav_entries();
+        let expected_first_entry =
+            pane.diff_visual_ix_for_source_visible_ix(first_changed_source_visible_ix);
+        assert_eq!(
+            entries.first().copied(),
+            Some(expected_first_entry),
+            "wrapped Full inline diff navigation should convert provider rows through the visible map"
+        );
+        assert_eq!(
+            pane.diff_wrap_visible_rows
+                .get(expected_first_entry)
+                .map(|row| row.source_visible_ix),
+            Some(first_changed_source_visible_ix),
+            "navigation should target the first wrapped visual row for the mapped source-visible row"
+        );
+    });
 }
 
 #[gpui::test]

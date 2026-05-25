@@ -192,6 +192,7 @@ pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
     whitespace_visible_line_styled_text(styled)
 }
 
+#[cfg(test)]
 pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: usize) -> usize {
     if text.is_empty() {
         return 1;
@@ -214,6 +215,7 @@ pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: us
     count.max(1)
 }
 
+#[cfg(test)]
 pub(in crate::view) fn diff_wrap_range_for_text(
     text: &str,
     wrap_columns: usize,
@@ -274,8 +276,10 @@ pub(in crate::view) fn slice_cached_diff_styled_text(
     }
 }
 
-#[cfg(test)]
-fn diff_wrap_ranges_for_text(text: &str, wrap_columns: usize) -> Vec<Range<usize>> {
+pub(in crate::view) fn diff_wrap_ranges_for_text(
+    text: &str,
+    wrap_columns: usize,
+) -> Vec<Range<usize>> {
     if text.is_empty() {
         return std::iter::once(0..0).collect();
     }
@@ -322,12 +326,7 @@ fn diff_wrap_next_range_for_text(
         let start = row_start + rel_start;
         let char_end = start + ch.len_utf8();
         let width = if ch == '\t' {
-            let rem = column % DIFF_WRAP_TAB_STOP_COLUMNS;
-            if rem == 0 {
-                DIFF_WRAP_TAB_STOP_COLUMNS
-            } else {
-                DIFF_WRAP_TAB_STOP_COLUMNS - rem
-            }
+            DIFF_WRAP_TAB_EXPANDED_COLUMNS
         } else {
             1
         };
@@ -385,7 +384,11 @@ fn expanded_highlights_to_raw_text(
     expanded_to_raw.push(0);
     for (raw_start, ch) in raw_text.char_indices() {
         let raw_end = raw_start + ch.len_utf8();
-        let expanded_len = if ch == '\t' { 4 } else { ch.len_utf8() };
+        let expanded_len = if ch == '\t' {
+            DIFF_WRAP_TAB_EXPANDED_COLUMNS
+        } else {
+            ch.len_utf8()
+        };
         for _ in 0..expanded_len {
             expanded_to_raw.push(raw_end);
         }
@@ -521,7 +524,7 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 43] = [
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
 const PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 32_768;
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
-const DIFF_WRAP_TAB_STOP_COLUMNS: usize = 4;
+const DIFF_WRAP_TAB_EXPANDED_COLUMNS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DiffTextSourceIdentity {
@@ -1049,6 +1052,19 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(rows, ["abcde", "fghij", "kl"]);
+    }
+
+    #[test]
+    fn diff_wrap_ranges_count_tabs_as_fixed_display_expansion() {
+        let text = "aaa\tbbb";
+        let rows = diff_wrap_ranges_for_text(text, 4)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["aaa", "\t", "bbb"]);
+        assert_eq!(diff_wrap_row_count_for_text(text, 4), 3);
+        assert_eq!(diff_wrap_range_for_text(text, 4, 1), Some(3..4));
     }
 
     #[test]

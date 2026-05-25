@@ -18,18 +18,42 @@ fn diff_wrap_columns_for_width(width: Pixels, char_width: Pixels) -> usize {
     ((f32::from(width.max(px(0.0))) / char_width).floor() as usize).max(1)
 }
 
-fn diff_wrap_split_row_count(row: &gitcomet_core::file_diff::FileDiffRow, columns: usize) -> usize {
-    let left = row
-        .old
-        .as_ref()
-        .map(|text| rows::diff_wrap_row_count_for_text(text.as_ref(), columns))
-        .unwrap_or(1);
-    let right = row
-        .new
-        .as_ref()
-        .map(|text| rows::diff_wrap_row_count_for_text(text.as_ref(), columns))
-        .unwrap_or(1);
-    left.max(right)
+fn diff_wrap_byte_ranges_for_text(text: &str, columns: usize) -> Vec<rows::DiffWrapByteRange> {
+    let mut ranges = rows::diff_wrap_ranges_for_text(text, columns)
+        .into_iter()
+        .map(rows::DiffWrapByteRange::from_range)
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        ranges.push(rows::DiffWrapByteRange::default());
+    }
+    ranges
+}
+
+fn diff_wrap_empty_byte_ranges() -> Vec<rows::DiffWrapByteRange> {
+    vec![rows::DiffWrapByteRange::default()]
+}
+
+fn diff_wrap_byte_ranges_for_file_diff_text(
+    text: &gitcomet_core::file_diff::FileDiffLineText,
+    columns: usize,
+) -> Vec<rows::DiffWrapByteRange> {
+    let display = crate::view::file_diff_display::file_diff_display_text(text);
+    diff_wrap_byte_ranges_for_text(display.as_ref(), columns)
+}
+
+fn diff_wrap_byte_ranges_for_optional_file_diff_text(
+    text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
+    columns: usize,
+) -> Vec<rows::DiffWrapByteRange> {
+    text.map(|text| diff_wrap_byte_ranges_for_file_diff_text(text, columns))
+        .unwrap_or_else(diff_wrap_empty_byte_ranges)
+}
+
+fn diff_wrap_byte_range_at(
+    ranges: &[rows::DiffWrapByteRange],
+    wrap_ix: usize,
+) -> rows::DiffWrapByteRange {
+    ranges.get(wrap_ix).copied().unwrap_or_default()
 }
 
 pub(in crate::view::panes::main) fn resolved_output_highlight_provider_binding_key(
@@ -3902,6 +3926,8 @@ impl MainPaneView {
         Some(rows::DiffTextWrapSlice {
             wrap_ix: row.wrap_ix,
             wrap_columns: columns,
+            primary_range: row.primary_range,
+            secondary_range: row.secondary_range,
         })
     }
 
@@ -3947,17 +3973,18 @@ impl MainPaneView {
         self.diff_wrap_visible_rows.clear();
         self.diff_wrap_visible_rows.reserve(source_len);
         for source_visible_ix in 0..source_len {
-            let row_count = self
-                .diff_wrap_row_count_for_source_visible_ix(
-                    source_visible_ix,
-                    inline_columns,
-                    split_columns,
-                )
-                .max(1);
+            let (primary_ranges, secondary_ranges) = self.diff_wrap_ranges_for_source_visible_ix(
+                source_visible_ix,
+                inline_columns,
+                split_columns,
+            );
+            let row_count = primary_ranges.len().max(secondary_ranges.len()).max(1);
             for wrap_ix in 0..row_count {
                 self.diff_wrap_visible_rows.push(DiffWrapVisualRow {
                     source_visible_ix,
                     wrap_ix,
+                    primary_range: diff_wrap_byte_range_at(&primary_ranges, wrap_ix),
+                    secondary_range: diff_wrap_byte_range_at(&secondary_ranges, wrap_ix),
                 });
             }
         }
@@ -3998,56 +4025,85 @@ impl MainPaneView {
         (inline_columns, split_columns)
     }
 
-    fn diff_wrap_row_count_for_source_visible_ix(
+    fn diff_wrap_ranges_for_source_visible_ix(
         &self,
         source_visible_ix: usize,
         inline_columns: usize,
         split_columns: usize,
-    ) -> usize {
+    ) -> (Vec<rows::DiffWrapByteRange>, Vec<rows::DiffWrapByteRange>) {
         if self.is_collapsed_diff_projection_active() {
             let Some(row) = self.collapsed_visible_row(source_visible_ix) else {
-                return 1;
+                return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
             };
             return match row {
-                CollapsedDiffVisibleRow::HunkHeader { .. } => 1,
+                CollapsedDiffVisibleRow::HunkHeader { .. } => {
+                    (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges())
+                }
                 CollapsedDiffVisibleRow::FileRow { row_ix } => match self.diff_view {
-                    DiffViewMode::Inline => self
-                        .file_diff_inline_render_data(row_ix)
-                        .map(|row| {
-                            rows::diff_wrap_row_count_for_text(row.text.as_ref(), inline_columns)
-                        })
-                        .unwrap_or(1),
-                    DiffViewMode::Split => self
-                        .file_diff_split_render_data(row_ix)
-                        .map(|row| diff_wrap_split_row_count(&row, split_columns))
-                        .unwrap_or(1),
+                    DiffViewMode::Inline => {
+                        let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                            return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
+                        };
+                        (
+                            diff_wrap_byte_ranges_for_file_diff_text(&row.text, inline_columns),
+                            diff_wrap_empty_byte_ranges(),
+                        )
+                    }
+                    DiffViewMode::Split => {
+                        let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                            return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
+                        };
+                        (
+                            diff_wrap_byte_ranges_for_optional_file_diff_text(
+                                row.old.as_ref(),
+                                split_columns,
+                            ),
+                            diff_wrap_byte_ranges_for_optional_file_diff_text(
+                                row.new.as_ref(),
+                                split_columns,
+                            ),
+                        )
+                    }
                 },
             };
         }
 
         let Some(mapped_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
-            return 1;
+            return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
         };
         if self.is_file_diff_view_active() {
             return match self.diff_view {
-                DiffViewMode::Inline => self
-                    .file_diff_inline_render_data(mapped_ix)
-                    .map(|row| {
-                        rows::diff_wrap_row_count_for_text(row.text.as_ref(), inline_columns)
-                    })
-                    .or_else(|| {
-                        self.file_diff_inline_row(mapped_ix).map(|line| {
-                            rows::diff_wrap_row_count_for_text(
-                                crate::view::diff_utils::diff_content_text(&line),
-                                inline_columns,
-                            )
-                        })
-                    })
-                    .unwrap_or(1),
-                DiffViewMode::Split => self
-                    .file_diff_split_render_data(mapped_ix)
-                    .map(|row| diff_wrap_split_row_count(&row, split_columns))
-                    .unwrap_or(1),
+                DiffViewMode::Inline => {
+                    if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
+                        return (
+                            diff_wrap_byte_ranges_for_file_diff_text(&row.text, inline_columns),
+                            diff_wrap_empty_byte_ranges(),
+                        );
+                    }
+                    let Some(line) = self.file_diff_inline_row(mapped_ix) else {
+                        return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
+                    };
+                    let text = crate::view::diff_utils::diff_content_text(&line);
+                    (
+                        diff_wrap_byte_ranges_for_text(text.as_ref(), inline_columns),
+                        diff_wrap_empty_byte_ranges(),
+                    )
+                }
+                DiffViewMode::Split => {
+                    let Some(row) = self.file_diff_split_render_data(mapped_ix) else {
+                        return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
+                    };
+                    (
+                        diff_wrap_byte_ranges_for_optional_file_diff_text(
+                            row.old.as_ref(),
+                            split_columns,
+                        ),
+                        diff_wrap_byte_ranges_for_optional_file_diff_text(
+                            row.new.as_ref(),
+                            split_columns,
+                        ),
+                    )
+                }
             };
         }
 
@@ -4059,35 +4115,54 @@ impl MainPaneView {
                     .copied()
                     .unwrap_or(DiffClickKind::Line);
                 if click_kind != DiffClickKind::Line {
-                    return 1;
+                    return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                 }
-                self.patch_diff_row(mapped_ix)
-                    .map(|line| {
-                        rows::diff_wrap_row_count_for_text(
-                            crate::view::diff_utils::diff_content_text(&line),
-                            inline_columns,
-                        )
-                    })
-                    .unwrap_or(1)
+                if self.patch_diff_row(mapped_ix).is_none() {
+                    return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
+                }
+                let text =
+                    self.diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
+                (
+                    diff_wrap_byte_ranges_for_text(text.as_ref(), inline_columns),
+                    diff_wrap_empty_byte_ranges(),
+                )
             }
             DiffViewMode::Split => match self.patch_diff_split_row(mapped_ix) {
-                Some(PatchSplitRow::Aligned { row, .. }) => {
-                    diff_wrap_split_row_count(&row, split_columns)
+                Some(PatchSplitRow::Aligned { .. }) => {
+                    let left = self.diff_text_full_line_for_region(
+                        source_visible_ix,
+                        DiffTextRegion::SplitLeft,
+                    );
+                    let right = self.diff_text_full_line_for_region(
+                        source_visible_ix,
+                        DiffTextRegion::SplitRight,
+                    );
+                    (
+                        diff_wrap_byte_ranges_for_text(left.as_ref(), split_columns),
+                        diff_wrap_byte_ranges_for_text(right.as_ref(), split_columns),
+                    )
                 }
                 Some(PatchSplitRow::Raw { src_ix, click_kind }) => {
                     if click_kind != DiffClickKind::Line {
-                        return 1;
+                        return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                     }
-                    self.patch_diff_row(src_ix)
-                        .map(|line| {
-                            rows::diff_wrap_row_count_for_text(
-                                crate::view::diff_utils::diff_content_text(&line),
-                                split_columns,
-                            )
-                        })
-                        .unwrap_or(1)
+                    if self.patch_diff_row(src_ix).is_none() {
+                        return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
+                    }
+                    let left = self.diff_text_full_line_for_region(
+                        source_visible_ix,
+                        DiffTextRegion::SplitLeft,
+                    );
+                    let right = self.diff_text_full_line_for_region(
+                        source_visible_ix,
+                        DiffTextRegion::SplitRight,
+                    );
+                    (
+                        diff_wrap_byte_ranges_for_text(left.as_ref(), split_columns),
+                        diff_wrap_byte_ranges_for_text(right.as_ref(), split_columns),
+                    )
                 }
-                None => 1,
+                None => (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges()),
             },
         }
     }

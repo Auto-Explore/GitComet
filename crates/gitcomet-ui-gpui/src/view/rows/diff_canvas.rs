@@ -2,10 +2,9 @@ use super::canvas::keyed_canvas;
 use super::diff_text::{
     PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
     build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
-    diff_wrap_range_for_text, slice_cached_diff_styled_text,
-    syntax_highlights_for_streamed_line_slice_heuristic, whitespace_visible_line_styled_text,
-    whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text,
-    whitespace_visible_styled_text,
+    slice_cached_diff_styled_text, syntax_highlights_for_streamed_line_slice_heuristic,
+    whitespace_visible_line_styled_text, whitespace_visible_line_styled_text_for_raw,
+    whitespace_visible_line_text, whitespace_visible_styled_text,
 };
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
@@ -80,10 +79,40 @@ pub(super) struct StreamedDiffTextPaintSpec {
     pub(super) syntax: StreamedDiffTextSyntaxSource,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct DiffWrapByteRange {
+    pub(in crate::view) start: usize,
+    pub(in crate::view) end: usize,
+}
+
+impl DiffWrapByteRange {
+    pub(in crate::view) fn from_range(range: Range<usize>) -> Self {
+        Self {
+            start: range.start,
+            end: range.end,
+        }
+    }
+
+    pub(in crate::view) fn range(self) -> Range<usize> {
+        self.start..self.end
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) struct DiffTextWrapSlice {
     pub(in crate::view) wrap_ix: usize,
     pub(in crate::view) wrap_columns: usize,
+    pub(in crate::view) primary_range: DiffWrapByteRange,
+    pub(in crate::view) secondary_range: DiffWrapByteRange,
+}
+
+impl DiffTextWrapSlice {
+    pub(in crate::view) fn range_for_region(self, region: DiffTextRegion) -> Range<usize> {
+        match region {
+            DiffTextRegion::Inline | DiffTextRegion::SplitLeft => self.primary_range.range(),
+            DiffTextRegion::SplitRight => self.secondary_range.range(),
+        }
+    }
 }
 
 fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
@@ -849,6 +878,7 @@ fn diff_text_paint_payload(
     streamed_spec: Option<&StreamedDiffTextPaintSpec>,
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
+    region: DiffTextRegion,
     wrap: Option<DiffTextWrapSlice>,
 ) -> DiffTextPaintPayload {
     if reveal_whitespace_chars {
@@ -863,10 +893,8 @@ fn diff_text_paint_payload(
             };
         }
 
-        let mut source_text_for_wrap: Option<&str> = None;
         let mut offset_map: Option<DiffTextOffsetMap> = None;
         let styled = if let Some(styled) = styled {
-            source_text_for_wrap = Some(styled.text.as_ref());
             let visible = if let Some(raw_text) = raw_text {
                 offset_map = Some(whitespace_visible_diff_offset_map(raw_text, true));
                 whitespace_visible_line_styled_text_for_raw(styled, raw_text)
@@ -880,7 +908,6 @@ fn diff_text_paint_payload(
             Some(visible)
         } else if let Some(spec) = streamed_spec {
             let raw_text = spec.raw_text.as_ref();
-            source_text_for_wrap = Some(raw_text);
             offset_map = Some(whitespace_visible_diff_offset_map(raw_text, true));
             let text = whitespace_visible_line_text(raw_text);
             let text_hash = {
@@ -900,16 +927,11 @@ fn diff_text_paint_payload(
 
         let wrapped;
         let styled = if let (Some(styled), Some(wrap)) = (styled.as_ref(), wrap) {
-            let source_range = source_text_for_wrap
-                .and_then(|text| diff_wrap_range_for_text(text, wrap.wrap_columns, wrap.wrap_ix))
-                .unwrap_or(0..0);
+            let source_range = wrap.range_for_region(region);
             let display_range = offset_map
                 .as_ref()
                 .map(|map| display_range_for_source_range(map, &source_range))
-                .or_else(|| {
-                    diff_wrap_range_for_text(styled.text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
-                })
-                .unwrap_or(0..0);
+                .unwrap_or_else(|| source_range.clone());
             wrapped = slice_cached_diff_styled_text(styled, display_range.clone());
             offset_map = offset_map
                 .as_ref()
@@ -946,9 +968,7 @@ fn diff_text_paint_payload(
 
     let wrapped;
     let styled = if let (Some(styled), Some(wrap)) = (styled, wrap) {
-        wrapped = diff_wrap_range_for_text(styled.text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
-            .map(|range| slice_cached_diff_styled_text(styled, range))
-            .unwrap_or_else(|| slice_cached_diff_styled_text(styled, 0..0));
+        wrapped = slice_cached_diff_styled_text(styled, wrap.range_for_region(region));
         Some(&wrapped)
     } else {
         styled
@@ -993,6 +1013,7 @@ pub(super) fn inline_diff_line_row_canvas(
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
+        DiffTextRegion::Inline,
         wrap,
     );
     let revision = inline_row_canvas_revision_key(
@@ -1156,6 +1177,7 @@ pub(super) fn split_diff_line_row_canvas(
         left_streamed_spec.as_ref(),
         left_raw_text,
         reveal_whitespace_chars,
+        DiffTextRegion::SplitLeft,
         wrap,
     );
     let right_payload = diff_text_paint_payload(
@@ -1163,6 +1185,7 @@ pub(super) fn split_diff_line_row_canvas(
         right_streamed_spec.as_ref(),
         right_raw_text,
         reveal_whitespace_chars,
+        DiffTextRegion::SplitRight,
         wrap,
     );
     let revision = split_row_canvas_revision_key(
@@ -1376,6 +1399,7 @@ pub(super) fn patch_split_column_row_canvas(
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
+        region,
         wrap,
     );
     let text = paint_payload.text;
@@ -1518,6 +1542,7 @@ pub(super) fn worktree_preview_row_canvas(
         streamed_spec.as_ref(),
         raw_text,
         reveal_whitespace_chars,
+        DiffTextRegion::Inline,
         None,
     );
     let text = paint_payload.text;
@@ -2088,9 +2113,7 @@ fn paint_selectable_diff_text(
             streamed_diff_text_ascii_cell_width(&base_style, metrics.font_size, window);
         let clip_bounds = window.content_mask().bounds;
         let overscan_columns = STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS.max(spec.query.as_ref().len());
-        let wrap_range = wrap.and_then(|wrap| {
-            diff_wrap_range_for_text(spec.raw_text.as_ref(), wrap.wrap_columns, wrap.wrap_ix)
-        });
+        let wrap_range = wrap.map(|wrap| wrap.range_for_region(region));
         streamed_slice_is_wrap = wrap_range.is_some();
         let slice_range = wrap_range.clone().unwrap_or_else(|| {
             streamed_diff_text_visible_slice_range(
@@ -2425,7 +2448,14 @@ mod tests {
             text_hash: 11,
         };
 
-        let payload = diff_text_paint_payload(Some(&styled), None, Some("a b\t"), true, None);
+        let payload = diff_text_paint_payload(
+            Some(&styled),
+            None,
+            Some("a b\t"),
+            true,
+            DiffTextRegion::Inline,
+            None,
+        );
 
         assert_eq!(payload.text.as_ref(), "a·b→↵");
         assert_eq!(payload.highlights[0].0, 1..7);
@@ -2446,7 +2476,8 @@ mod tests {
 
         assert!(should_stream_diff_text(Some(&spec)));
 
-        let payload = diff_text_paint_payload(None, Some(&spec), None, true, None);
+        let payload =
+            diff_text_paint_payload(None, Some(&spec), None, true, DiffTextRegion::Inline, None);
 
         assert!(payload.text.is_empty());
         assert!(payload.highlights.is_empty());

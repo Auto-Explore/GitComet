@@ -2258,6 +2258,8 @@ pub(in crate::view) enum DiffHorizontalScrollColumn {
 pub(in crate::view) struct DiffWrapVisualRow {
     pub(in crate::view) source_visible_ix: usize,
     pub(in crate::view) wrap_ix: usize,
+    pub(in crate::view) primary_range: rows::DiffWrapByteRange,
+    pub(in crate::view) secondary_range: rows::DiffWrapByteRange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

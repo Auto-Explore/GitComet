@@ -149,6 +149,7 @@ struct ReducerEffectsContext<'a> {
     repo_task_tokens: &'a mut HashMap<RepoId, RepoTaskToken>,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
+    repo_load_executor: &'a TaskExecutor,
     metadata_executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
@@ -233,6 +234,7 @@ where
         }
         schedule_effect(
             ctx.executor,
+            ctx.repo_load_executor,
             ctx.session_persist_executor,
             ctx.thread_state,
             ctx.backend,
@@ -296,6 +298,7 @@ impl AppStore {
 
         thread::spawn(move || {
             let executor = TaskExecutor::new(default_worker_threads());
+            let repo_load_executor = TaskExecutor::new(default_worker_threads());
             let metadata_executor = TaskExecutor::new(1);
             let session_persist_executor = TaskExecutor::new(1);
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -408,6 +411,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -444,6 +448,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -472,6 +477,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -500,6 +506,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -528,6 +535,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -556,6 +564,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -584,6 +593,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -621,6 +631,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -647,6 +658,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -694,6 +706,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
@@ -721,6 +734,7 @@ impl AppStore {
                                 repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
                                 metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
