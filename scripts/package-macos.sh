@@ -170,6 +170,16 @@ show_disk_usage() {
   done
 }
 
+dmg_size_for_source() {
+  local source_dir="$1"
+  local source_kib
+  source_kib="$(du -sk "$source_dir" | awk '{print $1}')"
+
+  # hdiutil's inferred size for -srcfolder can be too small for signed app
+  # bundles. Add 30% plus 64 MiB for filesystem metadata and small-file slack.
+  echo $(( (source_kib * 13 / 10 + 65536 + 1023) / 1024 ))
+}
+
 clean_target_intermediates_for_ci() {
   if [[ "${GITCOMET_MACOS_PACKAGE_CLEAN_TARGET:-0}" != "1" ]]; then
     return
@@ -296,12 +306,16 @@ if [[ $create_dmg -eq 1 ]]; then
   mkdir -p "$dmg_stage"
   cp -R "$app_bundle" "${dmg_stage}/GitComet.app"
   ln -s /Applications "${dmg_stage}/Applications"
+  dmg_size_mib="$(dmg_size_for_source "$dmg_stage")"
+  echo "Creating macOS DMG with ${dmg_size_mib} MiB filesystem."
 
   # Preserve compatibility with older macOS tooling.
   rm -f "$dmg_path"
   hdiutil create \
     -volname "GitComet" \
     -srcfolder "$dmg_stage" \
+    -fs HFS+ \
+    -size "${dmg_size_mib}m" \
     -ov \
     -format UDZO \
     "$dmg_path" >/dev/null
