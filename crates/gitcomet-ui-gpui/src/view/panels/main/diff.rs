@@ -540,14 +540,12 @@ impl MainPaneView {
                                         .then(|| self.collapsed_diff_total_file_stat())
                                         .flatten();
                                     let left_header = Self::split_column_header_label(
-                                        theme,
                                         "A (local / before)",
                                         collapsed_file_stat.map(|(_, removed)| removed),
                                         '-',
                                         theme.colors.diff_remove_text,
                                     );
                                     let right_header = Self::split_column_header_label(
-                                        theme,
                                         "B (remote / after)",
                                         collapsed_file_stat.map(|(added, _)| added),
                                         '+',

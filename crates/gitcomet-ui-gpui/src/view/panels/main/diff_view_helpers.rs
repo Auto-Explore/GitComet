@@ -123,7 +123,6 @@ impl MainPaneView {
     }
 
     pub(super) fn split_column_header_label(
-        theme: AppTheme,
         label: &'static str,
         count: Option<usize>,
         prefix: char,
