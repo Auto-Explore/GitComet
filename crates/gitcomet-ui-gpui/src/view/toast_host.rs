@@ -184,6 +184,11 @@ impl ToastHost {
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        for toast in &self.toasts {
+            toast
+                .input
+                .update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         cx.notify();
     }
 
@@ -1190,6 +1195,48 @@ mod tests {
 
         assert!(apply_submodule_add_progress_sync(&mut progress, &[]));
         assert!(progress.is_empty());
+    }
+
+    #[gpui::test]
+    fn set_theme_rethemes_existing_toast_inputs(cx: &mut gpui::TestAppContext) {
+        let light = AppTheme::gitcomet_light();
+        let dark = AppTheme::gitcomet_dark();
+
+        let host = cx.update(|app| {
+            app.new(|cx| {
+                let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
+                host.push_survey_toast(
+                    "survey-id",
+                    "Survey",
+                    "Help shape GitComet by taking a short user survey.",
+                    "https://example.com",
+                    "Open Survey",
+                    "Later",
+                    60,
+                    cx,
+                );
+                host
+            })
+        });
+
+        let toast_input = cx.update(|app| {
+            let host = host.read(app);
+            assert_eq!(host.toasts.len(), 1);
+            let input = host.toasts[0].input.clone();
+            assert_eq!(input.read(app).debug_text_color(), light.colors.text.into());
+            input
+        });
+
+        cx.update(|app| {
+            host.update(app, |host, cx| host.set_theme(dark, cx));
+        });
+
+        cx.update(|app| {
+            assert_eq!(
+                toast_input.read(app).debug_text_color(),
+                dark.colors.text.into()
+            );
+        });
     }
 
     #[test]

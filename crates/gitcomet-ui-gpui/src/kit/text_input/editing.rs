@@ -132,6 +132,11 @@ impl TextInput {
         cx.notify();
     }
 
+    #[cfg(test)]
+    pub(crate) fn debug_text_color(&self) -> gpui::Hsla {
+        self.style.text
+    }
+
     pub fn set_text(&mut self, text: impl Into<SharedString>, cx: &mut Context<Self>) {
         let text = text.into();
         if self.content.as_ref() == text.as_ref() {
