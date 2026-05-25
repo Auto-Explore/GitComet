@@ -50,6 +50,7 @@ pub(super) fn panel(
                         .child(
                             components::TruncatedText::path(title.clone())
                                 .id(("file_history_title_path", repo_id.0))
+                                .text_color(theme.colors.text_muted)
                                 .full_text_tooltip(this.tooltip_host.clone())
                                 .render(cx),
                         ),

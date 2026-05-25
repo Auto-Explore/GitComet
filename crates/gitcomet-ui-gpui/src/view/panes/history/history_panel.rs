@@ -51,6 +51,7 @@ impl HistoryView {
             )
             .h_full()
             .track_scroll(&self.history_scroll);
+            let list = restrict_scroll_to_vertical_axis(list);
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
                 let scroll_handle = state.base_handle.clone();
