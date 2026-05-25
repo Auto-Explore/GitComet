@@ -2537,13 +2537,15 @@ impl PopoverHost {
         };
 
         let panel = if let Some(max_panel_h) = context_menu_max_panel_h {
-            div()
-                .id("context_menu_scroll")
-                .min_h(px(0.0))
-                .max_h(max_panel_h)
-                .overflow_y_scroll()
-                .child(panel)
-                .into_any_element()
+            restrict_scroll_to_vertical_axis(
+                div()
+                    .id("context_menu_scroll")
+                    .min_h(px(0.0))
+                    .max_h(max_panel_h)
+                    .overflow_y_scroll(),
+            )
+            .child(panel)
+            .into_any_element()
         } else {
             panel.into_any_element()
         };

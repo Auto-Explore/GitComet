@@ -278,6 +278,7 @@ impl SidebarPaneView {
         .h_full()
         .min_h(px(0.0))
         .track_scroll(&self.branches_scroll);
+        let list = restrict_scroll_to_vertical_axis(list);
         let scrollbar_gutter = components::Scrollbar::visible_gutter(
             self.branches_scroll.clone(),
             components::ScrollbarAxis::Vertical,
