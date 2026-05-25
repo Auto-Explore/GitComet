@@ -127,6 +127,7 @@ pub(super) enum BranchSidebarRow {
     },
     SubmodulePlaceholder {
         message: SharedString,
+        can_load: bool,
     },
     SubmoduleItem {
         path: std::path::PathBuf,
@@ -943,6 +944,7 @@ pub(super) fn branch_sidebar_rows(
             Loadable::Ready(submodules) if submodules.is_empty() => {
                 rows.push(BranchSidebarRow::SubmodulePlaceholder {
                     message: "No submodules".into(),
+                    can_load: false,
                 });
             }
             Loadable::Ready(submodules) => {
@@ -954,12 +956,15 @@ pub(super) fn branch_sidebar_rows(
             }
             Loadable::Loading => rows.push(BranchSidebarRow::SubmodulePlaceholder {
                 message: "Loading".into(),
+                can_load: false,
             }),
             Loadable::NotLoaded => rows.push(BranchSidebarRow::SubmodulePlaceholder {
-                message: "Loading".into(),
+                message: "Not loaded".into(),
+                can_load: true,
             }),
             Loadable::Error(error) => rows.push(BranchSidebarRow::SubmodulePlaceholder {
                 message: error.clone().into(),
+                can_load: true,
             }),
         }
     }

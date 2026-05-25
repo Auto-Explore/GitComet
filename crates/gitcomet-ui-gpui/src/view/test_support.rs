@@ -79,3 +79,15 @@ pub(in crate::view) fn diff_content_mode(view: &GitCometView) -> DiffContentMode
 pub(in crate::view) fn diff_whitespace_mode(view: &GitCometView) -> DiffWhitespaceMode {
     view.diff_whitespace_mode
 }
+
+pub(in crate::view) fn diff_reveal_whitespace_chars(view: &GitCometView) -> bool {
+    view.diff_reveal_whitespace_chars
+}
+
+pub(in crate::view) fn diff_word_wrap(view: &GitCometView) -> bool {
+    view.diff_word_wrap
+}
+
+pub(in crate::view) fn diff_show_line_numbers(view: &GitCometView) -> bool {
+    view.diff_show_line_numbers
+}

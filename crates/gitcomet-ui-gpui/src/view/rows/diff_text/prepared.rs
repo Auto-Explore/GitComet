@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panes::main::diff_search::normalize_diff_search_query;
 
 pub(in crate::view) fn prepared_diff_syntax_line_for_one_based_line(
     document: Option<PreparedDiffSyntaxDocument>,
@@ -328,8 +329,8 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
         prepared_line.line_ix,
     ) {
         Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
-            let query_trimmed = query.trim();
-            if word_ranges.is_empty() && query_trimmed.is_empty() {
+            let query = normalize_diff_search_query(query);
+            if word_ranges.is_empty() && query.is_empty() {
                 let build_syntax_only = || {
                     SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
                         match highlight_palette {
@@ -385,7 +386,7 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
                         build: DiffTextBuildRequest {
                             text,
                             word_ranges,
-                            query,
+                            query: query.as_ref(),
                             syntax: DiffSyntaxConfig {
                                 language: None,
                                 mode: DiffSyntaxMode::HeuristicOnly,

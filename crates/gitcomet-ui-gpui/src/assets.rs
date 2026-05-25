@@ -64,6 +64,9 @@ impl GitCometAssets {
                 "../assets/icons/arrow_right.svg"
             ))),
             "icons/link.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/link.svg"))),
+            "icons/line_break.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/line_break.svg"
+            ))),
             "icons/unlink.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/unlink.svg"))),
             "icons/cloud.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/cloud.svg"))),
             "icons/cog.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/cog.svg"))),
@@ -136,6 +139,7 @@ impl GitCometAssets {
                 "icons/arrow_left.svg".into(),
                 "icons/arrow_right.svg".into(),
                 "icons/link.svg".into(),
+                "icons/line_break.svg".into(),
                 "icons/unlink.svg".into(),
                 "icons/cloud.svg".into(),
                 "icons/cog.svg".into(),

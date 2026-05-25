@@ -87,6 +87,7 @@ impl RepoLoadsInFlight {
     pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 12;
     pub const REMOTE_TAGS: u32 = 1 << 13;
     pub const WORKTREES: u32 = 1 << 14;
+    pub const SUBMODULES: u32 = 1 << 15;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -101,6 +102,12 @@ impl RepoLoadsInFlight {
 
     pub fn any_in_flight(&self) -> bool {
         self.in_flight != 0
+    }
+
+    pub fn clear(&mut self) {
+        self.in_flight = 0;
+        self.pending = 0;
+        self.pending_log = None;
     }
 
     /// Starts the common primary-refresh batch immediately when no work is already queued or
@@ -657,6 +664,7 @@ pub struct RepoState {
 
     pub command_log: Vec<CommandLogEntry>,
     pub pending_commit_retry: Option<PendingCommitRetry>,
+    pub load_epoch: u64,
     pub pending_force_push_lease: Option<ForcePushLease>,
 }
 
@@ -726,6 +734,7 @@ impl RepoState {
             diagnostics: Vec::new(),
             command_log: Vec::new(),
             pending_commit_retry: None,
+            load_epoch: 0,
             pending_force_push_lease: None,
         }
     }
@@ -1132,6 +1141,12 @@ impl RepoState {
 
     pub(crate) fn bump_ops_rev(&mut self) {
         self.ops_rev = self.ops_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_load_epoch(&mut self) -> u64 {
+        let previous = self.load_epoch;
+        self.load_epoch = self.load_epoch.wrapping_add(1);
+        previous
     }
 }
 

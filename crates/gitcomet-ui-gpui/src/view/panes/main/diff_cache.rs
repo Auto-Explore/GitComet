@@ -13,10 +13,10 @@ mod word_highlight;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
+use self::file_diff::file_diff_text_signature;
 pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
-use self::file_diff::{build_inline_text, file_diff_text_signature};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
@@ -364,17 +364,6 @@ impl MainPaneView {
         self.file_diff_inline_row_provider
             .as_ref()
             .and_then(|provider| provider.modify_pair_texts(inline_ix))
-    }
-
-    pub(in crate::view) fn ensure_file_diff_inline_text_materialized(&mut self) {
-        if !self.file_diff_inline_text.is_empty() || self.file_diff_inline_row_len() == 0 {
-            return;
-        }
-        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
-            self.file_diff_inline_text = provider.build_full_text();
-        } else {
-            self.file_diff_inline_text = build_inline_text(self.file_diff_inline_cache.as_slice());
-        }
     }
 
     pub(in crate::view) fn patch_diff_row_len(&self) -> usize {
@@ -2786,7 +2775,7 @@ impl MainPaneView {
                 })
             }
             DiffViewMode::Split => {
-                if self.diff_split_row_provider.is_some() {
+                if self.diff_split_row_provider.is_some() && !self.diff_word_wrap {
                     let meta = self.patch_split_visible_meta_from_source();
                     debug_assert_eq!(meta.visible_indices.as_slice(), self.diff_visible_indices);
                     return scrollbar_markers_from_visible_flags(meta.visible_flags.as_slice());
@@ -2859,11 +2848,27 @@ impl MainPaneView {
                 let flag = Self::collapsed_diff_hunk_marker_flag(*hunk);
                 let (start, end) = self.collapsed_diff_hunk_visible_file_bounds(hunk_ix, *hunk)?;
                 Some((start, end, flag))
+            })
+            .collect::<Vec<_>>();
+        if self.diff_word_wrap {
+            return scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
+                let source_visible_ix = self
+                    .diff_source_visible_ix_for_visible_ix(visible_ix)
+                    .unwrap_or(visible_ix);
+                ranges
+                    .iter()
+                    .find_map(|(start, end, flag)| {
+                        (source_visible_ix >= *start && source_visible_ix < *end).then_some(*flag)
+                    })
+                    .unwrap_or(0)
             });
+        }
         scrollbar_markers_from_visible_ranges(self.diff_visible_len(), ranges)
     }
 
-    fn compute_diff_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
+    pub(in crate::view) fn compute_diff_scrollbar_markers(
+        &self,
+    ) -> Vec<components::ScrollbarMarker> {
         if self.is_collapsed_diff_projection_active() {
             return self.diff_scrollbar_markers_collapsed();
         }
@@ -2874,7 +2879,9 @@ impl MainPaneView {
 
         match self.diff_view {
             DiffViewMode::Inline => {
-                if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+                if let Some(provider) = self.file_diff_inline_row_provider.as_ref()
+                    && !self.diff_word_wrap
+                {
                     return provider.scrollbar_markers();
                 }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
@@ -2889,7 +2896,9 @@ impl MainPaneView {
                 })
             }
             DiffViewMode::Split => {
-                if let Some(provider) = self.file_diff_row_provider.as_ref() {
+                if let Some(provider) = self.file_diff_row_provider.as_ref()
+                    && !self.diff_word_wrap
+                {
                     return provider.scrollbar_markers();
                 }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
@@ -2954,6 +2963,8 @@ impl MainPaneView {
         self.diff_visible_view = self.diff_view;
         self.diff_visible_is_file_view = is_file_view;
         self.diff_visible_cache_projection_rev = projection_rev;
+        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_cache_key = None;
         if !preserve_horizontal_width {
             self.reset_diff_horizontal_scroll_state();
         }
@@ -2963,7 +2974,7 @@ impl MainPaneView {
         if collapsed_projection_active {
             self.diff_visible_indices.clear();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            if self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
@@ -2972,7 +2983,7 @@ impl MainPaneView {
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+            if self.diff_search_has_query() {
                 self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
@@ -3027,7 +3038,7 @@ impl MainPaneView {
             .map(|flags| scrollbar_markers_from_visible_flags(flags.as_slice()))
             .unwrap_or_else(|| self.compute_diff_scrollbar_markers());
 
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_has_query() {
             self.diff_search_recompute_matches_for_current_view_preserving_current();
         }
     }

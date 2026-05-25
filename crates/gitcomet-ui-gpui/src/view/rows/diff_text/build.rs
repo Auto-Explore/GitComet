@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
 
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
@@ -44,7 +45,7 @@ pub(super) fn build_diff_text_segments(
         return Vec::new();
     }
 
-    let query = query.trim();
+    let query = normalize_diff_search_query(query);
     if word_ranges.is_empty()
         && query.is_empty()
         && language.is_none()
@@ -77,7 +78,7 @@ pub(super) fn build_diff_text_segments(
 
     let _word_query_scope = perf::span(ViewPerfSpan::WordQueryHighlighting);
     let query_ranges = if !query.is_empty() {
-        find_all_ascii_case_insensitive(text, query)
+        find_all_ascii_case_insensitive(text, query.as_ref())
     } else {
         Default::default()
     };
@@ -439,7 +440,7 @@ pub(super) fn build_styled_text_fused(
         return empty_styled_text();
     }
 
-    let query = query.trim();
+    let query = normalize_diff_search_query(query);
     if word_ranges.is_empty()
         && query.is_empty()
         && language.is_none()
@@ -468,7 +469,7 @@ pub(super) fn build_styled_text_fused(
 
     let _word_query_scope = perf::span(ViewPerfSpan::WordQueryHighlighting);
     let query_ranges = if !query.is_empty() {
-        find_all_ascii_case_insensitive(text, query)
+        find_all_ascii_case_insensitive(text, query.as_ref())
     } else {
         Default::default()
     };
@@ -691,7 +692,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
         return empty_styled_text();
     }
 
-    let query = query.trim();
+    let query = normalize_diff_search_query(query);
     if word_ranges.is_empty() && query.is_empty() {
         let build_syntax_only = || {
             SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
@@ -797,10 +798,9 @@ fn build_cached_diff_styled_text_with_optional_palette(
 pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
     theme: AppTheme,
     base: &CachedDiffStyledText,
-    query: &str,
+    matcher: &DiffSearchMatcher,
 ) -> CachedDiffStyledText {
-    let query = query.trim();
-    if query.is_empty() || base.text.is_empty() {
+    if matcher.is_empty() || matcher.regex_error().is_some() || base.text.is_empty() {
         return base.clone();
     }
 
@@ -809,7 +809,7 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
     }
 
     QUERY_OVERLAY_RANGES_BUF.with_borrow_mut(|query_ranges| {
-        find_all_ascii_case_insensitive_into(base.text.as_ref(), query, query_ranges);
+        matcher.find_row_overlay_ranges_into(base.text.as_ref(), query_ranges, 64);
         if query_ranges.is_empty() {
             return base.clone();
         }

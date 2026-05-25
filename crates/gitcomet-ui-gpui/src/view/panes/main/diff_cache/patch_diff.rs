@@ -688,6 +688,16 @@ impl PatchInlineVisibleMap {
         let offset = visible_ix.saturating_sub(run.start_visible_ix);
         (offset < run.len).then_some(run.start_src_ix + offset)
     }
+
+    pub(in crate::view) fn visible_ix_for_src_ix(&self, src_ix: usize) -> Option<usize> {
+        let run_ix = self
+            .visible_runs
+            .partition_point(|run| run.start_src_ix <= src_ix)
+            .checked_sub(1)?;
+        let run = self.visible_runs.get(run_ix)?;
+        let offset = src_ix.saturating_sub(run.start_src_ix);
+        (offset < run.len).then_some(run.start_visible_ix + offset)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -1104,6 +1114,16 @@ index 1111111..2222222 100644\n\
             .collect::<Vec<_>>();
 
         assert_eq!(mapped_visible, eager_visible);
+        for (visible_ix, src_ix) in eager_visible.iter().copied().enumerate() {
+            assert_eq!(map.visible_ix_for_src_ix(src_ix), Some(visible_ix));
+        }
+        for hidden_src_ix in hidden
+            .iter()
+            .enumerate()
+            .filter_map(|(src_ix, hide)| hide.then_some(src_ix))
+        {
+            assert_eq!(map.visible_ix_for_src_ix(hidden_src_ix), None);
+        }
         assert!(map.visible_len() < diff.lines.len());
     }
 

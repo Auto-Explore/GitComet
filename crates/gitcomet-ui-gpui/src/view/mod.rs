@@ -16,7 +16,7 @@ use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
     Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
-use gitcomet_state::msg::{Msg, RepoExternalChange, StoreEvent};
+use gitcomet_state::msg::{Msg, StoreEvent};
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
@@ -37,6 +37,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
+
+const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 
 actions!(
     text_input_diff_navigation,
@@ -78,6 +80,26 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.function
             && matches!(key, "a" | "c"))
         || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
+}
+
+fn repo_activation_msg(
+    state: &AppState,
+    last_activation_dispatch: &mut HashMap<RepoId, Instant>,
+    now: Instant,
+) -> Option<Msg> {
+    let repo_id = state.active_repo?;
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    if !matches!(repo.open, Loadable::Ready(_)) {
+        return None;
+    }
+    if last_activation_dispatch
+        .get(&repo_id)
+        .is_some_and(|last| now.saturating_duration_since(*last) < REPO_ACTIVATION_THROTTLE)
+    {
+        return None;
+    }
+    last_activation_dispatch.insert(repo_id, now);
+    Some(Msg::RepoActivated { repo_id })
 }
 
 mod app_model;
@@ -314,8 +336,9 @@ impl Element for UiScaleScrollCapture {
 
         let view = self.view.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            let zoom_modifier = event.modifiers.secondary() || event.modifiers.control;
             if phase != DispatchPhase::Capture
-                || !event.modifiers.secondary()
+                || !zoom_modifier
                 || event.modifiers.alt
                 || event.modifiers.function
             {
@@ -656,6 +679,9 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffWhitespaceMode::from_key)
             .unwrap_or_default();
+        let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
+        let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
+        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
         let commit_push_after_enabled = ui_session.commit_push_after_enabled.unwrap_or(false);
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
@@ -791,6 +817,9 @@ impl GitCometView {
                 diff_scroll_sync,
                 diff_content_mode,
                 diff_whitespace_mode,
+                diff_reveal_whitespace_chars,
+                diff_word_wrap,
+                diff_show_line_numbers,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -841,6 +870,9 @@ impl GitCometView {
                 commit_push_after_enabled,
                 diff_content_mode,
                 diff_whitespace_mode,
+                diff_reveal_whitespace_chars,
+                diff_word_wrap,
+                diff_show_line_numbers,
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 main_pane.clone(),
@@ -862,13 +894,12 @@ impl GitCometView {
             if !runtime.is_available() {
                 return;
             }
-            if let Some(repo) = this.active_repo()
-                && matches!(repo.open, Loadable::Ready(_))
-            {
-                this.store.dispatch(Msg::RepoExternallyChanged {
-                    repo_id: repo.id,
-                    change: RepoExternalChange::GitState,
-                });
+            if let Some(msg) = repo_activation_msg(
+                &this.state,
+                &mut this.last_repo_activation_dispatch_at,
+                Instant::now(),
+            ) {
+                this.store.dispatch(msg);
             }
         });
 
@@ -991,6 +1022,7 @@ impl GitCometView {
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
+            last_repo_activation_dispatch_at: HashMap::default(),
             date_time_format,
             timezone,
             show_timezone,
@@ -999,6 +1031,9 @@ impl GitCometView {
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_reveal_whitespace_chars,
+            diff_word_wrap,
+            diff_show_line_numbers,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1359,6 +1394,115 @@ impl GitCometView {
             .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
     }
 
+    fn apply_diff_reveal_whitespace_chars_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_reveal_whitespace_chars == next {
+            return false;
+        }
+
+        self.diff_reveal_whitespace_chars = next;
+        self.popover_host.update(cx, |host, cx| {
+            host.sync_diff_reveal_whitespace_chars(next, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_reveal_whitespace_chars_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_reveal_whitespace_chars_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_reveal_whitespace_chars(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_reveal_whitespace_chars_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_diff_reveal_whitespace_chars(next, cx)
+        });
+    }
+
+    fn apply_diff_word_wrap_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_word_wrap == next {
+            return false;
+        }
+
+        self.diff_word_wrap = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_word_wrap(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_word_wrap_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_word_wrap_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_word_wrap(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if !self.apply_diff_word_wrap_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
+    }
+
+    fn apply_diff_show_line_numbers_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_show_line_numbers == next {
+            return false;
+        }
+
+        self.diff_show_line_numbers = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_show_line_numbers(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_show_line_numbers_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_show_line_numbers_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_show_line_numbers(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_show_line_numbers_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
+    }
+
     pub(in crate::view) fn set_history_column_preferences(
         &mut self,
         show_graph: bool,
@@ -1397,10 +1541,16 @@ impl GitCometView {
             tag_fetch_mode,
         });
         if show_tags
+            && auto_fetch_tags_on_repo_activation
             && let Some(repo) = self.main_pane.read(cx).active_repo()
-            && matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_))
         {
-            self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+            if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+            }
+            if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store
+                    .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
+            }
         }
         self.schedule_ui_settings_persist(cx);
     }
@@ -1805,11 +1955,6 @@ impl GitCometView {
                 self.submodule_diff_bootstrap = None;
             }
         }
-    }
-
-    fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
     #[cfg(test)]

@@ -28,6 +28,7 @@ impl TextInput {
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
             style: TextInputStyle::from_theme(AppTheme::gitcomet_dark()),
             line_height_override: None,
+            vertical_padding_override: None,
             highlight: HighlightState::new(),
             layout: LayoutState::new(),
             wrap: WrapState::new(),
@@ -158,11 +159,43 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         highlights.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        if self.highlight.provider.is_none()
+            && self.highlight.highlights.as_slice() == highlights.as_slice()
+        {
+            return;
+        }
         self.highlight.highlights = Arc::new(highlights);
         self.highlight.provider = None;
         self.highlight.provider_binding_key = None;
         self.highlight.provider_poll_task.take();
         self.invalidate_highlights(false);
+        cx.notify();
+    }
+
+    #[allow(dead_code)]
+    pub fn set_selected_range(
+        &mut self,
+        range: Range<usize>,
+        autoscroll: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let start = self.clamp_to_char_boundary(range.start.min(range.end));
+        let end = self.clamp_to_char_boundary(range.start.max(range.end));
+        let next = start..end;
+        if self.selection.range == next && !self.selection.reversed {
+            if autoscroll {
+                self.queue_cursor_autoscroll();
+            }
+            return;
+        }
+
+        self.selection.range = next;
+        self.selection.reversed = false;
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        if autoscroll {
+            self.queue_cursor_autoscroll();
+        }
         cx.notify();
     }
 
@@ -214,6 +247,14 @@ impl TextInput {
         cx.notify();
     }
 
+    pub fn set_vertical_padding(&mut self, padding: Option<Pixels>, cx: &mut Context<Self>) {
+        if self.vertical_padding_override == padding {
+            return;
+        }
+        self.vertical_padding_override = padding;
+        cx.notify();
+    }
+
     pub(super) fn effective_line_height(&self, window: &Window) -> Pixels {
         self.line_height_override
             .unwrap_or_else(|| window.line_height())
@@ -230,6 +271,10 @@ impl TextInput {
     pub fn clear_transient_key_presses(&mut self) {
         self.interaction.enter_pressed = false;
         self.interaction.escape_pressed = false;
+    }
+
+    pub fn set_submit_on_enter(&mut self, submit_on_enter: bool) {
+        self.interaction.submit_on_enter = submit_on_enter;
     }
 
     pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<Self>) {
@@ -755,6 +800,7 @@ impl TextInput {
         self.select_to(self.content.len(), cx);
     }
 
+    #[allow(dead_code)]
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         if self.soft_wrap == soft_wrap {
             return;
@@ -1350,7 +1396,7 @@ impl TextInput {
     }
 
     pub(super) fn enter(&mut self, _: &Enter, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only || !self.multiline {
+        if self.read_only || !self.multiline || self.interaction.submit_on_enter {
             self.interaction.enter_pressed = true;
             cx.notify();
             return;

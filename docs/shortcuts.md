@@ -87,6 +87,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Action | macOS | Windows / Linux | Scope / notes |
 | --- | --- | --- | --- |
 | Search the current diff | `Cmd-F` | `Ctrl-F` | If rendered markdown preview is open, GitComet switches back to source mode before opening search. |
+| Insert a newline in diff search | `Shift-Enter` | `Shift-Enter` | Diff search only. The search box also has Match Case, Whole Word, and Regex toggles. |
 | Previous search match | `F2` | `F2` | While diff search is open. |
 | Next search match | `F3` | `F3` | While diff search is open. |
 | Close search, clear selection, or close the current diff | `Escape` | `Escape` | Exact behavior depends on the current diff state. |
@@ -96,7 +97,7 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Next change | `F3`, `F7`, `Option-Down` | `F3`, `F7`, `Alt-Down` | Raw diff and conflict diff views. |
 | Switch to inline diff | `Option-I` | `Alt-I` | Raw file diff only. Conflict resolver keeps split layout. |
 | Switch to split diff | `Option-S` | `Alt-S` | Raw file diff only. |
-| Toggle whitespace visibility | `Option-W` | `Alt-W` | Raw diff / conflict diff only. |
+| Toggle whitespace characters | `Option-W` | `Alt-W` | Text diff / conflict diff only. |
 | Stage or unstage the current working-tree file and advance to the adjacent file | `Space` | `Space` | Raw working-tree file diff only, and not while the diff search input has focus. |
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |

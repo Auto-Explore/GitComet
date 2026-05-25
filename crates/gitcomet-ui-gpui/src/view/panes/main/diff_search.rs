@@ -1,9 +1,254 @@
 use super::*;
 use gitcomet_core::domain::Diff;
-use memchr::memchr2_iter;
+use memchr::{memchr_iter, memchr2_iter};
+use regex::{Regex, RegexBuilder};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::borrow::Cow;
+use std::collections::VecDeque;
+use std::ops::Range;
+use std::time::Duration;
+
+const FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES: usize = 32 * 1024;
+const FILE_PREVIEW_REGEX_SEARCH_WINDOW_BYTES: usize = 256 * 1024;
+const FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES: usize = 64 * 1024;
+const DIFF_SEARCH_QUERY_DEBOUNCE_MS: u64 = 150;
+const MAX_UTF8_CHAR_BYTES: usize = 4;
+const DIFF_SEARCH_TRIGRAM_MIN_QUERY_BYTES: usize = 3;
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(in crate::view) struct DiffSearchOptions {
+    pub(in crate::view) match_case: bool,
+    pub(in crate::view) whole_word: bool,
+    pub(in crate::view) regex: bool,
+}
+
+pub(in crate::view) fn normalize_diff_search_query(query: &str) -> Cow<'_, str> {
+    if !query.contains('\r') {
+        return Cow::Borrowed(query);
+    }
+    Cow::Owned(query.replace("\r\n", "\n").replace('\r', "\n"))
+}
+
+pub(in crate::view) struct DiffSearchMatcher {
+    query: String,
+    options: DiffSearchOptions,
+    regex: Option<Regex>,
+    regex_error: Option<String>,
+}
+
+impl DiffSearchMatcher {
+    pub(in crate::view) fn new(query: &str, options: DiffSearchOptions) -> Self {
+        let query = normalize_diff_search_query(query).into_owned();
+        let (regex, regex_error) = if options.regex && !query.is_empty() {
+            match RegexBuilder::new(&query)
+                .case_insensitive(!options.match_case)
+                .multi_line(true)
+                .build()
+            {
+                Ok(regex) => (Some(regex), None),
+                Err(err) => (None, Some(err.to_string())),
+            }
+        } else {
+            (None, None)
+        };
+
+        Self {
+            query,
+            options,
+            regex,
+            regex_error,
+        }
+    }
+
+    pub(in crate::view) fn query(&self) -> &str {
+        self.query.as_str()
+    }
+
+    pub(in crate::view) fn regex_error(&self) -> Option<&str> {
+        self.regex_error.as_deref()
+    }
+
+    pub(in crate::view) fn is_empty(&self) -> bool {
+        self.query.is_empty()
+    }
+
+    pub(in crate::view) fn can_use_ascii_case_insensitive_fast_path(&self) -> bool {
+        !self.options.match_case
+            && !self.options.whole_word
+            && !self.options.regex
+            && !self.query.contains('\n')
+    }
+
+    fn can_use_single_row_literal_path(&self) -> bool {
+        !self.options.regex && !self.query.contains('\n')
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn is_match(&self, haystack: &str) -> bool {
+        self.find_range_at_or_after(haystack, 0).is_some()
+    }
+
+    pub(in crate::view) fn find_ranges_into(
+        &self,
+        haystack: &str,
+        out: &mut Vec<Range<usize>>,
+        max_matches: usize,
+    ) {
+        out.clear();
+        if max_matches == 0 || self.is_empty() || self.regex_error.is_some() {
+            return;
+        }
+
+        let mut search_start = 0usize;
+        while out.len() < max_matches {
+            let Some(range) = self.find_range_at_or_after(haystack, search_start) else {
+                break;
+            };
+            search_start = range.end;
+            out.push(range);
+        }
+    }
+
+    fn find_literal_case_sensitive_from(
+        &self,
+        haystack: &str,
+        start_at: usize,
+    ) -> Option<Range<usize>> {
+        let needle = self.query.as_bytes();
+        let haystack_bytes = haystack.as_bytes();
+        let (&first, _) = needle.first().zip(needle.last())?;
+        let last_start = haystack_bytes.len().checked_sub(needle.len())?;
+        let start_at = start_at.min(haystack_bytes.len());
+        if start_at > last_start {
+            return None;
+        }
+
+        for offset in memchr_iter(first, &haystack_bytes[start_at..=last_start]) {
+            let start = start_at + offset;
+            let range = start..(start + needle.len());
+            if haystack_bytes.get(range.clone()) == Some(needle)
+                && self.range_has_requested_boundaries(haystack, range.clone())
+            {
+                return Some(range);
+            }
+        }
+        None
+    }
+
+    fn find_literal_ascii_case_insensitive_from(
+        &self,
+        haystack: &str,
+        start_at: usize,
+    ) -> Option<Range<usize>> {
+        let needle = self.query.as_bytes();
+        let haystack_bytes = haystack.as_bytes();
+        let (&first, &last) = needle.first().zip(needle.last())?;
+        let last_start = haystack_bytes.len().checked_sub(needle.len())?;
+        let start_at = start_at.min(haystack_bytes.len());
+        if start_at > last_start {
+            return None;
+        }
+        let first_lower = first.to_ascii_lowercase();
+        let first_upper = first.to_ascii_uppercase();
+
+        if needle.len() == 1 {
+            for offset in memchr2_iter(first_lower, first_upper, &haystack_bytes[start_at..]) {
+                let start = start_at + offset;
+                let range = start..(start + 1);
+                if self.range_has_requested_boundaries(haystack, range.clone()) {
+                    return Some(range);
+                }
+            }
+            return None;
+        }
+
+        let middle = &needle[1..needle.len() - 1];
+        let last_lower = last.to_ascii_lowercase();
+        let last_upper = last.to_ascii_uppercase();
+        for offset in memchr2_iter(
+            first_lower,
+            first_upper,
+            &haystack_bytes[start_at..=last_start],
+        ) {
+            let start = start_at + offset;
+            let haystack_last = haystack_bytes[start + needle.len() - 1];
+            if haystack_last != last_lower && haystack_last != last_upper {
+                continue;
+            }
+            if !haystack_bytes[start + 1..start + needle.len() - 1].eq_ignore_ascii_case(middle) {
+                continue;
+            }
+            let range = start..(start + needle.len());
+            if self.range_has_requested_boundaries(haystack, range.clone()) {
+                return Some(range);
+            }
+        }
+        None
+    }
+
+    pub(in crate::view) fn find_row_overlay_ranges_into(
+        &self,
+        haystack: &str,
+        out: &mut Vec<Range<usize>>,
+        max_matches: usize,
+    ) {
+        self.find_ranges_into(haystack, out, max_matches);
+    }
+
+    fn find_range_at_or_after(&self, haystack: &str, start_at: usize) -> Option<Range<usize>> {
+        if self.is_empty() || self.regex_error.is_some() {
+            return None;
+        }
+
+        if let Some(regex) = self.regex.as_ref() {
+            let mut search_start = start_at.min(haystack.len());
+            loop {
+                let m = regex.find_at(haystack, search_start)?;
+                let range = m.start()..m.end();
+                if !range.is_empty() && self.range_has_requested_boundaries(haystack, range.clone())
+                {
+                    return Some(range);
+                }
+                search_start = next_char_boundary_after(haystack, m.start())?;
+            }
+        }
+
+        if self.options.match_case {
+            self.find_literal_case_sensitive_from(haystack, start_at)
+        } else {
+            self.find_literal_ascii_case_insensitive_from(haystack, start_at)
+        }
+    }
+
+    fn range_has_requested_boundaries(&self, haystack: &str, range: Range<usize>) -> bool {
+        if !self.options.whole_word {
+            return true;
+        }
+
+        !haystack[..range.start]
+            .chars()
+            .next_back()
+            .is_some_and(is_word_char)
+            && !haystack[range.end..]
+                .chars()
+                .next()
+                .is_some_and(is_word_char)
+    }
+}
+
+#[inline]
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn next_char_boundary_after(s: &str, ix: usize) -> Option<usize> {
+    if ix >= s.len() {
+        return None;
+    }
+
+    Some(ix + s[ix..].chars().next()?.len_utf8())
+}
 
 #[derive(Clone, Copy)]
 pub(in crate::view) struct AsciiCaseInsensitiveNeedle<'a> {
@@ -155,6 +400,12 @@ impl DiffSearchVisibleTrigramIndex {
     }
 }
 
+fn diff_search_inline_patch_query_uses_trigram_index(
+    query: AsciiCaseInsensitiveNeedle<'_>,
+) -> bool {
+    query.as_bytes().len() >= DIFF_SEARCH_TRIGRAM_MIN_QUERY_BYTES
+}
+
 #[inline]
 fn diff_search_displayed_text_matches_query(
     query: AsciiCaseInsensitiveNeedle<'_>,
@@ -173,6 +424,21 @@ fn diff_search_displayed_text_matches_query(
         }
     }
     query.is_match(expanded_tabs.as_str())
+}
+
+fn expand_tabs_to_string(text: &str) -> String {
+    if !text.contains('\t') {
+        return text.to_string();
+    }
+
+    let mut expanded = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\t' => expanded.push_str("    "),
+            _ => expanded.push(ch),
+        }
+    }
+    expanded
 }
 
 pub(in crate::view) fn diff_search_split_row_texts_match_query(
@@ -195,8 +461,8 @@ pub(in crate::view) fn diff_search_query_reuse(
     previous_query: &str,
     next_query: &str,
 ) -> DiffSearchQueryReuse {
-    let previous_query = previous_query.trim();
-    let next_query = next_query.trim();
+    let previous_query = normalize_diff_search_query(previous_query);
+    let next_query = normalize_diff_search_query(next_query);
     if next_query
         .as_bytes()
         .eq_ignore_ascii_case(previous_query.as_bytes())
@@ -317,12 +583,37 @@ fn inline_patch_diff_visible_ix_matches_query(
         .is_some_and(|text| query.is_match(text.as_ref()))
 }
 
+fn collect_inline_patch_diff_visible_matches_with_needle(
+    diff: &Diff,
+    diff_click_kinds: &[DiffClickKind],
+    diff_header_display_cache: &HashMap<usize, SharedString>,
+    diff_visible_inline_map: Option<&super::diff_cache::PatchInlineVisibleMap>,
+    diff_visible_indices: &[usize],
+    query: AsciiCaseInsensitiveNeedle<'_>,
+    out: &mut Vec<usize>,
+) {
+    let total = diff_visible_inline_map
+        .map(super::diff_cache::PatchInlineVisibleMap::visible_len)
+        .unwrap_or(diff_visible_indices.len());
+    for visible_ix in 0..total {
+        if inline_patch_diff_visible_ix_matches_query(
+            diff,
+            diff_click_kinds,
+            diff_header_display_cache,
+            diff_visible_inline_map,
+            diff_visible_indices,
+            query,
+            visible_ix,
+        ) {
+            out.push(visible_ix);
+        }
+    }
+}
+
 fn resolved_output_line_ix_matches_query(
     raw_text: &gitcomet_core::file_diff::FileDiffLineText,
     query: AsciiCaseInsensitiveNeedle<'_>,
 ) -> bool {
-    const FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES: usize = 32 * 1024;
-
     if raw_text.len() <= FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES {
         return query.is_match(raw_text.as_ref());
     }
@@ -396,6 +687,620 @@ fn retain_refined_visible_matches(
     }
 }
 
+fn normalized_stream_row_text(row_text: &str) -> &str {
+    row_text.strip_suffix('\r').unwrap_or(row_text)
+}
+
+fn normalized_file_diff_line_text_len(
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+) -> usize {
+    let len = raw_text.len();
+    if len == 0 {
+        return 0;
+    }
+
+    if raw_text
+        .slice_bytes(len - 1..len)
+        .is_some_and(|bytes| bytes.as_ref() == b"\r")
+    {
+        len - 1
+    } else {
+        len
+    }
+}
+
+#[inline]
+fn folded_search_byte(byte: u8, match_case: bool) -> u8 {
+    if match_case {
+        byte
+    } else {
+        byte.to_ascii_lowercase()
+    }
+}
+
+fn build_literal_search_prefix_table(needle: &[u8]) -> Vec<usize> {
+    let mut prefix = vec![0; needle.len()];
+    let mut matched = 0usize;
+
+    for ix in 1..needle.len() {
+        while matched > 0 && needle[ix] != needle[matched] {
+            matched = prefix[matched - 1];
+        }
+        if needle[ix] == needle[matched] {
+            matched += 1;
+            prefix[ix] = matched;
+        }
+    }
+
+    prefix
+}
+
+fn visible_ix_for_stream_abs(row_starts: &[(usize, usize)], stream_abs: usize) -> Option<usize> {
+    if row_starts.is_empty() {
+        return None;
+    }
+
+    let row_ix = match row_starts.binary_search_by_key(&stream_abs, |(start, _)| *start) {
+        Ok(ix) => ix,
+        Err(ix) => ix.saturating_sub(1),
+    };
+    row_starts.get(row_ix).map(|(_, visible_ix)| *visible_ix)
+}
+
+fn next_row_start_after_stream_abs(
+    row_starts: &[(usize, usize)],
+    stream_abs: usize,
+) -> Option<usize> {
+    let ix = row_starts.partition_point(|(start, _)| *start <= stream_abs);
+    row_starts.get(ix).map(|(start, _)| *start)
+}
+
+struct LiteralFileDiffLineTextStreamSearch {
+    needle: Vec<u8>,
+    prefix: Vec<usize>,
+    match_case: bool,
+    whole_word: bool,
+    matched: usize,
+    stream_abs: usize,
+    recent_bytes: VecDeque<u8>,
+    pending_whole_word_start: Option<usize>,
+    pending_whole_word_after: Vec<u8>,
+    row_starts: Vec<(usize, usize)>,
+    last_reported_visible_ix: Option<usize>,
+}
+
+impl LiteralFileDiffLineTextStreamSearch {
+    fn new(matcher: &DiffSearchMatcher) -> Option<Self> {
+        if matcher.options.regex || matcher.query.is_empty() {
+            return None;
+        }
+
+        let needle = matcher
+            .query
+            .as_bytes()
+            .iter()
+            .copied()
+            .map(|byte| folded_search_byte(byte, matcher.options.match_case))
+            .collect::<Vec<_>>();
+        let prefix = build_literal_search_prefix_table(needle.as_slice());
+
+        Some(Self {
+            needle,
+            prefix,
+            match_case: matcher.options.match_case,
+            whole_word: matcher.options.whole_word,
+            matched: 0,
+            stream_abs: 0,
+            recent_bytes: VecDeque::with_capacity(
+                matcher.query.len().saturating_add(MAX_UTF8_CHAR_BYTES),
+            ),
+            pending_whole_word_start: None,
+            pending_whole_word_after: Vec::with_capacity(MAX_UTF8_CHAR_BYTES),
+            row_starts: Vec::new(),
+            last_reported_visible_ix: None,
+        })
+    }
+
+    fn has_rows(&self) -> bool {
+        !self.row_starts.is_empty()
+    }
+
+    fn push_row_start(&mut self, visible_ix: usize) {
+        self.row_starts.push((self.stream_abs, visible_ix));
+    }
+
+    fn row_reported(&self, visible_ix: usize) -> bool {
+        self.last_reported_visible_ix == Some(visible_ix)
+    }
+
+    fn report_match_start(&mut self, match_start: usize, out: &mut Vec<usize>) {
+        let Some(visible_ix) = visible_ix_for_stream_abs(self.row_starts.as_slice(), match_start)
+        else {
+            return;
+        };
+        if self.last_reported_visible_ix == Some(visible_ix) {
+            return;
+        }
+        out.push(visible_ix);
+        self.last_reported_visible_ix = Some(visible_ix);
+    }
+
+    fn finish_pending_whole_word(&mut self, out: &mut Vec<usize>) {
+        let Some(match_start) = self.pending_whole_word_start else {
+            return;
+        };
+        match decode_first_utf8_char(self.pending_whole_word_after.as_slice()) {
+            Utf8CharDecode::Complete(ch) => {
+                self.pending_whole_word_start = None;
+                self.pending_whole_word_after.clear();
+                if !is_word_char(ch) {
+                    self.report_match_start(match_start, out);
+                }
+            }
+            Utf8CharDecode::Invalid => {
+                self.pending_whole_word_start = None;
+                self.pending_whole_word_after.clear();
+                self.report_match_start(match_start, out);
+            }
+            Utf8CharDecode::Incomplete => {}
+        }
+    }
+
+    fn push_byte(&mut self, byte: u8, out: &mut Vec<usize>) {
+        if self.pending_whole_word_start.is_some() {
+            self.pending_whole_word_after.push(byte);
+            self.finish_pending_whole_word(out);
+        }
+
+        let folded = folded_search_byte(byte, self.match_case);
+        while self.matched > 0 && folded != self.needle[self.matched] {
+            self.matched = self.prefix[self.matched - 1];
+        }
+        if folded == self.needle[self.matched] {
+            self.matched += 1;
+        }
+
+        self.recent_bytes.push_back(byte);
+        while self.recent_bytes.len() > self.needle.len().saturating_add(MAX_UTF8_CHAR_BYTES) {
+            self.recent_bytes.pop_front();
+        }
+
+        if self.matched == self.needle.len() {
+            let match_end = self.stream_abs.saturating_add(1);
+            let match_start = match_end.saturating_sub(self.needle.len());
+            let before_is_word = if match_start == 0 {
+                false
+            } else {
+                let recent_bytes = self.recent_bytes.make_contiguous();
+                let before_end = recent_bytes.len().saturating_sub(self.needle.len());
+                trailing_utf8_char_is_word(&recent_bytes[..before_end])
+            };
+
+            if !self.whole_word || !before_is_word {
+                if self.whole_word {
+                    self.pending_whole_word_start = Some(match_start);
+                    self.pending_whole_word_after.clear();
+                } else {
+                    self.report_match_start(match_start, out);
+                }
+            }
+
+            self.matched = self.prefix[self.needle.len() - 1];
+        }
+
+        self.stream_abs = self.stream_abs.saturating_add(1);
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8], out: &mut Vec<usize>) {
+        for &byte in bytes {
+            self.push_byte(byte, out);
+        }
+    }
+
+    fn skip_bytes_until_next_row(&mut self, byte_count: usize) {
+        self.stream_abs = self.stream_abs.saturating_add(byte_count);
+        self.matched = 0;
+        self.pending_whole_word_start = None;
+        self.pending_whole_word_after.clear();
+        self.recent_bytes.clear();
+    }
+
+    fn finish(&mut self, out: &mut Vec<usize>) {
+        if let Some(match_start) = self.pending_whole_word_start.take() {
+            self.pending_whole_word_after.clear();
+            self.report_match_start(match_start, out);
+        }
+    }
+}
+
+enum Utf8CharDecode {
+    Complete(char),
+    Incomplete,
+    Invalid,
+}
+
+fn decode_first_utf8_char(bytes: &[u8]) -> Utf8CharDecode {
+    let Some(&first) = bytes.first() else {
+        return Utf8CharDecode::Incomplete;
+    };
+
+    if first.is_ascii() {
+        return Utf8CharDecode::Complete(char::from(first));
+    }
+
+    let expected_len = match first {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return Utf8CharDecode::Invalid,
+    };
+    if bytes.len() < expected_len {
+        return Utf8CharDecode::Incomplete;
+    }
+
+    match std::str::from_utf8(&bytes[..expected_len]) {
+        Ok(text) => match text.chars().next() {
+            Some(ch) if ch.len_utf8() == expected_len => Utf8CharDecode::Complete(ch),
+            _ => Utf8CharDecode::Invalid,
+        },
+        Err(_) => Utf8CharDecode::Invalid,
+    }
+}
+
+fn trailing_utf8_char_is_word(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+
+    let start = bytes.len().saturating_sub(MAX_UTF8_CHAR_BYTES);
+    let tail = &bytes[start..];
+    for offset in 0..tail.len() {
+        if let Utf8CharDecode::Complete(ch) = decode_first_utf8_char(&tail[offset..])
+            && ch.len_utf8() == tail.len() - offset
+        {
+            return is_word_char(ch);
+        }
+    }
+
+    false
+}
+
+fn collect_file_diff_line_text_literal_stream_match_visible_rows(
+    rows: impl IntoIterator<Item = (usize, gitcomet_core::file_diff::FileDiffLineText)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    let Some(mut search) = LiteralFileDiffLineTextStreamSearch::new(matcher) else {
+        return;
+    };
+
+    for (visible_ix, raw_text) in rows {
+        if search.has_rows() {
+            search.push_byte(b'\n', out);
+        }
+        search.push_row_start(visible_ix);
+
+        let row_len = normalized_file_diff_line_text_len(&raw_text);
+        let mut chunk_start = 0usize;
+        while chunk_start < row_len {
+            let chunk_end = chunk_start
+                .saturating_add(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES)
+                .min(row_len);
+            if let Some(bytes) = raw_text.slice_bytes(chunk_start..chunk_end) {
+                search.push_bytes(bytes.as_ref(), out);
+            } else {
+                search.skip_bytes_until_next_row(chunk_end.saturating_sub(chunk_start));
+            }
+            chunk_start = chunk_end;
+
+            if search.row_reported(visible_ix) {
+                search.skip_bytes_until_next_row(row_len.saturating_sub(chunk_start));
+                break;
+            }
+        }
+    }
+
+    search.finish(out);
+}
+
+struct RegexFileDiffLineTextStreamSearch<'a> {
+    matcher: &'a DiffSearchMatcher,
+    window: String,
+    window_start_abs: usize,
+    stream_abs: usize,
+    row_starts: Vec<(usize, usize)>,
+    last_reported_visible_ix: Option<usize>,
+}
+
+impl<'a> RegexFileDiffLineTextStreamSearch<'a> {
+    fn new(matcher: &'a DiffSearchMatcher) -> Self {
+        Self {
+            matcher,
+            window: String::with_capacity(FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES),
+            window_start_abs: 0,
+            stream_abs: 0,
+            row_starts: Vec::new(),
+            last_reported_visible_ix: None,
+        }
+    }
+
+    fn has_rows(&self) -> bool {
+        !self.row_starts.is_empty()
+    }
+
+    fn push_row_start(&mut self, visible_ix: usize) {
+        self.row_starts.push((self.stream_abs, visible_ix));
+    }
+
+    fn row_reported(&self, visible_ix: usize) -> bool {
+        self.last_reported_visible_ix == Some(visible_ix)
+    }
+
+    fn report_match_start(&mut self, match_start: usize, out: &mut Vec<usize>) {
+        let Some(visible_ix) = visible_ix_for_stream_abs(self.row_starts.as_slice(), match_start)
+        else {
+            return;
+        };
+        if self.last_reported_visible_ix == Some(visible_ix) {
+            return;
+        }
+        out.push(visible_ix);
+        self.last_reported_visible_ix = Some(visible_ix);
+    }
+
+    fn scan_window(&mut self, stream_finished: bool, out: &mut Vec<usize>) {
+        let mut search_start = 0usize;
+        while search_start < self.window.len() {
+            let Some(range) = self
+                .matcher
+                .find_range_at_or_after(self.window.as_str(), search_start)
+            else {
+                break;
+            };
+
+            let has_real_before = range.start > 0 || self.window_start_abs == 0;
+            let has_real_after = range.end < self.window.len() || stream_finished;
+            let match_start_abs = self.window_start_abs.saturating_add(range.start);
+            if has_real_before && has_real_after {
+                self.report_match_start(match_start_abs, out);
+            }
+
+            let next_row_start =
+                next_row_start_after_stream_abs(self.row_starts.as_slice(), match_start_abs)
+                    .unwrap_or_else(|| self.window_start_abs.saturating_add(self.window.len()));
+            let next_search_start = next_row_start
+                .saturating_sub(self.window_start_abs)
+                .min(self.window.len());
+            if next_search_start > range.start {
+                search_start = next_search_start;
+            } else {
+                search_start = next_char_boundary_after(self.window.as_str(), range.start)
+                    .unwrap_or(self.window.len());
+            }
+        }
+    }
+
+    fn trim_window(&mut self) {
+        if self.window.len() <= FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES {
+            return;
+        }
+
+        let mut drop_len = self
+            .window
+            .len()
+            .saturating_sub(FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES);
+        while drop_len > 0 && !self.window.is_char_boundary(drop_len) {
+            drop_len -= 1;
+        }
+        if drop_len == 0 {
+            return;
+        }
+
+        self.window.drain(..drop_len);
+        self.window_start_abs = self.window_start_abs.saturating_add(drop_len);
+    }
+
+    fn push_str(&mut self, text: &str, out: &mut Vec<usize>) {
+        self.window.push_str(text);
+        self.stream_abs = self.stream_abs.saturating_add(text.len());
+        if self.window.len() >= FILE_PREVIEW_REGEX_SEARCH_WINDOW_BYTES {
+            self.scan_window(false, out);
+            self.trim_window();
+        }
+    }
+
+    fn skip_bytes_until_next_row(&mut self, byte_count: usize) {
+        self.stream_abs = self.stream_abs.saturating_add(byte_count);
+        self.window.clear();
+        self.window_start_abs = self.stream_abs;
+    }
+
+    fn finish(&mut self, out: &mut Vec<usize>) {
+        self.scan_window(true, out);
+    }
+}
+
+fn collect_file_diff_line_text_regex_stream_match_visible_rows(
+    rows: impl IntoIterator<Item = (usize, gitcomet_core::file_diff::FileDiffLineText)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    let mut search = RegexFileDiffLineTextStreamSearch::new(matcher);
+
+    for (visible_ix, raw_text) in rows {
+        if search.has_rows() {
+            search.push_str("\n", out);
+        }
+        search.push_row_start(visible_ix);
+
+        let row_len = normalized_file_diff_line_text_len(&raw_text);
+        let mut chunk_start = 0usize;
+        while chunk_start < row_len {
+            let requested_end = chunk_start
+                .saturating_add(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES)
+                .min(row_len);
+            let Some((text, resolved_range)) =
+                raw_text.slice_text_resolved(chunk_start..requested_end)
+            else {
+                break;
+            };
+            if !text.is_empty() {
+                search.push_str(text.as_ref(), out);
+            }
+
+            if resolved_range.end > chunk_start {
+                chunk_start = resolved_range.end;
+            } else {
+                chunk_start = requested_end;
+            }
+
+            if search.row_reported(visible_ix) {
+                search.skip_bytes_until_next_row(row_len.saturating_sub(chunk_start));
+                break;
+            }
+        }
+    }
+
+    search.finish(out);
+}
+
+fn collect_file_diff_line_text_stream_match_visible_rows(
+    rows: impl IntoIterator<Item = (usize, gitcomet_core::file_diff::FileDiffLineText)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    if matcher.options.regex {
+        collect_file_diff_line_text_regex_stream_match_visible_rows(rows, matcher, out);
+    } else {
+        collect_file_diff_line_text_literal_stream_match_visible_rows(rows, matcher, out);
+    }
+}
+
+fn collect_stream_match_row_offsets<T: AsRef<str>>(
+    rows: impl IntoIterator<Item = (usize, T)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<(usize, usize)>,
+) {
+    if matcher.can_use_single_row_literal_path() {
+        for (visible_ix, row_text) in rows {
+            if let Some(range) =
+                matcher.find_range_at_or_after(normalized_stream_row_text(row_text.as_ref()), 0)
+            {
+                out.push((visible_ix, range.start));
+            }
+        }
+        return;
+    }
+
+    let mut text = String::new();
+    let mut line_starts = Vec::new();
+    let mut visible_indices = Vec::new();
+
+    for (visible_ix, row_text) in rows {
+        if !visible_indices.is_empty() {
+            text.push('\n');
+        }
+        line_starts.push(text.len());
+        visible_indices.push(visible_ix);
+        text.push_str(normalized_stream_row_text(row_text.as_ref()));
+    }
+
+    if visible_indices.is_empty() {
+        return;
+    }
+
+    let mut search_start = 0usize;
+    while let Some(range) = matcher.find_range_at_or_after(&text, search_start) {
+        let start = range.start.min(text.len());
+        let line_ix = match line_starts.binary_search(&start) {
+            Ok(ix) => ix,
+            Err(ix) => ix.saturating_sub(1),
+        };
+        if let Some(visible_ix) = visible_indices.get(line_ix).copied() {
+            let line_start = line_starts.get(line_ix).copied().unwrap_or(start);
+            out.push((visible_ix, start.saturating_sub(line_start)));
+        }
+
+        search_start = line_starts.get(line_ix + 1).copied().unwrap_or(text.len());
+        if search_start <= start {
+            break;
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StreamMatchCollectionMode {
+    SingleRowLiteral,
+    MaterializedRows,
+}
+
+fn collect_stream_match_visible_rows_with_mode<T: AsRef<str>>(
+    rows: impl IntoIterator<Item = (usize, T)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) -> StreamMatchCollectionMode {
+    if matcher.can_use_single_row_literal_path() {
+        for (visible_ix, row_text) in rows {
+            if matcher
+                .find_range_at_or_after(normalized_stream_row_text(row_text.as_ref()), 0)
+                .is_some()
+            {
+                out.push(visible_ix);
+            }
+        }
+        return StreamMatchCollectionMode::SingleRowLiteral;
+    }
+
+    let mut row_offsets = Vec::new();
+    collect_stream_match_row_offsets(rows, matcher, &mut row_offsets);
+    out.extend(row_offsets.into_iter().map(|(visible_ix, _)| visible_ix));
+    StreamMatchCollectionMode::MaterializedRows
+}
+
+fn collect_stream_match_visible_rows<T: AsRef<str>>(
+    rows: impl IntoIterator<Item = (usize, T)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    let _ = collect_stream_match_visible_rows_with_mode(rows, matcher, out);
+}
+
+fn collect_split_stream_match_visible_rows<'a>(
+    rows: impl IntoIterator<Item = (usize, Option<Cow<'a, str>>, Option<Cow<'a, str>>)>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    if matcher.can_use_single_row_literal_path() {
+        for (visible_ix, left, right) in rows {
+            let left_matches = left.as_ref().is_some_and(|left| {
+                matcher
+                    .find_range_at_or_after(normalized_stream_row_text(left.as_ref()), 0)
+                    .is_some()
+            });
+            let right_matches = right.as_ref().is_some_and(|right| {
+                matcher
+                    .find_range_at_or_after(normalized_stream_row_text(right.as_ref()), 0)
+                    .is_some()
+            });
+            if left_matches || right_matches {
+                out.push(visible_ix);
+            }
+        }
+        return;
+    }
+
+    let mut left_rows = Vec::new();
+    let mut right_rows = Vec::new();
+
+    for (visible_ix, left, right) in rows {
+        left_rows.push((visible_ix, left.unwrap_or(Cow::Borrowed(""))));
+        right_rows.push((visible_ix, right.unwrap_or(Cow::Borrowed(""))));
+    }
+
+    collect_stream_match_visible_rows(left_rows, matcher, out);
+    collect_stream_match_visible_rows(right_rows, matcher, out);
+}
+
 impl MainPaneView {
     pub(in crate::view) fn active_conflict_target(
         &self,
@@ -420,7 +1325,29 @@ impl MainPaneView {
         Some((path.clone(), conflict.conflict))
     }
 
+    pub(in crate::view) fn diff_search_options_or_default(&self) -> DiffSearchOptions {
+        if self.diff_search_active {
+            self.diff_search_options
+        } else {
+            DiffSearchOptions::default()
+        }
+    }
+
+    pub(in crate::view) fn diff_search_has_query(&self) -> bool {
+        self.diff_search_active && !self.diff_search_query.as_ref().is_empty()
+    }
+
+    fn diff_search_current_matcher(&mut self) -> DiffSearchMatcher {
+        let matcher = DiffSearchMatcher::new(
+            self.diff_search_query.as_ref(),
+            self.diff_search_options_or_default(),
+        );
+        self.diff_search_regex_error = matcher.regex_error().map(|err| err.to_string().into());
+        matcher
+    }
+
     pub(in super::super::super) fn diff_search_recompute_matches(&mut self) {
+        self.diff_search_cancel_pending_query_recompute();
         if !self.diff_search_active {
             self.diff_search_matches.clear();
             self.diff_search_match_ix = None;
@@ -435,6 +1362,7 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches_and_scroll_to_first(&mut self) {
+        self.diff_search_cancel_pending_query_recompute();
         self.diff_search_recompute_matches_with_finalize(DiffSearchFinalizeMode::ScrollToFirst);
     }
 
@@ -453,6 +1381,7 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_search_recompute_matches_preserving_current(&mut self) {
+        self.diff_search_cancel_pending_query_recompute();
         if !self.diff_search_active {
             self.diff_search_matches.clear();
             self.diff_search_match_ix = None;
@@ -474,17 +1403,28 @@ impl MainPaneView {
         }
 
         self.diff_search_match_ix = None;
-        let query_text = self.diff_search_query.clone();
-        let query_text = query_text.as_ref().trim();
+        let matcher = self.diff_search_current_matcher();
 
-        let Some(query) = AsciiCaseInsensitiveNeedle::new(query_text) else {
+        if matcher.is_empty() || matcher.regex_error().is_some() {
             self.diff_search_matches.clear();
+            self.diff_search_finalize_matches(DiffSearchFinalizeMode::ScrollToFirst);
             return;
-        };
+        }
 
-        match diff_search_query_reuse(previous_query, query_text) {
-            DiffSearchQueryReuse::SameSemantics => {}
-            DiffSearchQueryReuse::Refinement if self.diff_search_can_refine_current_matches() => {
+        // Wrapped diffs need source-row scanning so literals can cross soft-wrap boundaries.
+        let can_refine = !self.diff_word_wrap
+            && matcher.can_use_ascii_case_insensitive_fast_path()
+            && self.diff_search_can_refine_current_matches();
+
+        match diff_search_query_reuse(previous_query, matcher.query()) {
+            DiffSearchQueryReuse::SameSemantics
+                if matcher.can_use_ascii_case_insensitive_fast_path() => {}
+            DiffSearchQueryReuse::Refinement if can_refine => {
+                let Some(query) = AsciiCaseInsensitiveNeedle::new(matcher.query()) else {
+                    self.diff_search_matches.clear();
+                    self.diff_search_finalize_matches(DiffSearchFinalizeMode::ScrollToFirst);
+                    return;
+                };
                 let mut previous_matches = std::mem::take(&mut self.diff_search_matches);
                 if !(self
                     .diff_search_try_refine_worktree_preview_matches(query, &mut previous_matches)
@@ -508,12 +1448,65 @@ impl MainPaneView {
                 }
                 self.diff_search_matches = previous_matches;
             }
-            DiffSearchQueryReuse::None | DiffSearchQueryReuse::Refinement => {
-                self.diff_search_scan_current_view_with_needle(query);
+            DiffSearchQueryReuse::SameSemantics
+            | DiffSearchQueryReuse::None
+            | DiffSearchQueryReuse::Refinement => {
+                self.diff_search_scan_current_view_with_matcher(&matcher);
             }
         }
 
         self.diff_search_finalize_matches(DiffSearchFinalizeMode::ScrollToFirst);
+    }
+
+    pub(in super::super::super) fn diff_search_cancel_pending_query_recompute(&mut self) {
+        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
+        self.diff_search_pending_previous_query = None;
+    }
+
+    pub(super) fn diff_search_schedule_query_recompute(
+        &mut self,
+        previous_query: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.diff_search_active {
+            self.diff_search_cancel_pending_query_recompute();
+            self.diff_search_matches.clear();
+            self.diff_search_match_ix = None;
+            return;
+        }
+
+        if self.diff_search_pending_previous_query.is_none() {
+            self.diff_search_pending_previous_query = Some(previous_query);
+        }
+        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
+        let seq = self.diff_search_debounce_seq;
+
+        cx.spawn(
+            async move |view: gpui::WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(DIFF_SEARCH_QUERY_DEBOUNCE_MS))
+                    .await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.diff_search_debounce_seq != seq {
+                        return;
+                    }
+                    if this.diff_search_flush_pending_query_recompute() {
+                        cx.notify();
+                    }
+                });
+            },
+        )
+        .detach();
+    }
+
+    pub(super) fn diff_search_flush_pending_query_recompute(&mut self) -> bool {
+        let Some(previous_query) = self.diff_search_pending_previous_query.take() else {
+            return false;
+        };
+
+        self.diff_search_debounce_seq = self.diff_search_debounce_seq.wrapping_add(1);
+        self.diff_search_recompute_matches_for_query_change(previous_query.as_ref());
+        true
     }
 
     pub(super) fn diff_search_recompute_matches_for_current_view(&mut self) {
@@ -537,16 +1530,88 @@ impl MainPaneView {
         &mut self,
         finalize: DiffSearchFinalizeMode,
     ) {
-        let query_text = self.diff_search_query.clone();
+        let matcher = self.diff_search_current_matcher();
 
-        let Some(query) = AsciiCaseInsensitiveNeedle::new(query_text.as_ref().trim()) else {
+        if matcher.is_empty() || matcher.regex_error().is_some() {
             self.diff_search_matches.clear();
             self.diff_search_match_ix = None;
             return;
-        };
+        }
 
-        self.diff_search_scan_current_view_with_needle(query);
+        self.diff_search_scan_current_view_with_matcher(&matcher);
         self.diff_search_finalize_matches(finalize);
+    }
+
+    fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
+        // Wrapped diffs need source-row scanning so literals can cross soft-wrap boundaries.
+        if !self.diff_word_wrap
+            && matcher.can_use_ascii_case_insensitive_fast_path()
+            && let Some(query) = AsciiCaseInsensitiveNeedle::new(matcher.query())
+        {
+            self.diff_search_scan_current_view_with_needle(query);
+            return;
+        }
+
+        self.diff_search_scan_current_view_general(matcher);
+    }
+
+    fn diff_search_visual_ix_for_source_match(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+        offset: usize,
+    ) -> usize {
+        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+            return source_visible_ix;
+        }
+
+        let first_visible_ix = self
+            .diff_wrap_visible_rows
+            .partition_point(|row| row.source_visible_ix < source_visible_ix);
+        let mut boundary_candidate = None;
+        let mut fallback = None;
+        for visible_ix in first_visible_ix..self.diff_wrap_visible_rows.len() {
+            let Some(row) = self.diff_wrap_visible_rows.get(visible_ix) else {
+                break;
+            };
+            if row.source_visible_ix != source_visible_ix {
+                break;
+            }
+            fallback.get_or_insert(visible_ix);
+            let (_, range) = self.diff_text_visual_source_range_for_region(visible_ix, region);
+            if range.is_empty() {
+                if offset == range.start {
+                    return visible_ix;
+                }
+                continue;
+            }
+            if range.start <= offset && offset < range.end {
+                return visible_ix;
+            }
+            if offset == range.end {
+                boundary_candidate = Some(visible_ix);
+            }
+        }
+
+        boundary_candidate.or(fallback).unwrap_or(source_visible_ix)
+    }
+
+    fn diff_search_collect_wrapped_source_matches(
+        &self,
+        source_len: usize,
+        region: DiffTextRegion,
+        matcher: &DiffSearchMatcher,
+        out: &mut Vec<usize>,
+    ) {
+        let rows = (0..source_len).map(|source_visible_ix| {
+            let text = self.diff_text_full_line_for_region(source_visible_ix, region);
+            (source_visible_ix, text)
+        });
+        let mut row_offsets = Vec::new();
+        collect_stream_match_row_offsets(rows, matcher, &mut row_offsets);
+        out.extend(row_offsets.into_iter().map(|(source_visible_ix, offset)| {
+            self.diff_search_visual_ix_for_source_match(source_visible_ix, region, offset)
+        }));
     }
 
     fn diff_search_scan_current_view_with_needle(&mut self, query: AsciiCaseInsensitiveNeedle<'_>) {
@@ -600,12 +1665,36 @@ impl MainPaneView {
             if self.diff_view == DiffViewMode::Inline
                 && !self.is_file_diff_view_active()
                 && !self.is_collapsed_diff_projection_active()
+                && !self.diff_word_wrap
                 && self.diff_search_scan_inline_patch_diff_with_needle(query)
             {
                 return;
             }
 
             let total = self.diff_visible_len();
+            if self.diff_word_wrap {
+                for visible_ix in 0..total {
+                    match self.diff_view {
+                        DiffViewMode::Inline => {
+                            let text =
+                                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                            if query.is_match(text.as_ref()) {
+                                self.diff_search_matches.push(visible_ix);
+                            }
+                        }
+                        DiffViewMode::Split => {
+                            let left = self
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                            let right = self
+                                .diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                            if query.is_match(left.as_ref()) || query.is_match(right.as_ref()) {
+                                self.diff_search_matches.push(visible_ix);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
             if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
                 for visible_ix in 0..total {
                     if self
@@ -653,6 +1742,173 @@ impl MainPaneView {
         }
     }
 
+    fn diff_search_scan_current_view_general(&mut self, matcher: &DiffSearchMatcher) {
+        self.diff_search_matches.clear();
+
+        if self.is_file_preview_active() {
+            let Some(line_count) = self.worktree_preview_line_count() else {
+                return;
+            };
+            if self.worktree_preview_source_len > 0 && self.worktree_preview_text.is_empty() {
+                let mut matches = Vec::new();
+                collect_file_diff_line_text_stream_match_visible_rows(
+                    (0..line_count).filter_map(|ix| {
+                        self.worktree_preview_line_raw_text(ix)
+                            .map(|line| (ix, line))
+                    }),
+                    matcher,
+                    &mut matches,
+                );
+                self.diff_search_matches = matches;
+            } else {
+                let rows: Vec<_> = (0..line_count)
+                    .filter_map(|ix| {
+                        self.worktree_preview_line_raw_text(ix)
+                            .map(|line| (ix, Cow::Owned(line.as_ref().to_string())))
+                    })
+                    .collect();
+                collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+            }
+            self.diff_search_matches.sort_unstable();
+            self.diff_search_matches.dedup();
+            return;
+        }
+
+        if let Some((_path, conflict_kind)) = self.active_conflict_target() {
+            if conflict_kind.is_some() || self.conflict_resolver.path.is_some() {
+                let ctx =
+                    ConflictResolverSearchContext::from_conflict_resolver(&self.conflict_resolver);
+                self.diff_search_matches =
+                    conflict_resolver_visible_match_indices_with_matcher(matcher, &ctx);
+            }
+            return;
+        }
+
+        if self.diff_view == DiffViewMode::Inline
+            && !self.is_file_diff_view_active()
+            && !self.is_collapsed_diff_projection_active()
+            && !self.diff_word_wrap
+            && self.diff_search_scan_inline_patch_diff_general(matcher)
+        {
+            return;
+        }
+
+        let total = self.diff_visible_len();
+        if self.diff_word_wrap {
+            let source_len = self
+                .diff_wrap_visible_cache_key
+                .map(|key| key.source_len)
+                .unwrap_or(total);
+            match self.diff_view {
+                DiffViewMode::Inline => {
+                    let mut matches = Vec::new();
+                    self.diff_search_collect_wrapped_source_matches(
+                        source_len,
+                        DiffTextRegion::Inline,
+                        matcher,
+                        &mut matches,
+                    );
+                    self.diff_search_matches.extend(matches);
+                }
+                DiffViewMode::Split => {
+                    let mut matches = Vec::new();
+                    self.diff_search_collect_wrapped_source_matches(
+                        source_len,
+                        DiffTextRegion::SplitLeft,
+                        matcher,
+                        &mut matches,
+                    );
+                    self.diff_search_collect_wrapped_source_matches(
+                        source_len,
+                        DiffTextRegion::SplitRight,
+                        matcher,
+                        &mut matches,
+                    );
+                    self.diff_search_matches.extend(matches);
+                }
+            }
+            self.diff_search_matches.sort_unstable();
+            self.diff_search_matches.dedup();
+            return;
+        }
+        if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
+            let rows = (0..total).filter_map(|visible_ix| {
+                self.diff_mapped_ix_for_visible_ix(visible_ix)
+                    .and_then(|mapped_ix| self.file_diff_inline_render_data(mapped_ix))
+                    .map(|row| (visible_ix, row.text))
+            });
+            let mut matches = Vec::new();
+            collect_file_diff_line_text_stream_match_visible_rows(rows, matcher, &mut matches);
+            self.diff_search_matches = matches;
+            self.diff_search_matches.sort_unstable();
+            self.diff_search_matches.dedup();
+            return;
+        }
+
+        if self.diff_view == DiffViewMode::Split && self.is_file_diff_view_active() {
+            let Some(provider) = self.file_diff_row_provider.as_ref() else {
+                return;
+            };
+            let rows: Vec<_> = (0..total)
+                .filter_map(|visible_ix| {
+                    let mapped_ix = self.diff_mapped_ix_for_visible_ix(visible_ix)?;
+                    let (left, right) = provider.split_row_texts(mapped_ix)?;
+                    Some((
+                        visible_ix,
+                        left.map(|left| Cow::Owned(expand_tabs_to_string(left.as_ref()))),
+                        right.map(|right| Cow::Owned(expand_tabs_to_string(right.as_ref()))),
+                    ))
+                })
+                .collect();
+            collect_split_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+            self.diff_search_matches.sort_unstable();
+            self.diff_search_matches.dedup();
+            return;
+        }
+
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                let rows: Vec<_> = (0..total)
+                    .map(|visible_ix| {
+                        let text =
+                            self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                        (visible_ix, Cow::Owned(text.as_ref().to_string()))
+                    })
+                    .collect();
+                collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+            }
+            DiffViewMode::Split => {
+                let left_rows: Vec<_> = (0..total)
+                    .map(|visible_ix| {
+                        let text =
+                            self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                        (visible_ix, Cow::Owned(text.as_ref().to_string()))
+                    })
+                    .collect();
+                collect_stream_match_visible_rows(
+                    left_rows,
+                    matcher,
+                    &mut self.diff_search_matches,
+                );
+
+                let right_rows: Vec<_> = (0..total)
+                    .map(|visible_ix| {
+                        let text =
+                            self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                        (visible_ix, Cow::Owned(text.as_ref().to_string()))
+                    })
+                    .collect();
+                collect_stream_match_visible_rows(
+                    right_rows,
+                    matcher,
+                    &mut self.diff_search_matches,
+                );
+            }
+        }
+        self.diff_search_matches.sort_unstable();
+        self.diff_search_matches.dedup();
+    }
+
     fn diff_search_scan_inline_patch_diff_with_needle(
         &mut self,
         query: AsciiCaseInsensitiveNeedle<'_>,
@@ -661,6 +1917,25 @@ impl MainPaneView {
             Some(Loadable::Ready(diff)) => Arc::clone(diff),
             _ => return false,
         };
+
+        let diff_click_kinds = &self.diff_click_kinds;
+        let diff_header_display_cache = &self.diff_header_display_cache;
+        let diff_visible_inline_map = self.diff_visible_inline_map.as_ref();
+        let diff_visible_indices = &self.diff_visible_indices;
+        let matches = &mut self.diff_search_matches;
+
+        if !diff_search_inline_patch_query_uses_trigram_index(query) {
+            collect_inline_patch_diff_visible_matches_with_needle(
+                diff.as_ref(),
+                diff_click_kinds,
+                diff_header_display_cache,
+                diff_visible_inline_map,
+                diff_visible_indices,
+                query,
+                matches,
+            );
+            return true;
+        }
 
         if self.diff_search_inline_patch_trigram_index.is_none() {
             let mut index = DiffSearchVisibleTrigramIndex::default();
@@ -695,31 +1970,19 @@ impl MainPaneView {
             .diff_search_inline_patch_trigram_index
             .as_ref()
             .expect("inline patch diff trigram index initialized");
-        let diff_click_kinds = &self.diff_click_kinds;
-        let diff_header_display_cache = &self.diff_header_display_cache;
-        let diff_visible_inline_map = self.diff_visible_inline_map.as_ref();
-        let diff_visible_indices = &self.diff_visible_indices;
-        let matches = &mut self.diff_search_matches;
 
         match index.candidates(query.bytes) {
             DiffSearchVisibleCandidates::None => {}
             DiffSearchVisibleCandidates::All => {
-                let total = diff_visible_inline_map
-                    .map(super::diff_cache::PatchInlineVisibleMap::visible_len)
-                    .unwrap_or(diff_visible_indices.len());
-                for visible_ix in 0..total {
-                    if inline_patch_diff_visible_ix_matches_query(
-                        diff.as_ref(),
-                        diff_click_kinds,
-                        diff_header_display_cache,
-                        diff_visible_inline_map,
-                        diff_visible_indices,
-                        query,
-                        visible_ix,
-                    ) {
-                        matches.push(visible_ix);
-                    }
-                }
+                collect_inline_patch_diff_visible_matches_with_needle(
+                    diff.as_ref(),
+                    diff_click_kinds,
+                    diff_header_display_cache,
+                    diff_visible_inline_map,
+                    diff_visible_indices,
+                    query,
+                    matches,
+                );
             }
             DiffSearchVisibleCandidates::Indexed(candidate_visible_rows) => {
                 for &visible_ix in candidate_visible_rows {
@@ -742,6 +2005,49 @@ impl MainPaneView {
         true
     }
 
+    fn diff_search_scan_inline_patch_diff_general(&mut self, matcher: &DiffSearchMatcher) -> bool {
+        let diff = match self.rendered_patch_diff_loadable() {
+            Some(Loadable::Ready(diff)) => Arc::clone(diff),
+            _ => return false,
+        };
+
+        if let Some(map) = self.diff_visible_inline_map.as_ref() {
+            let mut rows = Vec::new();
+            map.for_each_visible_src_ix(|visible_ix, src_ix| {
+                if let Some(text) = inline_patch_diff_search_text(
+                    diff.as_ref(),
+                    &self.diff_click_kinds,
+                    &self.diff_header_display_cache,
+                    src_ix,
+                ) {
+                    rows.push((visible_ix, Cow::Owned(text.as_ref().to_string())));
+                }
+            });
+            collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+        } else {
+            let rows: Vec<_> = self
+                .diff_visible_indices
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(|(visible_ix, src_ix)| {
+                    inline_patch_diff_search_text(
+                        diff.as_ref(),
+                        &self.diff_click_kinds,
+                        &self.diff_header_display_cache,
+                        src_ix,
+                    )
+                    .map(|text| (visible_ix, Cow::Owned(text.as_ref().to_string())))
+                })
+                .collect();
+            collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+        }
+
+        self.diff_search_matches.sort_unstable();
+        self.diff_search_matches.dedup();
+        true
+    }
+
     fn diff_search_file_diff_split_visible_row_matches_query(
         &self,
         query: AsciiCaseInsensitiveNeedle<'_>,
@@ -750,6 +2056,11 @@ impl MainPaneView {
     ) -> bool {
         if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Split {
             return false;
+        }
+        if self.diff_word_wrap {
+            let left = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+            let right = self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+            return query.is_match(left.as_ref()) || query.is_match(right.as_ref());
         }
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
             return false;
@@ -776,6 +2087,12 @@ impl MainPaneView {
         if !self.is_file_diff_view_active() || self.diff_view != DiffViewMode::Inline {
             return false;
         }
+        if self.diff_word_wrap {
+            return query.is_match(
+                self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+                    .as_ref(),
+            );
+        }
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
             return false;
         };
@@ -797,6 +2114,7 @@ impl MainPaneView {
             || self.diff_view != DiffViewMode::Inline
             || self.is_file_diff_view_active()
             || self.is_collapsed_diff_projection_active()
+            || self.diff_word_wrap
         {
             return false;
         }
@@ -869,6 +2187,12 @@ impl MainPaneView {
 
         match self.diff_view {
             DiffViewMode::Inline => {
+                if self.diff_word_wrap {
+                    return query.is_match(
+                        self.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline)
+                            .as_ref(),
+                    );
+                }
                 if self.is_file_diff_view_active() {
                     return self
                         .diff_search_file_diff_inline_visible_row_matches_query(query, visible_ix);
@@ -879,6 +2203,13 @@ impl MainPaneView {
                 )
             }
             DiffViewMode::Split => {
+                if self.diff_word_wrap {
+                    let left =
+                        self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitLeft);
+                    let right =
+                        self.diff_text_line_for_region(visible_ix, DiffTextRegion::SplitRight);
+                    return query.is_match(left.as_ref()) || query.is_match(right.as_ref());
+                }
                 if self.is_file_diff_view_active() {
                     let mut expanded_tabs = String::new();
                     return self.diff_search_file_diff_split_visible_row_matches_query(
@@ -944,6 +2275,7 @@ impl MainPaneView {
             return;
         }
 
+        self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -967,6 +2299,7 @@ impl MainPaneView {
             return;
         }
 
+        self.diff_search_flush_pending_query_recompute();
         if self.diff_search_matches.is_empty() {
             self.diff_search_recompute_matches();
         }
@@ -1179,6 +2512,42 @@ fn conflict_resolver_visible_match_indices_with_needle(
     out
 }
 
+fn conflict_resolver_visible_match_indices_with_matcher(
+    matcher: &DiffSearchMatcher,
+    ctx: &ConflictResolverSearchContext<'_>,
+) -> Vec<usize> {
+    let mut out = Vec::new();
+    match ctx.view_mode {
+        ConflictResolverViewMode::ThreeWay => {
+            let ConflictResolverSearchVisibleRows::Projection(projection) = ctx.three_way_visible;
+            search_three_way_via_spans_with_matcher(projection, ctx, matcher, &mut out);
+        }
+        ConflictResolverViewMode::TwoWayDiff => {
+            let ConflictResolverSearchTwoWayRows::Streamed {
+                split_row_index,
+                two_way_split_projection,
+            } = ctx.two_way_rows;
+            let rows = (0..two_way_split_projection.visible_len()).filter_map(|visible_ix| {
+                let (source_row, _conflict_ix) = two_way_split_projection.get(visible_ix)?;
+                let row = split_row_index.row_at(ctx.marker_segments, source_row)?;
+                Some((
+                    visible_ix,
+                    row.old
+                        .as_ref()
+                        .map(|text| Cow::Owned(text.as_ref().to_string())),
+                    row.new
+                        .as_ref()
+                        .map(|text| Cow::Owned(text.as_ref().to_string())),
+                ))
+            });
+            collect_split_stream_match_visible_rows(rows, matcher, &mut out);
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Search three-way source texts by iterating projection spans directly.
 ///
 /// This avoids the per-visible-item O(log spans) projection lookup by walking
@@ -1252,6 +2621,94 @@ fn search_three_way_via_spans(
             }
         }
     }
+}
+
+fn search_three_way_via_spans_with_matcher(
+    projection: &conflict_resolver::ThreeWayVisibleProjection,
+    ctx: &ConflictResolverSearchContext<'_>,
+    matcher: &DiffSearchMatcher,
+    out: &mut Vec<usize>,
+) {
+    fn line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -> &'a str {
+        if text.is_empty() {
+            return "";
+        }
+        let text_len = text.len();
+        let start = line_starts.get(line_ix).copied().unwrap_or(text_len);
+        if start >= text_len {
+            return "";
+        }
+        let mut end = line_starts
+            .get(line_ix.saturating_add(1))
+            .copied()
+            .unwrap_or(text_len)
+            .min(text_len);
+        if end > start && text.as_bytes().get(end.saturating_sub(1)) == Some(&b'\n') {
+            end = end.saturating_sub(1);
+        }
+        text.get(start..end).unwrap_or("")
+    }
+
+    let mut base_rows = Vec::new();
+    let mut ours_rows = Vec::new();
+    let mut theirs_rows = Vec::new();
+    let mut summary_rows = Vec::new();
+
+    for span in projection.spans() {
+        match *span {
+            conflict_resolver::ThreeWayVisibleSpan::Lines {
+                visible_start,
+                source_line_start,
+                len,
+            } => {
+                for i in 0..len {
+                    let visible_ix = visible_start + i;
+                    let line_ix = source_line_start + i;
+                    base_rows.push((
+                        visible_ix,
+                        Cow::Borrowed(line_text(
+                            ctx.three_way_base_text,
+                            ctx.three_way_base_line_starts,
+                            line_ix,
+                        )),
+                    ));
+                    ours_rows.push((
+                        visible_ix,
+                        Cow::Borrowed(line_text(
+                            ctx.three_way_ours_text,
+                            ctx.three_way_ours_line_starts,
+                            line_ix,
+                        )),
+                    ));
+                    theirs_rows.push((
+                        visible_ix,
+                        Cow::Borrowed(line_text(
+                            ctx.three_way_theirs_text,
+                            ctx.three_way_theirs_line_starts,
+                            line_ix,
+                        )),
+                    ));
+                }
+            }
+            conflict_resolver::ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                visible_index,
+                conflict_ix,
+            } => {
+                let choice_label = conflict_choice_for_index(ctx.marker_segments, conflict_ix)
+                    .map(conflict_choice_label)
+                    .unwrap_or("?");
+                summary_rows.push((
+                    visible_index,
+                    Cow::Owned(format!("Resolved: picked {choice_label}")),
+                ));
+            }
+        }
+    }
+
+    collect_stream_match_visible_rows(base_rows, matcher, out);
+    collect_stream_match_visible_rows(ours_rows, matcher, out);
+    collect_stream_match_visible_rows(theirs_rows, matcher, out);
+    collect_stream_match_visible_rows(summary_rows, matcher, out);
 }
 
 fn conflict_choice_for_index(
@@ -1330,11 +2787,15 @@ fn three_way_visible_item_matches_query(
 mod tests {
     use super::{
         AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
-        ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchQueryReuse,
-        conflict_resolver_visible_match_indices, contains_ascii_case_insensitive,
-        diff_search_query_reuse, diff_search_resume_match_ix,
-        diff_search_split_row_texts_match_query, empty_conflict_resolver_search_two_way_rows,
-        three_way_visible_item_matches_query,
+        ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchMatcher,
+        DiffSearchOptions, DiffSearchQueryReuse, FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES,
+        StreamMatchCollectionMode, collect_file_diff_line_text_stream_match_visible_rows,
+        collect_split_stream_match_visible_rows, collect_stream_match_visible_rows,
+        collect_stream_match_visible_rows_with_mode, conflict_resolver_visible_match_indices,
+        conflict_resolver_visible_match_indices_with_matcher, contains_ascii_case_insensitive,
+        diff_search_inline_patch_query_uses_trigram_index, diff_search_query_reuse,
+        diff_search_resume_match_ix, diff_search_split_row_texts_match_query,
+        empty_conflict_resolver_search_two_way_rows, three_way_visible_item_matches_query,
     };
     use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
@@ -1344,6 +2805,9 @@ mod tests {
     use crate::view::{
         ConflictModeState, ConflictResolverUiState, StreamedConflictState, ThreeWaySides,
     };
+    use std::borrow::Cow;
+    use std::io::Write;
+    use std::sync::Arc;
 
     fn three_way_search_context<'a>(
         marker_segments: &'a [ConflictSegment],
@@ -1386,8 +2850,12 @@ mod tests {
     #[test]
     fn diff_search_query_reuse_detects_same_semantics_and_refinements() {
         assert_eq!(
-            diff_search_query_reuse("Render_Cache", " render_cache "),
+            diff_search_query_reuse("Render_Cache", "render_cache"),
             DiffSearchQueryReuse::SameSemantics
+        );
+        assert_eq!(
+            diff_search_query_reuse("Render_Cache", " render_cache "),
+            DiffSearchQueryReuse::None
         );
         assert_eq!(
             diff_search_query_reuse("render_cache", "render_cache_hot_path"),
@@ -1401,6 +2869,525 @@ mod tests {
             diff_search_query_reuse("render_cache", "cache_render"),
             DiffSearchQueryReuse::None
         );
+    }
+
+    #[test]
+    fn diff_search_inline_patch_short_queries_skip_trigram_index() {
+        assert!(!diff_search_inline_patch_query_uses_trigram_index(
+            AsciiCaseInsensitiveNeedle::new("a").expect("needle")
+        ));
+        assert!(!diff_search_inline_patch_query_uses_trigram_index(
+            AsciiCaseInsensitiveNeedle::new("ab").expect("needle")
+        ));
+        assert!(diff_search_inline_patch_query_uses_trigram_index(
+            AsciiCaseInsensitiveNeedle::new("abc").expect("needle")
+        ));
+    }
+
+    #[test]
+    fn diff_search_matcher_honors_case_sensitivity() {
+        let default_matcher = DiffSearchMatcher::new("render", DiffSearchOptions::default());
+        assert!(default_matcher.is_match("Render path"));
+
+        let case_sensitive = DiffSearchMatcher::new(
+            "render",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(!case_sensitive.is_match("Render path"));
+        assert!(case_sensitive.is_match("render path"));
+    }
+
+    #[test]
+    fn diff_search_matcher_honors_whole_word_boundaries() {
+        let matcher = DiffSearchMatcher::new(
+            "render",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+
+        assert!(matcher.is_match("render cache"));
+        assert!(!matcher.is_match("prerender cache"));
+        assert!(!matcher.is_match("render_cache"));
+    }
+
+    #[test]
+    fn diff_search_matcher_whole_word_uses_unicode_boundaries() {
+        let literal = DiffSearchMatcher::new(
+            "β",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(!literal.is_match("αβγ"));
+        assert!(literal.is_match("β value"));
+
+        let regex = DiffSearchMatcher::new(
+            "β",
+            DiffSearchOptions {
+                whole_word: true,
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(!regex.is_match("αβγ"));
+        assert!(regex.is_match("β value"));
+    }
+
+    #[test]
+    fn diff_search_matcher_handles_regex_and_invalid_regex() {
+        let regex = DiffSearchMatcher::new(
+            r"render\d+",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(regex.regex_error().is_none());
+        assert!(regex.is_match("RENDER42"));
+
+        let invalid = DiffSearchMatcher::new(
+            "(",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(invalid.regex_error().is_some());
+        assert!(!invalid.is_match("("));
+    }
+
+    #[test]
+    fn diff_search_matcher_regex_anchors_match_visible_rows() {
+        let start_anchor = DiffSearchMatcher::new(
+            r"^use",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("mod app;")),
+                (11, Cow::Borrowed("use crate::app;")),
+                (12, Cow::Borrowed("  use crate::other;")),
+            ],
+            &start_anchor,
+            &mut matches,
+        );
+        assert_eq!(matches, vec![11]);
+
+        let end_anchor = DiffSearchMatcher::new(
+            r";$",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        matches.clear();
+        collect_stream_match_visible_rows(
+            [
+                (20, Cow::Borrowed("let x = 1")),
+                (21, Cow::Borrowed("let y = 2;")),
+                (22, Cow::Borrowed("let z = 3")),
+            ],
+            &end_anchor,
+            &mut matches,
+        );
+        assert_eq!(matches, vec![21]);
+    }
+
+    #[test]
+    fn diff_search_matcher_matches_across_adjacent_visible_rows() {
+        let matcher = DiffSearchMatcher::new("alpha\nbeta", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("alpha")),
+                (11, Cow::Borrowed("beta")),
+                (12, Cow::Borrowed("gamma")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_stream_collector_normalizes_crlf_row_endings() {
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("foo\r")),
+                (11, Cow::Borrowed("bar\r")),
+                (12, Cow::Borrowed("baz\r")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_file_slice_stream_collector_normalizes_crlf_row_endings() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.write_all(b"foo\r\nbar\r\nbaz\r\n")
+            .expect("write temp file");
+        let path = Arc::new(file.path().to_path_buf());
+        let rows = [
+            (
+                10,
+                gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                    Arc::clone(&path),
+                    0..4,
+                    true,
+                    false,
+                ),
+            ),
+            (
+                11,
+                gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                    Arc::clone(&path),
+                    5..9,
+                    true,
+                    false,
+                ),
+            ),
+            (
+                12,
+                gitcomet_core::file_diff::FileDiffLineText::file_slice(
+                    Arc::clone(&path),
+                    10..14,
+                    true,
+                    false,
+                ),
+            ),
+        ];
+
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_file_diff_line_text_stream_match_visible_rows(rows, &matcher, &mut matches);
+
+        assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_file_slice_general_collector_does_not_materialize_large_rows() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        let payload_bytes = FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES * 128;
+        let mut source = Vec::with_capacity(payload_bytes);
+        source.extend_from_slice(b"needle ");
+        source.extend(std::iter::repeat(b'x').take(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES));
+        source.push(0xff);
+        source.resize(payload_bytes, b'x');
+        file.write_all(source.as_slice()).expect("write temp file");
+        let path = Arc::new(file.path().to_path_buf());
+
+        let materialized = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        assert!(
+            materialized.as_ref().is_empty(),
+            "invalid UTF-8 sentinel should make full-row materialization unusable"
+        );
+
+        let matcher = DiffSearchMatcher::new(
+            "needle",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        let streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(77, streamed)],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![77]);
+
+        let regex_matcher = DiffSearchMatcher::new(
+            r"^needle",
+            DiffSearchOptions {
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut regex_matches = Vec::new();
+        let regex_streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(78, regex_streamed)],
+            &regex_matcher,
+            &mut regex_matches,
+        );
+
+        assert_eq!(regex_matches, vec![78]);
+    }
+
+    #[test]
+    fn diff_search_file_slice_case_sensitive_collector_does_not_materialize_large_rows() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        let payload_bytes = FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES * 128;
+        let mut source = Vec::with_capacity(payload_bytes);
+        source.extend_from_slice(b"Needle ");
+        source.extend(std::iter::repeat(b'x').take(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES));
+        source.push(0xff);
+        source.resize(payload_bytes, b'x');
+        file.write_all(source.as_slice()).expect("write temp file");
+        let path = Arc::new(file.path().to_path_buf());
+
+        let materialized = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        assert!(
+            materialized.as_ref().is_empty(),
+            "invalid UTF-8 sentinel should make full-row materialization unusable"
+        );
+
+        let matcher = DiffSearchMatcher::new(
+            "Needle",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        let mut matches = Vec::new();
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(77, streamed)],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![77]);
+    }
+
+    #[test]
+    fn diff_search_file_slice_literal_stream_respects_unicode_whole_word_boundaries() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        let row1 = "αβγ";
+        let row2 = "β delta";
+        let text = format!("{row1}\n{row2}\n");
+        file.write_all(text.as_bytes()).expect("write temp file");
+        let path = Arc::new(file.path().to_path_buf());
+
+        let matcher = DiffSearchMatcher::new(
+            "β",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        let row1_slice = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..row1.len(),
+            false,
+            false,
+        );
+        let row2_start = row1.len() + 1;
+        let row2_slice = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            row2_start..(row2_start + row2.len()),
+            false,
+            false,
+        );
+
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(10, row1_slice), (11, row2_slice)],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![11]);
+    }
+
+    #[test]
+    fn diff_search_matcher_does_not_match_multiline_fragments_on_non_adjacent_rows() {
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("foo")),
+                (11, Cow::Borrowed("not the middle of the query")),
+                (12, Cow::Borrowed("bar")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn diff_search_row_overlay_does_not_highlight_multiline_fragments() {
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+        let mut ranges = Vec::new();
+
+        matcher.find_row_overlay_ranges_into("foo", &mut ranges, 64);
+        assert!(ranges.is_empty());
+
+        matcher.find_row_overlay_ranges_into("bar", &mut ranges, 64);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn diff_search_stream_collector_reports_each_start_row_once() {
+        let matcher = DiffSearchMatcher::new(
+            "a",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("aaaa")),
+                (11, Cow::Borrowed("bbbb")),
+                (12, Cow::Borrowed("caca")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![10, 12]);
+    }
+
+    #[test]
+    fn diff_search_single_line_literal_stream_collector_avoids_concat_allocations() {
+        let rows = (0..8192)
+            .map(|ix| (ix, format!("row_{ix:04}_alpha_beta_gamma_delta")))
+            .collect::<Vec<_>>();
+        let matcher = DiffSearchMatcher::new(
+            "NEEDLE",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+
+        let mut matches = Vec::new();
+        let mode = collect_stream_match_visible_rows_with_mode(
+            rows.iter()
+                .map(|(visible_ix, text)| (*visible_ix, Cow::Borrowed(text.as_str()))),
+            &matcher,
+            &mut matches,
+        );
+
+        assert!(matches.is_empty());
+        assert_eq!(mode, StreamMatchCollectionMode::SingleRowLiteral);
+    }
+
+    #[test]
+    fn diff_search_single_line_literal_split_collector_honors_whole_word_boundaries() {
+        let matcher = DiffSearchMatcher::new(
+            "cat",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+
+        collect_split_stream_match_visible_rows(
+            [
+                (
+                    10,
+                    Some(Cow::Borrowed("concatenate")),
+                    Some(Cow::Borrowed("bobcat")),
+                ),
+                (11, Some(Cow::Borrowed("cat")), None),
+                (12, None, Some(Cow::Borrowed("dog cat mouse"))),
+                (
+                    13,
+                    Some(Cow::Borrowed("cat_thing")),
+                    Some(Cow::Borrowed("copycat")),
+                ),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![11, 12]);
+    }
+
+    #[test]
+    fn diff_search_stream_collector_keeps_empty_row_separators() {
+        let matcher = DiffSearchMatcher::new("\nbar", DiffSearchOptions::default());
+        let mut matches = Vec::new();
+        collect_stream_match_visible_rows(
+            [
+                (10, Cow::Borrowed("")),
+                (11, Cow::Borrowed("bar")),
+                (12, Cow::Borrowed("baz")),
+            ],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![10]);
+    }
+
+    #[test]
+    fn diff_search_split_stream_collector_preserves_missing_side_rows() {
+        let mut matches = Vec::new();
+        collect_split_stream_match_visible_rows(
+            [
+                (10, Some(Cow::Borrowed("foo")), Some(Cow::Borrowed("alpha"))),
+                (11, None, Some(Cow::Borrowed("beta"))),
+                (12, Some(Cow::Borrowed("bar")), Some(Cow::Borrowed("gamma"))),
+            ],
+            &DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default()),
+            &mut matches,
+        );
+        assert!(
+            matches.is_empty(),
+            "a missing split side cell must not collapse out of the search stream"
+        );
+
+        collect_split_stream_match_visible_rows(
+            [
+                (10, Some(Cow::Borrowed("foo")), Some(Cow::Borrowed("alpha"))),
+                (11, None, Some(Cow::Borrowed("beta"))),
+                (12, Some(Cow::Borrowed("bar")), Some(Cow::Borrowed("gamma"))),
+            ],
+            &DiffSearchMatcher::new("foo\n\nbar", DiffSearchOptions::default()),
+            &mut matches,
+        );
+        assert_eq!(matches, vec![10]);
     }
 
     #[test]
@@ -1517,6 +3504,44 @@ mod tests {
         };
         assert_eq!(
             conflict_resolver_visible_match_indices("needle", &two_way_ctx),
+            vec![0]
+        );
+    }
+
+    #[test]
+    fn conflict_search_two_way_general_matches_across_adjacent_rows() {
+        let marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "foo\nbar\n".into(),
+            theirs: "remote\nside\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        let index = ConflictSplitRowIndex::new(&marker_segments, 1);
+        let projection = TwoWaySplitProjection::new(&index, &marker_segments, false);
+        let three_way_visible_projection =
+            build_three_way_visible_projection(0, &[], &marker_segments, false);
+        let ctx = ConflictResolverSearchContext {
+            view_mode: ConflictResolverViewMode::TwoWayDiff,
+            marker_segments: &marker_segments,
+            three_way_visible: ConflictResolverSearchVisibleRows::Projection(
+                &three_way_visible_projection,
+            ),
+            three_way_base_text: "",
+            three_way_base_line_starts: &[],
+            three_way_ours_text: "",
+            three_way_ours_line_starts: &[],
+            three_way_theirs_text: "",
+            three_way_theirs_line_starts: &[],
+            two_way_rows: ConflictResolverSearchTwoWayRows::Streamed {
+                split_row_index: &index,
+                two_way_split_projection: &projection,
+            },
+        };
+        let matcher = DiffSearchMatcher::new("foo\nbar", DiffSearchOptions::default());
+
+        assert_eq!(
+            conflict_resolver_visible_match_indices_with_matcher(&matcher, &ctx),
             vec![0]
         );
     }

@@ -85,6 +85,28 @@ pub(crate) fn build_synthetic_repo_state(
     stashes: usize,
     commits: &[Commit],
 ) -> RepoState {
+    build_synthetic_repo_state_with_tags(
+        local_branches,
+        remote_branches,
+        remotes,
+        worktrees,
+        submodules,
+        stashes,
+        32,
+        commits,
+    )
+}
+
+pub(crate) fn build_synthetic_repo_state_with_tags(
+    local_branches: usize,
+    remote_branches: usize,
+    remotes: usize,
+    worktrees: usize,
+    submodules: usize,
+    stashes: usize,
+    tags: usize,
+    commits: &[Commit],
+) -> RepoState {
     let id = RepoId(1);
     let spec = RepoSpec {
         workdir: std::path::PathBuf::from("/tmp/bench"),
@@ -200,6 +222,11 @@ pub(crate) fn build_synthetic_repo_state(
         });
     }
     repo.stashes = Loadable::Ready(Arc::new(stashes_vec));
+
+    repo.tags = Loadable::Ready(Arc::new(build_tags_targeting_commits(commits, tags)));
+    repo.tags_rev = 1;
+    repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_tags_rev = 1;
 
     // Minimal "repo is open" status.
     repo.open = Loadable::Ready(());

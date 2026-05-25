@@ -1357,6 +1357,24 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
             pane.worktree_preview_segments_cache_get(0).is_none(),
             "streamed indexed preview rows should bypass the full-line styled row cache"
         );
+        let ((source_visible_ix, visual_range), visual_range_metrics) =
+            crate::perf_alloc::measure_allocations(|| {
+                pane.diff_text_visual_source_range_for_region(0, DiffTextRegion::Inline)
+            });
+        assert_eq!(source_visible_ix, 0);
+        assert_eq!(visual_range, 0..long_json.len());
+
+        let raw_text = pane
+            .worktree_preview_line_raw_text(0)
+            .expect("streamed preview line should be addressable");
+        let (_, materialized_metrics) = crate::perf_alloc::measure_allocations(|| {
+            let full_text = crate::view::file_diff_display_text(&raw_text);
+            std::hint::black_box(full_text.len());
+        });
+        assert!(
+            visual_range_metrics.alloc_bytes.saturating_mul(16) < materialized_metrics.alloc_bytes,
+            "no-wrap visual source range should not materialize the full preview row: range={visual_range_metrics:?} materialized={materialized_metrics:?}"
+        );
 
         let paint_record = rows::diff_paint_log_for_tests()
             .into_iter()
@@ -1478,12 +1496,12 @@ fn minified_json_preview_partial_copy_uses_streamed_line_slice(cx: &mut gpui::Te
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
                     offset: start,
                 });
                 pane.diff_text_head = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
                     offset: end,
                 });

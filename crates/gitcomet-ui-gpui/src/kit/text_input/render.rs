@@ -13,7 +13,7 @@ impl Render for TextInput {
         let pad_y = if chromeless || !multiline {
             px(0.0)
         } else {
-            px(8.0)
+            self.vertical_padding_override.unwrap_or(px(8.0))
         };
         let is_focused = focus.is_focused(window);
 

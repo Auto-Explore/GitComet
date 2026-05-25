@@ -336,6 +336,7 @@ pub(crate) fn emit_open_repo_sidecar(case_name: &str, metrics: &OpenRepoMetrics)
     payload.insert("remotes".to_string(), json!(metrics.remotes));
     payload.insert("worktrees".to_string(), json!(metrics.worktrees));
     payload.insert("submodules".to_string(), json!(metrics.submodules));
+    payload.insert("tags".to_string(), json!(metrics.tags));
     payload.insert("sidebar_rows".to_string(), json!(metrics.sidebar_rows));
     payload.insert("graph_rows".to_string(), json!(metrics.graph_rows));
     payload.insert(

@@ -34,7 +34,13 @@ const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
 #[cfg(any(test, feature = "syntax-shell"))]
 const BASH_HIGHLIGHTS_QUERY: &str = include_str!("queries/bash_highlights.scm");
 #[cfg(any(test, feature = "syntax-extra"))]
+const C_HIGHLIGHTS_QUERY: &str = include_str!("queries/c_highlights.scm");
+#[cfg(any(test, feature = "syntax-extra"))]
+const C_INJECTIONS_QUERY: &str = include_str!("queries/c_injections.scm");
+#[cfg(any(test, feature = "syntax-extra"))]
 const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
+#[cfg(any(test, feature = "syntax-extra"))]
+const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 #[cfg(any(test, feature = "syntax-repo"))]
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
 #[cfg(any(test, feature = "syntax-repo"))]
@@ -61,12 +67,16 @@ const GO_INJECTIONS_QUERY: &str = include_str!("queries/go_injections.scm");
 const JAVASCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/javascript_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const JAVASCRIPT_INJECTIONS_QUERY: &str = include_str!("queries/javascript_injections.scm");
+#[cfg(any(test, feature = "syntax-web"))]
+const JSDOC_HIGHLIGHTS_QUERY: &str = include_str!("queries/jsdoc_highlights.scm");
 #[cfg(any(test, feature = "syntax-data"))]
 const JSON_HIGHLIGHTS_QUERY: &str = include_str!("queries/json_highlights.scm");
 #[cfg(any(test, feature = "syntax-extra"))]
 const POWERSHELL_HIGHLIGHTS_QUERY: &str = tree_sitter_powershell::HIGHLIGHTS_QUERY;
 #[cfg(any(test, feature = "syntax-python"))]
 const PYTHON_HIGHLIGHTS_QUERY: &str = include_str!("queries/python_highlights.scm");
+#[cfg(any(test, feature = "syntax-web"))]
+const REGEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/regex_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const TYPESCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/typescript_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
@@ -196,8 +206,10 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     Rust,
     Python,
     JavaScript,
+    Jsdoc,
     TypeScript,
     Tsx,
+    Regex,
     Go,
     GoMod,
     GoWork,
@@ -893,6 +905,22 @@ mod tests {
             Some(DiffSyntaxLanguage::Cpp)
         );
         assert_eq!(
+            diff_syntax_language_for_path("legacy.C"),
+            Some(DiffSyntaxLanguage::Cpp)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("legacy.H"),
+            Some(DiffSyntaxLanguage::Cpp)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("plain.c"),
+            Some(DiffSyntaxLanguage::C)
+        );
+        assert_eq!(
+            diff_syntax_language_for_path("sketch.ino"),
+            Some(DiffSyntaxLanguage::Cpp)
+        );
+        assert_eq!(
             diff_syntax_language_for_path("styles.pcss"),
             Some(DiffSyntaxLanguage::Css)
         );
@@ -1007,6 +1035,14 @@ mod tests {
         assert_eq!(
             diff_syntax_language_for_code_fence_info("diff"),
             Some(DiffSyntaxLanguage::Diff)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("regex"),
+            Some(DiffSyntaxLanguage::Regex)
+        );
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("jsdoc"),
+            Some(DiffSyntaxLanguage::Jsdoc)
         );
         assert_eq!(
             diff_syntax_language_for_code_fence_info("foo/bar/baz.rb"),
@@ -3767,10 +3803,34 @@ mod tests {
 
     #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
-    fn vendored_cpp_injections_query_compiles() {
+    fn vendored_c_queries_compile() {
+        let lang: tree_sitter::Language = tree_sitter_c::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, C_HIGHLIGHTS_QUERY)
+            .expect("vendored C highlights.scm should compile");
+        tree_sitter::Query::new(&lang, C_INJECTIONS_QUERY)
+            .expect("vendored C injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn vendored_cpp_queries_compile() {
         let lang: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, CPP_HIGHLIGHTS_QUERY)
+            .expect("vendored C++ highlights.scm should compile");
         tree_sitter::Query::new(&lang, CPP_INJECTIONS_QUERY)
             .expect("vendored C++ injections.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vendored_injected_web_language_queries_compile() {
+        let jsdoc_lang: tree_sitter::Language = tree_sitter_jsdoc::LANGUAGE.into();
+        tree_sitter::Query::new(&jsdoc_lang, JSDOC_HIGHLIGHTS_QUERY)
+            .expect("vendored JSDoc highlights.scm should compile");
+
+        let regex_lang: tree_sitter::Language = tree_sitter_regex::LANGUAGE.into();
+        tree_sitter::Query::new(&regex_lang, REGEX_HIGHLIGHTS_QUERY)
+            .expect("vendored regex highlights.scm should compile");
     }
 
     #[cfg(any(test, feature = "syntax-repo"))]
@@ -3987,15 +4047,9 @@ mod tests {
             XML_HIGHLIGHTS_QUERY,
         );
         #[cfg(any(test, feature = "syntax-extra"))]
-        assert_capture_names_are_supported(
-            tree_sitter_c::LANGUAGE.into(),
-            tree_sitter_c::HIGHLIGHT_QUERY,
-        );
+        assert_capture_names_are_supported(tree_sitter_c::LANGUAGE.into(), C_HIGHLIGHTS_QUERY);
         #[cfg(any(test, feature = "syntax-extra"))]
-        assert_capture_names_are_supported(
-            tree_sitter_cpp::LANGUAGE.into(),
-            tree_sitter_cpp::HIGHLIGHT_QUERY,
-        );
+        assert_capture_names_are_supported(tree_sitter_cpp::LANGUAGE.into(), CPP_HIGHLIGHTS_QUERY);
         #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_c_sharp::LANGUAGE.into(),
@@ -4065,6 +4119,16 @@ mod tests {
         assert_capture_names_are_supported(
             tree_sitter_swift::LANGUAGE.into(),
             tree_sitter_swift::HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-web"))]
+        assert_capture_names_are_supported(
+            tree_sitter_jsdoc::LANGUAGE.into(),
+            JSDOC_HIGHLIGHTS_QUERY,
+        );
+        #[cfg(any(test, feature = "syntax-web"))]
+        assert_capture_names_are_supported(
+            tree_sitter_regex::LANGUAGE.into(),
+            REGEX_HIGHLIGHTS_QUERY,
         );
         #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
@@ -5237,6 +5301,147 @@ mod tests {
         );
     }
 
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn c_treesitter_uses_vendored_zed_query() {
+        let preproc = syntax_tokens_for_line(
+            "#define VALUE 42",
+            DiffSyntaxLanguage::C,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                "#define VALUE 42",
+                &preproc,
+                SyntaxTokenKind::Preproc,
+                "#define"
+            ),
+            "C preprocessor directives should produce Preproc tokens, got: {preproc:?}"
+        );
+
+        let text = "struct Example { int field; };";
+        let tokens = syntax_tokens_for_line(text, DiffSyntaxLanguage::C, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Keyword, "struct"),
+            "C storage/type keywords should be captured, got: {tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(text, &tokens, SyntaxTokenKind::Property, "field"),
+            "C field identifiers should produce Property tokens, got: {tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn cpp_treesitter_uses_vendored_zed_query() {
+        let concept_text = "template <typename T> concept Addable = requires(T a, T b) { a + b; };";
+        let concept_tokens =
+            syntax_tokens_for_line(concept_text, DiffSyntaxLanguage::Cpp, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                concept_text,
+                &concept_tokens,
+                SyntaxTokenKind::TypeInterface,
+                "Addable"
+            ),
+            "C++ concepts should produce TypeInterface tokens, got: {concept_tokens:?}"
+        );
+        assert!(
+            has_token_kind_and_text(
+                concept_text,
+                &concept_tokens,
+                SyntaxTokenKind::Keyword,
+                "requires"
+            ),
+            "C++ requires should produce Keyword tokens, got: {concept_tokens:?}"
+        );
+
+        let module_text = "export module math.core; import std;";
+        let module_tokens =
+            syntax_tokens_for_line(module_text, DiffSyntaxLanguage::Cpp, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                module_text,
+                &module_tokens,
+                SyntaxTokenKind::Keyword,
+                "module"
+            ),
+            "C++ module declarations should produce Keyword tokens, got: {module_tokens:?}"
+        );
+        assert!(
+            module_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Namespace),
+            "C++ module names should produce Namespace tokens, got: {module_tokens:?}"
+        );
+
+        let static_assert_text = "static_assert(sizeof(int) > 0);";
+        let static_assert_tokens = syntax_tokens_for_line(
+            static_assert_text,
+            DiffSyntaxLanguage::Cpp,
+            DiffSyntaxMode::Auto,
+        );
+        assert!(
+            has_token_kind_and_text(
+                static_assert_text,
+                &static_assert_tokens,
+                SyntaxTokenKind::Function,
+                "static_assert"
+            ),
+            "C++ static_assert should produce Function tokens, got: {static_assert_tokens:?}"
+        );
+
+        let operator_text = "auto cmp = lhs <=> rhs;";
+        let operator_tokens =
+            syntax_tokens_for_line(operator_text, DiffSyntaxLanguage::Cpp, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                operator_text,
+                &operator_tokens,
+                SyntaxTokenKind::Operator,
+                "<=>"
+            ),
+            "C++ spaceship operators should produce Operator tokens, got: {operator_tokens:?}"
+        );
+
+        let preproc_text = "#include <vector>";
+        let preproc_tokens =
+            syntax_tokens_for_line(preproc_text, DiffSyntaxLanguage::Cpp, DiffSyntaxMode::Auto);
+        assert!(
+            has_token_kind_and_text(
+                preproc_text,
+                &preproc_tokens,
+                SyntaxTokenKind::Preproc,
+                "#include"
+            ),
+            "C++ preprocessor directives should produce Preproc tokens, got: {preproc_tokens:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn injected_web_helper_languages_capture_basic_tokens() {
+        let regex_text = "(foo|bar)+";
+        let regex_tokens =
+            syntax_tokens_for_line(regex_text, DiffSyntaxLanguage::Regex, DiffSyntaxMode::Auto);
+        assert!(
+            regex_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Operator),
+            "Regex syntax should capture operators, got: {regex_tokens:?}"
+        );
+
+        let jsdoc_text = "@param {string} name";
+        let jsdoc_tokens =
+            syntax_tokens_for_line(jsdoc_text, DiffSyntaxLanguage::Jsdoc, DiffSyntaxMode::Auto);
+        assert!(
+            jsdoc_tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "JSDoc syntax should capture tags as keywords, got: {jsdoc_tokens:?}"
+        );
+    }
+
     #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn gitcommit_treesitter_captures_diff_change_kinds() {
@@ -5627,8 +5832,10 @@ mod tests {
             DiffSyntaxLanguage::Rust,
             DiffSyntaxLanguage::Python,
             DiffSyntaxLanguage::JavaScript,
+            DiffSyntaxLanguage::Jsdoc,
             DiffSyntaxLanguage::TypeScript,
             DiffSyntaxLanguage::Tsx,
+            DiffSyntaxLanguage::Regex,
             DiffSyntaxLanguage::Go,
             DiffSyntaxLanguage::GoMod,
             DiffSyntaxLanguage::GoWork,
@@ -5674,6 +5881,10 @@ mod tests {
         assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).is_none());
         assert!(tree_sitter_grammar(DiffSyntaxLanguage::JavaScript).is_none());
         assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::JavaScript).is_none());
+        assert!(tree_sitter_grammar(DiffSyntaxLanguage::Jsdoc).is_none());
+        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Jsdoc).is_none());
+        assert!(tree_sitter_grammar(DiffSyntaxLanguage::Regex).is_none());
+        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Regex).is_none());
     }
 
     #[cfg(not(any(test, feature = "syntax-xml")))]

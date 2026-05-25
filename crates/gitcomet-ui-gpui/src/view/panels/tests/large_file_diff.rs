@@ -1289,12 +1289,12 @@ fn minified_json_file_diff_partial_copy_uses_streamed_inline_row_source(
             this.main_pane.update(cx, |pane, _cx| {
                 pane.diff_view = DiffViewMode::Inline;
                 pane.diff_text_anchor = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
                     offset: start,
                 });
                 pane.diff_text_head = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::Inline,
                     offset: end,
                 });
@@ -1477,12 +1477,12 @@ fn minified_json_file_diff_split_partial_copy_uses_streamed_row_source(
                 pane.diff_view = DiffViewMode::Split;
                 pane.clear_diff_text_style_caches();
                 pane.diff_text_anchor = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::SplitLeft,
                     offset: start,
                 });
                 pane.diff_text_head = Some(DiffTextPos {
-                    visible_ix: 0,
+                    source_visible_ix: 0,
                     region: DiffTextRegion::SplitLeft,
                     offset: end,
                 });

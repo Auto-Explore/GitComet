@@ -21,7 +21,8 @@ pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
 const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
-const FULL_REFRESH_MAX_EFFECTS: usize = 9;
+const FULL_REFRESH_MAX_EFFECTS: usize = 8;
+const BACKGROUND_METADATA_MAX_EFFECTS: usize = 3;
 
 pub(super) trait EffectAccumulator {
     fn push_effect(&mut self, effect: Effect);
@@ -649,6 +650,10 @@ pub(super) fn refresh_full_effect_capacity() -> usize {
     FULL_REFRESH_MAX_EFFECTS
 }
 
+pub(super) fn background_metadata_effect_capacity() -> usize {
+    BACKGROUND_METADATA_MAX_EFFECTS
+}
+
 pub(super) fn refresh_full_effects(
     repo_state: &mut RepoState,
     git_log_settings: GitLogSettings,
@@ -660,7 +665,7 @@ pub(super) fn refresh_full_effects(
 
 pub(super) fn append_refresh_full_effects(
     repo_state: &mut RepoState,
-    git_log_settings: GitLogSettings,
+    _git_log_settings: GitLogSettings,
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
@@ -699,11 +704,6 @@ pub(super) fn append_refresh_full_effects(
     {
         effects.push_effect(Effect::LoadBranches { repo_id });
     }
-    if should_auto_fetch_history_tags(git_log_settings)
-        && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS)
-    {
-        effects.push_effect(Effect::LoadTags { repo_id });
-    }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::REMOTES)
@@ -717,6 +717,52 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadRemoteBranches { repo_id });
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
+}
+
+pub(super) fn append_auto_background_metadata_effects(
+    repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
+    effects: &mut impl EffectAccumulator,
+) {
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return;
+    }
+
+    let repo_id = repo_state.id;
+    if should_auto_fetch_history_tags(git_log_settings) {
+        if matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            repo_state.set_tags(Loadable::Loading);
+            if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+                effects.push_effect(Effect::LoadTags { repo_id });
+            }
+        }
+
+        if matches!(
+            repo_state.remote_tags,
+            Loadable::NotLoaded | Loadable::Error(_)
+        ) {
+            repo_state.set_remote_tags(Loadable::Loading);
+            if repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::REMOTE_TAGS)
+            {
+                effects.push_effect(Effect::LoadRemoteTags { repo_id });
+            }
+        }
+    }
+
+    if matches!(
+        repo_state.submodules,
+        Loadable::NotLoaded | Loadable::Error(_)
+    ) {
+        repo_state.set_submodules(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::SUBMODULES)
+        {
+            effects.push_effect(Effect::LoadSubmodules { repo_id });
+        }
+    }
 }
 
 pub(super) fn dedup_paths_in_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -1541,7 +1587,7 @@ mod tests {
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
-        assert_eq!(full_effects.len(), 9);
+        assert_eq!(full_effects.len(), 8);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
@@ -1558,9 +1604,10 @@ mod tests {
             "full refresh should coalesce staged and worktree status into LoadStatus"
         );
         assert!(
-            full_effects
+            !full_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadTags { .. }))
+                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
+            "tags should lazy-load by default instead of refresh_full_effects"
         );
         assert!(
             !full_effects
@@ -1578,6 +1625,33 @@ mod tests {
             full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
+        );
+
+        let mut metadata = repo_state(3);
+        metadata.set_open(Loadable::Ready(()));
+        let mut metadata_effects = Vec::new();
+        append_auto_background_metadata_effects(
+            &mut metadata,
+            GitLogSettings::default(),
+            &mut metadata_effects,
+        );
+        assert!(
+            metadata_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
+            "auto-idle metadata should request LoadTags"
+        );
+        assert!(
+            metadata_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
+            "auto-idle metadata should request LoadRemoteTags"
+        );
+        assert!(
+            metadata_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadSubmodules { .. })),
+            "auto-idle metadata should request LoadSubmodules"
         );
     }
 

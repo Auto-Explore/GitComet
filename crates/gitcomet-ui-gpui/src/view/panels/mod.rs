@@ -62,6 +62,15 @@ pub(in crate::view) enum ContextMenuAction {
     SetDiffWhitespaceMode {
         mode: DiffWhitespaceMode,
     },
+    SetDiffRevealWhitespaceChars {
+        enabled: bool,
+    },
+    SetDiffWordWrap {
+        enabled: bool,
+    },
+    SetDiffShowLineNumbers {
+        enabled: bool,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
     },

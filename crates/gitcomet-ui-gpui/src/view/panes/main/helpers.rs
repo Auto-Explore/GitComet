@@ -2254,6 +2254,28 @@ pub(in crate::view) enum DiffHorizontalScrollColumn {
     SplitRight,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffWrapVisualRow {
+    pub(in crate::view) source_visible_ix: usize,
+    pub(in crate::view) wrap_ix: usize,
+    pub(in crate::view) primary_range: rows::DiffWrapByteRange,
+    pub(in crate::view) secondary_range: rows::DiffWrapByteRange,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffWrapVisibleCacheKey {
+    pub(in crate::view) source_len: usize,
+    pub(in crate::view) diff_view: DiffViewMode,
+    pub(in crate::view) is_file_view: bool,
+    pub(in crate::view) collapsed_projection_active: bool,
+    pub(in crate::view) projection_rev: u64,
+    pub(in crate::view) diff_cache_rev: u64,
+    pub(in crate::view) file_diff_cache_seq: u64,
+    pub(in crate::view) inline_columns: usize,
+    pub(in crate::view) split_columns: usize,
+    pub(in crate::view) reveal_whitespace_chars: bool,
+}
+
 impl DiffHorizontalScrollColumn {
     pub(in crate::view) const fn index(self) -> usize {
         match self {
@@ -2318,6 +2340,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
+    pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
     pub(in crate::view) diff_content_mode: DiffContentMode,
     pub(in crate::view) diff_whitespace_mode: DiffWhitespaceMode,
@@ -2350,6 +2373,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,
     pub(in crate::view) diff_visible_indices: Vec<usize>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
+    pub(in crate::view) diff_wrap_visible_rows: Vec<DiffWrapVisualRow>,
+    pub(in crate::view) diff_wrap_visible_cache_key: Option<DiffWrapVisibleCacheKey>,
     pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
     pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: HashMap<usize, usize>,
     pub(in crate::view) collapsed_diff_reveals: HashMap<usize, CollapsedDiffReveal>,
@@ -2369,6 +2394,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
+    pub(in crate::view) diff_text_query_cache_options: super::diff_search::DiffSearchOptions,
+    pub(in crate::view) diff_text_query_cache_matcher:
+        Option<super::diff_search::DiffSearchMatcher>,
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
@@ -2384,10 +2412,15 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
     pub(in crate::view) diff_search_active: bool,
     pub(in crate::view) diff_search_query: SharedString,
+    pub(in crate::view) diff_search_options: super::diff_search::DiffSearchOptions,
+    pub(in crate::view) diff_search_regex_error: Option<SharedString>,
     pub(in crate::view) diff_search_matches: Vec<usize>,
     pub(in crate::view) diff_search_inline_patch_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) diff_search_match_ix: Option<usize>,
+    pub(in crate::view) diff_search_debounce_seq: u64,
+    pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
+    pub(in crate::view) diff_search_scroll: ScrollHandle,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
 
@@ -2488,6 +2521,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_diff_query_segments_cache_split:
         crate::view::conflict_resolver::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
+    pub(in crate::view) conflict_diff_query_cache_options: super::diff_search::DiffSearchOptions,
     pub(in crate::view) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     /// Prepared full-document syntax trees for each merge-input side (base, ours, theirs).

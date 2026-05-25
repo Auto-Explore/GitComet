@@ -4,7 +4,10 @@ use super::{
         ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{git_command_failed_error, run_git_parsed_stdout, run_git_raw_output};
+use crate::util::{
+    git_command_failed_error, run_git_parsed_stdout, run_git_parsed_stdout_cancellable,
+    run_git_raw_output,
+};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, canonicalize_stage_parts};
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
@@ -12,7 +15,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
-use gitcomet_core::services::{ConflictFileStages, Result};
+use gitcomet_core::services::{CancellationToken, ConflictFileStages, Result};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -96,6 +99,33 @@ impl GixRepo {
             self.build_unified_diff_command(&target),
             "git diff",
             true,
+            move |stdout| {
+                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "git diff produced non-UTF-8 output: {err}"
+                    )))
+                })
+            },
+        )
+    }
+
+    pub(super) fn diff_parsed_cancellable_impl(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        cancellation.check_cancelled()?;
+        if let Some(diff) = self.synthetic_simple_commit_path_diff(target)? {
+            cancellation.check_cancelled()?;
+            return Ok(diff);
+        }
+
+        let target = target.clone();
+        run_git_parsed_stdout_cancellable(
+            self.build_unified_diff_command(&target),
+            "git diff",
+            true,
+            cancellation,
             move |stdout| {
                 Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
                     Error::new(ErrorKind::Backend(format!(

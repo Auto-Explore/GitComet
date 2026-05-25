@@ -35,6 +35,10 @@ pub enum Effect {
         repo_id: RepoId,
         path: PathBuf,
     },
+    CancelRepoLoads {
+        repo_id: RepoId,
+        load_epoch: u64,
+    },
     LoadBranches {
         repo_id: RepoId,
     },

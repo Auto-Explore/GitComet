@@ -103,6 +103,366 @@ pub(in crate::view) fn resolved_output_line_text<'a>(
     text.get(start..end).unwrap_or("")
 }
 
+#[cfg(test)]
+pub(in crate::view) fn whitespace_visible_text(text: &str) -> SharedString {
+    whitespace_visible_text_and_highlights(text, &[]).0
+}
+
+pub(in crate::view) fn whitespace_visible_line_text(text: &str) -> SharedString {
+    whitespace_visible_line_text_and_highlights(text, &[]).0
+}
+
+#[cfg(test)]
+pub(in crate::view) fn whitespace_visible_multiline_text(text: &str) -> SharedString {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            ' ' => out.push('\u{00B7}'),
+            '\t' => out.push('\u{2192}'),
+            '\r' => out.push('\u{240D}'),
+            '\n' => {
+                out.push('\u{21B5}');
+                out.push('\n');
+            }
+            _ if ch.is_whitespace() => out.push('\u{2420}'),
+            _ => out.push(ch),
+        }
+    }
+    out.into()
+}
+
+#[cfg(test)]
+pub(in crate::view) fn whitespace_visible_text_and_highlights(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    whitespace_visible_text_and_highlights_impl(text, highlights, false)
+}
+
+pub(in crate::view) fn whitespace_visible_line_text_and_highlights(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    whitespace_visible_text_and_highlights_impl(text, highlights, true)
+}
+
+pub(in crate::view) fn whitespace_visible_styled_text(
+    styled: &CachedDiffStyledText,
+    append_eol_marker: bool,
+) -> CachedDiffStyledText {
+    let (text, highlights) = whitespace_visible_text_and_highlights_impl(
+        styled.text.as_ref(),
+        styled.highlights.as_ref(),
+        append_eol_marker,
+    );
+    let text_hash = hash_text_content(text.as_ref());
+    let highlights_hash = hash_visible_highlights(&highlights);
+    CachedDiffStyledText {
+        text,
+        highlights: Arc::from(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+pub(in crate::view) fn whitespace_visible_line_styled_text(
+    styled: &CachedDiffStyledText,
+) -> CachedDiffStyledText {
+    whitespace_visible_styled_text(styled, true)
+}
+
+pub(in crate::view) fn whitespace_visible_line_styled_text_for_raw(
+    styled: &CachedDiffStyledText,
+    raw_text: &str,
+) -> CachedDiffStyledText {
+    if raw_text.contains('\t') && styled.text.as_ref() != raw_text {
+        let raw_highlights = expanded_highlights_to_raw_text(raw_text, styled.highlights.as_ref());
+        let (text, highlights) =
+            whitespace_visible_line_text_and_highlights(raw_text, &raw_highlights);
+        let text_hash = hash_text_content(text.as_ref());
+        let highlights_hash = hash_visible_highlights(&highlights);
+        return CachedDiffStyledText {
+            text,
+            highlights: Arc::from(highlights),
+            highlights_hash,
+            text_hash,
+        };
+    }
+
+    whitespace_visible_line_styled_text(styled)
+}
+
+#[cfg(test)]
+pub(in crate::view) fn diff_wrap_row_count_for_text(text: &str, wrap_columns: usize) -> usize {
+    if text.is_empty() {
+        return 1;
+    }
+
+    let mut row_start = 0usize;
+    let mut count = 0usize;
+    let wrap_columns = wrap_columns.max(1);
+    while row_start < text.len() {
+        let Some((_, next_start)) = diff_wrap_next_range_for_text(text, wrap_columns, row_start)
+        else {
+            break;
+        };
+        count += 1;
+        if next_start <= row_start {
+            break;
+        }
+        row_start = next_start;
+    }
+    count.max(1)
+}
+
+#[cfg(test)]
+pub(in crate::view) fn diff_wrap_range_for_text(
+    text: &str,
+    wrap_columns: usize,
+    wrap_ix: usize,
+) -> Option<Range<usize>> {
+    if text.is_empty() {
+        return (wrap_ix == 0).then_some(0..0);
+    }
+
+    let mut row_start = 0usize;
+    let mut row_ix = 0usize;
+    let wrap_columns = wrap_columns.max(1);
+    while row_start < text.len() {
+        let (range, next_start) = diff_wrap_next_range_for_text(text, wrap_columns, row_start)?;
+        if row_ix == wrap_ix {
+            return Some(range);
+        }
+        if next_start <= row_start {
+            break;
+        }
+        row_start = next_start;
+        row_ix += 1;
+    }
+    None
+}
+
+pub(in crate::view) fn slice_cached_diff_styled_text(
+    styled: &CachedDiffStyledText,
+    range: Range<usize>,
+) -> CachedDiffStyledText {
+    let start = clamp_to_char_boundary(styled.text.as_ref(), range.start.min(styled.text.len()));
+    let end = clamp_to_char_boundary(styled.text.as_ref(), range.end.min(styled.text.len()));
+    if start >= end {
+        return CachedDiffStyledText {
+            text: SharedString::default(),
+            highlights: Arc::from(Vec::new()),
+            highlights_hash: 0,
+            text_hash: hash_text_content(""),
+        };
+    }
+
+    let text: SharedString = styled.text.as_ref()[start..end].to_string().into();
+    let mut highlights = Vec::new();
+    for (range, style) in styled.highlights.as_ref() {
+        let clipped_start = range.start.max(start);
+        let clipped_end = range.end.min(end);
+        if clipped_start < clipped_end {
+            highlights.push((clipped_start - start..clipped_end - start, *style));
+        }
+    }
+    let text_hash = hash_text_content(text.as_ref());
+    let highlights_hash = hash_visible_highlights(&highlights);
+    CachedDiffStyledText {
+        text,
+        highlights: Arc::from(highlights),
+        highlights_hash,
+        text_hash,
+    }
+}
+
+pub(in crate::view) fn diff_wrap_ranges_for_text(
+    text: &str,
+    wrap_columns: usize,
+) -> Vec<Range<usize>> {
+    if text.is_empty() {
+        return std::iter::once(0..0).collect();
+    }
+
+    let wrap_columns = wrap_columns.max(1);
+    let mut ranges = Vec::new();
+    let mut row_start = 0usize;
+
+    while row_start < text.len() {
+        let Some((range, next_start)) =
+            diff_wrap_next_range_for_text(text, wrap_columns, row_start)
+        else {
+            break;
+        };
+        ranges.push(range);
+        if next_start <= row_start {
+            break;
+        }
+        row_start = next_start;
+    }
+
+    if ranges.is_empty() {
+        ranges.push(0..0);
+    }
+    ranges
+}
+
+fn diff_wrap_next_range_for_text(
+    text: &str,
+    wrap_columns: usize,
+    row_start: usize,
+) -> Option<(Range<usize>, usize)> {
+    if row_start >= text.len() || !text.is_char_boundary(row_start) {
+        return None;
+    }
+
+    let mut end = row_start;
+    let mut column = 0usize;
+    let mut last_break = None;
+    let mut forced_newline = false;
+    let mut saw_char = false;
+
+    for (rel_start, ch) in text[row_start..].char_indices() {
+        let start = row_start + rel_start;
+        let char_end = start + ch.len_utf8();
+        let width = if ch == '\t' {
+            DIFF_WRAP_TAB_EXPANDED_COLUMNS
+        } else {
+            1
+        };
+        if column > 0 && column + width > wrap_columns {
+            break;
+        }
+
+        saw_char = true;
+        column += width;
+        end = char_end;
+        if ch.is_whitespace() {
+            last_break = Some(char_end);
+        }
+        if ch == '\n' {
+            forced_newline = true;
+            break;
+        }
+        if column >= wrap_columns {
+            break;
+        }
+    }
+
+    if !saw_char {
+        return None;
+    }
+
+    let next_start = if end >= text.len() || forced_newline {
+        end
+    } else {
+        last_break
+            .filter(|break_ix| *break_ix > row_start)
+            .unwrap_or(end)
+    };
+    let next_start = if next_start > row_start {
+        next_start
+    } else {
+        row_start + text[row_start..].chars().next()?.len_utf8()
+    };
+
+    Some((row_start..next_start, next_start))
+}
+
+fn clamp_to_char_boundary(text: &str, mut ix: usize) -> usize {
+    while ix > 0 && !text.is_char_boundary(ix) {
+        ix -= 1;
+    }
+    ix
+}
+
+fn expanded_highlights_to_raw_text(
+    raw_text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let mut expanded_to_raw = Vec::with_capacity(raw_text.len() + 1);
+    expanded_to_raw.push(0);
+    for (raw_start, ch) in raw_text.char_indices() {
+        let raw_end = raw_start + ch.len_utf8();
+        let expanded_len = if ch == '\t' {
+            DIFF_WRAP_TAB_EXPANDED_COLUMNS
+        } else {
+            ch.len_utf8()
+        };
+        for _ in 0..expanded_len {
+            expanded_to_raw.push(raw_end);
+        }
+    }
+
+    let mut remapped = Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        let Some(&start) = expanded_to_raw.get(range.start) else {
+            continue;
+        };
+        let Some(&end) = expanded_to_raw.get(range.end) else {
+            continue;
+        };
+        if start < end {
+            remapped.push((start..end, *style));
+        }
+    }
+    remapped
+}
+
+fn whitespace_visible_text_and_highlights_impl(
+    text: &str,
+    highlights: &[(Range<usize>, gpui::HighlightStyle)],
+    append_eol_marker: bool,
+) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
+    let mut out = String::with_capacity(text.len() + usize::from(append_eol_marker));
+    let mut byte_map = vec![0usize; text.len() + 1];
+
+    for (start, ch) in text.char_indices() {
+        byte_map[start] = out.len();
+        match ch {
+            ' ' => out.push('\u{00B7}'),
+            '\t' => out.push('\u{2192}'),
+            '\r' => out.push('\u{240D}'),
+            '\n' => out.push('\u{21B5}'),
+            _ if ch.is_whitespace() => out.push('\u{2420}'),
+            _ => out.push(ch),
+        }
+        let end = start + ch.len_utf8();
+        let mapped_end = out.len();
+        for mapped in byte_map.iter_mut().take(end + 1).skip(start + 1) {
+            *mapped = mapped_end;
+        }
+    }
+
+    if append_eol_marker && !text.ends_with('\n') {
+        out.push('\u{21B5}');
+    }
+
+    let mut remapped = Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        let start = *byte_map.get(range.start).unwrap_or(&out.len());
+        let end = *byte_map.get(range.end).unwrap_or(&out.len());
+        if start < end {
+            remapped.push((start..end, *style));
+        }
+    }
+
+    (out.into(), remapped)
+}
+
+fn hash_visible_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
+    if highlights.is_empty() {
+        return 0;
+    }
+
+    let mut hasher = FxHasher::default();
+    for (range, style) in highlights {
+        range.hash(&mut hasher);
+        style.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Returns `Auto` when a prepared document exists (full-document syntax),
 /// `HeuristicOnly` when it doesn't (per-line fallback).
 pub(super) fn syntax_mode_for_prepared_document(
@@ -164,6 +524,7 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 43] = [
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
 const PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 32_768;
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
+const DIFF_WRAP_TAB_EXPANDED_COLUMNS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DiffTextSourceIdentity {
@@ -543,6 +904,16 @@ pub(in crate::view) struct PreparedDiffSyntaxLine {
 mod tests {
     use super::*;
 
+    fn query_overlay_for_test(
+        theme: AppTheme,
+        base: &CachedDiffStyledText,
+        query: &str,
+        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+    ) -> CachedDiffStyledText {
+        let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(query, options);
+        build_cached_diff_query_overlay_styled_text(theme, base, &matcher)
+    }
+
     fn test_line_starts(text: &str) -> Arc<[usize]> {
         let mut line_starts = Vec::with_capacity(
             text.as_bytes()
@@ -614,6 +985,113 @@ mod tests {
 
         assert!(!segment_overlaps_sorted_ranges(8, 9, &ranges, &mut cursor));
         assert_eq!(cursor, 2);
+    }
+
+    #[test]
+    fn whitespace_visible_text_maps_spaces_tabs_cr_and_line_breaks() {
+        assert_eq!(whitespace_visible_text(" \t\r\n").as_ref(), "·→␍↵");
+        assert_eq!(
+            whitespace_visible_multiline_text("a b\r\nc\t").as_ref(),
+            "a·b␍↵\nc→"
+        );
+    }
+
+    #[test]
+    fn whitespace_visible_line_text_appends_eol_marker_and_remaps_highlights() {
+        let style = gpui::HighlightStyle::default();
+        let (display, highlights) =
+            whitespace_visible_line_text_and_highlights("a b\t", &[(1..4, style)]);
+
+        assert_eq!(display.as_ref(), "a·b→↵");
+        assert_eq!(highlights.len(), 1);
+        assert_eq!(highlights[0].0, 1..7);
+
+        let styled = CachedDiffStyledText {
+            text: "x y".into(),
+            highlights: Arc::from(vec![(1..3, style)]),
+            highlights_hash: 7,
+            text_hash: 11,
+        };
+        let visible = whitespace_visible_line_styled_text(&styled);
+        assert_eq!(visible.text.as_ref(), "x·y↵");
+        assert_eq!(visible.highlights[0].0, 1..4);
+        assert_ne!(visible.text_hash, styled.text_hash);
+    }
+
+    #[test]
+    fn whitespace_visible_styled_text_can_omit_synthetic_eol_marker() {
+        let styled = CachedDiffStyledText {
+            text: "x y".into(),
+            highlights: Arc::from(Vec::<(Range<usize>, gpui::HighlightStyle)>::new()),
+            highlights_hash: 0,
+            text_hash: 11,
+        };
+
+        let visible = whitespace_visible_styled_text(&styled, false);
+
+        assert_eq!(visible.text.as_ref(), "x·y");
+    }
+
+    #[test]
+    fn diff_wrap_ranges_prefer_word_boundaries() {
+        let text = "alpha beta gamma";
+        let rows = diff_wrap_ranges_for_text(text, 9)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["alpha ", "beta ", "gamma"]);
+    }
+
+    #[test]
+    fn diff_wrap_ranges_hard_break_long_words() {
+        let text = "abcdefghijkl";
+        let rows = diff_wrap_ranges_for_text(text, 5)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["abcde", "fghij", "kl"]);
+    }
+
+    #[test]
+    fn diff_wrap_ranges_count_tabs_as_fixed_display_expansion() {
+        let text = "aaa\tbbb";
+        let rows = diff_wrap_ranges_for_text(text, 4)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["aaa", "\t", "bbb"]);
+        assert_eq!(diff_wrap_row_count_for_text(text, 4), 3);
+        assert_eq!(diff_wrap_range_for_text(text, 4, 1), Some(3..4));
+    }
+
+    #[test]
+    fn diff_wrap_range_matches_full_range_builder() {
+        let text = "alpha beta γamma\nnext\trow";
+        let ranges = diff_wrap_ranges_for_text(text, 9);
+
+        for (wrap_ix, range) in ranges.iter().cloned().enumerate() {
+            assert!(text.is_char_boundary(range.start));
+            assert!(text.is_char_boundary(range.end));
+            assert_eq!(diff_wrap_range_for_text(text, 9, wrap_ix), Some(range));
+        }
+        assert_eq!(diff_wrap_row_count_for_text(text, 9), ranges.len());
+        assert_eq!(diff_wrap_range_for_text(text, 9, ranges.len()), None);
+    }
+
+    #[test]
+    fn whitespace_visible_line_styled_text_for_raw_preserves_tab_markers() {
+        let style = gpui::HighlightStyle::default();
+        let styled =
+            build_cached_diff_styled_text_from_relative_highlights("a b\t", &[(3..4, style)]);
+
+        assert_eq!(styled.text.as_ref(), "a b    ");
+        let visible = whitespace_visible_line_styled_text_for_raw(&styled, "a b\t");
+
+        assert_eq!(visible.text.as_ref(), "a·b→↵");
+        assert_eq!(visible.highlights[0].0, 4..7);
     }
 
     #[test]
@@ -2035,11 +2513,11 @@ mod tests {
             text_hash,
         };
 
-        let empty_query = build_cached_diff_query_overlay_styled_text(theme, &base, "");
+        let empty_query = query_overlay_for_test(theme, &base, "", Default::default());
         assert!(Arc::ptr_eq(&empty_query.highlights, &base.highlights));
         assert_eq!(empty_query.highlights_hash, base.highlights_hash);
 
-        let missing_query = build_cached_diff_query_overlay_styled_text(theme, &base, "xyz");
+        let missing_query = query_overlay_for_test(theme, &base, "xyz", Default::default());
         assert!(Arc::ptr_eq(&missing_query.highlights, &base.highlights));
         assert_eq!(missing_query.highlights_hash, base.highlights_hash);
     }
@@ -2062,7 +2540,7 @@ mod tests {
             text_hash,
         };
 
-        let overlaid = build_cached_diff_query_overlay_styled_text(theme, &base, "cd");
+        let overlaid = query_overlay_for_test(theme, &base, "cd", Default::default());
         assert_eq!(overlaid.highlights.len(), 3);
         assert_eq!(overlaid.highlights[1].0, 2..4);
         assert_eq!(
@@ -2071,6 +2549,85 @@ mod tests {
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_ne!(overlaid.highlights_hash, base.highlights_hash);
+    }
+
+    #[test]
+    fn query_overlay_honors_search_options() {
+        let theme = AppTheme::gitcomet_dark();
+        let base = build_cached_diff_styled_text(
+            theme,
+            "Render render cat concat cat",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+
+        let case_sensitive = query_overlay_for_test(
+            theme,
+            &base,
+            "render",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                match_case: true,
+                ..Default::default()
+            },
+        );
+        let case_sensitive_ranges: Vec<_> = case_sensitive
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(case_sensitive_ranges, vec![7..13]);
+
+        let whole_word = query_overlay_for_test(
+            theme,
+            &base,
+            "cat",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                whole_word: true,
+                ..Default::default()
+            },
+        );
+        let whole_word_ranges: Vec<_> = whole_word
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(whole_word_ranges, vec![14..17, 25..28]);
+
+        let regex = query_overlay_for_test(
+            theme,
+            &base,
+            r"r.n.e.",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        let regex_ranges: Vec<_> = regex
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(regex_ranges, vec![0..6, 7..13]);
+    }
+
+    #[test]
+    fn query_overlay_skips_literal_multiline_row_fragments_without_stream_match_context() {
+        let theme = AppTheme::gitcomet_dark();
+
+        let first_base =
+            build_cached_diff_styled_text(theme, "foo", &[], "", None, DiffSyntaxMode::Auto, None);
+        let first = query_overlay_for_test(theme, &first_base, "foo\nbar", Default::default());
+        assert!(Arc::ptr_eq(&first.highlights, &first_base.highlights));
+        assert_eq!(first.highlights_hash, first_base.highlights_hash);
+
+        let second_base =
+            build_cached_diff_styled_text(theme, "bar", &[], "", None, DiffSyntaxMode::Auto, None);
+        let second = query_overlay_for_test(theme, &second_base, "foo\nbar", Default::default());
+        assert!(Arc::ptr_eq(&second.highlights, &second_base.highlights));
+        assert_eq!(second.highlights_hash, second_base.highlights_hash);
     }
 
     #[test]
@@ -2095,7 +2652,7 @@ mod tests {
             text_hash,
         };
 
-        let overlaid = build_cached_diff_query_overlay_styled_text(theme, &base, "cdefg");
+        let overlaid = query_overlay_for_test(theme, &base, "cdefg", Default::default());
         assert_eq!(overlaid.highlights.len(), 5);
 
         assert_eq!(overlaid.highlights[0], (1..2, left));
@@ -2125,5 +2682,51 @@ mod tests {
         );
         assert!(overlaid.highlights[3].1.background_color.is_some());
         assert_eq!(overlaid.highlights[4], (7..8, right));
+    }
+
+    #[test]
+    fn query_overlay_reuses_prebuilt_regex_matcher_for_multiple_rows() {
+        let theme = AppTheme::gitcomet_dark();
+        let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+            r"r.n.e.",
+            crate::view::panes::main::diff_search::DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        let first_base = build_cached_diff_styled_text(
+            theme,
+            "Render first",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+        let second_base = build_cached_diff_styled_text(
+            theme,
+            "render second",
+            &[],
+            "",
+            None,
+            DiffSyntaxMode::Auto,
+            None,
+        );
+
+        let first = build_cached_diff_query_overlay_styled_text(theme, &first_base, &matcher);
+        let second = build_cached_diff_query_overlay_styled_text(theme, &second_base, &matcher);
+
+        let first_ranges: Vec<_> = first
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        let second_ranges: Vec<_> = second
+            .highlights
+            .iter()
+            .map(|(range, _)| range.clone())
+            .collect();
+        assert_eq!(first_ranges, vec![0..6]);
+        assert_eq!(second_ranges, vec![0..6]);
     }
 }

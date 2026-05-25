@@ -3,6 +3,7 @@ use super::super::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
 use super::conflict_canvas::{self, ConflictChunkContext};
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 const CONFLICT_ROW_FONT_SCALE: f32 = 0.80;
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
@@ -78,6 +79,13 @@ impl ConflictRowStyledText {
     }
 }
 
+fn conflict_diff_query_matcher(
+    query: &str,
+    query_options: DiffSearchOptions,
+) -> Option<DiffSearchMatcher> {
+    (!query.is_empty()).then(|| DiffSearchMatcher::new(query, query_options))
+}
+
 fn build_conflict_row_base_styled(
     theme: AppTheme,
     text: &str,
@@ -122,9 +130,9 @@ fn conflict_display_text(
     reveal_whitespace_chars: bool,
 ) -> SharedString {
     match styled {
-        Some(styled) if reveal_whitespace_chars => whitespace_visible_text(styled.text.as_ref()),
+        Some(_styled) if reveal_whitespace_chars => whitespace_visible_line_text(text.as_ref()),
         Some(styled) => styled.text.clone(),
-        None if reveal_whitespace_chars => whitespace_visible_text(text.as_ref()),
+        None if reveal_whitespace_chars => whitespace_visible_line_text(text.as_ref()),
         None => text.clone(),
     }
 }
@@ -718,8 +726,10 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
         let query = this.diff_search_query_or_empty();
-        let query = query.as_ref().trim().to_string();
-        this.sync_conflict_diff_query_overlay_caches(query.as_str());
+        let query_options = this.diff_search_options_or_default();
+        let query = query.as_ref().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
+        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
@@ -815,6 +825,8 @@ impl MainPaneView {
                     text_opt,
                     word_ranges,
                     query,
+                    query_options,
+                    query_matcher.as_ref(),
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(document, line_no),
@@ -1146,6 +1158,7 @@ impl MainPaneView {
         let requested_rows = range.len();
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let show_ws = this.reveal_whitespace_chars;
         if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
             let unresolved_row_bg =
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
@@ -1157,7 +1170,11 @@ impl MainPaneView {
             let mut elements = Vec::with_capacity(requested_rows);
 
             let push_row = |ix: usize, line: &str| {
-                let line_text = SharedString::new(line);
+                let line_text = if show_ws {
+                    whitespace_visible_line_text(line)
+                } else {
+                    SharedString::new(line)
+                };
                 let min_width = conflict_resolved_output_row_min_width(
                     window,
                     &line_text,
@@ -1297,9 +1314,14 @@ impl MainPaneView {
                         .child("")
                         .into_any_element();
                 }
+                let display_line_text = if show_ws {
+                    whitespace_visible_line_text(line_text.as_ref())
+                } else {
+                    line_text.clone()
+                };
                 let min_width = conflict_resolved_output_row_min_width(
                     window,
-                    &line_text,
+                    &display_line_text,
                     editor_font_family.as_str(),
                 );
 
@@ -1340,7 +1362,30 @@ impl MainPaneView {
                         .as_ref()
                         .or(cached_styled)
                         .expect("resolved preview row style should exist after populate");
-                    if styled.highlights.is_empty() {
+                    if show_ws {
+                        let visible =
+                            whitespace_visible_line_styled_text_for_raw(styled, line_text.as_ref());
+                        if visible.highlights.is_empty() {
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .child(visible.text)
+                                .into_any_element()
+                        } else {
+                            let visible_text = visible.text;
+                            let visible_highlights = visible.highlights;
+                            div()
+                                .w_full()
+                                .min_w(px(0.0))
+                                .overflow_hidden()
+                                .child(
+                                    gpui::StyledText::new(visible_text)
+                                        .with_highlights(visible_highlights.iter().cloned()),
+                                )
+                                .into_any_element()
+                        }
+                    } else if styled.highlights.is_empty() {
                         div()
                             .w_full()
                             .min_w(px(0.0))
@@ -1363,7 +1408,7 @@ impl MainPaneView {
                         .w_full()
                         .min_w(px(0.0))
                         .overflow_hidden()
-                        .child(line_text)
+                        .child(display_line_text)
                         .into_any_element()
                 };
 
@@ -1423,8 +1468,10 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let query = this.diff_search_query_or_empty();
-        let query = query.as_ref().trim().to_string();
-        this.sync_conflict_diff_query_overlay_caches(query.as_str());
+        let query_options = this.diff_search_options_or_default();
+        let query = query.as_ref().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
+        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
         let syntax_lang = this.conflict_row_syntax_language();
         // Streamed conflicts may or may not have prepared side documents; Auto
         // remains the safe fallback when a row is not backed by one.
@@ -1452,6 +1499,7 @@ impl MainPaneView {
                     row,
                     syntax_lang,
                     syntax_mode,
+                    query_matcher.as_ref(),
                     cx,
                 )
             })
@@ -1468,6 +1516,8 @@ impl MainPaneView {
         text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
         word_ranges: &[Range<usize>],
         query: &str,
+        _query_options: DiffSearchOptions,
+        query_matcher: Option<&DiffSearchMatcher>,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         prepared_line: PreparedDiffSyntaxLine,
@@ -1483,7 +1533,6 @@ impl MainPaneView {
             return result;
         }
 
-        let query = query.trim();
         let query_active = !query.is_empty();
         let base_has_style = !word_ranges.is_empty() || syntax_lang.is_some();
 
@@ -1513,6 +1562,9 @@ impl MainPaneView {
         }
 
         if query_active {
+            let Some(query_matcher) = query_matcher else {
+                return result;
+            };
             if !result.pending
                 && let Some(cached) = query_cache.get(&key)
             {
@@ -1525,18 +1577,19 @@ impl MainPaneView {
                 Some(ConflictRowStyledTextValue::Owned(styled)) => Some(styled),
                 _ => stable_cache.get(&key),
             } {
-                build_cached_diff_query_overlay_styled_text(theme, base, query)
+                build_cached_diff_query_overlay_styled_text(theme, base, query_matcher)
             } else {
-                build_conflict_cached_diff_styled_text_with_source_identity(
+                let base = build_conflict_cached_diff_styled_text_with_source_identity(
                     theme,
                     text,
                     source_identity,
                     word_ranges,
-                    query,
+                    "",
                     syntax_lang,
                     syntax_mode,
                     None,
-                )
+                );
+                build_cached_diff_query_overlay_styled_text(theme, &base, query_matcher)
             };
             if !result.pending {
                 query_cache.insert(key, styled);
@@ -1556,6 +1609,7 @@ impl MainPaneView {
         row: gitcomet_core::file_diff::FileDiffRow,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
+        query_matcher: Option<&DiffSearchMatcher>,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -1598,6 +1652,7 @@ impl MainPaneView {
         let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
         let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
         let query_text = self.conflict_diff_query_cache_query.clone();
+        let query_options = self.conflict_diff_query_cache_options;
         let query = query_text.as_ref();
         let (left_styled, right_styled) = if styling_enabled {
             (
@@ -1610,6 +1665,8 @@ impl MainPaneView {
                     row.old.as_ref(),
                     old_word_ranges,
                     query,
+                    query_options,
+                    query_matcher,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
@@ -1623,6 +1680,8 @@ impl MainPaneView {
                     row.new.as_ref(),
                     new_word_ranges,
                     query,
+                    query_options,
+                    query_matcher,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line),
@@ -1768,7 +1827,7 @@ fn conflict_diff_text_cell(
 ) -> AnyElement {
     let Some(styled) = styled else {
         let display = if reveal_whitespace_chars {
-            whitespace_visible_text(text.as_ref())
+            whitespace_visible_line_text(text.as_ref())
         } else {
             text
         };
@@ -1782,7 +1841,7 @@ fn conflict_diff_text_cell(
 
     if styled.highlights.is_empty() {
         let display = if reveal_whitespace_chars {
-            whitespace_visible_text(styled.text.as_ref())
+            whitespace_visible_line_text(text.as_ref())
         } else {
             styled.text.clone()
         };
@@ -1795,23 +1854,25 @@ fn conflict_diff_text_cell(
     }
 
     if reveal_whitespace_chars {
-        let (display, highlights) = whitespace_visible_text_and_highlights(
-            styled.text.as_ref(),
-            styled.highlights.as_ref(),
-        );
-        if highlights.is_empty() {
+        let visible = whitespace_visible_line_styled_text_for_raw(styled, text.as_ref());
+        if visible.highlights.is_empty() {
             return div()
                 .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .child(display)
+                .child(visible.text)
                 .into_any_element();
         }
+        let visible_text = visible.text;
+        let visible_highlights = visible.highlights;
         return div()
             .flex_1()
             .min_w(px(0.0))
             .overflow_hidden()
-            .child(gpui::StyledText::new(display).with_highlights(highlights))
+            .child(
+                gpui::StyledText::new(visible_text)
+                    .with_highlights(visible_highlights.iter().cloned()),
+            )
             .into_any_element();
     }
 
@@ -1826,10 +1887,12 @@ fn conflict_diff_text_cell(
         .into_any_element()
 }
 
+#[cfg(test)]
 fn whitespace_visible_text(text: &str) -> SharedString {
     whitespace_visible_text_and_highlights(text, &[]).0
 }
 
+#[cfg(test)]
 fn whitespace_visible_text_and_highlights(
     text: &str,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
@@ -2012,6 +2075,30 @@ mod tests {
     fn whitespace_visible_text_marks_all_whitespace_kinds() {
         let display = whitespace_visible_text(" \t\r\n");
         assert_eq!(display.as_ref(), "·→␍↵");
+    }
+
+    #[test]
+    fn conflict_display_text_reveals_implicit_line_break_marker() {
+        let text: SharedString = "a b\t".into();
+        let display = conflict_display_text(&text, None, true);
+
+        assert_eq!(display.as_ref(), "a·b→↵");
+    }
+
+    #[test]
+    fn conflict_diff_query_matcher_preserves_significant_whitespace() {
+        let space_matcher =
+            conflict_diff_query_matcher(" ", DiffSearchOptions::default()).expect("space query");
+        assert_eq!(space_matcher.query(), " ");
+        assert!(space_matcher.is_match("a b"));
+
+        let padded_matcher = conflict_diff_query_matcher(" foo ", DiffSearchOptions::default())
+            .expect("padded query");
+        assert_eq!(padded_matcher.query(), " foo ");
+        assert!(padded_matcher.is_match("x foo y"));
+        assert!(!padded_matcher.is_match("foo"));
+
+        assert!(conflict_diff_query_matcher("", DiffSearchOptions::default()).is_none());
     }
 
     #[test]

@@ -64,6 +64,61 @@ fn unavailable_git_runtime_state() -> GitRuntimeState {
     }
 }
 
+fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn window_activation_dispatches_repo_activated_message() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    let msg = repo_activation_msg(&state, &mut last_activation_dispatch, now)
+        .expect("ready active repo should produce activation message");
+
+    assert!(matches!(msg, Msg::RepoActivated { repo_id: got } if got == repo_id));
+    assert!(!matches!(msg, Msg::RepoExternallyChanged { .. }));
+}
+
+#[test]
+fn window_activation_dispatch_is_throttled_per_repo() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    assert!(repo_activation_msg(&state, &mut last_activation_dispatch, now).is_some());
+    assert!(
+        repo_activation_msg(
+            &state,
+            &mut last_activation_dispatch,
+            now + Duration::from_secs(1),
+        )
+        .is_none()
+    );
+    assert!(matches!(
+        repo_activation_msg(
+            &state,
+            &mut last_activation_dispatch,
+            now + REPO_ACTIVATION_THROTTLE,
+        ),
+        Some(Msg::RepoActivated { repo_id: got }) if got == repo_id
+    ));
+}
+
 #[test]
 fn toast_total_lifetime_includes_fade_in_and_out() {
     let ttl = Duration::from_secs(6);
@@ -2268,6 +2323,59 @@ fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappear
         None,
         "expected removed repo tab close tooltip not to reappear after the mouse stops elsewhere"
     );
+}
+
+#[gpui::test]
+fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        ..AppState::default()
+    };
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/loading-repo-tab-close-test"),
+        },
+    ));
+    store_for_assert.replace_snapshot_for_test(Arc::new(state));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+
+    let repo_tab_center = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected loading repo tab to be rendered")
+        .center();
+    cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    let close_center = cx
+        .debug_bounds("repo_tab_close_1")
+        .expect("expected loading repo tab close button to be rendered")
+        .center();
+    cx.simulate_mouse_move(close_center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        close_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        close_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+
+    wait_until("loading repo tab to close", || {
+        store_for_assert.snapshot().repos.is_empty()
+    });
 }
 
 #[test]

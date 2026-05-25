@@ -12,7 +12,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{
-    CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use gix::bstr::ByteSlice as _;
 use std::collections::BTreeMap;
@@ -37,9 +37,18 @@ fn allow_file_submodule_transport(cmd: &mut Command) {
 
 impl GixRepo {
     pub(super) fn list_submodules_impl(&self) -> Result<Vec<Submodule>> {
+        self.list_submodules_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn list_submodules_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Submodule>> {
+        cancellation.check_cancelled()?;
         let repo = self.reopen_repo()?;
         let mut submodules = Vec::new();
-        collect_repo_submodules(&repo, Path::new(""), &mut submodules)?;
+        collect_repo_submodules(&repo, Path::new(""), &mut submodules, cancellation)?;
+        cancellation.check_cancelled()?;
         submodules.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(submodules)
     }
@@ -352,13 +361,16 @@ fn collect_repo_submodules(
     repo: &gix::Repository,
     prefix: &Path,
     out: &mut Vec<Submodule>,
+    cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut gitlinks = collect_gitlinks(repo)?;
+    cancellation.check_cancelled()?;
+    let mut gitlinks = collect_gitlinks(repo, cancellation)?;
     if let Some(submodules) = repo
         .submodules()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodules: {e}"))))?
     {
         for submodule in submodules {
+            cancellation.check_cancelled()?;
             let relative_path = submodule
                 .path()
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))
@@ -371,13 +383,15 @@ fn collect_repo_submodules(
             let (row, nested_repo) =
                 configured_submodule_row(repo, submodule, full_path.clone(), gitlink)?;
             out.push(row);
+            cancellation.check_cancelled()?;
             if let Some(nested_repo) = nested_repo {
-                collect_repo_submodules(&nested_repo, &full_path, out)?;
+                collect_repo_submodules(&nested_repo, &full_path, out, cancellation)?;
             }
         }
     }
 
     for (relative_path, gitlink) in gitlinks {
+        cancellation.check_cancelled()?;
         let full_path = prefix.join(&relative_path);
         out.push(Submodule {
             path: full_path.clone(),
@@ -385,8 +399,9 @@ fn collect_repo_submodules(
             checked_out_head: None,
             status: SubmoduleStatus::MissingMapping,
         });
+        cancellation.check_cancelled()?;
         if let Some(nested_repo) = open_gitlink_repo(repo, &relative_path)? {
-            collect_repo_submodules(&nested_repo, &full_path, out)?;
+            collect_repo_submodules(&nested_repo, &full_path, out, cancellation)?;
         }
     }
 
@@ -1207,7 +1222,7 @@ fn submodule_path_registered(repo: &gix::Repository, path: &Path) -> Result<bool
     if configured_submodule_path_exists(repo, path)? {
         return Ok(true);
     }
-    Ok(collect_gitlinks(repo)?.contains_key(path))
+    Ok(collect_gitlinks(repo, &CancellationToken::new())?.contains_key(path))
 }
 
 fn configured_submodule_path_exists(repo: &gix::Repository, path: &Path) -> Result<bool> {
@@ -1430,7 +1445,11 @@ fn prune_empty_module_parent_dirs(modules_root: &Path, removed_dir: &Path) -> Re
     Ok(())
 }
 
-fn collect_gitlinks(repo: &gix::Repository) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
+fn collect_gitlinks(
+    repo: &gix::Repository,
+    cancellation: &CancellationToken,
+) -> Result<BTreeMap<PathBuf, GitlinkIndexState>> {
+    cancellation.check_cancelled()?;
     let index = repo
         .index_or_load_from_head_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
@@ -1438,6 +1457,7 @@ fn collect_gitlinks(repo: &gix::Repository) -> Result<BTreeMap<PathBuf, GitlinkI
 
     let mut gitlinks: BTreeMap<PathBuf, GitlinkIndexState> = BTreeMap::new();
     for entry in index.entries() {
+        cancellation.check_cancelled()?;
         if entry.mode != gix::index::entry::Mode::COMMIT {
             continue;
         }
@@ -1763,6 +1783,8 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 mod tests {
     use super::{GixRepo, allow_file_submodule_transport, submodule_file_transport_consent_key};
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
+    use gitcomet_core::error::ErrorKind;
+    use gitcomet_core::services::CancellationToken;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
@@ -1793,6 +1815,20 @@ mod tests {
     fn open_repo(workdir: &Path) -> GixRepo {
         let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
         GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    #[test]
+    fn cancelled_recursive_submodule_listing_stops_early() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let repo = open_repo(tmp.path());
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = repo
+            .list_submodules_cancellable_impl(&cancellation)
+            .expect_err("cancelled submodule listing should fail");
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
     }
 
     #[test]

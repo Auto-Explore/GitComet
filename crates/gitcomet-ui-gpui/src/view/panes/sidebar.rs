@@ -190,6 +190,10 @@ impl SidebarPaneView {
         };
 
         let repo_path = repo.spec.workdir.clone();
+        let repo_id = repo.id;
+        let should_load_submodules_on_expand = collapse_key.as_ref().trim()
+            == branch_sidebar::submodules_section_storage_key()
+            && matches!(repo.submodules, Loadable::NotLoaded | Loadable::Error(_));
         let collapse_key = collapse_key.as_ref().trim();
         if collapse_key.is_empty() {
             return;
@@ -203,9 +207,16 @@ impl SidebarPaneView {
         if items.is_empty() {
             self.sidebar_collapsed_items_by_repo.remove(&repo_path);
         }
+        let expanded_now = self.sidebar_collapsed_items_by_repo.get(&repo_path).map_or(
+            !branch_sidebar::is_collapsed(&BTreeSet::new(), collapse_key),
+            |items| !branch_sidebar::is_collapsed(items, collapse_key),
+        );
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
         self.schedule_ui_settings_persist(cx);
+        if should_load_submodules_on_expand && expanded_now {
+            self.store.dispatch(Msg::LoadSubmodules { repo_id });
+        }
         self.dispatch_sidebar_data_request_if_needed(cx);
         cx.notify();
     }

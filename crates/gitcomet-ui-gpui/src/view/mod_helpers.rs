@@ -519,22 +519,55 @@ impl DiffTextRegion {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct DiffTextPos {
-    pub(super) visible_ix: usize,
+    pub(super) source_visible_ix: usize,
     pub(super) region: DiffTextRegion,
     pub(super) offset: usize,
 }
 
 impl DiffTextPos {
     pub(super) fn cmp_key(self) -> (usize, u8, usize) {
-        (self.visible_ix, self.region.order(), self.offset)
+        (self.source_visible_ix, self.region.order(), self.offset)
     }
 }
 
 pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
+    pub(super) source_visible_ix: usize,
+    pub(super) text_start_offset: usize,
     pub(super) text_len: usize,
+    pub(super) offset_map: Option<DiffTextOffsetMap>,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DiffTextOffsetMap {
+    pub(super) display_to_source: Arc<[usize]>,
+    pub(super) source_to_display: Arc<[usize]>,
+}
+
+impl DiffTextOffsetMap {
+    pub(super) fn display_len(&self) -> usize {
+        self.display_to_source.len().saturating_sub(1)
+    }
+
+    pub(super) fn source_len(&self) -> usize {
+        self.source_to_display.len().saturating_sub(1)
+    }
+
+    pub(super) fn source_offset_for_display(&self, offset: usize) -> usize {
+        self.display_to_source
+            .get(offset.min(self.display_len()))
+            .copied()
+            .unwrap_or_else(|| self.source_len())
+    }
+
+    pub(super) fn display_offset_for_source(&self, offset: usize) -> usize {
+        self.source_to_display
+            .get(offset.min(self.source_len()))
+            .copied()
+            .unwrap_or_else(|| self.display_len())
+    }
 }
 
 #[derive(Clone)]
@@ -3214,6 +3247,7 @@ pub struct GitCometView {
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
+    pub(super) last_repo_activation_dispatch_at: HashMap<RepoId, Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
@@ -3223,6 +3257,9 @@ pub struct GitCometView {
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
+    pub(super) diff_reveal_whitespace_chars: bool,
+    pub(super) diff_word_wrap: bool,
+    pub(super) diff_show_line_numbers: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,

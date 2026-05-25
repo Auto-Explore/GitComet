@@ -460,6 +460,7 @@ pub(super) struct InteractionState {
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
     pub(super) enter_pressed: bool,
     pub(super) escape_pressed: bool,
+    pub(super) submit_on_enter: bool,
 }
 
 impl InteractionState {
@@ -476,6 +477,7 @@ impl InteractionState {
             cursor_blink_task: None,
             enter_pressed: false,
             escape_pressed: false,
+            submit_on_enter: false,
         }
     }
 }
@@ -493,6 +495,7 @@ pub struct TextInput {
     pub(super) line_ending: &'static str,
     pub(super) style: TextInputStyle,
     pub(super) line_height_override: Option<Pixels>,
+    pub(super) vertical_padding_override: Option<Pixels>,
     pub(super) highlight: HighlightState,
     pub(super) layout: LayoutState,
     pub(super) wrap: WrapState,

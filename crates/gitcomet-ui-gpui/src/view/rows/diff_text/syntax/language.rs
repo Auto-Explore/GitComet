@@ -20,15 +20,17 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "rs" | "rust" => DiffSyntaxLanguage::Rust,
         "py" | "python" | "pyi" | "mpy" => DiffSyntaxLanguage::Python,
         "js" | "mjs" | "cjs" | "javascript" => DiffSyntaxLanguage::JavaScript,
+        "jsdoc" => DiffSyntaxLanguage::Jsdoc,
         "jsx" => DiffSyntaxLanguage::Tsx,
         "ts" | "cts" | "mts" | "typescript" => DiffSyntaxLanguage::TypeScript,
         "tsx" => DiffSyntaxLanguage::Tsx,
+        "regex" | "regexp" => DiffSyntaxLanguage::Regex,
         "go" | "golang" => DiffSyntaxLanguage::Go,
         "gomod" | "go.mod" => DiffSyntaxLanguage::GoMod,
         "gowork" | "go.work" => DiffSyntaxLanguage::GoWork,
         "c" | "h" => DiffSyntaxLanguage::C,
         "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" | "c++" | "cppm" | "ixx" | "cu" | "cuh"
-        | "ipp" | "inl" | "ccm" | "cxxm" | "c++m" | "h++" => DiffSyntaxLanguage::Cpp,
+        | "ipp" | "inl" | "ino" | "ccm" | "cxxm" | "c++m" | "h++" => DiffSyntaxLanguage::Cpp,
         "m" | "objc" | "objective-c" => DiffSyntaxLanguage::ObjectiveC,
         "cs" | "c#" | "csharp" => DiffSyntaxLanguage::CSharp,
         "fs" | "fsx" | "fsi" | "f#" | "fsharp" => DiffSyntaxLanguage::FSharp,
@@ -69,6 +71,9 @@ pub(in crate::view) fn diff_syntax_language_for_path(
 ) -> Option<DiffSyntaxLanguage> {
     let p = path.as_ref();
     let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+    if matches!(ext, "C" | "H") {
+        return Some(DiffSyntaxLanguage::Cpp);
+    }
     let ext = ascii_lowercase_for_match(ext);
     diff_syntax_language_for_identifier(ext.as_ref()).or_else(|| {
         let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -270,15 +275,12 @@ pub(super) fn tree_sitter_grammar(
         #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::C => Some((
             tree_sitter_c::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_c::HIGHLIGHT_QUERY),
+            TreesitterQueryAsset::with_injections(C_HIGHLIGHTS_QUERY, C_INJECTIONS_QUERY),
         )),
         #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Cpp => Some((
             tree_sitter_cpp::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections(
-                tree_sitter_cpp::HIGHLIGHT_QUERY,
-                CPP_INJECTIONS_QUERY,
-            ),
+            TreesitterQueryAsset::with_injections(CPP_HIGHLIGHTS_QUERY, CPP_INJECTIONS_QUERY),
         )),
         #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::ObjectiveC => Some((
@@ -397,6 +399,16 @@ pub(super) fn tree_sitter_grammar(
                 JAVASCRIPT_HIGHLIGHTS_QUERY,
                 JAVASCRIPT_INJECTIONS_QUERY,
             ),
+        )),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Jsdoc => Some((
+            tree_sitter_jsdoc::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(JSDOC_HIGHLIGHTS_QUERY),
+        )),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Regex => Some((
+            tree_sitter_regex::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(REGEX_HIGHLIGHTS_QUERY),
         )),
         #[cfg(any(test, feature = "syntax-shell"))]
         DiffSyntaxLanguage::Bash => Some((
@@ -518,6 +530,10 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Tsx => highlight_spec_entry!(Tsx),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::JavaScript => highlight_spec_entry!(JavaScript),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Jsdoc => highlight_spec_entry!(Jsdoc),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Regex => highlight_spec_entry!(Regex),
         #[cfg(any(test, feature = "syntax-shell"))]
         DiffSyntaxLanguage::Bash => highlight_spec_entry!(Bash),
         #[cfg(any(test, feature = "syntax-xml"))]

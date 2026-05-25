@@ -49,7 +49,7 @@ async-trait	0.1.89	MIT OR Apache-2.0
 async_zip	0.0.18	MIT
 atomic	0.5.3	Apache-2.0/MIT
 atomic-waker	1.1.2	Apache-2.0 OR MIT
-autocfg	1.5.0	Apache-2.0 OR MIT
+autocfg	1.5.1	Apache-2.0 OR MIT
 av-scenechange	0.14.1	MIT
 av1-grain	0.2.5	BSD-2-Clause
 avif-serialize	0.8.9	BSD-3-Clause
@@ -69,8 +69,8 @@ block-padding	0.3.3	MIT OR Apache-2.0
 block2	0.6.2	MIT
 blocking	1.6.2	Apache-2.0 OR MIT
 bstr	1.12.1	MIT OR Apache-2.0
-built	0.8.0	MIT
-bumpalo	3.20.2	MIT OR Apache-2.0
+built	0.8.1	MIT
+bumpalo	3.20.3	MIT OR Apache-2.0
 bytemuck	1.25.0	Zlib OR Apache-2.0 OR MIT
 bytemuck_derive	1.10.2	Zlib OR Apache-2.0 OR MIT
 byteorder	1.5.0	Unlicense OR MIT
@@ -135,7 +135,6 @@ crossbeam-utils	0.8.21	MIT OR Apache-2.0
 crunchy	0.2.4	MIT
 crypto-common	0.1.7	MIT OR Apache-2.0
 ctor	1.0.6	Apache-2.0 OR MIT
-cty	0.2.2	MIT OR Apache-2.0
 dashmap	6.2.1	MIT
 data-url	0.3.2	MIT OR Apache-2.0
 deflate64	0.1.12	MIT
@@ -152,7 +151,7 @@ downcast-rs	1.2.1	MIT/Apache-2.0
 dunce	1.0.5	CC0-1.0 OR MIT-0 OR Apache-2.0
 dwrote	0.11.5	MPL-2.0
 dyn-clone	1.0.20	MIT OR Apache-2.0
-either	1.15.0	MIT OR Apache-2.0
+either	1.16.0	MIT OR Apache-2.0
 embed-resource	3.0.9	MIT
 encoding_rs	0.8.35	(Apache-2.0 OR MIT) AND BSD-3-Clause
 endi	1.1.1	MIT
@@ -340,7 +339,7 @@ jni-sys	0.3.1	MIT OR Apache-2.0
 jni-sys	0.4.1	MIT OR Apache-2.0
 jni-sys-macros	0.4.1	MIT OR Apache-2.0
 jobserver	0.1.34	MIT OR Apache-2.0
-js-sys	0.3.98	MIT OR Apache-2.0
+js-sys	0.3.99	MIT OR Apache-2.0
 khronos-egl	6.0.0	MIT/Apache-2.0
 khronos_api	3.1.0	Apache-2.0
 kqueue	1.1.1	MIT
@@ -358,7 +357,7 @@ libc	0.2.186	MIT OR Apache-2.0
 libfuzzer-sys	0.4.12	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
-libmimalloc-sys	0.1.48	MIT
+libmimalloc-sys	0.1.49	MIT
 libredox	0.1.16	MIT
 libz-sys	1.1.28	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
@@ -388,7 +387,7 @@ memchr	2.8.0	Unlicense OR MIT
 memmap2	0.9.10	MIT OR Apache-2.0
 memoffset	0.9.1	MIT
 metal	0.33.0	MIT OR Apache-2.0
-mimalloc	0.1.51	MIT
+mimalloc	0.1.52	MIT
 miniz_oxide	0.8.9	MIT OR Zlib OR Apache-2.0
 mio	1.2.0	MIT
 moxcms	0.8.1	BSD-3-Clause OR Apache-2.0
@@ -537,7 +536,7 @@ serde_core	1.0.228	MIT OR Apache-2.0
 serde_derive	1.0.228	MIT OR Apache-2.0
 serde_derive_internals	0.29.1	MIT OR Apache-2.0
 serde_fmt	1.1.0	Apache-2.0 OR MIT
-serde_json	1.0.149	MIT OR Apache-2.0
+serde_json	1.0.150	MIT OR Apache-2.0
 serde_json_lenient	0.2.4	MIT/Apache-2.0
 serde_repr	0.1.20	MIT OR Apache-2.0
 serde_spanned	1.1.1	MIT OR Apache-2.0
@@ -631,6 +630,7 @@ tree-sitter-gowork	0.0.1	MIT
 tree-sitter-html	0.23.2	MIT
 tree-sitter-java	0.23.5	MIT
 tree-sitter-javascript	0.25.0	MIT
+tree-sitter-jsdoc	0.25.0	MIT
 tree-sitter-json	0.24.8	MIT
 tree-sitter-kotlin-sg	0.4.1	MIT
 tree-sitter-language	0.1.7	MIT
@@ -642,6 +642,7 @@ tree-sitter-php	0.24.2	MIT
 tree-sitter-powershell	0.26.4	MIT
 tree-sitter-python	0.25.0	MIT
 tree-sitter-r	1.2.0	MIT
+tree-sitter-regex	0.25.0	MIT
 tree-sitter-ruby	0.23.1	MIT
 tree-sitter-rust	0.24.2	MIT
 tree-sitter-scala	0.26.0	MIT
@@ -693,11 +694,11 @@ walkdir	2.5.0	Unlicense/MIT
 wasi	0.11.1+wasi-snapshot-preview1	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasip2	1.0.3+wasi-0.2.9	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasip3	0.4.0+wasi-0.3.0-rc-2026-01-06	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
-wasm-bindgen	0.2.121	MIT OR Apache-2.0
-wasm-bindgen-futures	0.4.71	MIT OR Apache-2.0
-wasm-bindgen-macro	0.2.121	MIT OR Apache-2.0
-wasm-bindgen-macro-support	0.2.121	MIT OR Apache-2.0
-wasm-bindgen-shared	0.2.121	MIT OR Apache-2.0
+wasm-bindgen	0.2.122	MIT OR Apache-2.0
+wasm-bindgen-futures	0.4.72	MIT OR Apache-2.0
+wasm-bindgen-macro	0.2.122	MIT OR Apache-2.0
+wasm-bindgen-macro-support	0.2.122	MIT OR Apache-2.0
+wasm-bindgen-shared	0.2.122	MIT OR Apache-2.0
 wasm-encoder	0.244.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasm-metadata	0.244.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 wasmparser	0.244.0	Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
@@ -709,7 +710,7 @@ wayland-protocols-plasma	0.3.12	MIT
 wayland-protocols-wlr	0.3.12	MIT
 wayland-scanner	0.31.10	MIT
 wayland-sys	0.31.11	MIT
-web-sys	0.3.98	MIT OR Apache-2.0
+web-sys	0.3.99	MIT OR Apache-2.0
 web-time	1.1.0	MIT OR Apache-2.0
 weezl	0.1.12	MIT OR Apache-2.0
 wgpu	29.0.3	MIT OR Apache-2.0

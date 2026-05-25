@@ -714,6 +714,11 @@ fn submodule_commands_reload_submodules_on_success() {
             .iter()
             .any(|e| matches!(e, Effect::LoadSubmodules { repo_id: id } if *id == repo_id))
     );
+    assert!(
+        !state.repos[0]
+            .loads_in_flight
+            .finish(crate::model::RepoLoadsInFlight::SUBMODULES)
+    );
 
     state.repos[0].set_submodules(Loadable::Ready(Vec::new()));
     let effects = reduce(
@@ -736,6 +741,11 @@ fn submodule_commands_reload_submodules_on_success() {
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadSubmodules { repo_id: id } if *id == repo_id))
+    );
+    assert!(
+        !state.repos[0]
+            .loads_in_flight
+            .finish(crate::model::RepoLoadsInFlight::SUBMODULES)
     );
 
     state.repos[0].set_submodules(Loadable::Ready(Vec::new()));

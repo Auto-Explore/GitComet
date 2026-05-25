@@ -1,6 +1,7 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use crate::view::panes::main::{
     CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
     DiffHorizontalScrollColumn,
@@ -336,6 +337,8 @@ fn diff_placeholder_row(
 fn streamed_diff_text_spec_with_syntax(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
@@ -344,6 +347,8 @@ fn streamed_diff_text_spec_with_syntax(
         diff_canvas::StreamedDiffTextPaintSpec {
             raw_text,
             query: query.clone(),
+            query_options,
+            query_matcher,
             word_ranges: Arc::from(word_ranges),
             word_color,
             syntax,
@@ -354,6 +359,8 @@ fn streamed_diff_text_spec_with_syntax(
 fn heuristic_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -363,13 +370,23 @@ fn heuristic_streamed_diff_text_spec(
         Some(language) => diff_canvas::StreamedDiffTextSyntaxSource::Heuristic { language, mode },
         None => diff_canvas::StreamedDiffTextSyntaxSource::None,
     };
-    streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
+    streamed_diff_text_spec_with_syntax(
+        raw_text,
+        query,
+        query_options,
+        query_matcher,
+        word_ranges,
+        word_color,
+        syntax,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn prepared_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -392,7 +409,15 @@ fn prepared_streamed_diff_text_spec(
         },
         (None, _) => diff_canvas::StreamedDiffTextSyntaxSource::None,
     };
-    streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
+    streamed_diff_text_spec_with_syntax(
+        raw_text,
+        query,
+        query_options,
+        query_matcher,
+        word_ranges,
+        word_color,
+        syntax,
+    )
 }
 
 fn build_file_diff_cached_styled_text(
@@ -493,14 +518,14 @@ impl MainPaneView {
         &mut self,
         key: usize,
         query: &str,
+        options: DiffSearchOptions,
         syntax_epoch: u64,
     ) -> Option<&CachedDiffStyledText> {
-        let query = query.trim();
         if query.is_empty() {
             return self.diff_text_segments_cache_get(key, syntax_epoch);
         }
 
-        self.sync_diff_text_query_overlay_cache(query);
+        self.sync_diff_text_query_overlay_cache(query, options);
         let query_generation = self.diff_text_query_cache_generation;
         if self.diff_text_query_segments_cache.len() <= key {
             self.diff_text_query_segments_cache
@@ -519,7 +544,11 @@ impl MainPaneView {
             let base = self
                 .diff_text_segments_cache_get(key, syntax_epoch)?
                 .clone();
-            let overlaid = build_cached_diff_query_overlay_styled_text(self.theme, &base, query);
+            let overlaid = build_cached_diff_query_overlay_styled_text(
+                self.theme,
+                &base,
+                self.diff_text_query_cache_matcher.as_ref()?,
+            );
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
                 syntax_epoch,
                 query_generation,
@@ -544,6 +573,10 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         if this.is_collapsed_diff_projection_active() {
@@ -561,7 +594,18 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
-                    let Some(row) = this.collapsed_visible_row(visible_ix) else {
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                    let Some(source_visible_ix) =
+                        this.diff_source_visible_ix_for_visible_ix(visible_ix)
+                    else {
+                        return diff_placeholder_row(
+                            ("collapsed_diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+                    let Some(row) = this.collapsed_visible_row(source_visible_ix) else {
                         return diff_placeholder_row(
                             ("collapsed_diff_missing", visible_ix),
                             theme,
@@ -675,6 +719,8 @@ impl MainPaneView {
                                 prepared_streamed_diff_text_spec(
                                     row.text.clone(),
                                     &query,
+                                    query_options,
+                                    query_matcher.clone(),
                                     row_word_ranges.clone(),
                                     word_color,
                                     line_language,
@@ -724,6 +770,7 @@ impl MainPaneView {
                                 this.diff_text_segments_cache_get_for_query(
                                     row_ix,
                                     query.as_ref(),
+                                    query_options,
                                     cache_epoch,
                                 )
                             };
@@ -742,7 +789,11 @@ impl MainPaneView {
                                 None,
                                 styled,
                                 streamed_spec,
+                                Some(row.text.as_ref()),
+                                reveal_whitespace_chars,
                                 false,
+                                show_line_numbers,
+                                wrap,
                                 cx,
                             )
                         }
@@ -855,6 +906,8 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return diff_placeholder_row(
@@ -911,6 +964,8 @@ impl MainPaneView {
                         prepared_streamed_diff_text_spec(
                             row.text.clone(),
                             &query,
+                            query_options,
+                            query_matcher.clone(),
                             row_word_ranges.clone(),
                             word_color,
                             line_language,
@@ -964,6 +1019,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 inline_ix,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -1017,6 +1073,7 @@ impl MainPaneView {
                         let styled = this.diff_text_segments_cache_get_for_query(
                             inline_ix,
                             query.as_ref(),
+                            query_options,
                             cache_epoch,
                         );
                         debug_assert!(
@@ -1041,7 +1098,14 @@ impl MainPaneView {
                         None,
                         styled,
                         streamed_spec,
+                        render_data
+                            .as_ref()
+                            .map(|row| row.text.as_ref())
+                            .or_else(|| Some(diff_content_text(&line))),
+                        reveal_whitespace_chars,
                         false,
+                        show_line_numbers,
+                        wrap,
                         cx,
                     )
                 })
@@ -1058,6 +1122,8 @@ impl MainPaneView {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                let show_line_numbers = this.diff_show_line_numbers;
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                 let Some(src_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                     return diff_placeholder_row(
@@ -1091,6 +1157,8 @@ impl MainPaneView {
                         heuristic_streamed_diff_text_spec(
                             crate::view::diff_utils::diff_content_line_text(&line),
                             &query,
+                            query_options,
+                            query_matcher.clone(),
                             word_ranges.to_vec(),
                             diff_line_word_color(visual_kind, theme),
                             language,
@@ -1149,7 +1217,12 @@ impl MainPaneView {
                         active_context_menu_invoker.as_ref() == Some(&invoker)
                     });
                 let styled = if should_style && streamed_spec.is_none() {
-                    this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref(), cache_epoch)
+                    this.diff_text_segments_cache_get_for_query(
+                        src_ix,
+                        query.as_ref(),
+                        query_options,
+                        cache_epoch,
+                    )
                 } else {
                     None
                 };
@@ -1167,7 +1240,15 @@ impl MainPaneView {
                     header_display,
                     styled,
                     streamed_spec,
+                    Some(if matches!(click_kind, DiffClickKind::Line) {
+                        diff_content_text(&line)
+                    } else {
+                        line.text.as_ref()
+                    }),
+                    reveal_whitespace_chars,
                     context_menu_active,
+                    show_line_numbers,
+                    wrap,
                     cx,
                 )
             })
@@ -1205,6 +1286,10 @@ impl MainPaneView {
                 DiffHorizontalScrollColumn::Primary
             });
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
@@ -1262,7 +1347,14 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
-                    let Some(visible_row) = this.collapsed_visible_row(visible_ix) else {
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                    let Some(source_visible_ix) =
+                        this.diff_source_visible_ix_for_visible_ix(visible_ix)
+                    else {
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
+                    };
+                    let Some(visible_row) = this.collapsed_visible_row(source_visible_ix) else {
                         return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                     };
 
@@ -1323,6 +1415,8 @@ impl MainPaneView {
                                         prepared_streamed_diff_text_spec(
                                             raw_text,
                                             &query,
+                                            query_options,
+                                            query_matcher.clone(),
                                             row_word_ranges.clone(),
                                             row_word_color,
                                             language,
@@ -1372,6 +1466,7 @@ impl MainPaneView {
                                     this.diff_text_segments_cache_get_for_query(
                                         key,
                                         query.as_ref(),
+                                        query_options,
                                         cache_epoch,
                                     )
                                 } else {
@@ -1392,6 +1487,9 @@ impl MainPaneView {
                                 visual_kind,
                                 styled,
                                 streamed_spec,
+                                reveal_whitespace_chars,
+                                show_line_numbers,
+                                wrap,
                                 cx,
                             )
                         }
@@ -1422,6 +1520,8 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                     let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
@@ -1437,6 +1537,8 @@ impl MainPaneView {
                             prepared_streamed_diff_text_spec(
                                 raw_text,
                                 &query,
+                                query_options,
+                                query_matcher.clone(),
                                 row_word_ranges.clone(),
                                 row_word_color,
                                 language,
@@ -1485,6 +1587,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 key,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -1512,6 +1615,9 @@ impl MainPaneView {
                         visual_kind,
                         styled,
                         streamed_spec,
+                        reveal_whitespace_chars,
+                        show_line_numbers,
+                        wrap,
                         cx,
                     )
                 })
@@ -1526,6 +1632,8 @@ impl MainPaneView {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                let show_line_numbers = this.diff_show_line_numbers;
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                 let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                     return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
@@ -1569,6 +1677,8 @@ impl MainPaneView {
                                     heuristic_streamed_diff_text_spec(
                                         raw_text,
                                         &query,
+                                        query_options,
+                                        query_matcher.clone(),
                                         word_ranges.clone(),
                                         word_color,
                                         language,
@@ -1610,6 +1720,7 @@ impl MainPaneView {
                                 this.diff_text_segments_cache_get_for_query(
                                     src_ix,
                                     query.as_ref(),
+                                    query_options,
                                     cache_epoch,
                                 )
                             } else {
@@ -1631,6 +1742,9 @@ impl MainPaneView {
                             visual_kind,
                             styled,
                             streamed_spec,
+                            reveal_whitespace_chars,
+                            show_line_numbers,
+                            wrap,
                             cx,
                         )
                     }
@@ -1685,6 +1799,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 src_ix,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -1727,7 +1842,11 @@ fn diff_row(
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
     context_menu_active: bool,
+    show_line_numbers: bool,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1849,8 +1968,17 @@ fn diff_row(
         bg = focused_diff_line_bg(theme, visual_kind);
     }
 
-    let old = line_number_string(line.old_line);
-    let new = line_number_string(line.new_line);
+    let show_row_numbers = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    let old = if show_row_numbers {
+        line_number_string(line.old_line)
+    } else {
+        SharedString::default()
+    };
+    let new = if show_row_numbers {
+        line_number_string(line.new_line)
+    } else {
+        SharedString::default()
+    };
 
     match mode {
         DiffViewMode::Inline => diff_canvas::inline_diff_line_row_canvas(
@@ -1867,6 +1995,10 @@ fn diff_row(
             gutter_fg,
             styled,
             streamed_spec,
+            raw_text,
+            reveal_whitespace_chars,
+            show_line_numbers,
+            wrap,
         ),
         DiffViewMode::Split => {
             let left_kind = if visual_kind == DiffLineKind::Remove {
@@ -1901,6 +2033,14 @@ fn diff_row(
                 DiffLineKind::Add | DiffLineKind::Context => streamed_spec,
                 _ => None,
             };
+            let left_raw_text = match line.kind {
+                DiffLineKind::Remove | DiffLineKind::Context => raw_text,
+                _ => None,
+            };
+            let right_raw_text = match line.kind {
+                DiffLineKind::Add | DiffLineKind::Context => raw_text,
+                _ => None,
+            };
 
             diff_canvas::split_diff_line_row_canvas(
                 theme,
@@ -1921,6 +2061,11 @@ fn diff_row(
                 right_text,
                 left_streamed_spec,
                 right_streamed_spec,
+                left_raw_text,
+                right_raw_text,
+                reveal_whitespace_chars,
+                show_line_numbers,
+                wrap,
             )
         }
     }
@@ -2197,6 +2342,9 @@ fn patch_split_column_row(
     visual_kind: FileDiffRowKind,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
+    reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2213,9 +2361,14 @@ fn patch_split_column_row(
         bg = focused_diff_line_bg(theme, line_kind);
     }
 
-    let line_no = match column {
-        PatchSplitColumn::Left => line_number_string(row.old_line),
-        PatchSplitColumn::Right => line_number_string(row.new_line),
+    let show_row_number = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    let line_no = if show_row_number {
+        match column {
+            PatchSplitColumn::Left => line_number_string(row.old_line),
+            PatchSplitColumn::Right => line_number_string(row.new_line),
+        }
+    } else {
+        SharedString::default()
     };
 
     diff_canvas::patch_split_column_row_canvas(
@@ -2232,6 +2385,14 @@ fn patch_split_column_row(
         line_no,
         styled,
         streamed_spec,
+        match column {
+            PatchSplitColumn::Left => row.old.as_ref(),
+            PatchSplitColumn::Right => row.new.as_ref(),
+        }
+        .map(|text| text.as_ref()),
+        reveal_whitespace_chars,
+        show_line_numbers,
+        wrap,
     )
 }
 

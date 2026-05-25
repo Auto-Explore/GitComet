@@ -1991,6 +1991,7 @@ pub struct PatchDiffSearchQueryUpdateFixture {
     stable_cache: Vec<Option<CachedDiffStyledText>>,
     query_cache: Vec<Option<PatchDiffSearchQueryCacheEntry>>,
     query_cache_query: SharedString,
+    query_cache_matcher: Option<crate::view::panes::main::diff_search::DiffSearchMatcher>,
     query_cache_generation: u64,
 }
 
@@ -2080,6 +2081,7 @@ impl PatchDiffSearchQueryUpdateFixture {
             stable_cache: vec![None; diff_rows.len()],
             query_cache: vec![None; diff_rows.len()],
             query_cache_query: SharedString::default(),
+            query_cache_matcher: None,
             query_cache_generation: 0,
             diff_rows,
             click_kinds,
@@ -2106,12 +2108,20 @@ impl PatchDiffSearchQueryUpdateFixture {
         }
         self.query_cache.fill(None);
         self.query_cache_query = SharedString::default();
+        self.query_cache_matcher = None;
         self.query_cache_generation = 0;
     }
 
     fn sync_query_cache(&mut self, query: &str) {
+        let query = query.trim();
         if self.query_cache_query.as_ref() != query {
             self.query_cache_query = query.to_string().into();
+            self.query_cache_matcher = (!query.is_empty()).then(|| {
+                crate::view::panes::main::diff_search::DiffSearchMatcher::new(
+                    query,
+                    Default::default(),
+                )
+            });
             self.query_cache_generation = self.query_cache_generation.wrapping_add(1);
         }
     }
@@ -2184,7 +2194,9 @@ impl PatchDiffSearchQueryUpdateFixture {
             {
                 let base = self.stable_cache.get(src_ix).and_then(Option::as_ref)?;
                 let overlay = super::diff_text::build_cached_diff_query_overlay_styled_text(
-                    self.theme, base, query,
+                    self.theme,
+                    base,
+                    self.query_cache_matcher.as_ref()?,
                 );
                 if let Some(slot) = self.query_cache.get_mut(src_ix) {
                     *slot = Some(PatchDiffSearchQueryCacheEntry {

@@ -167,6 +167,9 @@ pub(crate) struct SettingsWindowView {
     change_tracking_view: ChangeTrackingView,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
+    diff_reveal_whitespace_chars: bool,
+    diff_word_wrap: bool,
+    diff_show_line_numbers: bool,
     diff_scroll_sync: DiffScrollSync,
     history_show_graph: bool,
     history_show_author: bool,
@@ -514,6 +517,9 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(DiffWhitespaceMode::from_key)
             .unwrap_or_default();
+        let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
+        let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
+        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
         let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -604,6 +610,9 @@ impl SettingsWindowView {
             change_tracking_view,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_reveal_whitespace_chars,
+            diff_word_wrap,
+            diff_show_line_numbers,
             diff_scroll_sync,
             history_show_graph,
             history_show_author,
@@ -656,6 +665,9 @@ impl SettingsWindowView {
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
+            diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
+            diff_word_wrap: Some(self.diff_word_wrap),
+            diff_show_line_numbers: Some(self.diff_show_line_numbers),
             change_tracking_height: None,
             untracked_height: None,
             history_show_graph: Some(self.history_show_graph),
@@ -1055,6 +1067,45 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_whitespace_mode(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_reveal_whitespace_chars(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.diff_reveal_whitespace_chars == next {
+            return;
+        }
+
+        self.diff_reveal_whitespace_chars = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_reveal_whitespace_chars(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_word_wrap(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.diff_word_wrap == next {
+            return;
+        }
+
+        self.diff_word_wrap = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_word_wrap(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_show_line_numbers(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.diff_show_line_numbers == next {
+            return;
+        }
+
+        self.diff_show_line_numbers = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_show_line_numbers(next, cx);
         });
         cx.notify();
     }
@@ -2440,6 +2491,42 @@ impl Render for SettingsWindowView {
                             this.set_diff_whitespace_mode(this.diff_whitespace_mode.toggled(), cx);
                         }));
 
+                    let diff_reveal_whitespace_chars_row = self
+                        .toggle_row(
+                            "settings_window_diff_reveal_whitespace_chars",
+                            "Reveal whitespace characters",
+                            self.diff_reveal_whitespace_chars,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_diff_reveal_whitespace_chars(
+                                !this.diff_reveal_whitespace_chars,
+                                cx,
+                            );
+                        }));
+
+                    let diff_word_wrap_row = self
+                        .toggle_row(
+                            "settings_window_diff_word_wrap",
+                            "Word wrap",
+                            self.diff_word_wrap,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_diff_word_wrap(!this.diff_word_wrap, cx);
+                        }));
+
+                    let diff_show_line_numbers_row = self
+                        .toggle_row(
+                            "settings_window_diff_show_line_numbers",
+                            "Show line numbers",
+                            self.diff_show_line_numbers,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_diff_show_line_numbers(!this.diff_show_line_numbers, cx);
+                        }));
+
                     let history_default_mode_row = self
                         .summary_row(
                             "settings_window_git_log_default_mode",
@@ -2854,7 +2941,11 @@ impl Render for SettingsWindowView {
                         ));
                     }
 
-                    diff_card = diff_card.child(diff_whitespace_mode_row);
+                    diff_card = diff_card
+                        .child(diff_whitespace_mode_row)
+                        .child(diff_reveal_whitespace_chars_row)
+                        .child(diff_word_wrap_row)
+                        .child(diff_show_line_numbers_row);
 
                     diff_card = diff_card.child(diff_scroll_sync_row);
 
@@ -3058,7 +3149,7 @@ impl Render for SettingsWindowView {
                                         "settings_window_git_log_tag_fetch_mode_activation",
                                         "On repository activation",
                                         Some(
-                                            "Fetch local tags when a repository becomes active."
+                                            "Fetch local and remote tags in the background when a repository becomes active."
                                                 .into(),
                                         ),
                                         self.history_tag_fetch_mode
@@ -3710,6 +3801,11 @@ mod tests {
     use gpui::{Modifiers, ScrollDelta, ScrollWheelEvent};
     use std::ops::Deref;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const SESSION_FILE_ENV: &str = "GITCOMET_SESSION_FILE";
+    const DIFF_DEFAULTS_SESSION_SUBTEST_ENV: &str = "GITCOMET_DIFF_DEFAULTS_SESSION_SUBTEST";
 
     struct TestBackend;
 
@@ -3719,6 +3815,36 @@ mod tests {
                 "Test backend does not open repositories",
             )))
         }
+    }
+
+    fn unique_session_file(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gitcomet-settings-window-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create settings session temp dir");
+        dir.join("session.json")
+    }
+
+    fn run_subtest_with_session_env(filter: &str, session_file: &Path) {
+        let current_exe = std::env::current_exe().expect("locate current test binary");
+        let output = Command::new(current_exe)
+            .arg(filter)
+            .arg("--nocapture")
+            .env(SESSION_FILE_ENV, session_file)
+            .env(DIFF_DEFAULTS_SESSION_SUBTEST_ENV, "1")
+            .output()
+            .expect("spawn settings subtest process");
+        assert!(
+            output.status.success(),
+            "subtest {filter} failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn assert_debug_bounds_within(
@@ -5401,6 +5527,147 @@ mod tests {
                     .read_with(app, |settings, _cx| settings.diff_whitespace_mode)
                     .expect("settings window should remain readable"),
                 next_mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn diff_render_settings_update_main_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_diff_reveal_whitespace_chars(true, cx);
+                        settings.set_diff_word_wrap(true, cx);
+                        settings.set_diff_show_line_numbers(false, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "diff render setting updates should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::diff_reveal_whitespace_chars(
+                main_view.read(app)
+            ));
+            assert!(crate::view::test_support::diff_word_wrap(
+                main_view.read(app)
+            ));
+            assert!(!crate::view::test_support::diff_show_line_numbers(
+                main_view.read(app)
+            ));
+            assert!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_reveal_whitespace_chars)
+                    .expect("settings window should remain readable")
+            );
+            assert!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_word_wrap)
+                    .expect("settings window should remain readable")
+            );
+            assert!(
+                !settings_window
+                    .read_with(app, |settings, _cx| settings.diff_show_line_numbers)
+                    .expect("settings window should remain readable")
+            );
+        });
+    }
+
+    #[test]
+    fn diff_render_defaults_from_session_wrapper() {
+        let session_file = unique_session_file("diff-defaults");
+        gitcomet_state::session::persist_ui_settings_to_path(
+            gitcomet_state::session::UiSettings {
+                diff_reveal_whitespace_chars: Some(true),
+                diff_word_wrap: Some(true),
+                diff_show_line_numbers: Some(false),
+                ..Default::default()
+            },
+            &session_file,
+        )
+        .expect("seed diff defaults session");
+
+        run_subtest_with_session_env(
+            "diff_render_defaults_from_session_subprocess",
+            &session_file,
+        );
+    }
+
+    #[gpui::test]
+    fn diff_render_defaults_from_session_subprocess(cx: &mut gpui::TestAppContext) {
+        if std::env::var_os(DIFF_DEFAULTS_SESSION_SUBTEST_ENV).is_none() {
+            return;
+        }
+
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|_window, app| {
+            let view = main_view.read(app);
+            assert!(crate::view::test_support::diff_reveal_whitespace_chars(
+                view
+            ));
+            assert!(crate::view::test_support::diff_word_wrap(view));
+            assert!(!crate::view::test_support::diff_show_line_numbers(view));
+            assert!(view.main_pane.read(app).reveal_whitespace_chars);
+            assert!(view.main_pane.read(app).diff_word_wrap);
+            assert!(!view.main_pane.read(app).diff_show_line_numbers);
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            assert!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_reveal_whitespace_chars)
+                    .expect("settings window should remain readable")
+            );
+            assert!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.diff_word_wrap)
+                    .expect("settings window should remain readable")
+            );
+            assert!(
+                !settings_window
+                    .read_with(app, |settings, _cx| settings.diff_show_line_numbers)
+                    .expect("settings window should remain readable")
             );
         });
     }

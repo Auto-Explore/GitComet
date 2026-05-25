@@ -1,10 +1,11 @@
 use super::GixRepo;
 use crate::util::{
-    git_workdir_cmd_for, run_git_capture, run_git_with_output, validate_ref_like_arg,
+    git_workdir_cmd_for, run_git_capture, run_git_capture_cancellable, run_git_with_output,
+    validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, RemoteTag, Tag};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{CommandOutput, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet as HashSet;
 use std::str;
@@ -60,6 +61,14 @@ fn delete_local_tag(repo: &gix::Repository, name: &str) -> Result<()> {
 
 impl GixRepo {
     pub(super) fn list_tags_impl(&self) -> Result<Vec<Tag>> {
+        self.list_tags_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn list_tags_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Tag>> {
+        cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
 
         let refs = repo
@@ -74,6 +83,7 @@ impl GixRepo {
 
         let mut tags = Vec::new();
         for reference in iter {
+            cancellation.check_cancelled()?;
             let reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let name = reference.name().shorten().to_str_lossy().into_owned();
@@ -81,31 +91,50 @@ impl GixRepo {
             tags.push(Tag { name, target });
         }
 
+        cancellation.check_cancelled()?;
         tags.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(tags)
     }
 
     pub(super) fn list_remote_tags_impl(&self) -> Result<Vec<RemoteTag>> {
+        self.list_remote_tags_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn list_remote_tags_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteTag>> {
+        cancellation.check_cancelled()?;
         let remotes = self.list_remotes_impl()?;
         let workdir = self.spec.workdir.clone();
         let mut handles = Vec::new();
 
         for remote in remotes {
+            cancellation.check_cancelled()?;
             if validate_ref_like_arg(&remote.name, "remote name").is_err() {
                 continue;
             }
 
             let workdir = workdir.clone();
             let remote_name = remote.name;
+            let cancellation = cancellation.clone();
             handles.push(thread::spawn(move || {
+                if cancellation.is_cancelled() {
+                    return None;
+                }
                 let mut cmd = git_workdir_cmd_for(&workdir);
                 cmd.arg("ls-remote")
                     .arg("--tags")
                     .arg("--refs")
                     .arg("--")
                     .arg(&remote_name);
-                match run_git_capture(cmd, &format!("git ls-remote --tags --refs {remote_name}")) {
+                match run_git_capture_cancellable(
+                    cmd,
+                    &format!("git ls-remote --tags --refs {remote_name}"),
+                    &cancellation,
+                ) {
                     Ok(output) => Some(parse_ls_remote_tags(&output, &remote_name)),
+                    Err(error) if matches!(error.kind(), ErrorKind::Cancelled) => None,
                     // Remote tag presence is best-effort metadata for UI menus.
                     // If one remote is unavailable, keep partial results from others.
                     Err(_) => None,
@@ -114,21 +143,30 @@ impl GixRepo {
         }
 
         let mut remote_tags = Vec::new();
+        let mut cancelled = false;
         for handle in handles {
             let Ok(maybe_tags) = handle.join() else {
                 continue;
             };
+            if cancellation.is_cancelled() {
+                cancelled = true;
+                continue;
+            }
             if let Some(mut tags) = maybe_tags {
                 remote_tags.append(&mut tags);
             }
         }
 
+        if cancelled {
+            return Err(Error::new(ErrorKind::Cancelled));
+        }
         remote_tags.sort_by(|a, b| {
             a.remote
                 .cmp(&b.remote)
                 .then_with(|| a.name.cmp(&b.name))
                 .then_with(|| a.target.as_ref().cmp(b.target.as_ref()))
         });
+        cancellation.check_cancelled()?;
         Ok(remote_tags)
     }
 
@@ -273,8 +311,34 @@ impl GixRepo {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
+    use super::{GixRepo, local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
+    use gitcomet_core::error::ErrorKind;
+    use gitcomet_core::services::CancellationToken;
     use rustc_hash::FxHashSet as HashSet;
+    use std::path::Path;
+    use std::process::Command;
+
+    fn run_git(workdir: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(args)
+            .output()
+            .expect("git command to run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn open_repo(workdir: &Path) -> GixRepo {
+        run_git(workdir, &["init"]);
+        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
 
     #[test]
     fn parse_ls_remote_tag_names_skips_invalid_lines() {
@@ -313,5 +377,31 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/hotfix\n";
             .collect();
         let prune = local_tags_to_prune(local_output, &remote_tags);
         assert_eq!(prune, vec!["v1.1.0".to_string()]);
+    }
+
+    #[test]
+    fn cancelled_tag_listing_stops_early() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = open_repo(tmp.path());
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = repo
+            .list_tags_cancellable_impl(&cancellation)
+            .expect_err("cancelled tag listing should fail");
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+    }
+
+    #[test]
+    fn cancelled_remote_tag_listing_stops_early() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = open_repo(tmp.path());
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+
+        let error = repo
+            .list_remote_tags_cancellable_impl(&cancellation)
+            .expect_err("cancelled remote tag listing should fail");
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
     }
 }

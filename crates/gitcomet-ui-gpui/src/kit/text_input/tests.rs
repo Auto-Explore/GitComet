@@ -999,6 +999,44 @@ fn multiline_shift_enter_inserts_a_line_break(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn multiline_submit_on_enter_keeps_shift_enter_as_line_break(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_submit_on_enter(true);
+            input.set_text("alpha", cx);
+
+            input.enter(&Enter, window, cx);
+
+            assert_eq!(input.text(), "alpha");
+            assert!(
+                input.take_enter_pressed(),
+                "enter should submit multiline inputs when submit-on-enter is enabled"
+            );
+
+            let expected = format!("alpha{}", input.line_ending);
+            input.shift_enter(&ShiftEnter, window, cx);
+
+            assert_eq!(input.text(), expected);
+            assert!(
+                !input.take_enter_pressed(),
+                "shift-enter should still insert a newline"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn single_line_shift_enter_is_a_noop(cx: &mut gpui::TestAppContext) {
     let (input, cx) = cx.add_window_view(|window, cx| {
         TextInput::new(

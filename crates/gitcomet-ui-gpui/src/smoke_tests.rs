@@ -1496,6 +1496,38 @@ fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
     }
 }
 
+fn wait_for_initial_worktrees_load_to_settle(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    repo_id: RepoId,
+) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        sync_view_for_tests(cx, view);
+
+        let settled = store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.sidebar_data_request.worktrees
+                    && !matches!(repo.worktrees, Loadable::Loading | Loadable::NotLoaded)
+            });
+        if settled {
+            return;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for initial worktrees load to settle");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
 fn wait_until(description: &str, ready: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -2030,6 +2062,7 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
         restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &_view, repo_id);
 
     let linked_repo = base.join("repo-feature");
     store_for_test.dispatch(Msg::Internal(
@@ -2090,6 +2123,7 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
 
     store_for_test.dispatch(Msg::Internal(
         gitcomet_state::msg::InternalMsg::BranchesLoaded {
@@ -2171,6 +2205,7 @@ fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAp
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
 
     let branch = "feature/super-long-worktree-branch-name-that-needs-truncation-to-fit-the-sidebar"
         .to_string();
@@ -2225,6 +2260,7 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
         restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

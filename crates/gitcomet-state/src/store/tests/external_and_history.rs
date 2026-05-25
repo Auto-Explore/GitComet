@@ -19,6 +19,65 @@ fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
 }
 
 #[test]
+fn repo_activated_is_reducer_noop_by_itself() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoActivated { repo_id },
+    );
+
+    assert!(effects.is_empty());
+    assert!(!state.repos[0].status.is_loading());
+    assert!(!state.repos[0].log.is_loading());
+}
+
+#[test]
+fn repo_load_trace_names_repo_activation_and_refresh_messages() {
+    let repo_id = RepoId(1);
+
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::RepoActivated { repo_id }),
+        "RepoActivated"
+    );
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        }),
+        "RepoExternallyChanged"
+    );
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::ReloadRepo { repo_id }),
+        "ReloadRepo"
+    );
+    assert_eq!(
+        repo_load_trace::msg_repo_id(&Msg::RepoActivated { repo_id }),
+        Some(repo_id)
+    );
+    assert_eq!(
+        repo_load_trace::msg_external_change(&Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        }),
+        Some(crate::msg::RepoExternalChange::GitState)
+    );
+}
+
+#[test]
 fn external_worktree_change_refreshes_status_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -715,6 +774,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    state.repos[0].set_open(Loadable::Ready(()));
     state.active_repo = Some(RepoId(1));
 
     let effects = reduce(
@@ -728,7 +788,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
+    assert!(repo_state.remote_tags.is_loading());
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
@@ -737,13 +797,28 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.log.is_loading());
     assert!(!repo_state.history_state.log_loading_more);
     assert!(repo_state.merge_commit_message.is_loading());
+    assert!(repo_state.submodules.is_loading());
     assert!(has_status_refresh_effects(&effects, RepoId(1)));
     assert!(
-        !effects.iter().any(|effect| matches!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+        )),
+        "tags should auto-load in the background on repo reload"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
             effect,
             Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
         )),
-        "remote tags should lazy-load from tag UI, not repo reload"
+        "remote tags should auto-load in the background on repo reload"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmodules { repo_id } if *repo_id == RepoId(1)
+        )),
+        "submodules should auto-load in the background on repo reload"
     );
 }
 

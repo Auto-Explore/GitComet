@@ -914,10 +914,9 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
-                    let show_submodules_spinner = this.active_repo().is_some_and(|r| {
-                        matches!(r.submodules, Loadable::Loading)
-                            || (!collapsed && matches!(r.submodules, Loadable::NotLoaded))
-                    });
+                    let show_submodules_spinner = this
+                        .active_repo()
+                        .is_some_and(|r| matches!(r.submodules, Loadable::Loading));
                     let context_menu_invoker: SharedString =
                         format!("submodules_section_menu_{}", repo_id.0).into();
                     let context_menu_active =
@@ -1004,14 +1003,41 @@ impl SidebarPaneView {
                         )
                         .into_any_element()
                 }
-                BranchSidebarRow::SubmodulePlaceholder { message } => div()
+                BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
                     .id(("submodule_placeholder", ix))
-                    .h(scaled_px(22.0))
+                    .h(scaled_px(24.0))
                     .w_full()
-                    .px_2()
+                    .pl_2()
+                    .pr_1()
+                    .flex()
+                    .items_center()
+                    .gap(scaled_px(6.0))
                     .text_sm()
                     .text_color(theme.colors.text_muted)
-                    .child(message)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(message),
+                    )
+                    .when(can_load, |row| {
+                        row.child(
+                            components::Button::new(
+                                format!("submodule_placeholder_load_{}", repo_id.0),
+                                "Load",
+                            )
+                            .borderless()
+                            .on_click(
+                                theme,
+                                cx,
+                                move |this, _e, _window, _cx| {
+                                    this.store.dispatch(Msg::LoadSubmodules { repo_id });
+                                },
+                            ),
+                        )
+                    })
                     .into_any_element(),
                 BranchSidebarRow::SubmoduleItem { path } => {
                     let path_for_open = path.clone();

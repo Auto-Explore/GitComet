@@ -805,6 +805,7 @@ fn open_repo_fixture_reports_structural_metrics() {
     assert_eq!(metrics.remotes, 2);
     assert_eq!(metrics.worktrees, 0);
     assert_eq!(metrics.submodules, 0);
+    assert_eq!(metrics.tags, 32);
     assert_eq!(metrics.graph_rows, 500);
     assert!(metrics.sidebar_rows >= 60);
     assert!(metrics.max_graph_lanes >= 1);
@@ -812,15 +813,16 @@ fn open_repo_fixture_reports_structural_metrics() {
 
 #[test]
 fn open_repo_fixture_reports_extreme_metadata_fanout_metrics() {
-    let fixture = OpenRepoFixture::with_sidebar_fanout(1_000, 1_000, 10_000, 1, 5_000, 1_000);
+    let fixture = OpenRepoFixture::with_metadata_fanout(1_000, 1_000, 10_000, 1, 1, 259, 37_610);
     let (hash, metrics) = fixture.run_with_metrics();
     assert_ne!(hash, 0);
     assert_eq!(metrics.commit_count, 1_000);
     assert_eq!(metrics.local_branches, 1_000);
     assert_eq!(metrics.remote_branches, 10_000);
     assert_eq!(metrics.remotes, 1);
-    assert_eq!(metrics.worktrees, 5_000);
-    assert_eq!(metrics.submodules, 1_000);
+    assert_eq!(metrics.worktrees, 1);
+    assert_eq!(metrics.submodules, 259);
+    assert_eq!(metrics.tags, 37_610);
     assert_eq!(metrics.graph_rows, 1_000);
     // Initial open keeps Worktrees and Submodules collapsed, so their section
     // headers appear but their rows do not.

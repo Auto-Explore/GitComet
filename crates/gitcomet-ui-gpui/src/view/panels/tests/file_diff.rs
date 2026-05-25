@@ -2,6 +2,7 @@
 #![allow(clippy::type_complexity)]
 
 use super::*;
+use crate::view::panes::main::diff_cache::PatchInlineVisibleMap;
 use std::path::PathBuf;
 
 fn fixture_repo_root() -> std::path::PathBuf {
@@ -339,6 +340,31 @@ index 1111111..2222222 100644
     (unified, old_text, new_text)
 }
 
+fn build_full_diff_word_wrap_navigation_fixture_texts() -> (String, String, String) {
+    let old_one = format!("old first {}", "left_payload_".repeat(160));
+    let new_one = format!("new first {}", "right_payload_".repeat(160));
+    let old_two = "old second changed row".to_string();
+    let new_two = "new second changed row".to_string();
+    let old_text = format!("alpha\n{old_one}\n{old_two}\nomega\n");
+    let new_text = format!("alpha\n{new_one}\n{new_two}\nomega\n");
+    let unified = format!(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,4 @@
+ alpha
+-{old_one}
+-{old_two}
++{new_one}
++{new_two}
+ omega
+"
+    );
+    (unified, old_text, new_text)
+}
+
 fn build_collapsed_diff_trailing_hscroll_fixture_texts() -> (String, String, String) {
     let old_lines = (1..=70usize)
         .map(|line| {
@@ -436,6 +462,49 @@ fn build_collapsed_diff_short_gap_fixture_texts() -> (String, String, String) {
         (20, "old value 20", "new value 20"),
         (34, "old value 34", "new value 34"),
     ])
+}
+
+fn build_collapsed_diff_word_wrap_navigation_fixture_texts() -> (String, String, String) {
+    let total_lines = 100usize;
+    let changes = [20usize, 60usize];
+    let mut old_lines = (1..=total_lines)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>();
+    let mut new_lines = old_lines.clone();
+
+    old_lines[changes[0] - 1] = format!("old value 20 {}", "left_payload_".repeat(160));
+    new_lines[changes[0] - 1] = format!("new value 20 {}", "right_payload_".repeat(160));
+    old_lines[changes[1] - 1] = "old value 60".to_string();
+    new_lines[changes[1] - 1] = "new value 60".to_string();
+
+    let old_text = format!("{}\n", old_lines.join("\n"));
+    let new_text = format!("{}\n", new_lines.join("\n"));
+    let mut unified = String::from(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+",
+    );
+    for line in changes {
+        let context_start = line.saturating_sub(3).max(1);
+        let context_end = (line + 3).min(total_lines);
+        let context_count = context_end.saturating_sub(context_start).saturating_add(1);
+        unified.push_str(&format!(
+            "@@ -{context_start},{context_count} +{context_start},{context_count} @@\n"
+        ));
+        for current_line in context_start..=context_end {
+            if current_line == line {
+                unified.push_str(&format!("-{}\n", old_lines[current_line - 1]));
+                unified.push_str(&format!("+{}\n", new_lines[current_line - 1]));
+            } else {
+                unified.push_str(&format!(" {}\n", old_lines[current_line - 1]));
+            }
+        }
+    }
+
+    (unified, old_text, new_text)
 }
 
 fn activate_collapsed_diff_fixture(
@@ -732,8 +801,12 @@ fn collapsed_file_row_visible_ix(
 ) -> usize {
     (0..pane.diff_visible_len())
         .find(|&visible_ix| {
+            let Some(source_visible_ix) = pane.diff_source_visible_ix_for_visible_ix(visible_ix)
+            else {
+                return false;
+            };
             matches!(
-                pane.collapsed_visible_row(visible_ix),
+                pane.collapsed_visible_row(source_visible_ix),
                 Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { row_ix })
                     if row_ix == target_row_ix
             )
@@ -1625,6 +1698,1032 @@ fn diff_content_mode_main_pane_persist_path_does_not_reenter_main_pane_updates(
 }
 
 #[gpui::test]
+fn diff_word_wrap_toggles_full_file_diff_wrapped_row_path(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(520.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    let long_new_line = "new line with enough text to exercise the soft wrap render path softwrapneedle abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,2 +1,2 @@
+ first line
+-old line
++new line with enough text to exercise the soft wrap render path softwrapneedle abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz
+"
+    .to_string();
+    let old_text = "first line\nold line\n".to_string();
+    let new_text = format!("first line\n{long_new_line}\n");
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(187),
+        "word_wrap_full_file_diff",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(false, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full file diff ready for word wrap toggle",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.is_file_diff_view_active()
+                && pane.diff_visible_len() > 0
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} file_active={} visible_len={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active(),
+                pane.diff_visible_len(),
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_word_wrap_scroll").is_none(),
+        "word wrap off should render the file diff row list"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    cx.update(|_window, app| {
+        assert!(crate::view::test_support::diff_word_wrap(view.read(app)));
+        assert!(view.read(app).main_pane.read(app).diff_word_wrap);
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_word_wrap_scroll").is_none(),
+        "word wrap on should stay on the normal highlighted diff row renderer"
+    );
+    assert!(
+        cx.debug_bounds("diff_hscrollbar").is_none(),
+        "word wrap on should suppress the horizontal scrollbar"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_visible_len() > pane.file_diff_inline_row_len(),
+            "word wrap should expand long logical rows into continuation visual rows"
+        );
+        assert!(
+            pane.diff_wrap_visible_rows
+                .iter()
+                .any(|row| row.wrap_ix > 0),
+            "wrapped continuation rows should be tracked separately from logical rows"
+        );
+    });
+
+    let (_continuation_ix, source_visible_ix, continuation_start, continuation_text) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            pane.diff_wrap_visible_rows
+                .iter()
+                .enumerate()
+                .find_map(|(visible_ix, visual)| {
+                    if visual.wrap_ix == 0 {
+                        return None;
+                    }
+                    let row_ix = pane.diff_mapped_ix_for_visible_ix(visible_ix)?;
+                    let row = pane.file_diff_inline_render_data(row_ix)?;
+                    if !row.text.as_ref().contains("softwrapneedle") {
+                        return None;
+                    }
+                    let text = pane.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                    let full_text = pane.diff_text_full_line_for_region(
+                        visual.source_visible_ix,
+                        DiffTextRegion::Inline,
+                    );
+                    let start = full_text.as_ref().find(text.as_ref())?;
+                    (!text.is_empty() && !row.text.as_ref().starts_with(text.as_ref())).then_some((
+                        visible_ix,
+                        visual.source_visible_ix,
+                        start,
+                        text.to_string(),
+                    ))
+                })
+                .expect(
+                    "expected a non-prefix wrapped continuation row for the long file-diff line",
+                )
+        });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: continuation_start,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: continuation_start + continuation_text.len(),
+            });
+            pane.copy_selected_diff_text_to_clipboard(cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(continuation_text.clone()),
+        "copying a wrapped continuation row should copy the visible slice, not the start of the logical line"
+    );
+
+    let full_wrapped_line = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let full = pane
+            .diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline)
+            .to_string();
+        assert!(
+            pane.diff_wrap_visible_rows
+                .iter()
+                .filter(|row| row.source_visible_ix == source_visible_ix)
+                .count()
+                > 1,
+            "expected selected source row to be split across wrapped visual rows"
+        );
+        full
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: full_wrapped_line.len(),
+            });
+            pane.copy_selected_diff_text_to_clipboard(cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(full_wrapped_line.clone()),
+        "copying across wrapped visual rows should not insert soft-wrap newlines"
+    );
+    assert!(
+        !full_wrapped_line.contains('\n'),
+        "fixture line should be a single logical source line"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = "softwrapneedle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("softwrapneedle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+    rows::clear_diff_paint_log_for_tests();
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "search should match only the wrapped visual row containing the query"
+        );
+        let match_ix = pane.diff_search_matches[0];
+        assert!(
+            pane.diff_text_line_for_region(match_ix, DiffTextRegion::Inline)
+                .as_ref()
+                .contains("softwrapneedle"),
+            "the active search match should point at the wrapped slice that contains the query"
+        );
+    });
+
+    let boundary_query_start = continuation_start.saturating_sub(8);
+    let boundary_query_end = (continuation_start + 8).min(full_wrapped_line.len());
+    assert!(
+        boundary_query_start < continuation_start && continuation_start < boundary_query_end,
+        "expected enough text around the soft-wrap boundary"
+    );
+    let soft_wrap_boundary_literal_query = format!(
+        "{}{}",
+        &full_wrapped_line[boundary_query_start..continuation_start],
+        &full_wrapped_line[continuation_start..boundary_query_end]
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = soft_wrap_boundary_literal_query.clone().into();
+                let query_for_input = soft_wrap_boundary_literal_query.clone();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query_for_input, cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "literal search should match across a soft-wrap boundary in the source row"
+        );
+        let match_ix = pane.diff_search_matches[0];
+        assert_eq!(
+            pane.diff_wrap_visible_rows
+                .get(match_ix)
+                .map(|row| row.source_visible_ix),
+            Some(source_visible_ix),
+            "wrapped boundary matches should map back to the source row"
+        );
+    });
+
+    let soft_wrap_boundary_query = format!(
+        "{}\n{}",
+        &full_wrapped_line[boundary_query_start..continuation_start],
+        &full_wrapped_line[continuation_start..boundary_query_end]
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = soft_wrap_boundary_query.clone().into();
+                let query_for_input = soft_wrap_boundary_query.clone();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text(query_for_input, cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "search should not treat a soft-wrap boundary as a real newline"
+        );
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "softwrapneedle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("softwrapneedle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+
+    let paint_log = rows::diff_paint_log_for_tests();
+    let highlighted_text = paint_log
+        .iter()
+        .flat_map(|record| {
+            record
+                .highlights
+                .iter()
+                .filter(|(_, _, background)| background.is_some())
+                .filter_map(|(range, _, _)| record.text.as_ref().get(range.clone()))
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        highlighted_text.contains("softwrapneedle"),
+        "wrapped row rendering should preserve search highlighting"
+    );
+
+    let key_before_resize = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_wrap_visible_cache_key
+    });
+    cx.simulate_resize(gpui::size(px(760.0), px(520.0)));
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_ne!(
+            pane.diff_wrap_visible_cache_key, key_before_resize,
+            "resizing should rebuild the wrap projection key"
+        );
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "search matches should be recomputed in the resized wrapped-row index space"
+        );
+        let match_ix = pane.diff_search_matches[0];
+        assert!(
+            match_ix < pane.diff_visible_len()
+                && pane
+                    .diff_text_line_for_region(match_ix, DiffTextRegion::Inline)
+                    .as_ref()
+                    .contains("softwrapneedle"),
+            "resized search match should still point at the visual row containing the query"
+        );
+        assert!(
+            !pane.diff_scrollbar_markers_cache.is_empty(),
+            "scrollbar markers should be recomputed after the wrap projection changes"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(false, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("diff_word_wrap_scroll").is_none(),
+        "turning word wrap off should restore the file diff row list"
+    );
+}
+
+#[gpui::test]
+fn split_diff_word_wrap_copy_omits_soft_wrap_newlines(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(860.0), px(460.0)));
+
+    let (unified, old_text, new_text) = build_full_diff_word_wrap_navigation_fixture_texts();
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(2192),
+        "split_word_wrap_copy_real_content",
+        PathBuf::from("src/lib.rs"),
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                cx.notify();
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split file diff ready for word-wrap copy",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.is_file_diff_view_active()
+                && pane.diff_visible_len() > 0
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} file_active={} visible_len={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active(),
+                pane.diff_visible_len(),
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    let (source_visible_ix, full_wrapped_line, next_source_visible_ix, next_source_line) = cx
+        .update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            let (source_visible_ix, full_wrapped_line) = pane
+                .diff_wrap_visible_rows
+                .iter()
+                .map(|row| row.source_visible_ix)
+                .find_map(|source_visible_ix| {
+                    let full = pane
+                        .diff_text_full_line_for_region(
+                            source_visible_ix,
+                            DiffTextRegion::SplitRight,
+                        )
+                        .to_string();
+                    if !full.contains("right_payload_") {
+                        return None;
+                    }
+                    let wrap_row_count = pane
+                        .diff_wrap_visible_rows
+                        .iter()
+                        .filter(|row| row.source_visible_ix == source_visible_ix)
+                        .count();
+                    (wrap_row_count > 1).then_some((source_visible_ix, full))
+                })
+                .expect("expected a wrapped split-right source row");
+            let (next_source_visible_ix, next_source_line) = pane
+                .diff_wrap_visible_rows
+                .iter()
+                .map(|row| row.source_visible_ix)
+                .find_map(|ix| {
+                    if ix <= source_visible_ix {
+                        return None;
+                    }
+                    let text = pane
+                        .diff_text_full_line_for_region(ix, DiffTextRegion::SplitRight)
+                        .to_string();
+                    (!text.is_empty()).then_some((ix, text))
+                })
+                .expect("expected a following real split-right source row");
+            (
+                source_visible_ix,
+                full_wrapped_line,
+                next_source_visible_ix,
+                next_source_line,
+            )
+        });
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::SplitRight,
+                offset: 0,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::SplitRight,
+                offset: full_wrapped_line.len(),
+            });
+            pane.copy_selected_diff_text_to_clipboard(cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(full_wrapped_line.clone()),
+        "split diff copy should not insert soft-wrap newlines"
+    );
+    assert!(!full_wrapped_line.contains('\n'));
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::SplitRight,
+                offset: 0,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix: next_source_visible_ix,
+                region: DiffTextRegion::SplitRight,
+                offset: next_source_line.len(),
+            });
+            pane.copy_selected_diff_text_to_clipboard(cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(format!("{full_wrapped_line}\n{next_source_line}")),
+        "copying real source rows should still preserve real line breaks"
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_word_wrap_continuation_rows_use_source_visible_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(820.0), px(420.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(188);
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_word_wrap_source_row",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (continuation_ix, source_visible_ix, expected_text) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_wrap_visible_rows
+            .iter()
+            .enumerate()
+            .find_map(|(visible_ix, visual)| {
+                if visual.wrap_ix == 0 {
+                    return None;
+                }
+                let Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow { row_ix }) =
+                    pane.collapsed_visible_row(visual.source_visible_ix)
+                else {
+                    return None;
+                };
+                let row = pane.file_diff_inline_render_data(row_ix)?;
+                if !row.text.as_ref().contains("right_payload_") {
+                    return None;
+                }
+                let text = pane.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                text.as_ref().contains("right_payload_").then_some((
+                    visible_ix,
+                    visual.source_visible_ix,
+                    text.to_string(),
+                ))
+            })
+            .expect("expected a wrapped collapsed file row continuation")
+    });
+    assert_ne!(
+        continuation_ix, source_visible_ix,
+        "the regression needs a continuation row whose visual index differs from the source row"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(continuation_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    rows::clear_diff_paint_log_for_tests();
+    draw_and_drain_test_window(cx);
+    let record = rows::diff_paint_log_for_tests()
+        .into_iter()
+        .find(|record| {
+            record.visible_ix == continuation_ix && record.region == DiffTextRegion::Inline
+        })
+        .unwrap_or_else(|| {
+            panic!("expected paint record for wrapped continuation {continuation_ix}")
+        });
+    assert_eq!(
+        record.text.as_ref(),
+        expected_text,
+        "collapsed wrapped continuation rows should render the source row slice, not the next collapsed logical row"
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_word_wrap_copy_uses_continuation_slice(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(820.0), px(420.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(190);
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_word_wrap_copy_slice",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (continuation_ix, source_visible_ix, selection_start, expected_text) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            pane.diff_wrap_visible_rows
+                .iter()
+                .enumerate()
+                .find_map(|(visible_ix, visual)| {
+                    if visual.wrap_ix == 0 {
+                        return None;
+                    }
+                    let Some(crate::view::panes::main::CollapsedDiffVisibleRow::FileRow {
+                        row_ix,
+                    }) = pane.collapsed_visible_row(visual.source_visible_ix)
+                    else {
+                        return None;
+                    };
+                    let row = pane.file_diff_inline_render_data(row_ix)?;
+                    if !row.text.as_ref().contains("right_payload_") {
+                        return None;
+                    }
+                    let text = pane.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                    if !text.as_ref().contains("right_payload_") {
+                        return None;
+                    }
+                    let (_, range) = pane
+                        .diff_text_visual_source_range_for_region(visible_ix, DiffTextRegion::Inline);
+                    Some((
+                        visible_ix,
+                        visual.source_visible_ix,
+                        range.start,
+                        text.to_string(),
+                    ))
+                })
+                .expect("expected a wrapped collapsed file row continuation for copy")
+        });
+    assert_ne!(
+        continuation_ix, source_visible_ix,
+        "the copy regression needs a visual continuation row"
+    );
+
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: selection_start,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: selection_start + expected_text.len(),
+            });
+            pane.sync_diff_focus_to_text_selection();
+            cx.notify();
+        });
+        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_text),
+        "Ctrl-C should copy the same wrapped slice that is selected and painted"
+    );
+
+    let full_wrapped_line = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let full = pane
+            .diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline)
+            .to_string();
+        assert!(
+            pane.diff_wrap_visible_rows
+                .iter()
+                .filter(|row| row.source_visible_ix == source_visible_ix)
+                .count()
+                > 1,
+            "expected selected collapsed row to be split across wrapped visual rows"
+        );
+        full
+    });
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: 0,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: full_wrapped_line.len(),
+            });
+            pane.copy_selected_diff_text_to_clipboard(cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(full_wrapped_line.clone()),
+        "collapsed diff copy should not insert soft-wrap newlines"
+    );
+    assert!(
+        !full_wrapped_line.contains('\n'),
+        "fixture line should be a single logical source line"
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_word_wrap_selection_survives_resize(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(820.0), px(420.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(191);
+    let (unified, old_text, new_text) = build_collapsed_diff_horizontal_scroll_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_word_wrap_resize_selection",
+        DiffViewMode::Inline,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let marker = "right_payload_";
+    let (source_visible_ix, marker_start, key_before_resize) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let (source_visible_ix, marker_start) = pane
+            .diff_wrap_visible_rows
+            .iter()
+            .enumerate()
+            .find_map(|(visible_ix, visual)| {
+                if visual.wrap_ix == 0 {
+                    return None;
+                }
+                let text = pane.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+                let local = text.as_ref().find(marker)?;
+                let (_, range) = pane
+                    .diff_text_visual_source_range_for_region(visible_ix, DiffTextRegion::Inline);
+                Some((visual.source_visible_ix, range.start + local))
+            })
+            .expect("expected marker on a wrapped collapsed continuation row");
+        (
+            source_visible_ix,
+            marker_start,
+            pane.diff_wrap_visible_cache_key,
+        )
+    });
+
+    cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_text_anchor = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: marker_start,
+            });
+            pane.diff_text_head = Some(DiffTextPos {
+                source_visible_ix,
+                region: DiffTextRegion::Inline,
+                offset: marker_start + marker.len(),
+            });
+            pane.sync_diff_focus_to_text_selection();
+            cx.notify();
+        });
+        let focus = main_pane.read(app).diff_panel_focus_handle.clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(marker.to_string())
+    );
+
+    cx.simulate_resize(gpui::size(px(650.0), px(420.0)));
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_ne!(
+            pane.diff_wrap_visible_cache_key, key_before_resize,
+            "resizing should rebuild wrapped visual rows"
+        );
+    });
+
+    cx.simulate_keystrokes("ctrl-c");
+    let copied_after_resize = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("expected copied selection after resize");
+    assert_eq!(
+        copied_after_resize.replace('\n', ""),
+        marker,
+        "the selection should remain anchored to the same source text after wrap rows rebuild"
+    );
+}
+
+#[gpui::test]
+fn diff_word_wrap_columns_follow_scaled_font_metrics(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(520.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    let long_new_line = format!("scaled {}", "wrapmetric".repeat(32));
+    let unified = format!(
+        "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-old line
++{long_new_line}
+"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(189),
+        "word_wrap_scaled_font_metrics",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "scaled font metrics fixture ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "cache_inflight={:?} file_active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+    let default_columns = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_wrap_visible_cache_key
+            .expect("expected default wrap cache key")
+            .inline_columns
+    });
+
+    cx.update(|_window, app| {
+        crate::app::set_app_ui_scale_percent(app, 200);
+    });
+    draw_and_drain_test_window(cx);
+    let zoomed_columns = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_wrap_visible_cache_key
+            .expect("expected zoomed wrap cache key")
+            .inline_columns
+    });
+
+    assert!(
+        zoomed_columns < default_columns,
+        "wrap columns should decrease when the active diff font scales up (default={default_columns}, zoomed={zoomed_columns})"
+    );
+
+    cx.update(|_window, app| {
+        crate::app::set_app_ui_scale_percent(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+    });
+}
+
+#[gpui::test]
+fn reveal_whitespace_chars_marks_file_diff_paint_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let path = PathBuf::from("src/lib.rs");
+    let unified = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1 +1 @@
+-alpha
++a b\t
+"
+    .to_string();
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(188),
+        "reveal_whitespace_file_diff",
+        path,
+        unified,
+        "alpha\n".to_string(),
+        "a b\t\n".to_string(),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.set_diff_word_wrap(false, cx);
+            this.set_diff_reveal_whitespace_chars(true, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "file diff ready for whitespace reveal",
+        |pane| {
+            pane.file_diff_cache_inflight.is_none()
+                && pane.is_file_diff_view_active()
+                && pane.file_diff_inline_cache.iter().any(|line| {
+                    line.kind == gitcomet_core::domain::DiffLineKind::Add
+                        && line.text.as_ref().contains("a b\t")
+                })
+        },
+        |pane| {
+            format!(
+                "cache_inflight={:?} file_active={} inline_rows={:?}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_inline_cache
+                    .iter()
+                    .map(|line| format!("{:?}:{}", line.kind, line.text.as_ref()))
+                    .collect::<Vec<_>>(),
+            )
+        },
+    );
+
+    let visible_ix = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (0..pane.diff_visible_len())
+            .find(|&visible_ix| {
+                let Some(inline_ix) = pane.diff_mapped_ix_for_visible_ix(visible_ix) else {
+                    return false;
+                };
+                pane.file_diff_inline_row(inline_ix).is_some_and(|line| {
+                    line.kind == gitcomet_core::domain::DiffLineKind::Add
+                        && line.text.as_ref().contains("a b\t")
+                })
+            })
+            .expect("expected visible added row with whitespace")
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    let record = cx.update(|window, app| {
+        rows::clear_diff_paint_log_for_tests();
+        let _ = window.draw(app);
+        rows::diff_paint_log_for_tests()
+            .into_iter()
+            .find(|record| {
+                record.visible_ix == visible_ix && record.region == DiffTextRegion::Inline
+            })
+            .expect("expected paint record for visible whitespace row")
+    });
+    assert_eq!(record.text.as_ref(), "a·b→↵");
+}
+
+#[gpui::test]
 fn diff_content_mode_switches_regular_file_diff_between_patch_and_content(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -1778,12 +2877,12 @@ fn set_diff_text_selection_for_test(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.diff_text_anchor = Some(DiffTextPos {
-                    visible_ix: start_visible_ix,
+                    source_visible_ix: start_visible_ix,
                     region,
                     offset: 0,
                 });
                 pane.diff_text_head = Some(DiffTextPos {
-                    visible_ix: end_visible_ix,
+                    source_visible_ix: end_visible_ix,
                     region,
                     offset: 1,
                 });
@@ -2012,6 +3111,500 @@ fn full_diff_split_change_shortcuts_visit_each_changed_row(cx: &mut gpui::TestAp
         &view,
         gitcomet_state::model::RepoId(70602),
         "full_diff_split_row_nav",
+        DiffViewMode::Split,
+    );
+}
+
+fn assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    cx.simulate_resize(gpui::size(px(760.0), px(420.0)));
+    let path = PathBuf::from("src/lib.rs");
+    let (unified, old_text, new_text) = build_full_diff_word_wrap_navigation_fixture_texts();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "full diff word-wrap fixture activates file diff view",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight.is_some(),
+                pane.file_diff_cache_target.clone(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = diff_view;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.diff_autoscroll_pending = false;
+                pane.clear_diff_text_selection();
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "full diff word-wrap navigation entries are visual rows",
+        |pane| {
+            let entries = pane.diff_nav_entries();
+            pane.diff_content_mode == DiffContentMode::Full
+                && pane.diff_view == diff_view
+                && pane.diff_word_wrap
+                && pane.diff_wrap_visible_cache_key.is_some()
+                && pane
+                    .diff_wrap_visible_rows
+                    .iter()
+                    .any(|row| row.wrap_ix > 0)
+                && entries.len() >= 2
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.diff_visible_len(),
+                pane.diff_wrap_visible_cache_key,
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    let (first_entry, second_entry) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let entries = pane.diff_nav_entries();
+        let first_entry = entries[0];
+        let second_entry = entries[1];
+        let first_row = pane.diff_wrap_visible_rows[first_entry];
+        let second_row = pane.diff_wrap_visible_rows[second_entry];
+        assert_eq!(
+            first_row.wrap_ix, 0,
+            "first navigation entry should be the first visual row for its changed logical row"
+        );
+        assert_eq!(
+            second_row.wrap_ix, 0,
+            "second navigation entry should be the first visual row for its changed logical row"
+        );
+        assert!(
+            second_row.source_visible_ix > first_row.source_visible_ix,
+            "second navigation entry should advance to the next changed logical row"
+        );
+        let has_wrapped_continuation_between_entries = pane
+            .diff_wrap_visible_rows
+            .iter()
+            .enumerate()
+            .any(|(visible_ix, row)| {
+                visible_ix > first_entry
+                    && visible_ix < second_entry
+                    && row.source_visible_ix == first_row.source_visible_ix
+                    && row.wrap_ix > 0
+            });
+        assert!(
+            has_wrapped_continuation_between_entries,
+            "fixture should put wrapped continuation rows between the first two navigation entries; entries={entries:?}, first_row={first_row:?}, second_row={second_row:?}"
+        );
+        (first_entry, second_entry)
+    });
+
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            Some(first_entry),
+            "first F3 should select the first changed visual row in wrapped Full diff {diff_view:?}"
+        );
+    });
+
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            Some(second_entry),
+            "second F3 should skip wrap continuations in wrapped Full diff {diff_view:?}"
+        );
+    });
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            Some(first_entry),
+            "F2 should move back to the previous changed visual row in wrapped Full diff {diff_view:?}"
+        );
+    });
+}
+
+#[gpui::test]
+fn full_diff_word_wrap_inline_change_shortcuts_skip_continuation_rows(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70603),
+        "full_diff_word_wrap_inline_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn full_diff_word_wrap_inline_change_shortcuts_map_provider_rows_through_visible_map(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(760.0), px(420.0)));
+    let path = PathBuf::from("src/lib.rs");
+    let (unified, old_text, new_text) = build_full_diff_word_wrap_navigation_fixture_texts();
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70607),
+        "full_diff_word_wrap_inline_visible_map_nav",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full diff word-wrap visible-map fixture activates file diff view",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight.is_some(),
+                pane.file_diff_cache_target.clone(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.diff_autoscroll_pending = false;
+                pane.clear_diff_text_selection();
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "full diff word-wrap visible-map fixture has wrapped inline rows",
+        |pane| {
+            pane.diff_content_mode == DiffContentMode::Full
+                && pane.diff_view == DiffViewMode::Inline
+                && pane.diff_word_wrap
+                && pane.diff_wrap_visible_cache_key.is_some()
+                && pane
+                    .diff_wrap_visible_rows
+                    .iter()
+                    .any(|row| row.wrap_ix > 0)
+                && pane
+                    .file_diff_inline_row_provider
+                    .as_ref()
+                    .is_some_and(|provider| !provider.change_visible_indices().is_empty())
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.diff_view,
+                pane.diff_visible_len(),
+                pane.diff_wrap_visible_cache_key,
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let inline_len = pane.file_diff_inline_row_len();
+                assert!(inline_len > 1, "fixture should expose file inline rows");
+                let mut hidden = vec![false; inline_len];
+                hidden[0] = true;
+                pane.diff_visible_inline_map =
+                    Some(PatchInlineVisibleMap::from_hidden_flags(hidden.as_slice()));
+                pane.diff_visible_indices.clear();
+                pane.diff_wrap_visible_rows.clear();
+                pane.diff_wrap_visible_cache_key = None;
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.clear_diff_text_selection();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let provider = pane
+            .file_diff_inline_row_provider
+            .as_ref()
+            .expect("fixture should use the paged inline file provider");
+        let first_changed_provider_ix = provider
+            .change_visible_indices()
+            .into_iter()
+            .next()
+            .expect("fixture should contain a changed inline row");
+        let visible_map = pane
+            .diff_visible_inline_map
+            .as_ref()
+            .expect("test should install a non-identity inline visible map");
+        let first_changed_source_visible_ix = visible_map
+            .visible_ix_for_src_ix(first_changed_provider_ix)
+            .expect("changed provider row should remain visible");
+        assert_ne!(
+            first_changed_provider_ix, first_changed_source_visible_ix,
+            "fixture should exercise a non-identity provider-to-visible mapping"
+        );
+
+        let entries = pane.diff_nav_entries();
+        let expected_first_entry =
+            pane.diff_visual_ix_for_source_visible_ix(first_changed_source_visible_ix);
+        assert_eq!(
+            entries.first().copied(),
+            Some(expected_first_entry),
+            "wrapped Full inline diff navigation should convert provider rows through the visible map"
+        );
+        assert_eq!(
+            pane.diff_wrap_visible_rows
+                .get(expected_first_entry)
+                .map(|row| row.source_visible_ix),
+            Some(first_changed_source_visible_ix),
+            "navigation should target the first wrapped visual row for the mapped source-visible row"
+        );
+    });
+}
+
+#[gpui::test]
+fn full_diff_word_wrap_split_change_shortcuts_skip_continuation_rows(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_full_diff_word_wrap_change_shortcuts_skip_continuations(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70604),
+        "full_diff_word_wrap_split_nav",
+        DiffViewMode::Split,
+    );
+}
+
+fn assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    diff_view: DiffViewMode,
+) {
+    cx.simulate_resize(gpui::size(px(760.0), px(420.0)));
+    let (unified, old_text, new_text) = build_collapsed_diff_word_wrap_navigation_fixture_texts();
+    activate_collapsed_diff_fixture(
+        cx,
+        view,
+        repo_id,
+        fixture_name,
+        diff_view,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_selection_anchor = None;
+                pane.diff_selection_range = None;
+                pane.clear_diff_text_selection();
+                cx.notify();
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "collapsed diff word-wrap navigation entries are visual rows",
+        |pane| {
+            pane.diff_view == diff_view
+                && pane.diff_word_wrap
+                && pane.is_collapsed_diff_projection_active()
+                && pane.diff_wrap_visible_cache_key.is_some()
+                && pane.collapsed_diff_hunk_visible_indices.len() >= 2
+                && pane.diff_nav_entries().len() >= 2
+        },
+        |pane| {
+            (
+                pane.diff_view,
+                pane.diff_visible_len(),
+                pane.diff_wrap_visible_cache_key,
+                pane.collapsed_diff_hunk_visible_indices.clone(),
+                pane.diff_nav_entries(),
+            )
+        },
+    );
+
+    let (first_entry, second_entry) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let raw_first_anchor = pane.collapsed_diff_hunk_visible_indices[0];
+        let raw_second_anchor = pane.collapsed_diff_hunk_visible_indices[1];
+        let expected_first = pane.diff_visual_ix_for_source_visible_ix(raw_first_anchor);
+        let expected_second = pane.diff_visual_ix_for_source_visible_ix(raw_second_anchor);
+        let entries = pane.diff_nav_entries();
+        assert_eq!(
+            entries[0], expected_first,
+            "first collapsed hunk nav entry should use the mapped visual anchor"
+        );
+        assert_eq!(
+            entries[1], expected_second,
+            "second collapsed hunk nav entry should use the mapped visual anchor"
+        );
+        assert_ne!(
+            expected_second, raw_second_anchor,
+            "fixture should expose the stale source-visible second hunk index regression"
+        );
+        let second_row = pane.diff_wrap_visible_rows[expected_second];
+        assert_eq!(second_row.source_visible_ix, raw_second_anchor);
+        assert_eq!(
+            second_row.wrap_ix, 0,
+            "collapsed hunk navigation should land on the first visual row for the hunk anchor"
+        );
+        assert!(
+            pane.diff_wrap_visible_rows
+                .iter()
+                .take(expected_second)
+                .any(|row| row.wrap_ix > 0),
+            "fixture should include wrapped visual rows before the second hunk anchor"
+        );
+        (entries[0], entries[1])
+    });
+
+    set_diff_row_selection_for_test(cx, view, first_entry, (first_entry, first_entry));
+    focus_diff_panel(cx, view);
+    cx.simulate_keystrokes("f3");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            Some(second_entry),
+            "F3 should navigate to the mapped collapsed hunk visual anchor in {diff_view:?}"
+        );
+    });
+
+    cx.simulate_keystrokes("f2");
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).diff_selection_anchor,
+            Some(first_entry),
+            "F2 should navigate back to the previous collapsed hunk visual anchor in {diff_view:?}"
+        );
+    });
+}
+
+#[gpui::test]
+fn collapsed_diff_word_wrap_inline_change_shortcuts_use_visual_hunk_anchors(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70605),
+        "collapsed_diff_word_wrap_inline_nav",
+        DiffViewMode::Inline,
+    );
+}
+
+#[gpui::test]
+fn collapsed_diff_word_wrap_split_change_shortcuts_use_visual_hunk_anchors(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    assert_collapsed_diff_word_wrap_change_shortcuts_use_visual_hunk_anchors(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(70606),
+        "collapsed_diff_word_wrap_split_nav",
         DiffViewMode::Split,
     );
 }
@@ -3560,6 +5153,87 @@ fn push_raw_patch_diff_state(
     unified: String,
 ) -> gitcomet_core::domain::DiffTarget {
     push_raw_patch_diff_state_with_rev(cx, view, repo_id, fixture_name, unified, 1, true)
+}
+
+#[gpui::test]
+fn split_file_diff_multiline_search_preserves_blank_side_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(9140);
+    let path = PathBuf::from("src/split_search.rs");
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "split_search_blank_side_rows",
+        path,
+        "\
+diff --git a/src/split_search.rs b/src/split_search.rs
+index 1111111..2222222 100644
+--- a/src/split_search.rs
++++ b/src/split_search.rs
+@@ -1,2 +1,3 @@
+ foo
++inserted
+ bar
+"
+        .to_string(),
+        "foo\nbar\n".to_string(),
+        "foo\ninserted\nbar\n".to_string(),
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split search file diff fixture activates",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.file_diff_split_row_len() == 3
+        },
+        |pane| {
+            (
+                pane.diff_content_mode,
+                pane.is_file_diff_view_active(),
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_target.clone(),
+                pane.file_diff_split_row_len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            pane.diff_view = DiffViewMode::Split;
+            pane.diff_search_active = true;
+
+            pane.diff_search_query = "foo\nbar".into();
+            pane.diff_search_recompute_matches();
+            assert!(
+                pane.diff_search_matches.is_empty(),
+                "split search must not collapse a visible blank left cell between foo and bar"
+            );
+
+            pane.diff_search_query = "foo\n\nbar".into();
+            pane.diff_search_recompute_matches();
+            assert_eq!(
+                pane.diff_search_matches.len(),
+                1,
+                "split search should match the visible left stream including the blank row"
+            );
+            let match_row = pane.diff_search_matches[0];
+            assert_eq!(
+                pane.diff_text_line_for_region(match_row, DiffTextRegion::SplitLeft)
+                    .as_ref(),
+                "foo"
+            );
+        });
+    });
 }
 
 #[gpui::test]

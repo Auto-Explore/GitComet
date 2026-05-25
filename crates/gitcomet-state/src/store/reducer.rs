@@ -11,6 +11,7 @@ use crate::model::{
     SubmoduleAddProgressState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
 use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
+use crate::store::repo_load_trace;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::{GitRepository, SafePushAfterCommitContext};
 use rustc_hash::FxHashMap as HashMap;
@@ -89,6 +90,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
         Msg::OpenRepo(_)
             | Msg::RestoreSession { .. }
             | Msg::ReloadRepo { .. }
+            | Msg::RepoActivated { .. }
             | Msg::RepoExternallyChanged { .. }
             | Msg::SetHistoryScope { .. }
             | Msg::LoadMoreHistory { .. }
@@ -694,6 +696,7 @@ pub(super) fn reduce(
             Vec::new()
         }
         Msg::ReloadRepo { repo_id } => external_and_history::reload_repo(state, repo_id),
+        Msg::RepoActivated { .. } => Vec::new(),
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(state, repo_id, change)
         }
@@ -1298,6 +1301,35 @@ pub(super) fn reduce(
             spec,
             repo,
         }) => repo_management::repo_opened_ok(repos, state, repo_id, spec, repo),
+        Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+            repo_id,
+            load_epoch,
+            message,
+        }) => {
+            let current_load_epoch = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .map(|repo| repo.load_epoch);
+            if current_load_epoch == Some(load_epoch) {
+                repo_load_trace::trace!(
+                    "apply_repo_load_finished repo_id={:?} load_epoch={} inner={}",
+                    repo_id,
+                    load_epoch,
+                    repo_load_trace::internal_msg_name(&message)
+                );
+                reduce(repos, id_alloc, state, Msg::Internal(*message))
+            } else {
+                repo_load_trace::trace!(
+                    "drop_stale_repo_load_finished repo_id={:?} load_epoch={} current_load_epoch={:?} inner={}",
+                    repo_id,
+                    load_epoch,
+                    current_load_epoch,
+                    repo_load_trace::internal_msg_name(&message)
+                );
+                Vec::new()
+            }
+        }
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id,
             spec,

@@ -3,16 +3,54 @@ use gitcomet_core::services::{
     GitBackend, PullMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
 };
 use gitcomet_git_gix::GixBackend;
+#[path = "support/test_git_env.rs"]
+mod test_git_env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 #[cfg(windows)]
 use std::sync::OnceLock;
 
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    // Keep tests deterministic by isolating from host git config.
+    test_git_env::apply(&mut cmd);
+    // Local bare remotes require file protocol to be permitted.
+    cmd.env("GIT_ALLOW_PROTOCOL", "file");
+    cmd
+}
+
+fn is_bare_git_dir(repo: &Path) -> bool {
+    let has_bare_layout =
+        repo.join("HEAD").is_file() && repo.join("objects").is_dir() && repo.join("refs").is_dir();
+    if !has_bare_layout {
+        return false;
+    }
+
+    let Ok(config) = fs::read_to_string(repo.join("config")) else {
+        return false;
+    };
+
+    config.lines().any(|line| {
+        let Some((key, value)) = line.trim().split_once('=') else {
+            return false;
+        };
+        key.trim() == "bare" && value.trim().eq_ignore_ascii_case("true")
+    })
+}
+
+fn git_command_for_repo(repo: &Path) -> Command {
+    let mut cmd = git_command();
+    if is_bare_git_dir(repo) {
+        cmd.arg("--git-dir").arg(repo);
+    } else {
+        cmd.arg("-C").arg(repo);
+    }
+    cmd
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let status = git_command_for_repo(repo)
         .args(args)
         .status()
         .expect("git command to run");
@@ -20,9 +58,7 @@ fn run_git(repo: &Path, args: &[&str]) {
 }
 
 fn run_git_capture(repo: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let output = git_command_for_repo(repo)
         .args(args)
         .output()
         .expect("git command to run");
@@ -49,10 +85,7 @@ fn is_git_shell_startup_failure(text: &str) -> bool {
 fn git_shell_available_for_upstream_tests() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     *AVAILABLE.get_or_init(|| {
-        let output = match Command::new("git")
-            .args(["difftool", "--tool-help"])
-            .output()
-        {
+        let output = match git_command().args(["difftool", "--tool-help"]).output() {
             Ok(output) => output,
             Err(_) => return true,
         };

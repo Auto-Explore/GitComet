@@ -184,17 +184,28 @@ pub(super) fn submodules_loaded(
     repo_id: RepoId,
     result: std::result::Result<Vec<Submodule>, Error>,
 ) -> Vec<Effect> {
+    let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let submodules = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
+                } else {
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
             }
         };
         repo_state.set_submodules(submodules);
+        if repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::SUBMODULES)
+        {
+            effects.push(Effect::LoadSubmodules { repo_id });
+        }
     }
-    Vec::new()
+    effects
 }
 
 pub(super) fn select_commit(
@@ -261,7 +272,12 @@ pub(super) fn append_ensure_sidebar_data_effects(
 
     if request.submodules && matches!(repo_state.submodules, Loadable::NotLoaded) {
         repo_state.set_submodules(Loadable::Loading);
-        effects.push_effect(Effect::LoadSubmodules { repo_id });
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::SUBMODULES)
+        {
+            effects.push_effect(Effect::LoadSubmodules { repo_id });
+        }
     }
 
     if request.stashes && matches!(repo_state.stashes, Loadable::NotLoaded) {
@@ -497,7 +513,14 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
         return Vec::new();
     }
     repo_state.set_submodules(Loadable::Loading);
-    vec![Effect::LoadSubmodules { repo_id }]
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::SUBMODULES)
+    {
+        vec![Effect::LoadSubmodules { repo_id }]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn branches_loaded(
@@ -808,6 +831,8 @@ pub(super) fn tags_loaded(
             Err(e) => {
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) {
                     Loadable::Ready(Vec::new())
+                } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
                 } else {
                     push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
@@ -834,6 +859,8 @@ pub(super) fn remote_tags_loaded(
             Err(e) => {
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) {
                     Loadable::Ready(Vec::new())
+                } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
                 } else {
                     push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
@@ -1418,6 +1445,15 @@ mod tests {
         ));
         assert!(repo_mut(&mut state, repo_id).submodules.is_loading());
 
+        let effects = load_tags(&mut state, repo_id);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadTags { repo_id: rid } if rid == repo_id
+        ));
+        assert!(repo_mut(&mut state, repo_id).tags.is_loading());
+        assert!(load_tags(&mut state, repo_id).is_empty());
+
         let effects = load_stashes(&mut state, repo_id);
         assert_eq!(effects.len(), 1);
         assert!(matches!(
@@ -1987,6 +2023,32 @@ mod tests {
             Loadable::Error(_)
         ));
         assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn cancelled_metadata_results_reset_to_not_loaded_without_diagnostics() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let cancelled = || Error::new(ErrorKind::Cancelled);
+
+        assert!(tags_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).tags,
+            Loadable::NotLoaded
+        ));
+
+        assert!(remote_tags_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).remote_tags,
+            Loadable::NotLoaded
+        ));
+
+        assert!(submodules_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).submodules,
+            Loadable::NotLoaded
+        ));
+        assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 0);
     }
 
     #[test]

@@ -256,6 +256,7 @@ pub struct OpenRepoFixture {
     remotes: usize,
     worktrees: usize,
     submodules: usize,
+    tags: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -266,6 +267,7 @@ pub struct OpenRepoMetrics {
     pub remotes: u64,
     pub worktrees: u64,
     pub submodules: u64,
+    pub tags: u64,
     pub sidebar_rows: u64,
     pub graph_rows: u64,
     pub max_graph_lanes: u64,
@@ -278,7 +280,7 @@ impl OpenRepoFixture {
         remote_branches: usize,
         remotes: usize,
     ) -> Self {
-        Self::with_sidebar_fanout(commits, local_branches, remote_branches, remotes, 0, 0)
+        Self::with_metadata_fanout(commits, local_branches, remote_branches, remotes, 0, 0, 32)
     }
 
     pub fn with_sidebar_fanout(
@@ -289,15 +291,36 @@ impl OpenRepoFixture {
         worktrees: usize,
         submodules: usize,
     ) -> Self {
+        Self::with_metadata_fanout(
+            commits,
+            local_branches,
+            remote_branches,
+            remotes,
+            worktrees,
+            submodules,
+            32,
+        )
+    }
+
+    pub fn with_metadata_fanout(
+        commits: usize,
+        local_branches: usize,
+        remote_branches: usize,
+        remotes: usize,
+        worktrees: usize,
+        submodules: usize,
+        tags: usize,
+    ) -> Self {
         let theme = AppTheme::gitcomet_dark();
         let commits_vec = build_synthetic_commits(commits);
-        let repo = build_synthetic_repo_state(
+        let repo = build_synthetic_repo_state_with_tags(
             local_branches,
             remote_branches,
             remotes,
             worktrees,
             submodules,
             0,
+            tags,
             &commits_vec,
         );
         Self {
@@ -309,6 +332,7 @@ impl OpenRepoFixture {
             remotes,
             worktrees,
             submodules,
+            tags,
         }
     }
 
@@ -384,6 +408,7 @@ impl OpenRepoFixture {
                 remotes: u64::try_from(self.remotes).unwrap_or(u64::MAX),
                 worktrees: u64::try_from(self.worktrees).unwrap_or(u64::MAX),
                 submodules: u64::try_from(self.submodules).unwrap_or(u64::MAX),
+                tags: u64::try_from(self.tags).unwrap_or(u64::MAX),
                 sidebar_rows: u64::try_from(rows.len()).unwrap_or(u64::MAX),
                 graph_rows: u64::try_from(graph.len()).unwrap_or(u64::MAX),
                 max_graph_lanes: u64::try_from(max_graph_lanes).unwrap_or(u64::MAX),

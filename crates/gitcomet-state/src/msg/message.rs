@@ -133,6 +133,9 @@ pub enum Msg {
     ReloadRepo {
         repo_id: RepoId,
     },
+    RepoActivated {
+        repo_id: RepoId,
+    },
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,
@@ -598,6 +601,11 @@ pub enum InternalMsg {
         url: String,
         dest: PathBuf,
         result: Result<CommandOutput, Error>,
+    },
+    RepoLoadFinished {
+        repo_id: RepoId,
+        load_epoch: u64,
+        message: Box<InternalMsg>,
     },
     RepoOpenedOk {
         repo_id: RepoId,

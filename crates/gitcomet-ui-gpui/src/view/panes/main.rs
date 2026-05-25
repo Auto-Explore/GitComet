@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicI32, Ordering};
 mod actions_impl;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
-mod diff_search;
+pub(in crate::view) mod diff_search;
 mod diff_text;
 mod helpers;
 mod preview;
@@ -75,7 +75,7 @@ impl Render for MainPaneView {
             .and_then(|r| r.diff_state.diff_target.as_ref())
             .is_some();
         if show_diff {
-            div().size_full().child(self.diff_view(cx))
+            div().size_full().child(self.diff_view(window, cx))
         } else {
             div().size_full().child(self.history_view.clone())
         }
