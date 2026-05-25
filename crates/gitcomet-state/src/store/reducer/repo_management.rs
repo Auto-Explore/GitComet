@@ -617,9 +617,7 @@ fn fill_set_active_repo_inline_impl(
     } else {
         None
     };
-    let selected_history_reloads = changed
-        .then(|| selected_history_reloads_for_activation(repo_state))
-        .unwrap_or_default();
+    let selected_history_reloads = if changed { selected_history_reloads_for_activation(repo_state) } else { Default::default() };
 
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that

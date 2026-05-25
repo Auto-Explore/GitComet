@@ -2634,8 +2634,7 @@ fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
             "expected whitespace-only queries to refresh instead of leaving stale matches behind"
         );
         assert_eq!(
-            pane.diff_search_match_ix,
-            None,
+            pane.diff_search_match_ix, None,
             "expected recomputing an empty result set to clear the active diff search match"
         );
     });

@@ -402,6 +402,15 @@ impl GitRepository for GixRepo {
         self.diff_parsed_impl(target)
     }
 
+    fn diff_parsed_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.diff_parsed_cancellable_impl(target, cancellation)
+    }
+
     fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         self.diff_file_text_impl(target)
     }

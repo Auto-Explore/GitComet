@@ -3284,6 +3284,265 @@ impl GitBackend for PanicOpenBackend {
     }
 }
 
+struct BlockingReleaseGuard {
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl Drop for BlockingReleaseGuard {
+    fn drop(&mut self) {
+        let (lock, condvar) = &*self.release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+}
+
+fn wait_for_release_signal(release: &Arc<(Mutex<bool>, Condvar)>) {
+    let (lock, condvar) = &**release;
+    let mut released = lock.lock().expect("release mutex");
+    while !*released {
+        released = condvar.wait(released).expect("release wait");
+    }
+}
+
+enum MetadataRepoMode {
+    BlockingRemoteTags,
+    ReadyTags,
+}
+
+struct MetadataSchedulingRepo {
+    spec: RepoSpec,
+    mode: MetadataRepoMode,
+    started_tx: std::sync::mpsc::Sender<&'static str>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GitRepository for MetadataSchedulingRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        unsupported_repo_result()
+    }
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_tags(&self) -> Result<Vec<gitcomet_core::domain::Tag>> {
+        match self.mode {
+            MetadataRepoMode::ReadyTags => {
+                let _ = self.started_tx.send("tags");
+                Ok(Vec::new())
+            }
+            MetadataRepoMode::BlockingRemoteTags => unsupported_repo_result(),
+        }
+    }
+    fn list_remote_tags(&self) -> Result<Vec<gitcomet_core::domain::RemoteTag>> {
+        match self.mode {
+            MetadataRepoMode::BlockingRemoteTags => {
+                let _ = self.started_tx.send("remote_tags");
+                wait_for_release_signal(&self.release);
+                Ok(Vec::new())
+            }
+            MetadataRepoMode::ReadyTags => unsupported_repo_result(),
+        }
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+}
+
+enum SelectedDiffRepoMode {
+    BlockingDiff,
+    ReadyDiff,
+}
+
+struct SelectedDiffSchedulingRepo {
+    spec: RepoSpec,
+    mode: SelectedDiffRepoMode,
+    started_tx: std::sync::mpsc::Sender<RepoId>,
+    started_repo_id: RepoId,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GitRepository for SelectedDiffSchedulingRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        unsupported_repo_result()
+    }
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn diff_parsed_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::Diff> {
+        let _ = self.started_tx.send(self.started_repo_id);
+        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
+            while !cancellation.is_cancelled() {
+                let (lock, condvar) = &*self.release;
+                let released = lock.lock().expect("release mutex");
+                let (released, _) = condvar
+                    .wait_timeout(released, Duration::from_millis(10))
+                    .expect("release wait");
+                if *released {
+                    break;
+                }
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(gitcomet_core::domain::Diff::from_unified(
+            target.clone(),
+            "diff --git a/tracked.txt b/tracked.txt\n",
+        ))
+    }
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+}
+
 struct RecordingLogRepo {
     spec: RepoSpec,
     calls: Arc<std::sync::Mutex<Vec<String>>>,
@@ -4134,6 +4393,241 @@ fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
         }) => assert_eq!(got_repo_id, repo_id),
         other => panic!("expected status load result, got {other:?}"),
     }
+}
+
+#[test]
+fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
+    let repo_a = RepoId(510);
+    let repo_b = RepoId(511);
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<&'static str>();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(
+            repo_a,
+            Arc::new(MetadataSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-metadata-blocking-remote-tags"),
+                },
+                mode: MetadataRepoMode::BlockingRemoteTags,
+                started_tx: started_tx.clone(),
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos.insert(
+            repo_b,
+            Arc::new(MetadataSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-metadata-ready-tags"),
+                },
+                mode: MetadataRepoMode::ReadyTags,
+                started_tx,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor =
+        super::executor::TaskExecutor::new(super::executor::metadata_worker_threads());
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_a,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-metadata-state-a"),
+        },
+    ));
+    state.repos.push(RepoState::new_opening(
+        repo_b,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-metadata-state-b"),
+        },
+    ));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = HashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::LoadRemoteTags { repo_id: repo_a },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("remote tag task did not start"),
+        "remote_tags"
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::LoadTags { repo_id: repo_b },
+    );
+
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("metadata refresh for repo B should not wait behind repo A remote tags"),
+        "tags"
+    );
+}
+
+#[test]
+fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
+    let repo_a = RepoId(520);
+    let repo_b = RepoId(521);
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<RepoId>();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(
+            repo_a,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-selected-diff-blocking-a"),
+                },
+                mode: SelectedDiffRepoMode::BlockingDiff,
+                started_tx: started_tx.clone(),
+                started_repo_id: repo_a,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos.insert(
+            repo_b,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-selected-diff-ready-b"),
+                },
+                mode: SelectedDiffRepoMode::ReadyDiff,
+                started_tx,
+                started_repo_id: repo_b,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let target_a = DiffTarget::WorkingTree {
+        path: PathBuf::from("repo-a.txt"),
+        area: DiffArea::Unstaged,
+    };
+    let target_b = DiffTarget::WorkingTree {
+        path: PathBuf::from("repo-b.txt"),
+        area: DiffArea::Unstaged,
+    };
+    let mut state = AppState::default();
+    let mut repo_state_a = RepoState::new_opening(
+        repo_a,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-selected-diff-state-a"),
+        },
+    );
+    repo_state_a.diff_state.diff_target = Some(target_a.clone());
+    let mut repo_state_b = RepoState::new_opening(
+        repo_b,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-selected-diff-state-b"),
+        },
+    );
+    repo_state_b.diff_state.diff_target = Some(target_b.clone());
+    state.repos.push(repo_state_a);
+    state.repos.push(repo_state_b);
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = HashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::LoadSelectedDiff {
+            repo_id: repo_a,
+            load_patch_diff: true,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: false,
+            load_file_image: false,
+        },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("repo A diff task did not start"),
+        repo_a
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::CancelRepoLoads {
+            repo_id: repo_a,
+            load_epoch: 0,
+        },
+    );
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::LoadSelectedDiff {
+            repo_id: repo_b,
+            load_patch_diff: true,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: false,
+            load_file_image: false,
+        },
+    );
+
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("repo B diff should start once repo A load epoch is cancelled"),
+        repo_b
+    );
 }
 
 #[test]

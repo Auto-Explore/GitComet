@@ -336,8 +336,9 @@ impl Element for UiScaleScrollCapture {
 
         let view = self.view.clone();
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            let zoom_modifier = event.modifiers.secondary() || event.modifiers.control;
             if phase != DispatchPhase::Capture
-                || !event.modifiers.secondary()
+                || !zoom_modifier
                 || event.modifiers.alt
                 || event.modifiers.function
             {

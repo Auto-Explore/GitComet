@@ -342,16 +342,34 @@ fn decode_file_image_diff_preview_pair(
     }
 
     std::thread::scope(|scope| {
-        let old_task = old
-            .map(|bytes| scope.spawn(move || decode_file_image_diff_preview_side(format, bytes)));
-        let new_task = new
-            .map(|bytes| scope.spawn(move || decode_file_image_diff_preview_side(format, bytes)));
+        let old_task = old.map(|bytes| {
+            std::thread::Builder::new().spawn_scoped(scope, move || {
+                decode_file_image_diff_preview_side(format, bytes)
+            })
+        });
+        let new_task = new.map(|bytes| {
+            std::thread::Builder::new().spawn_scoped(scope, move || {
+                decode_file_image_diff_preview_side(format, bytes)
+            })
+        });
 
         let old_preview = old_task.map_or_else(DecodedImageDiffPreview::default, |task| {
-            task.join().unwrap_or_default()
+            task.map_or_else(
+                |_| {
+                    old.map(|bytes| decode_file_image_diff_preview_side(format, bytes))
+                        .unwrap_or_default()
+                },
+                |task| task.join().unwrap_or_default(),
+            )
         });
         let new_preview = new_task.map_or_else(DecodedImageDiffPreview::default, |task| {
-            task.join().unwrap_or_default()
+            task.map_or_else(
+                |_| {
+                    new.map(|bytes| decode_file_image_diff_preview_side(format, bytes))
+                        .unwrap_or_default()
+                },
+                |task| task.join().unwrap_or_default(),
+            )
         });
         (old_preview, new_preview)
     })

@@ -397,10 +397,30 @@ pub trait GitRepository: Send + Sync {
         self.diff_unified(target)
             .map(|text| Diff::from_unified(target.clone(), &text))
     }
+    fn diff_parsed_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        cancellation.check_cancelled()?;
+        let diff = self.diff_parsed(target)?;
+        cancellation.check_cancelled()?;
+        Ok(diff)
+    }
     fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<FileDiffText>> {
         Err(Error::new(ErrorKind::Unsupported(
             "file diff view is not implemented for this backend",
         )))
+    }
+    fn diff_file_text_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        cancellation.check_cancelled()?;
+        let result = self.diff_file_text(target)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_preview_text_file(
         &self,
@@ -411,10 +431,31 @@ pub trait GitRepository: Send + Sync {
             "preview text file loading is not implemented for this backend",
         )))
     }
+    fn diff_preview_text_file_cancellable(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<PathBuf>> {
+        cancellation.check_cancelled()?;
+        let result = self.diff_preview_text_file(target, side)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
     fn diff_file_image(&self, _target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "image diff view is not implemented for this backend",
         )))
+    }
+    fn diff_file_image_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        cancellation.check_cancelled()?;
+        let result = self.diff_file_image(target)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
@@ -848,6 +889,16 @@ pub trait GitRepository: Send + Sync {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule diff summary is not implemented for this backend",
         )))
+    }
+    fn submodule_diff_summary_cancellable(
+        &self,
+        target: &crate::domain::DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::domain::SubmoduleDiffSummary> {
+        cancellation.check_cancelled()?;
+        let summary = self.submodule_diff_summary(target)?;
+        cancellation.check_cancelled()?;
+        Ok(summary)
     }
 
     fn check_submodule_add_trust(

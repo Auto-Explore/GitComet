@@ -22,7 +22,11 @@ mod worker_channel;
 
 use effects::RepoTaskToken;
 use effects::{EffectExecutors, schedule_effect};
-use executor::{TaskExecutor, default_worker_threads};
+#[cfg(any(test, feature = "test-support"))]
+use executor::StoreExecutorPool;
+use executor::{
+    TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
+};
 use reducer::{
     fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
     fill_stage_path_inline, fill_stage_paths_inline, fill_unstage_path_inline,
@@ -299,9 +303,34 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
 
         thread::spawn(move || {
+            #[cfg(any(test, feature = "test-support"))]
+            let executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::Primary,
+                default_worker_threads(),
+            );
+            #[cfg(not(any(test, feature = "test-support")))]
             let executor = TaskExecutor::new(default_worker_threads());
-            let repo_load_executor = TaskExecutor::new(default_worker_threads());
-            let metadata_executor = TaskExecutor::new(1);
+
+            #[cfg(any(test, feature = "test-support"))]
+            let repo_load_executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::RepoLoad,
+                repo_load_worker_threads(),
+            );
+            #[cfg(not(any(test, feature = "test-support")))]
+            let repo_load_executor = TaskExecutor::new(repo_load_worker_threads());
+
+            #[cfg(any(test, feature = "test-support"))]
+            let metadata_executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::Metadata,
+                metadata_worker_threads(),
+            );
+            #[cfg(not(any(test, feature = "test-support")))]
+            let metadata_executor = TaskExecutor::new(metadata_worker_threads());
+
+            #[cfg(any(test, feature = "test-support"))]
+            let session_persist_executor =
+                TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
+            #[cfg(not(any(test, feature = "test-support")))]
             let session_persist_executor = TaskExecutor::new(1);
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
             let mut repo_task_tokens: HashMap<RepoId, RepoTaskToken> = HashMap::default();

@@ -566,9 +566,43 @@ pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
 }
 
 pub(crate) fn run_git_parsed_stdout<T, F>(
+    cmd: Command,
+    label: &str,
+    allow_exit_code_one: bool,
+    parse_stdout: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
+{
+    run_git_parsed_stdout_maybe_cancellable(cmd, label, allow_exit_code_one, None, parse_stdout)
+}
+
+pub(crate) fn run_git_parsed_stdout_cancellable<T, F>(
+    cmd: Command,
+    label: &str,
+    allow_exit_code_one: bool,
+    cancellation: &CancellationToken,
+    parse_stdout: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
+{
+    run_git_parsed_stdout_maybe_cancellable(
+        cmd,
+        label,
+        allow_exit_code_one,
+        Some(cancellation),
+        parse_stdout,
+    )
+}
+
+fn run_git_parsed_stdout_maybe_cancellable<T, F>(
     mut cmd: Command,
     label: &str,
     allow_exit_code_one: bool,
+    cancellation: Option<&CancellationToken>,
     parse_stdout: F,
 ) -> Result<T>
 where
@@ -599,11 +633,20 @@ where
     let timeout = git_command_timeout();
     let start = Instant::now();
     let mut timed_out = false;
+    let mut cancelled = false;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    cancelled = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(err) => return Err(io_err(err)),
+                    }
+                }
                 let elapsed = start.elapsed();
                 if elapsed >= timeout {
                     timed_out = true;
@@ -628,6 +671,10 @@ where
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+    }
+
+    if cancelled {
+        return Err(Error::new(ErrorKind::Cancelled));
     }
 
     if timed_out {

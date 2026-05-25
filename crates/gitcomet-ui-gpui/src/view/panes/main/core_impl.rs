@@ -98,8 +98,10 @@ fn diff_wrap_byte_ranges_for_optional_file_diff_text(
     columns: usize,
     reveal_whitespace_chars: bool,
 ) -> Vec<rows::DiffWrapByteRange> {
-    text.map(|text| diff_wrap_byte_ranges_for_file_diff_text(text, columns, reveal_whitespace_chars))
-        .unwrap_or_else(diff_wrap_empty_byte_ranges)
+    text.map(|text| {
+        diff_wrap_byte_ranges_for_file_diff_text(text, columns, reveal_whitespace_chars)
+    })
+    .unwrap_or_else(diff_wrap_empty_byte_ranges)
 }
 
 fn diff_wrap_byte_range_at(
@@ -4149,8 +4151,8 @@ impl MainPaneView {
                     let Some(line) = self.file_diff_inline_row(mapped_ix) else {
                         return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                     };
-                    let text =
-                        self.diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
+                    let text = self
+                        .diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
                     (
                         diff_wrap_byte_ranges_for_text(
                             text.as_ref(),

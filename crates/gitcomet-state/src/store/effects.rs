@@ -1642,7 +1642,7 @@ pub(super) fn schedule_effect(
             load_file_image,
         } => {
             if let Some((target, target_rev)) = selected_diff_target(thread_state, repo_id)
-                && let Some((msg_tx, _)) =
+                && let Some((msg_tx, cancellation)) =
                     repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_selected_diff(
@@ -1653,6 +1653,7 @@ pub(super) fn schedule_effect(
                     repo_id,
                     target,
                     target_rev,
+                    cancellation,
                     repo_load::SelectedDiffLoadOptions {
                         load_patch_diff,
                         load_file_text,
