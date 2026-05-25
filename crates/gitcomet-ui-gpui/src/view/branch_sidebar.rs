@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::SubmoduleStatus;
 use rustc_hash::{FxHashMap, FxHasher};
 use smallvec::SmallVec;
 use std::{
@@ -126,6 +127,7 @@ pub(super) enum BranchSidebarRow {
     },
     SubmodulePlaceholder {
         message: SharedString,
+        can_load: bool,
     },
     SubmoduleItem {
         path: std::path::PathBuf,
@@ -222,6 +224,7 @@ pub(in crate::view) fn branch_sidebar_branch_label(full_name: &str) -> &str {
         .map_or(full_name, |(_, label)| label)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn branch_sidebar_worktree_label(
     branch: Option<&str>,
     detached: bool,
@@ -548,6 +551,19 @@ fn hash_branch_sidebar_submodule_source<H: Hasher>(repo: &RepoState, hasher: &mu
     if let Loadable::Ready(submodules) = &repo.submodules {
         for submodule in submodules.iter() {
             submodule.path.hash(hasher);
+            submodule.recorded_head.hash(hasher);
+            submodule.checked_out_head.hash(hasher);
+            match submodule.status {
+                SubmoduleStatus::UpToDate => 0u8.hash(hasher),
+                SubmoduleStatus::NotInitialized => 1u8.hash(hasher),
+                SubmoduleStatus::HeadMismatch => 2u8.hash(hasher),
+                SubmoduleStatus::MergeConflict => 3u8.hash(hasher),
+                SubmoduleStatus::MissingMapping => 4u8.hash(hasher),
+                SubmoduleStatus::Unknown(value) => {
+                    5u8.hash(hasher);
+                    value.hash(hasher);
+                }
+            }
         }
     }
 }
@@ -928,6 +944,7 @@ pub(super) fn branch_sidebar_rows(
             Loadable::Ready(submodules) if submodules.is_empty() => {
                 rows.push(BranchSidebarRow::SubmodulePlaceholder {
                     message: "No submodules".into(),
+                    can_load: false,
                 });
             }
             Loadable::Ready(submodules) => {
@@ -939,12 +956,15 @@ pub(super) fn branch_sidebar_rows(
             }
             Loadable::Loading => rows.push(BranchSidebarRow::SubmodulePlaceholder {
                 message: "Loading".into(),
+                can_load: false,
             }),
             Loadable::NotLoaded => rows.push(BranchSidebarRow::SubmodulePlaceholder {
-                message: "Loading".into(),
+                message: "Not loaded".into(),
+                can_load: true,
             }),
             Loadable::Error(error) => rows.push(BranchSidebarRow::SubmodulePlaceholder {
                 message: error.clone().into(),
+                can_load: true,
             }),
         }
     }
@@ -1612,7 +1632,8 @@ mod tests {
         repo.worktrees_rev = 1;
         repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
             path: PathBuf::from("vendor/lib"),
-            head: commit_id("cccccccc"),
+            recorded_head: commit_id("cccccccc"),
+            checked_out_head: Some(commit_id("cccccccc")),
             status: SubmoduleStatus::UpToDate,
         }]));
         repo.submodules_rev = 1;

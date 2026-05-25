@@ -15,10 +15,17 @@ pub(super) fn paint_history_graph(
         return;
     }
 
-    let stroke_width = px(1.6);
-    let col_gap = px(HISTORY_GRAPH_COL_GAP_PX);
-    let margin_x = px(HISTORY_GRAPH_MARGIN_X_PX);
-    let node_radius = if row.is_merge { px(3.9) } else { px(3.4) };
+    let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
+    let scaled_px = |value| px(value * design_scale_factor);
+    let stroke_width = scaled_px(1.6);
+    let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
+    let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
+    let node_radius = if row.is_merge {
+        scaled_px(3.9)
+    } else {
+        scaled_px(3.4)
+    };
+    let node_corner_radius = scaled_px(2.0);
 
     let y_top = bounds.top();
     let y_center = bounds.top() + bounds.size.height / 2.0;
@@ -54,7 +61,7 @@ pub(super) fn paint_history_graph(
         if (x_from - x_to).abs() < px(0.5) {
             path.line_to(point(bounds.left() + x_to, y_center));
         } else {
-            let ctrl = px(8.0);
+            let ctrl = scaled_px(8.0);
             path.cubic_bezier_to(
                 point(bounds.left() + x_to, y_center),
                 point(bounds.left() + x_from + ctrl, y_center),
@@ -134,6 +141,7 @@ pub(super) fn paint_history_graph(
             bounds.left() + node_x,
             y_center,
             node_radius,
+            node_corner_radius,
             node_color,
             window,
         );
@@ -144,6 +152,7 @@ fn paint_commit_node(
     x_center: Pixels,
     y_center: Pixels,
     node_radius: Pixels,
+    corner_radius: Pixels,
     node_color: gpui::Rgba,
     window: &mut Window,
 ) {
@@ -155,7 +164,7 @@ fn paint_commit_node(
             ),
             node_color,
         )
-        .corner_radii(node_radius.min(px(2.0))),
+        .corner_radii(node_radius.min(corner_radius)),
     );
 }
 
@@ -166,31 +175,57 @@ fn paint_stash_node(
     border_color: gpui::Rgba,
     window: &mut Window,
 ) {
-    let border = px(1.0);
-    let box_w = px(9.0);
-    let box_h = px(8.0);
-    let outer_w = box_w + border * 2.0;
-    let outer_h = box_h + border * 2.0;
-    let r = px(1.8);
+    use gpui::PathBuilder;
+
+    let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
+    let scaled_px = |value| px(value * design_scale_factor);
+    let border = scaled_px(1.0);
+    let body_w = scaled_px(11.2);
+    let body_h = scaled_px(5.8);
+    let outer_w = body_w + border * 2.0;
+    let outer_h = body_h + border * 2.0;
+    let body_y_offset = scaled_px(1.15);
+    let body_radius = scaled_px(1.25);
 
     let outer = Bounds::new(
-        point(x_center - outer_w * 0.5, y_center - outer_h * 0.5),
+        point(
+            x_center - outer_w * 0.5,
+            y_center - outer_h * 0.5 + body_y_offset,
+        ),
         size(outer_w, outer_h),
     );
     let inner = Bounds::new(
         point(outer.left() + border, outer.top() + border),
-        size(box_w, box_h),
+        size(body_w, body_h),
     );
 
-    window.paint_quad(fill(outer, border_color).corner_radii(r.min(px(2.0))));
-    window
-        .paint_quad(fill(inner, fill_color).corner_radii((r - px(0.4)).max(px(0.0)).min(px(2.0))));
-
-    // Simple "lid" line to make it read as a stash/box.
-    let lid_y = inner.top() + px(2.4);
-    let lid = Bounds::new(
-        point(inner.left() + px(1.0), lid_y),
-        size((inner.size.width - px(2.0)).max(px(0.0)), px(1.0)),
+    window.paint_quad(fill(outer, border_color).corner_radii(body_radius.min(scaled_px(3.0))));
+    window.paint_quad(
+        fill(inner, fill_color).corner_radii(
+            (body_radius - scaled_px(0.6))
+                .max(px(0.0))
+                .min(scaled_px(1.5)),
+        ),
     );
-    window.paint_quad(fill(lid, with_alpha(border_color, 0.65)));
+
+    let zipper = Bounds::new(
+        point(x_center - scaled_px(4.2), inner.top() + scaled_px(1.3)),
+        size(scaled_px(8.4), scaled_px(1.0)),
+    );
+    window.paint_quad(fill(zipper, with_alpha(border_color, 0.72)).corner_radii(scaled_px(0.5)));
+
+    let handle_attach_y = outer.top() + scaled_px(0.15);
+    let handle_apex_y = outer.top() - scaled_px(1.95);
+    let handle_half_width = scaled_px(1.95);
+
+    let mut handle = PathBuilder::stroke(border);
+    handle.move_to(point(x_center - handle_half_width, handle_attach_y));
+    handle.cubic_bezier_to(
+        point(x_center + handle_half_width, handle_attach_y),
+        point(x_center - scaled_px(1.9), handle_apex_y),
+        point(x_center + scaled_px(1.9), handle_apex_y),
+    );
+    if let Ok(path) = handle.build() {
+        window.paint_path(path, border_color);
+    }
 }

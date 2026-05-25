@@ -3,6 +3,30 @@ use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
 
+const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
+const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
+const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
+
+#[inline]
+fn scaled_diff_px(value: f32, ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn diff_row_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
+    scaled_diff_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn diff_file_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
+    scaled_diff_px(DIFF_FILE_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u32) -> Pixels {
+    scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
 #[derive(Default)]
 pub(super) struct ResolvedOutputSyntaxState {
     /// Fallback highlights used when full-document syntax is unsupported.
@@ -219,6 +243,14 @@ impl FileDiffStyleCacheEpochs {
             | gitcomet_core::domain::DiffLineKind::Hunk => 0,
         }
     }
+}
+
+pub(in crate::view) const FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES: usize = 4_096;
+
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct FileDiffSplitWordHighlights {
+    pub(in crate::view) old: Vec<Range<usize>>,
+    pub(in crate::view) new: Vec<Range<usize>>,
 }
 
 pub(in crate::view) fn versioned_cached_diff_styled_text_is_current(
@@ -2143,7 +2175,148 @@ pub(in crate::view) struct PreparedSyntaxDocumentKey {
     pub(in crate::view) view_mode: PreparedSyntaxViewMode,
 }
 
-pub(in crate::view) struct MainPaneView {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) enum CollapsedDiffExpansionKind {
+    #[default]
+    None,
+    Up,
+    Down,
+    Both,
+    Short,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffHunk {
+    pub(in crate::view) src_ix: usize,
+    pub(in crate::view) base_row_start: usize,
+    pub(in crate::view) base_row_end_exclusive: usize,
+    pub(in crate::view) has_additions: bool,
+    pub(in crate::view) has_removals: bool,
+    pub(in crate::view) reveal_up_lines: usize,
+    pub(in crate::view) reveal_down_lines: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffReveal {
+    pub(in crate::view) up_lines: usize,
+    pub(in crate::view) down_lines: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct CollapsedDiffProjectionIdentity {
+    pub(in crate::view) repo_id: RepoId,
+    pub(in crate::view) diff_target: DiffTarget,
+    pub(in crate::view) file_path: std::path::PathBuf,
+    pub(in crate::view) diff_whitespace_mode: DiffWhitespaceMode,
+    pub(in crate::view) patch_content_signature: Option<u64>,
+    pub(in crate::view) file_content_signature: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum CollapsedDiffVisibleRow {
+    HunkHeader {
+        src_ix: usize,
+        expansion_kind: CollapsedDiffExpansionKind,
+        display_src_ix: Option<usize>,
+        hidden_rows: usize,
+    },
+    FileRow {
+        row_ix: usize,
+    },
+}
+
+impl CollapsedDiffVisibleRow {
+    pub(in crate::view) const fn row_ix(self) -> Option<usize> {
+        match self {
+            Self::FileRow { row_ix } => Some(row_ix),
+            Self::HunkHeader { .. } => None,
+        }
+    }
+
+    pub(in crate::view) const fn header_display_src_ix(self) -> Option<usize> {
+        match self {
+            Self::HunkHeader { display_src_ix, .. } => display_src_ix,
+            Self::FileRow { .. } => None,
+        }
+    }
+
+    pub(in crate::view) const fn header_action_src_ix(self) -> Option<usize> {
+        match self {
+            Self::HunkHeader { src_ix, .. } => Some(src_ix),
+            Self::FileRow { .. } => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum DiffHorizontalScrollColumn {
+    Primary,
+    SplitRight,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffWrapVisualRow {
+    pub(in crate::view) source_visible_ix: usize,
+    pub(in crate::view) wrap_ix: usize,
+    pub(in crate::view) primary_range: rows::DiffWrapByteRange,
+    pub(in crate::view) secondary_range: rows::DiffWrapByteRange,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct DiffWrapVisibleCacheKey {
+    pub(in crate::view) source_len: usize,
+    pub(in crate::view) diff_view: DiffViewMode,
+    pub(in crate::view) is_file_view: bool,
+    pub(in crate::view) collapsed_projection_active: bool,
+    pub(in crate::view) projection_rev: u64,
+    pub(in crate::view) diff_cache_rev: u64,
+    pub(in crate::view) file_diff_cache_seq: u64,
+    pub(in crate::view) inline_columns: usize,
+    pub(in crate::view) split_columns: usize,
+    pub(in crate::view) reveal_whitespace_chars: bool,
+}
+
+impl DiffHorizontalScrollColumn {
+    pub(in crate::view) const fn index(self) -> usize {
+        match self {
+            Self::Primary => 0,
+            Self::SplitRight => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::view) struct DiffHorizontalScrollState {
+    pub(in crate::view) content_widths: [Pixels; 2],
+}
+
+impl DiffHorizontalScrollState {
+    pub(in crate::view) fn new() -> Self {
+        Self {
+            content_widths: [px(0.0); 2],
+        }
+    }
+
+    pub(in crate::view) fn reset(&mut self) {
+        self.content_widths = [px(0.0); 2];
+    }
+
+    pub(in crate::view) fn record_content_width(
+        &mut self,
+        column: DiffHorizontalScrollColumn,
+        width: Pixels,
+    ) -> bool {
+        let ix = column.index();
+        if width > self.content_widths[ix] {
+            self.content_widths[ix] = width;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+pub(crate) struct MainPaneView {
     pub(in crate::view) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
     pub(in crate::view) view_mode: GitCometViewMode,
@@ -2153,7 +2326,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) date_time_format: DateTimeFormat,
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) root_view: WeakEntity<GitCometView>,
-    pub(super) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     pub(super) notify_fingerprint: u64,
     pub(in crate::view) active_context_menu_invoker: Option<SharedString>,
 
@@ -2163,18 +2336,22 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) layout_sidebar_collapsed: bool,
     pub(in crate::view) layout_details_collapsed: bool,
 
-    pub(in crate::view) show_whitespace: bool,
+    pub(in crate::view) reveal_whitespace_chars: bool,
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
+    pub(in crate::view) diff_show_line_numbers: bool,
     pub(in crate::view) diff_scroll_sync: DiffScrollSync,
+    pub(in crate::view) diff_content_mode: DiffContentMode,
+    pub(in crate::view) diff_whitespace_mode: DiffWhitespaceMode,
     pub(in crate::view) diff_split_ratio: f32,
     pub(in crate::view) diff_split_resize: Option<DiffSplitResizeState>,
     pub(in crate::view) diff_split_last_synced_x: [Pixels; 2],
     pub(in crate::view) diff_split_last_synced_y: [Pixels; 2],
-    pub(in crate::view) diff_horizontal_min_width: Pixels,
+    pub(in crate::view) diff_horizontal_scroll: DiffHorizontalScrollState,
     pub(in crate::view) diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) diff_cache_rev: u64,
+    pub(in crate::view) diff_cache_content_signature: Option<u64>,
     pub(in crate::view) diff_cache_target: Option<DiffTarget>,
     pub(in crate::view) diff_cache: Vec<AnnotatedDiffLine>,
     pub(in crate::view) diff_row_provider: Option<Arc<super::diff_cache::PagedPatchDiffRows>>,
@@ -2185,6 +2362,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_yaml_block_scalar_for_src_ix: Vec<bool>,
     pub(in crate::view) diff_click_kinds: Vec<DiffClickKind>,
     pub(in crate::view) diff_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
+    pub(in crate::view) diff_visual_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_hide_unified_header_for_src_ix: Vec<bool>,
     pub(in crate::view) diff_header_display_cache: HashMap<usize, SharedString>,
     pub(in crate::view) diff_split_cache: Vec<PatchSplitRow>,
@@ -2192,11 +2370,23 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
     pub(in crate::view) diff_autoscroll_pending: bool,
     pub(in crate::view) diff_raw_input: Entity<components::TextInput>,
+    pub(in crate::view) submodule_hash_inputs: Vec<Entity<components::TextInput>>,
     pub(in crate::view) diff_visible_indices: Vec<usize>,
     pub(in crate::view) diff_visible_inline_map: Option<super::diff_cache::PatchInlineVisibleMap>,
+    pub(in crate::view) diff_wrap_visible_rows: Vec<DiffWrapVisualRow>,
+    pub(in crate::view) diff_wrap_visible_cache_key: Option<DiffWrapVisibleCacheKey>,
+    pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
+    pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: HashMap<usize, usize>,
+    pub(in crate::view) collapsed_diff_reveals: HashMap<usize, CollapsedDiffReveal>,
+    pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
+    pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
+    pub(in crate::view) collapsed_diff_header_display_cache: HashMap<usize, SharedString>,
+    pub(in crate::view) collapsed_diff_projection_identity: Option<CollapsedDiffProjectionIdentity>,
     pub(in crate::view) diff_visible_cache_len: usize,
     pub(in crate::view) diff_visible_view: DiffViewMode,
     pub(in crate::view) diff_visible_is_file_view: bool,
+    pub(in crate::view) diff_visible_projection_rev: u64,
+    pub(in crate::view) diff_visible_cache_projection_rev: u64,
     pub(in crate::view) diff_scrollbar_markers_cache: Vec<components::ScrollbarMarker>,
     pub(in crate::view) diff_word_highlights: Vec<Option<Vec<Range<usize>>>>,
     pub(in crate::view) diff_word_highlights_inflight: Option<u64>,
@@ -2204,6 +2394,9 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_text_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_segments_cache: Vec<Option<VersionedCachedDiffStyledText>>,
     pub(in crate::view) diff_text_query_cache_query: SharedString,
+    pub(in crate::view) diff_text_query_cache_options: super::diff_search::DiffSearchOptions,
+    pub(in crate::view) diff_text_query_cache_matcher:
+        Option<super::diff_search::DiffSearchMatcher>,
     pub(in crate::view) diff_text_query_cache_generation: u64,
     pub(in crate::view) diff_selection_anchor: Option<usize>,
     pub(in crate::view) diff_selection_range: Option<(usize, usize)>,
@@ -2217,20 +2410,26 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     pub(in crate::view) diff_text_layout_cache_epoch: u64,
     pub(in crate::view) diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
-    pub(in crate::view) diff_hunk_picker_search_input: Option<Entity<components::TextInput>>,
     pub(in crate::view) diff_search_active: bool,
     pub(in crate::view) diff_search_query: SharedString,
+    pub(in crate::view) diff_search_options: super::diff_search::DiffSearchOptions,
+    pub(in crate::view) diff_search_regex_error: Option<SharedString>,
     pub(in crate::view) diff_search_matches: Vec<usize>,
     pub(in crate::view) diff_search_inline_patch_trigram_index:
         Option<super::diff_search::DiffSearchVisibleTrigramIndex>,
     pub(in crate::view) diff_search_match_ix: Option<usize>,
+    pub(in crate::view) diff_search_debounce_seq: u64,
+    pub(in crate::view) diff_search_pending_previous_query: Option<SharedString>,
+    pub(in crate::view) diff_search_scroll: ScrollHandle,
     pub(in crate::view) diff_search_input: Entity<components::TextInput>,
     pub(super) _diff_search_subscription: gpui::Subscription,
 
     pub(in crate::view) file_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_diff_cache_rev: u64,
     pub(in crate::view) file_diff_cache_content_signature: Option<u64>,
+    pub(in crate::view) file_diff_cache_whitespace_mode: DiffWhitespaceMode,
     pub(in crate::view) file_diff_cache_target: Option<DiffTarget>,
+    pub(in crate::view) file_diff_cache_error: Option<String>,
     pub(in crate::view) file_diff_cache_path: Option<std::path::PathBuf>,
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
@@ -2238,16 +2437,20 @@ pub(in crate::view) struct MainPaneView {
     /// Real old-side file text used for split and inline syntax projection.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
+    pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_old_line_to_inline_row: Arc<[Option<usize>]>,
     /// Real new-side file text used for split and inline syntax projection.
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
+    pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
+    pub(in crate::view) file_diff_new_line_to_inline_row: Arc<[Option<usize>]>,
     pub(in crate::view) file_diff_inline_cache: Vec<AnnotatedDiffLine>,
     pub(in crate::view) file_diff_inline_row_provider:
         Option<Arc<super::diff_cache::PagedFileDiffInlineRows>>,
     pub(in crate::view) file_diff_inline_text: SharedString,
-    pub(in crate::view) file_diff_inline_word_highlights: Vec<Option<Vec<Range<usize>>>>,
-    pub(in crate::view) file_diff_split_word_highlights_old: Vec<Option<Vec<Range<usize>>>>,
-    pub(in crate::view) file_diff_split_word_highlights_new: Vec<Option<Vec<Range<usize>>>>,
+    pub(in crate::view) file_diff_inline_word_highlights: rows::LruCache<usize, Vec<Range<usize>>>,
+    pub(in crate::view) file_diff_split_word_highlights:
+        rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
     pub(in crate::view) file_diff_syntax_generation: u64,
@@ -2318,6 +2521,7 @@ pub(in crate::view) struct MainPaneView {
     pub(in crate::view) conflict_diff_query_segments_cache_split:
         crate::view::conflict_resolver::ConflictSplitStyledTextCache,
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
+    pub(in crate::view) conflict_diff_query_cache_options: super::diff_search::DiffSearchOptions,
     pub(in crate::view) conflict_three_way_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     /// Prepared full-document syntax trees for each merge-input side (base, ours, theirs).

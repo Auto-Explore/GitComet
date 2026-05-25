@@ -19,7 +19,7 @@ pub(in super::super) struct SidebarPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
@@ -152,6 +152,13 @@ impl SidebarPaneView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
+    pub(in super::super) fn open_repo_for_workdir(
+        &self,
+        workdir: &std::path::Path,
+    ) -> Option<&RepoState> {
+        self.state.repos.iter().find(|r| r.spec.workdir == workdir)
+    }
+
     pub(in super::super) fn cached_path_display(&self, path: &std::path::Path) -> SharedString {
         let mut cache = self.path_display_cache.borrow_mut();
         path_display::cached_path_display(&mut cache, path)
@@ -183,6 +190,10 @@ impl SidebarPaneView {
         };
 
         let repo_path = repo.spec.workdir.clone();
+        let repo_id = repo.id;
+        let should_load_submodules_on_expand = collapse_key.as_ref().trim()
+            == branch_sidebar::submodules_section_storage_key()
+            && matches!(repo.submodules, Loadable::NotLoaded | Loadable::Error(_));
         let collapse_key = collapse_key.as_ref().trim();
         if collapse_key.is_empty() {
             return;
@@ -196,9 +207,16 @@ impl SidebarPaneView {
         if items.is_empty() {
             self.sidebar_collapsed_items_by_repo.remove(&repo_path);
         }
+        let expanded_now = self.sidebar_collapsed_items_by_repo.get(&repo_path).map_or(
+            !branch_sidebar::is_collapsed(&BTreeSet::new(), collapse_key),
+            |items| !branch_sidebar::is_collapsed(items, collapse_key),
+        );
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
         self.schedule_ui_settings_persist(cx);
+        if should_load_submodules_on_expand && expanded_now {
+            self.store.dispatch(Msg::LoadSubmodules { repo_id });
+        }
         self.dispatch_sidebar_data_request_if_needed(cx);
         cx.notify();
     }
@@ -296,29 +314,6 @@ impl SidebarPaneView {
             .child(panel_body)
     }
 
-    pub(in super::super) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    pub(in super::super) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
-    }
-
     pub(in super::super) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -356,7 +351,7 @@ impl SidebarPaneView {
         section: BranchSection,
         branch_name: &str,
         commit_id: CommitId,
-        desired_scope: LogScope,
+        fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
         let branch_name = branch_name.to_string();
@@ -367,7 +362,7 @@ impl SidebarPaneView {
                     section,
                     &branch_name,
                     commit_id,
-                    desired_scope,
+                    fallback_scope,
                     cx,
                 );
             });

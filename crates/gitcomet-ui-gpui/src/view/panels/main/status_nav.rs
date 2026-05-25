@@ -202,17 +202,40 @@ pub(super) fn adjacent_diff_file_target_for_repo(
             })
         }
         DiffTarget::Commit { path: None, .. } => None,
+        DiffTarget::CommitRange { .. } => None,
     }
 }
 
 impl MainPaneView {
-    pub(in crate::view) fn try_select_adjacent_diff_file(
+    fn try_select_adjacent_diff_file_inner(
         &mut self,
         repo_id: RepoId,
         direction: i8,
+        focus_diff_panel: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
+        if let Some(inline) = self.active_inline_submodule_diff() {
+            let next_ix = if direction < 0 {
+                inline.selected_ix.checked_sub(1)
+            } else if direction > 0 {
+                (inline.selected_ix + 1 < inline.entries.len()).then_some(inline.selected_ix + 1)
+            } else {
+                None
+            };
+            let Some(next_ix) = next_ix else {
+                return false;
+            };
+            if focus_diff_panel {
+                window.focus(&self.diff_panel_focus_handle, cx);
+            }
+            self.store.dispatch(Msg::SelectInlineSubmoduleDiff {
+                repo_id,
+                selected_ix: next_ix,
+            });
+            return true;
+        }
+
         let change_tracking_view = self.active_change_tracking_view(cx);
         let Some(target) = (|| {
             let repo = self.active_repo()?;
@@ -222,7 +245,9 @@ impl MainPaneView {
             return false;
         };
 
-        window.focus(&self.diff_panel_focus_handle, cx);
+        if focus_diff_panel {
+            window.focus(&self.diff_panel_focus_handle, cx);
+        }
         match target {
             AdjacentDiffFileTarget::WorkingTree {
                 section,
@@ -260,6 +285,26 @@ impl MainPaneView {
         }
 
         true
+    }
+
+    pub(in crate::view) fn try_select_adjacent_diff_file(
+        &mut self,
+        repo_id: RepoId,
+        direction: i8,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.try_select_adjacent_diff_file_inner(repo_id, direction, true, window, cx)
+    }
+
+    pub(in crate::view) fn try_select_adjacent_diff_file_preserving_focus(
+        &mut self,
+        repo_id: RepoId,
+        direction: i8,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.try_select_adjacent_diff_file_inner(repo_id, direction, false, window, cx)
     }
 }
 
@@ -420,14 +465,17 @@ mod tests {
                     gitcomet_core::domain::CommitFileChange {
                         path: file_a.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_b.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_c.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: false,
                     },
                 ],
             }));

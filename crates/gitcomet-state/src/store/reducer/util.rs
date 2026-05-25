@@ -20,8 +20,9 @@ use std::time::SystemTime;
 pub(super) const DEFAULT_LOG_PAGE_SIZE: usize = 200;
 const CONFLICT_RELOAD_EFFECT_COUNT: usize = 1;
 const DIFF_RELOAD_MAX_EFFECTS: usize = 3;
-const PRIMARY_REFRESH_MAX_EFFECTS: usize = 6;
-const FULL_REFRESH_MAX_EFFECTS: usize = 11;
+const PRIMARY_REFRESH_MAX_EFFECTS: usize = 5;
+const FULL_REFRESH_MAX_EFFECTS: usize = 8;
+const BACKGROUND_METADATA_MAX_EFFECTS: usize = 3;
 
 pub(super) trait EffectAccumulator {
     fn push_effect(&mut self, effect: Effect);
@@ -53,6 +54,7 @@ pub(super) struct SelectedDiffLoadPlan {
     pub load_patch_diff: bool,
     pub load_file_text: bool,
     pub preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
+    pub load_submodule_summary: bool,
     pub load_file_image: bool,
 }
 
@@ -113,6 +115,9 @@ pub(super) fn diff_target_preview_flags(target: &DiffTarget) -> DiffTargetPrevie
         DiffTarget::WorkingTree { path, .. } => path_preview_flags(path),
         DiffTarget::Commit {
             path: Some(path), ..
+        }
+        | DiffTarget::CommitRange {
+            path: Some(path), ..
         } => path_preview_flags(path),
         _ => DiffTargetPreviewFlags::default(),
     }
@@ -156,10 +161,11 @@ fn diff_target_is_preview_only(repo_state: &RepoState, target: &DiffTarget) -> b
 
             details.files.iter().any(|file| {
                 file.path == *path
+                    && !file.is_submodule
                     && matches!(file.kind, FileStatusKind::Added | FileStatusKind::Deleted)
             })
         }
-        DiffTarget::Commit { path: None, .. } => false,
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
     }
 }
 
@@ -197,7 +203,7 @@ fn diff_target_preview_text_side(
             }
 
             details.files.iter().find_map(|file| {
-                (file.path == *path).then_some(match file.kind {
+                (file.path == *path && !file.is_submodule).then_some(match file.kind {
                     FileStatusKind::Added => Some(gitcomet_core::domain::DiffPreviewTextSide::New),
                     FileStatusKind::Deleted => {
                         Some(gitcomet_core::domain::DiffPreviewTextSide::Old)
@@ -209,7 +215,7 @@ fn diff_target_preview_text_side(
                 })?
             })
         }
-        DiffTarget::Commit { path: None, .. } => None,
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => None,
     }
 }
 
@@ -217,9 +223,21 @@ pub(super) fn selected_diff_load_plan(
     repo_state: &RepoState,
     target: &DiffTarget,
 ) -> SelectedDiffLoadPlan {
+    if diff_target_is_submodule(repo_state, target) {
+        return SelectedDiffLoadPlan {
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: true,
+            load_file_image: false,
+        };
+    }
+
     let supports_file = matches!(
         target,
-        DiffTarget::WorkingTree { .. } | DiffTarget::Commit { path: Some(_), .. }
+        DiffTarget::WorkingTree { .. }
+            | DiffTarget::Commit { path: Some(_), .. }
+            | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
     let preview_only = diff_target_is_preview_only(repo_state, target);
@@ -231,6 +249,7 @@ pub(super) fn selected_diff_load_plan(
         load_patch_diff: !preview_only,
         load_file_text: supports_file && !preview_only && (!preview.wants_image || preview.is_svg),
         preview_text_side,
+        load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
     }
 }
@@ -254,11 +273,87 @@ pub(super) fn apply_selected_diff_load_plan_state(
     } else {
         Loadable::NotLoaded
     };
+    repo_state.diff_state.submodule_summary = if load_plan.load_submodule_summary {
+        Loadable::Loading
+    } else {
+        Loadable::NotLoaded
+    };
     repo_state.diff_state.diff_file_image = if load_plan.load_file_image {
         Loadable::Loading
     } else {
         Loadable::NotLoaded
     };
+}
+
+fn diff_target_is_submodule(repo_state: &RepoState, target: &DiffTarget) -> bool {
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            let Some(entry) = repo_state.status_entry_for_path(*area, path) else {
+                return false;
+            };
+            if entry.kind == FileStatusKind::Untracked {
+                return false;
+            }
+
+            if let Loadable::Ready(submodules) = &repo_state.submodules
+                && submodules.iter().any(|submodule| submodule.path == *path)
+            {
+                return true;
+            }
+
+            if entry.kind == FileStatusKind::Deleted {
+                return head_path_is_gitlink(&repo_state.spec.workdir, path);
+            }
+
+            let dot_git = repo_state.spec.workdir.join(path).join(".git");
+            dot_git.is_file() || dot_git.is_dir()
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => {
+            let Loadable::Ready(details) = &repo_state.history_state.commit_details else {
+                return false;
+            };
+            if &details.id != commit_id {
+                return false;
+            }
+
+            details
+                .files
+                .iter()
+                .any(|file| file.path == *path && file.is_submodule)
+        }
+        DiffTarget::Commit { path: None, .. } | DiffTarget::CommitRange { .. } => false,
+    }
+}
+
+fn head_path_is_gitlink(workdir: &Path, path: &Path) -> bool {
+    let path = if path.is_absolute() {
+        match path.strip_prefix(workdir) {
+            Ok(path) => path,
+            Err(_) => return false,
+        }
+    } else {
+        path
+    };
+
+    let Ok(repo) = gix::open(workdir) else {
+        return false;
+    };
+    let Ok(head_id) = repo.head_id() else {
+        return false;
+    };
+    let Ok(object) = repo.find_object(head_id.detach()) else {
+        return false;
+    };
+    let Ok(tree) = object.peel_to_tree() else {
+        return false;
+    };
+    let Ok(Some(entry)) = tree.lookup_entry_by_path(path) else {
+        return false;
+    };
+    entry.mode().is_commit()
 }
 
 pub(super) fn selected_conflict_target<'a>(
@@ -376,6 +471,9 @@ pub(super) fn diff_reload_effect_count(repo_state: &RepoState, target: &DiffTarg
     let plan = selected_diff_load_plan(repo_state, target);
 
     let mut count = usize::from(plan.load_patch_diff);
+    if plan.load_submodule_summary {
+        count += 1;
+    }
     if plan.load_file_image {
         count += 1;
     }
@@ -408,6 +506,12 @@ pub(super) fn append_diff_reload_effects(
 ) {
     let plan = selected_diff_load_plan(repo_state, &target);
 
+    if plan.load_submodule_summary {
+        effects.push_effect(Effect::LoadSubmoduleSummary {
+            repo_id,
+            target: target.clone(),
+        });
+    }
     if plan.load_patch_diff {
         effects.push_effect(Effect::LoadDiff {
             repo_id,
@@ -546,6 +650,10 @@ pub(super) fn refresh_full_effect_capacity() -> usize {
     FULL_REFRESH_MAX_EFFECTS
 }
 
+pub(super) fn background_metadata_effect_capacity() -> usize {
+    BACKGROUND_METADATA_MAX_EFFECTS
+}
+
 pub(super) fn refresh_full_effects(
     repo_state: &mut RepoState,
     git_log_settings: GitLogSettings,
@@ -557,7 +665,7 @@ pub(super) fn refresh_full_effects(
 
 pub(super) fn append_refresh_full_effects(
     repo_state: &mut RepoState,
-    git_log_settings: GitLogSettings,
+    _git_log_settings: GitLogSettings,
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
@@ -596,11 +704,6 @@ pub(super) fn append_refresh_full_effects(
     {
         effects.push_effect(Effect::LoadBranches { repo_id });
     }
-    if should_auto_fetch_history_tags(git_log_settings)
-        && repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS)
-    {
-        effects.push_effect(Effect::LoadTags { repo_id });
-    }
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::REMOTES)
@@ -614,6 +717,52 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadRemoteBranches { repo_id });
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
+}
+
+pub(super) fn append_auto_background_metadata_effects(
+    repo_state: &mut RepoState,
+    git_log_settings: GitLogSettings,
+    effects: &mut impl EffectAccumulator,
+) {
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return;
+    }
+
+    let repo_id = repo_state.id;
+    if should_auto_fetch_history_tags(git_log_settings) {
+        if matches!(repo_state.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+            repo_state.set_tags(Loadable::Loading);
+            if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+                effects.push_effect(Effect::LoadTags { repo_id });
+            }
+        }
+
+        if matches!(
+            repo_state.remote_tags,
+            Loadable::NotLoaded | Loadable::Error(_)
+        ) {
+            repo_state.set_remote_tags(Loadable::Loading);
+            if repo_state
+                .loads_in_flight
+                .request(RepoLoadsInFlight::REMOTE_TAGS)
+            {
+                effects.push_effect(Effect::LoadRemoteTags { repo_id });
+            }
+        }
+    }
+
+    if matches!(
+        repo_state.submodules,
+        Loadable::NotLoaded | Loadable::Error(_)
+    ) {
+        repo_state.set_submodules(Loadable::Loading);
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::SUBMODULES)
+        {
+            effects.push_effect(Effect::LoadSubmodules { repo_id });
+        }
+    }
 }
 
 pub(super) fn dedup_paths_in_order(paths: Vec<PathBuf>) -> Vec<PathBuf> {
@@ -832,7 +981,9 @@ fn summarize_command(
             RepoCommandKind::MergeRef { .. } => "Merge",
             RepoCommandKind::SquashRef { .. } => "Squash",
             RepoCommandKind::Push => "Push",
+            RepoCommandKind::PushAfterCommit { .. } => "Push after commit",
             RepoCommandKind::ForcePush => "Force push",
+            RepoCommandKind::ForcePushWithLease { .. } => "Force push with lease",
             RepoCommandKind::PushSetUpstream { .. } => "Push",
             RepoCommandKind::SetUpstreamBranch { .. } => "Set as tracking upstream",
             RepoCommandKind::UnsetUpstreamBranch { .. } => "Unlink upstream branch",
@@ -863,6 +1014,8 @@ fn summarize_command(
             | RepoCommandKind::ForceRemoveWorktree { .. } => "Worktree",
             RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }
+            | RepoCommandKind::LoadSubmodule { .. }
+            | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. } => "Submodule",
             RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk => "Hunk",
             RepoCommandKind::ApplyWorktreePatch { reverse } => {
@@ -957,11 +1110,30 @@ fn summarize_command(
                 "Push: Completed".to_string()
             }
         }
+        RepoCommandKind::PushAfterCommit { set_upstream, .. } => {
+            let base = if output.stderr.contains("Everything up-to-date") {
+                "Everything up-to-date"
+            } else {
+                "Completed"
+            };
+            if *set_upstream {
+                format!("Push after commit -u: {base}")
+            } else {
+                format!("Push after commit: {base}")
+            }
+        }
         RepoCommandKind::ForcePush => {
             if output.stderr.contains("Everything up-to-date") {
                 "Force push: Everything up-to-date".to_string()
             } else {
                 "Force push: Completed".to_string()
+            }
+        }
+        RepoCommandKind::ForcePushWithLease { .. } => {
+            if output.stderr.contains("Everything up-to-date") {
+                "Force push with lease: Everything up-to-date".to_string()
+            } else {
+                "Force push with lease: Completed".to_string()
             }
         }
         RepoCommandKind::PushSetUpstream { remote, branch } => {
@@ -1055,6 +1227,15 @@ fn summarize_command(
             format!("Submodule added → {}", path.display())
         }
         RepoCommandKind::UpdateSubmodules { .. } => "Submodules: Updated".to_string(),
+        RepoCommandKind::LoadSubmodule { path, .. } => {
+            format!("Submodule loaded → {}", path.display())
+        }
+        RepoCommandKind::ChangeSubmodulePointer { path, reference } => {
+            format!(
+                "Submodule pointer updated → {} ({reference})",
+                path.display()
+            )
+        }
         RepoCommandKind::RemoveSubmodule { path } => {
             format!("Submodule removed → {}", path.display())
         }
@@ -1406,7 +1587,7 @@ mod tests {
         let mut full = repo_state(2);
         full.set_log_loading_more(true);
         let full_effects = refresh_full_effects(&mut full, GitLogSettings::default());
-        assert_eq!(full_effects.len(), 9);
+        assert_eq!(full_effects.len(), 8);
         assert!(!full.log_loading_more);
         assert!(
             full_effects
@@ -1423,9 +1604,10 @@ mod tests {
             "full refresh should coalesce staged and worktree status into LoadStatus"
         );
         assert!(
-            full_effects
+            !full_effects
                 .iter()
-                .any(|effect| matches!(effect, Effect::LoadTags { .. }))
+                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
+            "tags should lazy-load by default instead of refresh_full_effects"
         );
         assert!(
             !full_effects
@@ -1443,6 +1625,33 @@ mod tests {
             full_effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadRebaseAndMergeState { .. }))
+        );
+
+        let mut metadata = repo_state(3);
+        metadata.set_open(Loadable::Ready(()));
+        let mut metadata_effects = Vec::new();
+        append_auto_background_metadata_effects(
+            &mut metadata,
+            GitLogSettings::default(),
+            &mut metadata_effects,
+        );
+        assert!(
+            metadata_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTags { .. })),
+            "auto-idle metadata should request LoadTags"
+        );
+        assert!(
+            metadata_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadRemoteTags { .. })),
+            "auto-idle metadata should request LoadRemoteTags"
+        );
+        assert!(
+            metadata_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadSubmodules { .. })),
+            "auto-idle metadata should request LoadSubmodules"
         );
     }
 

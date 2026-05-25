@@ -17,11 +17,13 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let can_create = this.can_submit_create_tag(cx);
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(420.0))
+        .w(scaled_px(420.0))
         .child(
             div()
                 .px_2()
@@ -57,14 +59,16 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("create_tag_cancel", "Cancel")
+                        .focus_handle(this.create_tag_cancel_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "create_tag_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("create_tag_go", "Create")
+                        .focus_handle(this.create_tag_submit_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "create_tag_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_create)

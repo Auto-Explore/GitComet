@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panes::main::diff_search::normalize_diff_search_query;
 
 pub(in crate::view) fn prepared_diff_syntax_line_for_one_based_line(
     document: Option<PreparedDiffSyntaxDocument>,
@@ -328,8 +329,8 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
         prepared_line.line_ix,
     ) {
         Some(syntax::PreparedSyntaxLineTokensRequest::Ready(tokens)) => {
-            let query_trimmed = query.trim();
-            if word_ranges.is_empty() && query_trimmed.is_empty() {
+            let query = normalize_diff_search_query(query);
+            if word_ranges.is_empty() && query.is_empty() {
                 let build_syntax_only = || {
                     SYNTAX_HIGHLIGHTS_BUF.with_borrow_mut(|buf| {
                         match highlight_palette {
@@ -385,7 +386,7 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
                         build: DiffTextBuildRequest {
                             text,
                             word_ranges,
-                            query,
+                            query: query.as_ref(),
                             syntax: DiffSyntaxConfig {
                                 language: None,
                                 mode: DiffSyntaxMode::HeuristicOnly,
@@ -511,6 +512,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
     old_source: PreparedDiffSyntaxTextSource,
     new_source: PreparedDiffSyntaxTextSource,
     rows: &[InlineDiffSyntaxOnlyRow<'_>],
+    fallback_syntax_mode: DiffSyntaxMode,
 ) -> Vec<PreparedDocumentLineStyledText> {
     let Some(language) = language else {
         return rows
@@ -579,7 +581,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         theme: AppTheme,
         language: DiffSyntaxLanguage,
         text: &str,
-        document: Option<PreparedDiffSyntaxDocument>,
+        fallback_syntax_mode: DiffSyntaxMode,
     ) -> PreparedDocumentLineStyledText {
         PreparedDocumentLineStyledText::Cacheable(build_cached_diff_styled_text(
             theme,
@@ -587,7 +589,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
             &[],
             "",
             Some(language),
-            syntax_mode_for_prepared_document(document),
+            fallback_syntax_mode,
             None,
         ))
     }
@@ -598,6 +600,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         source: PreparedDiffSyntaxTextSource,
         rows: &[SideRow<'_>],
         results: &mut [Option<PreparedDocumentLineStyledText>],
+        fallback_syntax_mode: DiffSyntaxMode,
     ) {
         if rows.is_empty() {
             return;
@@ -609,7 +612,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                     theme,
                     language,
                     row.text,
-                    source.document,
+                    fallback_syntax_mode,
                 ));
             }
             return;
@@ -650,7 +653,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                             theme,
                             language,
                             row.text,
-                            Some(document),
+                            fallback_syntax_mode,
                         ));
                     }
                 }
@@ -685,7 +688,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                         theme,
                         language,
                         row.text,
-                        old_source.document,
+                        fallback_syntax_mode,
                     ));
                 }
             }
@@ -706,7 +709,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
                         theme,
                         language,
                         row.text,
-                        new_source.document,
+                        fallback_syntax_mode,
                     ));
                 }
             }
@@ -732,6 +735,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         old_source,
         old_rows.as_slice(),
         results.as_mut_slice(),
+        fallback_syntax_mode,
     );
     fill_side_results(
         theme,
@@ -739,6 +743,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         new_source,
         new_rows.as_slice(),
         results.as_mut_slice(),
+        fallback_syntax_mode,
     );
 
     results
@@ -746,17 +751,7 @@ pub(in crate::view) fn build_cached_diff_styled_text_for_inline_syntax_only_rows
         .enumerate()
         .map(|(ix, styled)| {
             styled.unwrap_or_else(|| {
-                fallback_syntax_only_row(
-                    theme,
-                    language,
-                    rows[ix].text,
-                    prepared_diff_syntax_line_for_inline_diff_row(
-                        old_source.document,
-                        new_source.document,
-                        rows[ix].line,
-                    )
-                    .document,
-                )
+                fallback_syntax_only_row(theme, language, rows[ix].text, fallback_syntax_mode)
             })
         })
         .collect()
@@ -806,13 +801,15 @@ pub(in crate::view) fn request_syntax_highlights_for_prepared_document_byte_rang
             line_range.len()
         };
         let estimated_highlight_capacity = {
-            let estimated_pending_line_highlights = if ready_line_count == 0 {
-                pending_line_count.saturating_mul(8)
-            } else {
-                let avg_ready_highlights =
-                    (ready_highlight_count + ready_line_count.saturating_sub(1)) / ready_line_count;
-                pending_line_count.saturating_mul(avg_ready_highlights.max(1))
-            };
+            let estimated_pending_line_highlights = ready_highlight_count
+                .saturating_add(ready_line_count.saturating_sub(1))
+                .checked_div(ready_line_count)
+                .map_or_else(
+                    || pending_line_count.saturating_mul(8),
+                    |avg_ready_highlights| {
+                        pending_line_count.saturating_mul(avg_ready_highlights.max(1))
+                    },
+                );
             ready_highlight_count.saturating_add(estimated_pending_line_highlights)
         };
         let mut highlights = Vec::with_capacity(estimated_highlight_capacity);

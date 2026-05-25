@@ -520,22 +520,55 @@ impl DiffTextRegion {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct DiffTextPos {
-    pub(super) visible_ix: usize,
+    pub(super) source_visible_ix: usize,
     pub(super) region: DiffTextRegion,
     pub(super) offset: usize,
 }
 
 impl DiffTextPos {
     pub(super) fn cmp_key(self) -> (usize, u8, usize) {
-        (self.visible_ix, self.region.order(), self.offset)
+        (self.source_visible_ix, self.region.order(), self.offset)
     }
 }
 
 pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
+    pub(super) source_visible_ix: usize,
+    pub(super) text_start_offset: usize,
     pub(super) text_len: usize,
+    pub(super) offset_map: Option<DiffTextOffsetMap>,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct DiffTextOffsetMap {
+    pub(super) display_to_source: Arc<[usize]>,
+    pub(super) source_to_display: Arc<[usize]>,
+}
+
+impl DiffTextOffsetMap {
+    pub(super) fn display_len(&self) -> usize {
+        self.display_to_source.len().saturating_sub(1)
+    }
+
+    pub(super) fn source_len(&self) -> usize {
+        self.source_to_display.len().saturating_sub(1)
+    }
+
+    pub(super) fn source_offset_for_display(&self, offset: usize) -> usize {
+        self.display_to_source
+            .get(offset.min(self.display_len()))
+            .copied()
+            .unwrap_or_else(|| self.source_len())
+    }
+
+    pub(super) fn display_offset_for_source(&self, offset: usize) -> usize {
+        self.source_to_display
+            .get(offset.min(self.source_len()))
+            .copied()
+            .unwrap_or_else(|| self.display_len())
+    }
 }
 
 #[derive(Clone)]
@@ -544,9 +577,40 @@ pub(super) struct ToastState {
     pub(super) kind: components::ToastKind,
     pub(super) input: Entity<components::TextInput>,
     pub(super) is_code_message: bool,
-    pub(super) action_url: Option<String>,
-    pub(super) action_label: Option<String>,
+    pub(super) actions: Vec<ToastAction>,
+    pub(super) dismiss_behavior: ToastDismissBehavior,
     pub(super) ttl: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ToastAction {
+    OpenUrl {
+        url: String,
+        label: String,
+    },
+    OpenSurvey {
+        survey_id: String,
+        survey_name: String,
+        url: String,
+        label: String,
+    },
+    PostponeSurvey {
+        survey_id: String,
+        survey_name: String,
+        postpone_seconds: u64,
+        label: String,
+    },
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) enum ToastDismissBehavior {
+    #[default]
+    Remove,
+    PostponeSurvey {
+        survey_id: String,
+        survey_name: String,
+        postpone_seconds: u64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -556,7 +620,7 @@ pub(super) struct CommitDetailsDelayState {
     pub(super) show_loading: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum StatusSection {
     CombinedUnstaged,
     Untracked,
@@ -588,10 +652,16 @@ enum StatusSectionFilter {
     ExcludeUntracked,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct StatusSectionEntries<'a> {
     entries: &'a [FileStatus],
-    filter: StatusSectionFilter,
+    indexes: StatusSectionIndexes,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum StatusSectionIndexes {
+    All,
+    Filtered(Vec<usize>),
 }
 
 impl<'a> StatusSectionEntries<'a> {
@@ -610,44 +680,81 @@ impl<'a> StatusSectionEntries<'a> {
             ),
             StatusSection::Staged => (repo.staged_status_entries()?, StatusSectionFilter::All),
         };
-        Some(Self { entries, filter })
+        let indexes = match filter {
+            StatusSectionFilter::All => StatusSectionIndexes::All,
+            StatusSectionFilter::UntrackedOnly | StatusSectionFilter::ExcludeUntracked => {
+                StatusSectionIndexes::Filtered(
+                    entries
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(ix, entry)| {
+                            status_section_filter_matches(filter, entry).then_some(ix)
+                        })
+                        .collect(),
+                )
+            }
+        };
+        Some(Self { entries, indexes })
     }
 
-    pub(super) fn iter(self) -> StatusSectionIter<'a> {
-        StatusSectionIter {
-            inner: self.entries.iter(),
-            filter: self.filter,
+    pub(super) fn iter(&self) -> StatusSectionIter<'a, '_> {
+        let inner = match &self.indexes {
+            StatusSectionIndexes::All => StatusSectionIterInner::All(self.entries.iter()),
+            StatusSectionIndexes::Filtered(indexes) => StatusSectionIterInner::Filtered {
+                entries: self.entries,
+                indexes: indexes.iter(),
+            },
+        };
+        StatusSectionIter { inner }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        match &self.indexes {
+            StatusSectionIndexes::All => self.entries.len(),
+            StatusSectionIndexes::Filtered(indexes) => indexes.len(),
         }
     }
 
-    pub(super) fn len(self) -> usize {
-        self.iter().count()
+    pub(super) fn get(&self, index: usize) -> Option<&'a FileStatus> {
+        match &self.indexes {
+            StatusSectionIndexes::All => self.entries.get(index),
+            StatusSectionIndexes::Filtered(indexes) => indexes
+                .get(index)
+                .and_then(|source_ix| self.entries.get(*source_ix)),
+        }
     }
 
-    pub(super) fn get(self, index: usize) -> Option<&'a FileStatus> {
-        self.iter().nth(index)
-    }
-
-    pub(super) fn path_vec(self) -> Vec<std::path::PathBuf> {
+    pub(super) fn path_vec(&self) -> Vec<std::path::PathBuf> {
         self.iter().map(|entry| entry.path.clone()).collect()
     }
 
-    pub(super) fn contains_path(self, path: &std::path::Path) -> bool {
+    pub(super) fn contains_path(&self, path: &std::path::Path) -> bool {
         self.iter().any(|entry| entry.path == path)
     }
 }
 
-pub(super) struct StatusSectionIter<'a> {
-    inner: std::slice::Iter<'a, FileStatus>,
-    filter: StatusSectionFilter,
+pub(super) struct StatusSectionIter<'a, 'indexes> {
+    inner: StatusSectionIterInner<'a, 'indexes>,
 }
 
-impl<'a> Iterator for StatusSectionIter<'a> {
+enum StatusSectionIterInner<'a, 'indexes> {
+    All(std::slice::Iter<'a, FileStatus>),
+    Filtered {
+        entries: &'a [FileStatus],
+        indexes: std::slice::Iter<'indexes, usize>,
+    },
+}
+
+impl<'a, 'indexes> Iterator for StatusSectionIter<'a, 'indexes> {
     type Item = &'a FileStatus;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .find(|entry| status_section_filter_matches(self.filter, entry))
+        match &mut self.inner {
+            StatusSectionIterInner::All(iter) => iter.next(),
+            StatusSectionIterInner::Filtered { entries, indexes } => {
+                indexes.next().and_then(|ix| entries.get(*ix))
+            }
+        }
     }
 }
 
@@ -1120,6 +1227,9 @@ pub(super) struct ConflictResolverUiState {
     /// Current choice for each conflict block, cached to avoid rebuilding it
     /// from `marker_segments` on every render.
     pub(super) conflict_choices: Vec<conflict_resolver::ConflictChoice>,
+    /// Ignore-whitespace visual row kinds by two-way split source row.
+    pub(super) two_way_split_visual_kind_cache:
+        HashMap<usize, gitcomet_core::file_diff::FileDiffRowKind>,
     /// Visible-row indices used to measure horizontal width for the two-way split inputs.
     pub(super) two_way_horizontal_measure_rows: [usize; 2],
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
@@ -1177,6 +1287,7 @@ impl Default for ConflictResolverUiState {
             three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
             conflict_choices: Vec::new(),
+            two_way_split_visual_kind_cache: HashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights: ThreeWaySides::default(),
             nav_anchor: None,
@@ -1215,6 +1326,36 @@ fn indexed_line_text<'a>(text: &'a str, line_starts: &[usize], line_ix: usize) -
         end = end.saturating_sub(1);
     }
     Some(text.get(start..end).unwrap_or(""))
+}
+
+fn append_conflict_row_without_whitespace(
+    row: &gitcomet_core::file_diff::FileDiffRow,
+    old_out: &mut String,
+    new_out: &mut String,
+) {
+    use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+    match row.kind {
+        RK::Context => {}
+        RK::Remove => {
+            if let Some(text) = row.old.as_ref() {
+                old_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+        }
+        RK::Add => {
+            if let Some(text) = row.new.as_ref() {
+                new_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+        }
+        RK::Modify => {
+            if let Some(text) = row.old.as_ref() {
+                old_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+            if let Some(text) = row.new.as_ref() {
+                new_out.extend(text.as_ref().chars().filter(|ch| !ch.is_whitespace()));
+            }
+        }
+    }
 }
 
 impl ConflictResolverUiState {
@@ -1419,6 +1560,72 @@ impl ConflictResolverUiState {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => {
                 s.split_row_index.row_at(&self.marker_segments, row_ix)
+            }
+        }
+    }
+
+    pub(super) fn two_way_split_visual_kind_at(
+        &mut self,
+        row_ix: usize,
+        row: &gitcomet_core::file_diff::FileDiffRow,
+        whitespace_mode: DiffWhitespaceMode,
+    ) -> gitcomet_core::file_diff::FileDiffRowKind {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        if whitespace_mode == DiffWhitespaceMode::Show || matches!(row.kind, RK::Context) {
+            return row.kind;
+        }
+
+        if let Some(kind) = self.two_way_split_visual_kind_cache.get(&row_ix).copied() {
+            return kind;
+        }
+
+        self.cache_two_way_split_visual_kind_run(row_ix);
+        self.two_way_split_visual_kind_cache
+            .get(&row_ix)
+            .copied()
+            .unwrap_or(row.kind)
+    }
+
+    fn cache_two_way_split_visual_kind_run(&mut self, row_ix: usize) {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let mut start = row_ix;
+        while start > 0 {
+            let Some(prev) = self.two_way_split_row_by_source(start - 1) else {
+                break;
+            };
+            if matches!(prev.kind, RK::Context) {
+                break;
+            }
+            start -= 1;
+        }
+
+        let mut old_stripped = String::new();
+        let mut new_stripped = String::new();
+        let mut end = start;
+        while let Some(next) = self.two_way_split_row_by_source(end) {
+            if matches!(next.kind, RK::Context) {
+                break;
+            }
+            append_conflict_row_without_whitespace(&next, &mut old_stripped, &mut new_stripped);
+            end += 1;
+        }
+
+        if start == end {
+            return;
+        }
+
+        if old_stripped == new_stripped {
+            for ix in start..end {
+                self.two_way_split_visual_kind_cache.insert(ix, RK::Context);
+            }
+            return;
+        }
+
+        for ix in start..end {
+            if let Some(row) = self.two_way_split_row_by_source(ix) {
+                self.two_way_split_visual_kind_cache.insert(ix, row.kind);
             }
         }
     }
@@ -1673,6 +1880,7 @@ impl ConflictResolverUiState {
     /// Rebuild two-way visible state from current marker segments.
     /// Rebuilds the streamed split row index and projection.
     pub(super) fn rebuild_two_way_visible_state(&mut self) {
+        self.two_way_split_visual_kind_cache.clear();
         let ConflictModeState::Streamed(s) = &mut self.mode_state;
         s.split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
             &self.marker_segments,
@@ -1743,7 +1951,8 @@ impl ConflictResolverUiState {
 #[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
     use super::{
-        ConflictResolverUiState, DeferredLineStarts, Loadable, ThreeWayColumn, ThreeWaySides,
+        ConflictResolverUiState, DeferredLineStarts, DiffWhitespaceMode, Loadable, ThreeWayColumn,
+        ThreeWaySides,
     };
     use crate::view::conflict_resolver::{
         self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
@@ -1921,6 +2130,33 @@ mod conflict_resolver_ui_state_tests {
         assert_eq!(
             state.conflict_choices,
             vec![ConflictChoice::Ours, ConflictChoice::Both]
+        );
+    }
+
+    #[test]
+    fn ignored_whitespace_visual_kind_caches_entire_change_run() {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "let x = 1\nabc  \n".into(),
+            theirs: "let x=1\nabc\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        state.rebuild_two_way_visible_state();
+
+        let first_row = state.two_way_split_row_by_source(0).unwrap();
+        assert_eq!(
+            state.two_way_split_visual_kind_at(0, &first_row, DiffWhitespaceMode::Ignore),
+            RK::Context
+        );
+
+        assert_eq!(state.two_way_split_visual_kind_cache.len(), 2);
+        assert_eq!(
+            state.two_way_split_visual_kind_cache.get(&1).copied(),
+            Some(RK::Context)
         );
     }
 
@@ -2258,8 +2494,14 @@ pub(super) enum PopoverKind {
     },
     PullPicker,
     PushPicker,
+    CommitOptionsMenu {
+        repo_id: RepoId,
+    },
+    PreviousCommitMessagesMenu {
+        repo_id: RepoId,
+    },
     AppMenu,
-    DiffHunks,
+    DiffActionMenu,
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,
@@ -2320,6 +2562,11 @@ pub(super) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    SubmoduleInnerDiffMenu {
+        repo_id: RepoId,
+        submodule_repo_path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     TagMenu {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -2327,7 +2574,9 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
+    DiffContentModeSettings,
     ChangeTrackingSettings,
+    UiScalePicker,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2367,6 +2616,7 @@ pub(super) enum SubmodulePopoverKind {
     SectionMenu,
     Menu { path: std::path::PathBuf },
     AddPrompt,
+    ChangePointerPrompt { path: std::path::PathBuf },
     TrustConfirm,
     OpenPicker,
     RemovePicker,
@@ -2536,6 +2786,28 @@ pub(super) enum DeferredRepoBootstrap {
     OpenRepo(std::path::PathBuf),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SubmoduleDiffBootstrap {
+    pub(super) repo_path: std::path::PathBuf,
+    pub(super) target: DiffTarget,
+}
+
+impl SubmoduleDiffBootstrap {
+    pub(super) fn new(repo_path: std::path::PathBuf, target: DiffTarget) -> Self {
+        let repo_path = normalize_bootstrap_repo_path(repo_path);
+        let target = normalize_bootstrap_diff_target(&repo_path, target);
+        Self { repo_path, target }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum SubmoduleDiffBootstrapAction {
+    OpenRepo(std::path::PathBuf),
+    SetActiveRepo(RepoId),
+    SelectDiff { repo_id: RepoId, target: DiffTarget },
+    Complete,
+}
+
 pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::path::PathBuf {
     let path = if path.is_relative() {
         std::env::current_dir()
@@ -2545,6 +2817,46 @@ pub(super) fn normalize_bootstrap_repo_path(path: std::path::PathBuf) -> std::pa
         path
     };
     canonicalize_path(path)
+}
+
+fn normalize_bootstrap_target_path(
+    repo_path: &std::path::Path,
+    target_path: std::path::PathBuf,
+) -> std::path::PathBuf {
+    if target_path.is_relative() {
+        return target_path;
+    }
+
+    if let Ok(relative) = target_path.strip_prefix(repo_path) {
+        return relative.to_path_buf();
+    }
+
+    canonicalize_path(target_path.clone())
+        .strip_prefix(repo_path)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or(target_path)
+}
+
+fn normalize_bootstrap_diff_target(repo_path: &std::path::Path, target: DiffTarget) -> DiffTarget {
+    match target {
+        DiffTarget::WorkingTree { path, area } => DiffTarget::WorkingTree {
+            path: normalize_bootstrap_target_path(repo_path, path),
+            area,
+        },
+        DiffTarget::Commit { commit_id, path } => DiffTarget::Commit {
+            commit_id,
+            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        },
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+        } => DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path: path.map(|path| normalize_bootstrap_target_path(repo_path, path)),
+        },
+    }
 }
 
 pub(super) fn focused_mergetool_target_path(
@@ -2733,6 +3045,38 @@ pub(super) fn focused_mergetool_bootstrap_action(
     }
 
     Some(FocusedMergetoolBootstrapAction::Complete)
+}
+
+pub(super) fn submodule_diff_bootstrap_action(
+    state: &AppState,
+    bootstrap: &SubmoduleDiffBootstrap,
+) -> Option<SubmoduleDiffBootstrapAction> {
+    let Some(repo) = state
+        .repos
+        .iter()
+        .find(|r| r.spec.workdir == bootstrap.repo_path)
+    else {
+        return Some(SubmoduleDiffBootstrapAction::OpenRepo(
+            bootstrap.repo_path.clone(),
+        ));
+    };
+
+    if state.active_repo != Some(repo.id) {
+        return Some(SubmoduleDiffBootstrapAction::SetActiveRepo(repo.id));
+    }
+
+    if !matches!(repo.open, Loadable::Ready(())) {
+        return None;
+    }
+
+    if repo.diff_state.diff_target.as_ref() != Some(&bootstrap.target) {
+        return Some(SubmoduleDiffBootstrapAction::SelectDiff {
+            repo_id: repo.id,
+            target: bootstrap.target.clone(),
+        });
+    }
+
+    Some(SubmoduleDiffBootstrapAction::Complete)
 }
 
 pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
@@ -2925,6 +3269,72 @@ impl DiffScrollSync {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum DiffContentMode {
+    #[default]
+    Full,
+    Collapsed,
+}
+
+impl DiffContentMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Full => "content",
+            Self::Collapsed => "changed_lines_only",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "content" => Some(Self::Full),
+            "changed_lines_only" => Some(Self::Collapsed),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Full => "Full",
+            Self::Collapsed => "Collapsed",
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        self.label()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DiffWhitespaceMode {
+    #[default]
+    Show,
+    Ignore,
+}
+
+impl DiffWhitespaceMode {
+    pub(crate) const fn key(self) -> &'static str {
+        match self {
+            Self::Show => "show",
+            Self::Ignore => "ignore",
+        }
+    }
+
+    pub(crate) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "show" => Some(Self::Show),
+            "ignore" => Some(Self::Ignore),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn toggled(self) -> Self {
+        match self {
+            Self::Show => Self::Ignore,
+            Self::Ignore => Self::Show,
+        }
+    }
+}
+
 pub struct GitCometView {
     pub(super) store: Arc<AppStore>,
     pub(super) state: Arc<AppState>,
@@ -2943,10 +3353,12 @@ pub struct GitCometView {
     pub(super) details_pane: Entity<DetailsPaneView>,
     pub(super) repo_tabs_bar: Entity<RepoTabsBarView>,
     pub(super) action_bar: Entity<ActionBarView>,
+    pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
+    pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
     pub(super) startup_repo_bootstrap_pending: bool,
     pub(super) splash_backdrop_image: Arc<gpui::Image>,
@@ -2954,6 +3366,7 @@ pub struct GitCometView {
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
+    pub(super) last_repo_activation_dispatch_at: HashMap<RepoId, Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
@@ -2969,7 +3382,14 @@ pub struct GitCometView {
     pub(super) terminal_cursor_blink_active: bool,
     pub(super) terminal_cursor_blink_task_scheduled: bool,
     pub(super) terminal_cursor_blink_seq: u64,
+    pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
+    pub(super) diff_content_mode: DiffContentMode,
+    pub(super) diff_whitespace_mode: DiffWhitespaceMode,
+    pub(super) diff_reveal_whitespace_chars: bool,
+    pub(super) diff_word_wrap: bool,
+    pub(super) diff_show_line_numbers: bool,
+    pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
@@ -2978,6 +3398,8 @@ pub struct GitCometView {
 
     pub(super) sidebar_collapsed: bool,
     pub(super) details_collapsed: bool,
+    pub(super) sidebar_width_design: f32,
+    pub(super) details_width_design: f32,
     pub(super) sidebar_width: Pixels,
     pub(super) details_width: Pixels,
     pub(super) sidebar_render_width: Pixels,

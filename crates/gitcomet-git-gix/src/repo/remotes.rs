@@ -1,11 +1,15 @@
 use super::GixRepo;
+use super::history::gix_head_id_or_none;
 use crate::util::{
-    bytes_to_text_preserving_utf8, run_git_capture, run_git_simple, run_git_with_output,
-    validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, git_command_failed_error, run_git_capture, run_git_raw_output,
+    run_git_simple, run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
 };
-use gitcomet_core::domain::{Remote, RemoteBranch, Upstream};
+use gitcomet_core::domain::{CommitId, Remote, RemoteBranch, Upstream};
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{CommandOutput, PullMode, RemoteUrlKind, Result};
+use gitcomet_core::services::{
+    CancellationToken, CommandOutput, ForcePushLease, PullMode, RemoteUrlKind, Result,
+    SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
+};
 use gix::bstr::ByteSlice as _;
 use rustc_hash::FxHashSet as HashSet;
 use std::process::Command;
@@ -83,6 +87,20 @@ fn normalize_remote_url(url: &str) -> String {
     // gix serializes Windows drive-letter file remotes as `file://C:/...`.
     let normalized_path = path.replace('\\', "/");
     format!("file:///{normalized_path}")
+}
+
+fn safe_push_ref_display(remote: &str, branch: &str) -> String {
+    format!("{remote}/{branch}")
+}
+
+fn output_mentions_missing_remote_ref(output: &std::process::Output) -> bool {
+    let mut text = bytes_to_text_preserving_utf8(&output.stderr);
+    text.push('\n');
+    text.push_str(&bytes_to_text_preserving_utf8(&output.stdout));
+    text.contains("couldn't find remote ref")
+        || text.contains("could not find remote ref")
+        || text.contains("couldn't find remote branch")
+        || text.contains("could not find remote branch")
 }
 
 fn run_git_command<S, O>(
@@ -211,6 +229,14 @@ impl GixRepo {
     }
 
     pub(super) fn list_remote_branches_impl(&self) -> Result<Vec<RemoteBranch>> {
+        self.list_remote_branches_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn list_remote_branches_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let refs = repo
             .references()
@@ -221,6 +247,7 @@ impl GixRepo {
 
         let mut branches = Vec::new();
         for reference in iter {
+            cancellation.check_cancelled()?;
             let mut reference = reference
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix ref iter: {e}"))))?;
             let short_name = reference.name().shorten().to_str_lossy().into_owned();
@@ -244,6 +271,7 @@ impl GixRepo {
         }
 
         branches.sort_by(|a, b| a.remote.cmp(&b.remote).then_with(|| a.name.cmp(&b.name)));
+        cancellation.check_cancelled()?;
         Ok(branches)
     }
 
@@ -393,6 +421,369 @@ impl GixRepo {
         run_git_command_with_optional_output(cmd, &command_label, capture_output)
     }
 
+    fn push_head_to_branch_with_oid_lease_with_output_impl(
+        &self,
+        lease: &ForcePushLease,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(&lease.remote, "remote name")?;
+        validate_ref_like_arg(&lease.branch, "branch name")?;
+        validate_hex_commit_id(&lease.expected)?;
+        validate_ref_like_arg(&lease.local_branch, "local branch name")?;
+        validate_hex_commit_id(&lease.local_head)?;
+
+        let current_branch = self.current_branch_name()?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "stale force-push lease: expected branch {}, but HEAD is detached",
+                lease.local_branch
+            )))
+        })?;
+        if current_branch != lease.local_branch {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "stale force-push lease: expected branch {}, but current branch is {}",
+                lease.local_branch, current_branch
+            ))));
+        }
+
+        let current_head = self.head_commit_id_impl()?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(
+                "stale force-push lease: current HEAD does not point to a commit".to_string(),
+            ))
+        })?;
+        if current_head != lease.local_head {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "stale force-push lease: expected HEAD {}, but current HEAD is {}",
+                lease.local_head, current_head
+            ))));
+        }
+
+        let lease_ref = format!("refs/heads/{}", lease.branch);
+        let lease_arg = format!("--force-with-lease={}:{}", lease_ref, lease.expected);
+        let source_ref = format!("{}:{lease_ref}", lease.local_head);
+        let command_label = format!("git push {lease_arg} {} {source_ref}", lease.remote);
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push")
+            .arg(&lease_arg)
+            .arg("--")
+            .arg(&lease.remote)
+            .arg(source_ref);
+        run_git_with_output(cmd, &command_label)
+    }
+
+    pub(super) fn head_commit_id_impl(&self) -> Result<Option<CommitId>> {
+        let repo = self.reopen_repo()?;
+        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(id.to_string().into())))
+    }
+
+    fn validate_push_after_commit_target(&self, target: &SafePushAfterCommitTarget) -> Result<()> {
+        validate_ref_like_arg(&target.remote, "remote name")?;
+        validate_ref_like_arg(&target.branch, "branch name")?;
+        validate_ref_like_arg(&target.local_branch, "local branch name")?;
+        validate_hex_commit_id(&target.local_head)?;
+
+        let current_branch = self.current_branch_name()?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "stale push-after-commit target: expected branch {}, but HEAD is detached",
+                target.local_branch
+            )))
+        })?;
+        if current_branch != target.local_branch {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "stale push-after-commit target: expected branch {}, but current branch is {}",
+                target.local_branch, current_branch
+            ))));
+        }
+
+        let current_head = self.head_commit_id_impl()?.ok_or_else(|| {
+            Error::new(ErrorKind::Backend(
+                "stale push-after-commit target: current HEAD does not point to a commit"
+                    .to_string(),
+            ))
+        })?;
+        if current_head != target.local_head {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "stale push-after-commit target: expected HEAD {}, but current HEAD is {}",
+                target.local_head, current_head
+            ))));
+        }
+
+        Ok(())
+    }
+
+    fn push_after_commit_target_with_optional_output_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+        set_upstream: bool,
+        capture_output: bool,
+    ) -> Result<CommandOutput> {
+        self.validate_push_after_commit_target(target)?;
+
+        let source = if set_upstream {
+            format!("refs/heads/{}", target.local_branch)
+        } else {
+            target.local_head.to_string()
+        };
+        let refspec = format!("{source}:refs/heads/{}", target.branch);
+        let command_label = if set_upstream {
+            format!(
+                "git push --set-upstream {} {}:refs/heads/{}",
+                target.remote, source, target.branch
+            )
+        } else {
+            format!(
+                "git push {} {}:refs/heads/{}",
+                target.remote, source, target.branch
+            )
+        };
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push");
+        if set_upstream {
+            cmd.arg("--set-upstream");
+        }
+        cmd.arg("--").arg(&target.remote).arg(refspec);
+        run_git_command_with_optional_output(cmd, &command_label, capture_output)
+    }
+
+    pub(super) fn push_after_commit_with_output_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_target_with_optional_output_impl(target, false, true)
+    }
+
+    pub(super) fn push_after_commit_set_upstream_with_output_impl(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_target_with_optional_output_impl(target, true, true)
+    }
+
+    fn fetch_remote_branch_tip_for_safe_push(
+        &self,
+        remote: &str,
+        branch: &str,
+    ) -> Result<Option<CommitId>> {
+        validate_ref_like_arg(remote, "remote name")?;
+        validate_ref_like_arg(branch, "branch name")?;
+
+        let remote_ref = format!("refs/heads/{branch}");
+        let label = format!("git fetch --refmap= {remote} {remote_ref}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("fetch")
+            .arg("--no-tags")
+            .arg("--refmap=")
+            .arg("--")
+            .arg(remote)
+            .arg(&remote_ref);
+        let output = run_git_raw_output(cmd, &label)?;
+        if !output.status.success() {
+            if output_mentions_missing_remote_ref(&output) {
+                return Ok(None);
+            }
+            return Err(git_command_failed_error(&label, output));
+        }
+
+        let label = "git rev-parse --verify FETCH_HEAD^{commit}";
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("rev-parse")
+            .arg("--verify")
+            .arg("FETCH_HEAD^{commit}");
+        let output = run_git_raw_output(cmd, label)?;
+        if !output.status.success() {
+            return Err(git_command_failed_error(label, output));
+        }
+
+        let tip = bytes_to_text_preserving_utf8(&output.stdout)
+            .trim()
+            .to_string();
+        let tip = CommitId(tip.into());
+        validate_hex_commit_id(&tip)?;
+        Ok(Some(tip))
+    }
+
+    fn commit_is_ancestor(&self, ancestor: &CommitId, descendant: &CommitId) -> Result<bool> {
+        validate_hex_commit_id(ancestor)?;
+        validate_hex_commit_id(descendant)?;
+
+        let label = format!("git merge-base --is-ancestor {ancestor} {descendant}");
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("merge-base")
+            .arg("--is-ancestor")
+            .arg(ancestor.as_ref())
+            .arg(descendant.as_ref());
+        let output = run_git_raw_output(cmd, &label)?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        if output.status.code() == Some(1) {
+            return Ok(false);
+        }
+        Err(git_command_failed_error(&label, output))
+    }
+
+    fn safe_push_decision_for_target(
+        &self,
+        context: &SafePushAfterCommitContext,
+        local_branch: &str,
+        remote: String,
+        branch: String,
+        has_upstream: bool,
+    ) -> Result<SafePushAfterCommitDecision> {
+        let display_ref = safe_push_ref_display(&remote, &branch);
+        let Some(post_head) = context.post_head.as_ref() else {
+            return Ok(SafePushAfterCommitDecision::Blocked {
+                summary: "No commit was created to push.".to_string(),
+                lease: None,
+            });
+        };
+        let target = SafePushAfterCommitTarget {
+            remote,
+            branch,
+            local_branch: local_branch.to_string(),
+            local_head: post_head.clone(),
+        };
+
+        let Some(remote_tip) =
+            self.fetch_remote_branch_tip_for_safe_push(&target.remote, &target.branch)?
+        else {
+            return if has_upstream {
+                Ok(SafePushAfterCommitDecision::Blocked {
+                    summary: format!(
+                        "The configured upstream branch {display_ref} was not found on the remote."
+                    ),
+                    lease: None,
+                })
+            } else {
+                Ok(SafePushAfterCommitDecision::PushSetUpstream { target })
+            };
+        };
+
+        if self.commit_is_ancestor(&remote_tip, post_head)? {
+            return if has_upstream {
+                Ok(SafePushAfterCommitDecision::Push { target })
+            } else {
+                Ok(SafePushAfterCommitDecision::PushSetUpstream { target })
+            };
+        }
+
+        if context.amend && context.pre_head.as_ref() == Some(&remote_tip) {
+            return Ok(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "The amended commit appears to be published at {display_ref}. Use Force push with lease to update it without overwriting newer remote work."
+                ),
+                lease: Some(ForcePushLease {
+                    remote: target.remote,
+                    branch: target.branch,
+                    expected: remote_tip,
+                    local_branch: local_branch.to_string(),
+                    local_head: post_head.clone(),
+                }),
+            });
+        }
+
+        Ok(SafePushAfterCommitDecision::Blocked {
+            summary: format!(
+                "Remote branch {display_ref} changed while committing. Pull or rebase manually, then push again."
+            ),
+            lease: None,
+        })
+    }
+
+    fn validate_safe_push_after_commit_context(
+        &self,
+        local_branch: &str,
+        post_head: &CommitId,
+    ) -> Result<Option<SafePushAfterCommitDecision>> {
+        validate_ref_like_arg(local_branch, "local branch name")?;
+        validate_hex_commit_id(post_head)?;
+
+        let Some(current_branch) = self.current_branch_name()? else {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current branch changed from {local_branch} to detached HEAD after committing. Check out {local_branch} and push manually."
+                ),
+                lease: None,
+            }));
+        };
+        if current_branch != local_branch {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current branch changed from {local_branch} to {current_branch} after committing. Check out {local_branch} and push manually."
+                ),
+                lease: None,
+            }));
+        }
+
+        let Some(current_head) = self.head_commit_id_impl()? else {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current HEAD no longer points to the commit created on {local_branch}. Push manually."
+                ),
+                lease: None,
+            }));
+        };
+        if &current_head != post_head {
+            return Ok(Some(SafePushAfterCommitDecision::Blocked {
+                summary: format!(
+                    "Current HEAD changed after committing on {local_branch}. Expected {post_head}, but current HEAD is {current_head}. Push manually."
+                ),
+                lease: None,
+            }));
+        }
+
+        Ok(None)
+    }
+
+    pub(super) fn safe_push_after_commit_impl(
+        &self,
+        context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        let Some(post_head) = context.post_head.as_ref() else {
+            return Ok(SafePushAfterCommitDecision::Blocked {
+                summary: "No commit was created to push.".to_string(),
+                lease: None,
+            });
+        };
+        let Some(local_branch) = context.local_branch.as_deref() else {
+            return Ok(SafePushAfterCommitDecision::Blocked {
+                summary: "Push after commit needs a checked-out branch.".to_string(),
+                lease: None,
+            });
+        };
+
+        if let Some(decision) =
+            self.validate_safe_push_after_commit_context(local_branch, post_head)?
+        {
+            return Ok(decision);
+        }
+
+        if let Some(upstream) = self.branch_upstream(local_branch)? {
+            return self.safe_push_decision_for_target(
+                context,
+                local_branch,
+                upstream.remote,
+                upstream.branch,
+                true,
+            );
+        }
+
+        let Some(remote) = self.preferred_remote_name()? else {
+            return Ok(SafePushAfterCommitDecision::Blocked {
+                summary: "No git remote is configured for push after commit.".to_string(),
+                lease: None,
+            });
+        };
+
+        self.safe_push_decision_for_target(
+            context,
+            local_branch,
+            remote,
+            local_branch.to_string(),
+            false,
+        )
+    }
+
     fn push_with_optional_output_impl(&self, capture_output: bool) -> Result<CommandOutput> {
         if let Some(branch) = self.current_branch_name()? {
             if let Some(upstream) = self.branch_upstream(&branch)? {
@@ -449,6 +840,13 @@ impl GixRepo {
 
     pub(super) fn push_force_with_output_impl(&self) -> Result<CommandOutput> {
         self.push_force_with_optional_output_impl(true)
+    }
+
+    pub(super) fn push_force_with_lease_with_output_impl(
+        &self,
+        lease: &ForcePushLease,
+    ) -> Result<CommandOutput> {
+        self.push_head_to_branch_with_oid_lease_with_output_impl(lease)
     }
 
     pub(super) fn pull_branch_with_output_impl(

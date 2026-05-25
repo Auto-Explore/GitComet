@@ -16,11 +16,10 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use super::super::executor::TaskExecutor;
+use super::super::{executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::send_or_log;
 
 const GIT_COMMAND_TIMEOUT_ENV: &str = "GITCOMET_GIT_COMMAND_TIMEOUT_SECS";
@@ -597,7 +596,7 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
 
 pub(super) fn schedule_clone_repo(
     executor: &TaskExecutor,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     url: String,
     dest: PathBuf,
     auth: Option<StagedGitAuth>,
@@ -802,7 +801,7 @@ pub(super) fn schedule_clone_repo(
     });
 }
 
-pub(super) fn schedule_abort_clone_repo(_msg_tx: mpsc::Sender<Msg>, dest: PathBuf) {
+pub(super) fn schedule_abort_clone_repo(_msg_tx: StoreWorkerSender, dest: PathBuf) {
     let handle = active_clones()
         .lock()
         .unwrap_or_else(|e| e.into_inner())

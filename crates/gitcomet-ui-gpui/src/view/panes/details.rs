@@ -1,19 +1,30 @@
 use super::super::path_display;
 use super::super::*;
+use crate::kit::text_truncation::path_alignment_visible_signature;
+use gitcomet_state::model::{AuthRetryOperation, CommandLogEntry};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PendingCommitAmend {
+    repo_id: RepoId,
+    last_command_log_entry: Option<CommandLogEntry>,
+}
 
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
+    pub(in super::super) ui_scale_percent: u32,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
+    change_tracking_height_design: Option<f32>,
+    untracked_height_design: Option<f32>,
     pub(in super::super) change_tracking_height: Option<Pixels>,
     pub(in super::super) untracked_height: Option<Pixels>,
     pub(in super::super) status_sections_bounds_ref:
@@ -35,6 +46,9 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
     pub(in super::super) commit_message_drafts: HashMap<RepoId, SharedString>,
+    pub(in super::super) commit_amend_enabled: bool,
+    pub(in super::super) commit_push_after_enabled: bool,
+    pending_commit_amend: Option<PendingCommitAmend>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
@@ -48,6 +62,11 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    pub(in super::super) untracked_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) unstaged_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) commit_files_path_alignment_group:
+        components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -55,8 +74,10 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) change_tracking_height: Option<u32>,
     pub(in super::super) untracked_height: Option<u32>,
+    pub(in super::super) ui_scale_percent: u32,
+    pub(in super::super) commit_push_after_enabled: bool,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
-    pub(in super::super) tooltip_host: WeakEntity<TooltipHost>,
+    pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
 
 pub(in super::super) struct StatusSectionResizeTracker {
@@ -166,6 +187,8 @@ impl DetailsPaneView {
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
+            repo.head_branch_rev.hash(&mut hasher);
+            repo.branches_rev.hash(&mut hasher);
         }
 
         hasher.finish()
@@ -183,6 +206,8 @@ impl DetailsPaneView {
             change_tracking_view,
             change_tracking_height,
             untracked_height,
+            ui_scale_percent,
+            commit_push_after_enabled,
             root_view,
             tooltip_host,
         } = init;
@@ -233,7 +258,7 @@ impl DetailsPaneView {
         });
 
         let commit_details_sha_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "".into(),
                     multiline: false,
@@ -243,7 +268,9 @@ impl DetailsPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
+            input
         });
 
         let commit_details_date_input = cx.new(|cx| {
@@ -261,7 +288,7 @@ impl DetailsPaneView {
         });
 
         let commit_details_parent_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "".into(),
                     multiline: false,
@@ -271,7 +298,9 @@ impl DetailsPaneView {
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
+            input
         });
 
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
@@ -293,17 +322,22 @@ impl DetailsPaneView {
             state,
             theme,
             change_tracking_view,
+            ui_scale_percent,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
             active_context_menu_invoker: None,
-            change_tracking_height: Self::sanitized_restored_change_tracking_height(
+            change_tracking_height_design: Self::sanitized_restored_change_tracking_height_design(
                 change_tracking_view,
                 change_tracking_height,
             ),
-            untracked_height: Self::sanitized_restored_untracked_height(untracked_height),
+            untracked_height_design: Self::sanitized_restored_untracked_height_design(
+                untracked_height,
+            ),
+            change_tracking_height: None,
+            untracked_height: None,
             status_sections_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             change_tracking_stack_bounds_ref: std::rc::Rc::new(std::cell::RefCell::new(None)),
             status_section_resize: None,
@@ -319,6 +353,9 @@ impl DetailsPaneView {
             commit_details_date_input,
             commit_details_parent_input,
             commit_message_drafts: HashMap::default(),
+            commit_amend_enabled: false,
+            commit_push_after_enabled,
+            pending_commit_amend: None,
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
@@ -330,7 +367,12 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
         };
+        pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
         pane
     }
@@ -358,6 +400,48 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
+        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+    }
+
+    fn change_tracking_height_design(&self) -> Option<f32> {
+        self.change_tracking_height_design.or_else(|| {
+            self.ui_scale()
+                .design_units_from_optional_pixels(self.change_tracking_height)
+        })
+    }
+
+    fn untracked_height_design(&self) -> Option<f32> {
+        self.untracked_height_design.or_else(|| {
+            self.ui_scale()
+                .design_units_from_optional_pixels(self.untracked_height)
+        })
+    }
+
+    fn sync_scaled_section_heights_from_design(&mut self) {
+        let change_tracking_height_design = self.change_tracking_height_design();
+        let untracked_height_design = self.untracked_height_design();
+        let scale = self.ui_scale();
+        self.change_tracking_height_design = change_tracking_height_design;
+        self.untracked_height_design = untracked_height_design;
+        self.change_tracking_height = scale.pixels_from_design_units(change_tracking_height_design);
+        self.untracked_height = scale.pixels_from_design_units(untracked_height_design);
+    }
+
+    pub(in super::super) fn set_change_tracking_height_from_pixels(
+        &mut self,
+        height: Option<Pixels>,
+    ) {
+        self.change_tracking_height = height;
+        self.change_tracking_height_design =
+            self.ui_scale().design_units_from_optional_pixels(height);
+    }
+
+    pub(in super::super) fn set_untracked_height_from_pixels(&mut self, height: Option<Pixels>) {
+        self.untracked_height = height;
+        self.untracked_height_design = self.ui_scale().design_units_from_optional_pixels(height);
+    }
+
     pub(in super::super) fn set_change_tracking_view(
         &mut self,
         next: ChangeTrackingView,
@@ -373,15 +457,170 @@ impl DetailsPaneView {
         cx.notify();
     }
 
+    pub(in super::super) fn set_commit_amend_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_amend_enabled == enabled {
+            return;
+        }
+
+        self.commit_amend_enabled = enabled;
+        if !enabled {
+            self.pending_commit_amend = None;
+        }
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_push_after_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_push_after_enabled == enabled {
+            return;
+        }
+
+        self.commit_push_after_enabled = enabled;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_commit_message_from_history(
+        &mut self,
+        message: String,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.commit_message_user_edited = true;
+        self.commit_message_programmatic_change = true;
+        self.commit_message_last_text = message.clone().into();
+        self.commit_message_input
+            .update(cx, |input, cx| input.set_text(message, cx));
+        self.commit_message_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        let focus = self
+            .commit_message_input
+            .read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn sync_commit_amend_enabled_to_root(&self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_commit_amend_enabled(enabled, cx);
+            });
+        });
+    }
+
+    fn should_preserve_pending_commit_amend_after_failed_log_entry(
+        state: &AppState,
+        repo_id: RepoId,
+    ) -> bool {
+        let auth_prompt_retries_amend = state.auth_prompt.as_ref().is_some_and(|prompt| {
+            matches!(
+                &prompt.operation,
+                AuthRetryOperation::Commit {
+                    repo_id: retry_repo_id,
+                    amend: true,
+                    ..
+                } if *retry_repo_id == repo_id
+            )
+        });
+        let commit_retry_in_flight = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.pending_commit_retry
+                    .as_ref()
+                    .is_some_and(|pending| pending.amend)
+            });
+
+        auth_prompt_retries_amend || commit_retry_in_flight
+    }
+
+    fn should_clear_pending_commit_amend_after_log_entry(
+        state: &AppState,
+        repo_id: RepoId,
+        entry_ok: bool,
+    ) -> bool {
+        entry_ok
+            || !Self::should_preserve_pending_commit_amend_after_failed_log_entry(state, repo_id)
+    }
+
+    pub(in super::super) fn mark_pending_commit_amend(&mut self, repo_id: RepoId) {
+        let last_command_log_entry = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.command_log.last().cloned());
+        self.pending_commit_amend = Some(PendingCommitAmend {
+            repo_id,
+            last_command_log_entry,
+        });
+    }
+
+    fn pending_commit_amend_completed_entry<'a>(
+        pending: &PendingCommitAmend,
+        repo: &'a RepoState,
+    ) -> Option<&'a CommandLogEntry> {
+        let start = pending
+            .last_command_log_entry
+            .as_ref()
+            .and_then(|last_seen| {
+                repo.command_log
+                    .iter()
+                    .rposition(|entry| entry == last_seen)
+                    .map(|index| index + 1)
+            })
+            .unwrap_or(0);
+        repo.command_log[start..]
+            .iter()
+            .rfind(|entry| entry.command == "Amend")
+    }
+
     pub(in super::super) fn saved_status_section_heights(&self) -> (Option<u32>, Option<u32>) {
-        let to_u32 = |value: Option<Pixels>| {
-            let px_value: f32 = value.unwrap_or(px(0.0)).round().into();
-            (px_value.is_finite() && px_value >= 1.0).then_some(px_value as u32)
-        };
+        let scale = self.ui_scale();
         (
-            to_u32(self.change_tracking_height),
-            to_u32(self.untracked_height),
+            ui_scale::stored_design_units(
+                scale
+                    .design_units_from_optional_pixels(self.change_tracking_height)
+                    .or(self.change_tracking_height_design),
+            ),
+            ui_scale::stored_design_units(
+                scale
+                    .design_units_from_optional_pixels(self.untracked_height)
+                    .or(self.untracked_height_design),
+            ),
         )
+    }
+
+    pub(in super::super) fn apply_ui_scale_percent(
+        &mut self,
+        _previous_percent: u32,
+        next_percent: u32,
+        change_tracking_view: ChangeTrackingView,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.ui_scale_percent == next_percent {
+            return;
+        }
+
+        let (change_tracking_height, untracked_height) = self.saved_status_section_heights();
+        self.ui_scale_percent = next_percent;
+        self.status_section_resize = None;
+        self.change_tracking_height_design = Self::sanitized_restored_change_tracking_height_design(
+            change_tracking_view,
+            change_tracking_height,
+        );
+        self.untracked_height_design =
+            Self::sanitized_restored_untracked_height_design(untracked_height);
+        self.sync_scaled_section_heights_from_design();
+        cx.notify();
     }
 
     pub(in super::super) fn set_active_context_menu_invoker(
@@ -418,6 +657,61 @@ impl DetailsPaneView {
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
         let mut cache = self.commit_file_rows.borrow_mut();
         cache.rows_for(&(repo_id, commit_details_rev), files)
+    }
+
+    pub(in super::super) fn status_path_alignment_group(
+        &self,
+        section: StatusSection,
+    ) -> &components::PathTruncationAlignmentGroup {
+        match section {
+            StatusSection::CombinedUnstaged | StatusSection::Unstaged => {
+                &self.unstaged_path_alignment_group
+            }
+            StatusSection::Untracked => &self.untracked_path_alignment_group,
+            StatusSection::Staged => &self.staged_path_alignment_group,
+        }
+    }
+
+    pub(in super::super) fn status_visible_signature(
+        &self,
+        repo: &RepoState,
+        section: StatusSection,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo.id,
+            Self::status_section_alignment_key(section),
+            status_section_rev(repo, section),
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
+    pub(in super::super) fn commit_files_visible_signature(
+        &self,
+        repo_id: RepoId,
+        commit_details_rev: u64,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo_id,
+            commit_details_rev,
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
+    fn status_section_alignment_key(section: StatusSection) -> u8 {
+        match section {
+            StatusSection::CombinedUnstaged => 0,
+            StatusSection::Untracked => 1,
+            StatusSection::Unstaged => 2,
+            StatusSection::Staged => 3,
+        }
     }
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {
@@ -488,6 +782,40 @@ impl DetailsPaneView {
 
         let switched_repo = prev_active_repo_id != next_repo_id;
         let mut restored_commit_message: Option<SharedString> = None;
+        if switched_repo {
+            let was_amend_enabled = self.commit_amend_enabled;
+            self.commit_amend_enabled = false;
+            self.pending_commit_amend = None;
+            if was_amend_enabled {
+                self.sync_commit_amend_enabled_to_root(false, cx);
+            }
+        } else if let Some((repo_id, entry_ok)) =
+            self.pending_commit_amend.as_ref().and_then(|pending| {
+                if Some(pending.repo_id) != next_repo_id {
+                    return None;
+                }
+                let repo = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == pending.repo_id)?;
+                let entry = Self::pending_commit_amend_completed_entry(pending, repo)?;
+                Some((pending.repo_id, entry.ok))
+            })
+        {
+            let clear_pending = Self::should_clear_pending_commit_amend_after_log_entry(
+                &self.state,
+                repo_id,
+                entry_ok,
+            );
+            if entry_ok {
+                self.commit_amend_enabled = false;
+                self.sync_commit_amend_enabled_to_root(false, cx);
+            }
+            if clear_pending {
+                self.pending_commit_amend = None;
+            }
+        }
         if switched_repo {
             if let Some(prev_repo_id) = prev_active_repo_id {
                 let current: SharedString =
@@ -632,29 +960,6 @@ impl DetailsPaneView {
         .detach();
     }
 
-    pub(in super::super) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    pub(in super::super) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
-    }
-
     pub(in super::super) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -713,7 +1018,9 @@ impl Render for DetailsPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_state::model::{AuthPromptState, PendingCommitRetry};
     use std::path::PathBuf;
+    use std::time::{Duration, UNIX_EPOCH};
 
     fn repo_state(id: RepoId, path: &str) -> RepoState {
         RepoState::new_opening(
@@ -722,6 +1029,181 @@ mod tests {
                 workdir: PathBuf::from(path),
             },
         )
+    }
+
+    fn command_log_entry(command: &str, ok: bool, seconds: u64) -> CommandLogEntry {
+        CommandLogEntry {
+            time: UNIX_EPOCH + Duration::from_secs(seconds),
+            ok,
+            command: command.to_string(),
+            summary: format!("{command}: test"),
+            stdout: String::new(),
+            stderr: String::new(),
+        }
+    }
+
+    #[test]
+    fn pending_amend_ignores_previous_amend_log_entry() {
+        let repo_id = RepoId(1);
+        let old_entry = command_log_entry("Amend", true, 1);
+        let pending = PendingCommitAmend {
+            repo_id,
+            last_command_log_entry: Some(old_entry.clone()),
+        };
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.command_log.push(old_entry);
+
+        assert!(DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo).is_none());
+    }
+
+    #[test]
+    fn pending_amend_observes_later_amend_log_entry() {
+        let repo_id = RepoId(1);
+        let old_entry = command_log_entry("Amend", true, 1);
+        let new_entry = command_log_entry("Amend", true, 2);
+        let pending = PendingCommitAmend {
+            repo_id,
+            last_command_log_entry: Some(old_entry.clone()),
+        };
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.command_log.push(old_entry);
+        repo.command_log.push(new_entry);
+
+        assert_eq!(
+            DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
+                .map(|entry| entry.time),
+            Some(UNIX_EPOCH + Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn pending_amend_observes_amend_before_later_push_log_entry() {
+        let repo_id = RepoId(1);
+        let old_entry = command_log_entry("Amend", true, 1);
+        let new_entry = command_log_entry("Amend", true, 2);
+        let push_entry = command_log_entry("Push after commit", true, 3);
+        let pending = PendingCommitAmend {
+            repo_id,
+            last_command_log_entry: Some(old_entry.clone()),
+        };
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.command_log.push(old_entry);
+        repo.command_log.push(new_entry);
+        repo.command_log.push(push_entry);
+
+        assert_eq!(
+            DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo)
+                .map(|entry| entry.time),
+            Some(UNIX_EPOCH + Duration::from_secs(2))
+        );
+    }
+
+    #[test]
+    fn pending_amend_observes_successful_retry_after_failed_amend_log_entry() {
+        let repo_id = RepoId(1);
+        let marker_entry = command_log_entry("Commit", true, 1);
+        let failed_amend = command_log_entry("Amend", false, 2);
+        let successful_retry = command_log_entry("Amend", true, 3);
+        let pending = PendingCommitAmend {
+            repo_id,
+            last_command_log_entry: Some(marker_entry.clone()),
+        };
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.command_log.push(marker_entry);
+        repo.command_log.push(failed_amend);
+        repo.command_log.push(successful_retry);
+
+        let completed_entry =
+            DetailsPaneView::pending_commit_amend_completed_entry(&pending, &repo);
+
+        assert_eq!(
+            completed_entry.map(|entry| (entry.ok, entry.time)),
+            Some((true, UNIX_EPOCH + Duration::from_secs(3)))
+        );
+    }
+
+    #[test]
+    fn pending_amend_marker_survives_auth_prompt_retry() {
+        let repo_id = RepoId(1);
+        let state = AppState {
+            repos: vec![repo_state(repo_id, "/tmp/repo")],
+            active_repo: Some(repo_id),
+            auth_prompt: Some(AuthPromptState {
+                kind: AuthPromptKind::UsernamePassword,
+                reason: "auth required".into(),
+                operation: AuthRetryOperation::Commit {
+                    repo_id,
+                    message: "message".into(),
+                    amend: true,
+                    push_after_commit: false,
+                },
+            }),
+            ..AppState::default()
+        };
+
+        assert!(
+            DetailsPaneView::should_preserve_pending_commit_amend_after_failed_log_entry(
+                &state, repo_id
+            )
+        );
+        assert!(
+            !DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, false
+            )
+        );
+    }
+
+    #[test]
+    fn pending_amend_marker_survives_in_flight_auth_retry() {
+        let repo_id = RepoId(1);
+        let mut repo = repo_state(repo_id, "/tmp/repo");
+        repo.pending_commit_retry = Some(PendingCommitRetry {
+            message: "message".into(),
+            amend: true,
+            push_after_commit: false,
+        });
+        let state = AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+
+        assert!(
+            DetailsPaneView::should_preserve_pending_commit_amend_after_failed_log_entry(
+                &state, repo_id
+            )
+        );
+        assert!(
+            !DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, false
+            )
+        );
+        assert!(
+            DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, true
+            )
+        );
+    }
+
+    #[test]
+    fn pending_amend_marker_is_not_preserved_for_non_retry_failure() {
+        let repo_id = RepoId(1);
+        let state = AppState {
+            repos: vec![repo_state(repo_id, "/tmp/repo")],
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        };
+
+        assert!(
+            !DetailsPaneView::should_preserve_pending_commit_amend_after_failed_log_entry(
+                &state, repo_id
+            )
+        );
+        assert!(
+            DetailsPaneView::should_clear_pending_commit_amend_after_log_entry(
+                &state, repo_id, false
+            )
+        );
     }
 
     #[test]
@@ -774,5 +1256,26 @@ mod tests {
 
         state.repos[0].merge_message_rev = 1;
         assert_ne!(DetailsPaneView::notify_fingerprint(&state), after_details);
+    }
+
+    #[test]
+    fn notify_fingerprint_tracks_amend_availability_revisions() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = DetailsPaneView::notify_fingerprint(&state);
+
+        state.repos[0].head_branch_rev = 1;
+        let after_head_branch = DetailsPaneView::notify_fingerprint(&state);
+        assert_ne!(after_head_branch, initial);
+
+        state.repos[0].branches_rev = 1;
+        assert_ne!(
+            DetailsPaneView::notify_fingerprint(&state),
+            after_head_branch
+        );
     }
 }

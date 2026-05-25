@@ -1,19 +1,143 @@
-use crate::model::ConflictFileLoadMode;
+use crate::model::{AppState, ConflictFileLoadMode};
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
-use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogScope};
+use gitcomet_core::domain::{DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
-use gitcomet_core::services::ConflictFileStages;
+use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::mpsc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use super::super::{RepoId, executor::TaskExecutor};
-use super::util::{RepoMap, send_or_log, spawn_with_repo, spawn_with_repo_or_else};
+use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
+use super::util::{
+    RepoMap, send_or_log, spawn_detached_with_repo_or_else, spawn_with_repo,
+    spawn_with_repo_or_else,
+};
+
+pub(super) struct SelectedDiffLoadOptions {
+    pub(super) load_patch_diff: bool,
+    pub(super) load_file_text: bool,
+    pub(super) preview_text_side: Option<DiffPreviewTextSide>,
+    pub(super) load_submodule_summary: bool,
+    pub(super) load_file_image: bool,
+}
+
+#[derive(Clone)]
+pub(super) struct SelectedDiffLoadGuard {
+    thread_state: Arc<RwLock<Arc<AppState>>>,
+    repo_id: RepoId,
+    target: DiffTarget,
+    target_rev: u64,
+}
+
+impl SelectedDiffLoadGuard {
+    pub(super) fn new(
+        thread_state: Arc<RwLock<Arc<AppState>>>,
+        repo_id: RepoId,
+        target: DiffTarget,
+        target_rev: u64,
+    ) -> Self {
+        Self {
+            thread_state,
+            repo_id,
+            target,
+            target_rev,
+        }
+    }
+
+    fn is_current(&self) -> bool {
+        let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == self.repo_id)
+            .is_some_and(|repo| {
+                repo.diff_state.diff_target_rev == self.target_rev
+                    && repo.diff_state.diff_target.as_ref() == Some(&self.target)
+            })
+    }
+}
+
+fn spawn_with_selected_diff_guard(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    repo_id: RepoId,
+    msg_tx: StoreWorkerSender,
+    guard: SelectedDiffLoadGuard,
+    task: impl FnOnce(Arc<dyn GitRepository>, StoreWorkerSender, SelectedDiffLoadGuard) + Send + 'static,
+) -> bool {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        if !guard.is_current() {
+            return;
+        }
+        task(repo, msg_tx, guard);
+    })
+}
+
+#[cfg(test)]
+mod selected_diff_guard_tests {
+    use super::*;
+    use crate::model::RepoState;
+    use gitcomet_core::domain::RepoSpec;
+
+    fn target(path: &str) -> DiffTarget {
+        DiffTarget::WorkingTree {
+            path: PathBuf::from(path),
+            area: DiffArea::Unstaged,
+        }
+    }
+
+    fn thread_state_with_target(
+        repo_id: RepoId,
+        selected: DiffTarget,
+        target_rev: u64,
+    ) -> Arc<RwLock<Arc<AppState>>> {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/selected-diff-guard-test"),
+            },
+        );
+        repo.diff_state.diff_target = Some(selected);
+        repo.diff_state.diff_target_rev = target_rev;
+
+        let mut state = AppState::default();
+        state.repos.push(repo);
+        Arc::new(RwLock::new(Arc::new(state)))
+    }
+
+    #[test]
+    fn selected_diff_guard_accepts_current_target_and_revision() {
+        let repo_id = RepoId(1);
+        let selected = target("src/lib.rs");
+        let guard = SelectedDiffLoadGuard::new(
+            thread_state_with_target(repo_id, selected.clone(), 7),
+            repo_id,
+            selected,
+            7,
+        );
+
+        assert!(guard.is_current());
+    }
+
+    #[test]
+    fn selected_diff_guard_rejects_stale_target_or_revision() {
+        let repo_id = RepoId(1);
+        let selected = target("src/lib.rs");
+        let thread_state = thread_state_with_target(repo_id, selected.clone(), 7);
+
+        let stale_revision =
+            SelectedDiffLoadGuard::new(Arc::clone(&thread_state), repo_id, selected.clone(), 6);
+        assert!(!stale_revision.is_current());
+
+        let stale_target =
+            SelectedDiffLoadGuard::new(thread_state, repo_id, target("src/main.rs"), 7);
+        assert!(!stale_target.is_current());
+    }
+}
 
 fn missing_repo_error(repo_id: RepoId) -> Error {
     Error::new(ErrorKind::Backend(format!(
@@ -74,11 +198,13 @@ fn conflict_file_current_from_session(session: &ConflictSession) -> Option<Confl
 pub(super) fn schedule_load_branches(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-branches",
         repos,
         repo_id,
         msg_tx,
@@ -87,7 +213,7 @@ pub(super) fn schedule_load_branches(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
                     repo_id,
-                    result: repo.list_branches(),
+                    result: repo.list_branches_cancellable(&cancellation),
                 }),
             );
         },
@@ -106,11 +232,13 @@ pub(super) fn schedule_load_branches(
 pub(super) fn schedule_load_remotes(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-remotes",
         repos,
         repo_id,
         msg_tx,
@@ -119,7 +247,7 @@ pub(super) fn schedule_load_remotes(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RemotesLoaded {
                     repo_id,
-                    result: repo.list_remotes(),
+                    result: repo.list_remotes_cancellable(&cancellation),
                 }),
             );
         },
@@ -138,11 +266,13 @@ pub(super) fn schedule_load_remotes(
 pub(super) fn schedule_load_remote_branches(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-remote-branches",
         repos,
         repo_id,
         msg_tx,
@@ -151,7 +281,7 @@ pub(super) fn schedule_load_remote_branches(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RemoteBranchesLoaded {
                     repo_id,
-                    result: repo.list_remote_branches(),
+                    result: repo.list_remote_branches_cancellable(&cancellation),
                 }),
             );
         },
@@ -170,11 +300,13 @@ pub(super) fn schedule_load_remote_branches(
 pub(super) fn schedule_load_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-status",
         repos,
         repo_id,
         msg_tx,
@@ -183,7 +315,7 @@ pub(super) fn schedule_load_status(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
                     repo_id,
-                    result: repo.status(),
+                    result: repo.status_cancellable(&cancellation),
                 }),
             );
         },
@@ -202,11 +334,13 @@ pub(super) fn schedule_load_status(
 pub(super) fn schedule_load_worktree_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-worktree-status",
         repos,
         repo_id,
         msg_tx,
@@ -215,7 +349,7 @@ pub(super) fn schedule_load_worktree_status(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
                     repo_id,
-                    result: repo.worktree_status(),
+                    result: repo.worktree_status_cancellable(&cancellation),
                 }),
             );
         },
@@ -234,11 +368,13 @@ pub(super) fn schedule_load_worktree_status(
 pub(super) fn schedule_load_staged_status(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-staged-status",
         repos,
         repo_id,
         msg_tx,
@@ -247,7 +383,7 @@ pub(super) fn schedule_load_staged_status(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
                     repo_id,
-                    result: repo.staged_status(),
+                    result: repo.staged_status_cancellable(&cancellation),
                 }),
             );
         },
@@ -266,11 +402,13 @@ pub(super) fn schedule_load_staged_status(
 pub(super) fn schedule_load_head_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-head-branch",
         repos,
         repo_id,
         msg_tx,
@@ -279,7 +417,7 @@ pub(super) fn schedule_load_head_branch(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
                     repo_id,
-                    result: repo.current_branch(),
+                    result: repo.current_branch_cancellable(&cancellation),
                 }),
             );
         },
@@ -298,11 +436,13 @@ pub(super) fn schedule_load_head_branch(
 pub(super) fn schedule_load_upstream_divergence(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-upstream-divergence",
         repos,
         repo_id,
         msg_tx,
@@ -311,7 +451,7 @@ pub(super) fn schedule_load_upstream_divergence(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::UpstreamDivergenceLoaded {
                     repo_id,
-                    result: repo.upstream_divergence(),
+                    result: repo.upstream_divergence_cancellable(&cancellation),
                 }),
             );
         },
@@ -330,25 +470,24 @@ pub(super) fn schedule_load_upstream_divergence(
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     scope: LogScope,
     limit: usize,
     cursor: Option<LogCursor>,
+    cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-log",
         repos,
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                match scope {
-                    LogScope::CurrentBranch => repo.log_head_page(limit, cursor_ref),
-                    LogScope::AllBranches => repo.log_all_branches_page(limit, cursor_ref),
-                }
+                repo.log_history_mode_page_cancellable(scope, limit, cursor_ref, &cancellation)
             };
             send_or_log(
                 &msg_tx,
@@ -377,8 +516,9 @@ pub(super) fn schedule_load_log(
 pub(super) fn schedule_load_tags(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -390,7 +530,7 @@ pub(super) fn schedule_load_tags(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
                     repo_id,
-                    result: repo.list_tags(),
+                    result: repo.list_tags_cancellable(&cancellation),
                 }),
             );
         },
@@ -409,8 +549,9 @@ pub(super) fn schedule_load_tags(
 pub(super) fn schedule_load_remote_tags(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -422,7 +563,7 @@ pub(super) fn schedule_load_remote_tags(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RemoteTagsLoaded {
                     repo_id,
-                    result: repo.list_remote_tags(),
+                    result: repo.list_remote_tags_cancellable(&cancellation),
                 }),
             );
         },
@@ -441,17 +582,19 @@ pub(super) fn schedule_load_remote_tags(
 pub(super) fn schedule_load_stashes(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-stashes",
         repos,
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
-            let mut entries = repo.stash_list();
+            let mut entries = repo.stash_list_cancellable(&cancellation);
             if let Ok(v) = &mut entries {
                 v.truncate(limit);
             }
@@ -478,7 +621,7 @@ pub(super) fn schedule_load_stashes(
 pub(super) fn schedule_load_conflict_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     mode: ConflictFileLoadMode,
@@ -643,7 +786,7 @@ pub(super) fn schedule_load_conflict_file(
 pub(super) fn schedule_load_reflog(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     limit: usize,
 ) {
@@ -676,7 +819,7 @@ pub(super) fn schedule_load_reflog(
 pub(super) fn schedule_load_file_history(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     limit: usize,
@@ -696,7 +839,7 @@ pub(super) fn schedule_load_file_history(
 pub(super) fn schedule_load_blame(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     rev: Option<String>,
@@ -718,11 +861,13 @@ pub(super) fn schedule_load_blame(
 pub(super) fn schedule_load_worktrees(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-worktrees",
         repos,
         repo_id,
         msg_tx,
@@ -731,7 +876,7 @@ pub(super) fn schedule_load_worktrees(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                     repo_id,
-                    result: repo.list_worktrees(),
+                    result: repo.list_worktrees_cancellable(&cancellation),
                 }),
             );
         },
@@ -750,8 +895,9 @@ pub(super) fn schedule_load_worktrees(
 pub(super) fn schedule_load_submodules(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
     spawn_with_repo_or_else(
         executor,
@@ -763,7 +909,7 @@ pub(super) fn schedule_load_submodules(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                     repo_id,
-                    result: repo.list_submodules(),
+                    result: repo.list_submodules_cancellable(&cancellation),
                 }),
             );
         },
@@ -782,11 +928,13 @@ pub(super) fn schedule_load_submodules(
 pub(super) fn schedule_load_rebase_state(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-rebase-state",
         repos,
         repo_id,
         msg_tx,
@@ -795,7 +943,7 @@ pub(super) fn schedule_load_rebase_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress(),
+                    result: repo.rebase_in_progress_cancellable(&cancellation),
                 }),
             );
         },
@@ -814,11 +962,13 @@ pub(super) fn schedule_load_rebase_state(
 pub(super) fn schedule_load_rebase_and_merge_state(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-rebase-and-merge-state",
         repos,
         repo_id,
         msg_tx,
@@ -827,14 +977,14 @@ pub(super) fn schedule_load_rebase_and_merge_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress(),
+                    result: repo.rebase_in_progress_cancellable(&cancellation),
                 }),
             );
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message(),
+                    result: repo.merge_commit_message_cancellable(&cancellation),
                 }),
             );
         },
@@ -860,11 +1010,13 @@ pub(super) fn schedule_load_rebase_and_merge_state(
 pub(super) fn schedule_load_merge_commit_message(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    cancellation: CancellationToken,
 ) {
-    spawn_with_repo_or_else(
+    spawn_detached_with_repo_or_else(
         executor,
+        "load-merge-commit-message",
         repos,
         repo_id,
         msg_tx,
@@ -873,7 +1025,7 @@ pub(super) fn schedule_load_merge_commit_message(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded {
                     repo_id,
-                    result: repo.merge_commit_message(),
+                    result: repo.merge_commit_message_cancellable(&cancellation),
                 }),
             );
         },
@@ -892,7 +1044,7 @@ pub(super) fn schedule_load_merge_commit_message(
 pub(super) fn schedule_load_commit_details(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
@@ -908,10 +1060,30 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_load_recent_commit_messages(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    limit: usize,
+    request_rev: u64,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
+                repo_id,
+                request_rev,
+                result: repo.recent_commit_messages(limit),
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -932,7 +1104,7 @@ pub(super) fn schedule_load_diff(
 pub(super) fn schedule_load_diff_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -952,10 +1124,10 @@ pub(super) fn schedule_load_diff_file(
 pub(super) fn schedule_load_diff_preview_text_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
-    side: gitcomet_core::domain::DiffPreviewTextSide,
+    side: DiffPreviewTextSide,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.diff_preview_text_file(&target, side);
@@ -971,10 +1143,125 @@ pub(super) fn schedule_load_diff_preview_text_file(
     });
 }
 
+pub(super) fn schedule_load_submodule_summary(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    target: DiffTarget,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.submodule_diff_summary(&target);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                repo_id,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_parsed(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff_file(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_file_text(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::InlineSubmoduleDiffFileLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_inline_submodule_selected_diff_file_image(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    inline_rev: u64,
+    selected: Option<(PathBuf, DiffTarget, u64)>,
+) {
+    let Some((submodule_repo_path, target, current_rev)) = selected else {
+        return;
+    };
+    if current_rev != inline_rev {
+        return;
+    }
+
+    executor.spawn(move || {
+        let result = backend
+            .open(&submodule_repo_path)
+            .and_then(|repo| repo.diff_file_image(&target));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(
+                crate::msg::InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                    repo_id,
+                    inline_rev,
+                    target,
+                    result,
+                },
+            ),
+        );
+    });
+}
+
 pub(super) fn schedule_load_diff_file_image(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
 ) {
@@ -994,31 +1281,139 @@ pub(super) fn schedule_load_diff_file_image(
 pub(super) fn schedule_load_selected_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    thread_state: Arc<RwLock<Arc<AppState>>>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: DiffTarget,
-    load_patch_diff: bool,
-    load_file_text: bool,
-    preview_text_side: Option<gitcomet_core::domain::DiffPreviewTextSide>,
-    load_file_image: bool,
+    target_rev: u64,
+    cancellation: CancellationToken,
+    options: SelectedDiffLoadOptions,
 ) {
-    if load_file_image {
-        schedule_load_diff_file_image(executor, repos, msg_tx.clone(), repo_id, target.clone());
-    }
-    if let Some(side) = preview_text_side {
-        schedule_load_diff_preview_text_file(
+    let guard = SelectedDiffLoadGuard::new(thread_state, repo_id, target.clone(), target_rev);
+    if options.load_submodule_summary {
+        let target = target.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
             executor,
             repos,
-            msg_tx.clone(),
             repo_id,
-            target.clone(),
-            side,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.submodule_diff_summary_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::SubmoduleSummaryLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
         );
     }
-    if load_file_text {
-        schedule_load_diff_file(executor, repos, msg_tx.clone(), repo_id, target.clone());
+    if options.load_file_image {
+        let target = target.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_file_image_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
     }
-    if load_patch_diff {
-        schedule_load_diff(executor, repos, msg_tx, repo_id, target);
+    if let Some(side) = options.preview_text_side {
+        let target = target.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_preview_text_file_cancellable(&target, side, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffPreviewTextFileLoaded {
+                        repo_id,
+                        target,
+                        side,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
+    if options.load_file_text {
+        let target = target.clone();
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx.clone(),
+            guard.clone(),
+            move |repo, msg_tx, guard| {
+                let result = repo.diff_file_text_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
+    }
+    if options.load_patch_diff {
+        let cancellation = cancellation.clone();
+        spawn_with_selected_diff_guard(
+            executor,
+            repos,
+            repo_id,
+            msg_tx,
+            guard,
+            move |repo, msg_tx, guard| {
+                // UI consumes this parsed diff through paged/lazy row adapters.
+                let result = repo.diff_parsed_cancellable(&target, &cancellation);
+                if !guard.is_current() {
+                    return;
+                }
+                send_or_log(
+                    &msg_tx,
+                    Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+                        repo_id,
+                        target,
+                        result,
+                    }),
+                );
+            },
+        );
     }
 }

@@ -29,7 +29,7 @@ jobs:
   performance-budgets:
     name: Performance budgets (manual PR subset)
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'pr-subset'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     # Shared runners are noisy for performance numbers; treat this as signal/alerting only.
     continue-on-error: true
     timeout-minutes: 60
@@ -132,9 +132,9 @@ jobs:
     name: Performance budgets (strict, full suite)
     # Use a dedicated perf runner when available (set PERF_RUNNER repo variable
     # to a self-hosted label, e.g. "self-hosted" or "perf-dedicated").
-    # Falls back to ubuntu-latest for shared-runner alerting when unset.
+    # Falls back to ubuntu-22.04 for shared-runner alerting when unset.
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.suite == 'full')
-    runs-on: ${{ vars.PERF_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.PERF_RUNNER || 'ubuntu-22.04' }}
     timeout-minutes: 120
     env:
       GITCOMET_PERF_CRITERION_ROOT: target/criterion
@@ -193,6 +193,6 @@ jobs:
           echo "::notice::Running in strict mode on dedicated runner (${{ vars.PERF_RUNNER }}) with real-repo snapshots from ${{ vars.PERF_REAL_REPO_ROOT }}"
           cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --strict
         else
-          echo "::notice::Running in alerting mode on shared runner (ubuntu-latest) — numbers are noisy"
+          echo "::notice::Running in alerting mode on shared runner (ubuntu-22.04) — numbers are noisy"
           cargo run -p gitcomet-ui-gpui --bin perf_budget_report -- --criterion-root target/criterion --skip-missing
         fi

@@ -19,6 +19,16 @@ pub(super) fn hash_diff_target<H: Hasher>(target: &DiffTarget, hasher: &mut H) {
             commit_id.hash(hasher);
             path.hash(hasher);
         }
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path,
+        } => {
+            2u8.hash(hasher);
+            from_commit_id.hash(hasher);
+            to_commit_id.hash(hasher);
+            path.hash(hasher);
+        }
     }
 }
 

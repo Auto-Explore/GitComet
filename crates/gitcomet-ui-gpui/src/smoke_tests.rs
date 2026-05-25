@@ -1,6 +1,6 @@
 use crate::test_support::{lock_clipboard_test, lock_visual_test};
 use crate::view::components;
-use crate::{theme::AppTheme, view};
+use crate::{theme::AppTheme, ui_scale, view};
 use gitcomet_core::domain::*;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, PullMode, Result};
@@ -29,6 +29,23 @@ fn abs_scroll_y(raw: Pixels) -> Pixels {
     if raw < px(0.0) { -raw } else { raw }
 }
 
+fn open_text_input_context_menu(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>) {
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Right,
+        click_count: 1,
+    });
+}
+
 #[test]
 fn builds_pure_components_without_panics() {
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
@@ -55,52 +72,60 @@ fn builds_pure_components_without_panics() {
         assert_no_panic("components::Button render variants", || {
             let _ = components::Button::new("z1", "Filled")
                 .style(components::ButtonStyle::Filled)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z2", "Outlined")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z3", "Subtle")
                 .style(components::ButtonStyle::Subtle)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z4", "Disabled")
                 .style(components::ButtonStyle::Outlined)
                 .disabled(true)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::Button::new("z5", "Create")
                 .style(components::ButtonStyle::Filled)
                 .separated_end_slot(div().text_xs().child("Enter"))
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("components::SplitButton", || {
             let left = components::Button::new("s1", "Left")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let right = components::Button::new("s2", "Right")
                 .style(components::ButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::SplitButton::new(left, right)
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("components::Tab + TabBar", || {
             let tab = components::Tab::new(("t", 1u64))
                 .selected(true)
                 .child(div().child("Repo"))
-                .render(theme);
-            let _ = components::TabBar::new("tb").tab(tab).render(theme);
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+            let _ = components::TabBar::new("tb")
+                .tab(tab)
+                .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 
         assert_no_panic("view::window_frame", || {
             let content = div().child("content").into_any_element();
-            let _ = view::window_frame(theme, Decorations::Server, content);
+            let _ = view::window_frame(
+                theme,
+                Decorations::Server,
+                content,
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            );
             let _ = view::window_frame(
                 theme,
                 Decorations::Client {
                     tiling: Tiling::default(),
                 },
                 div().child("content").into_any_element(),
+                ui_scale::DEFAULT_UI_SCALE_PERCENT,
             );
         });
 
@@ -154,15 +179,15 @@ impl gpui::Render for SmokeView {
                 components::Tab::new(("t", 0u64))
                     .selected(true)
                     .child(div().child("One"))
-                    .render(theme),
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
             )
             .tab(
                 components::Tab::new(("t", 1u64))
                     .selected(false)
                     .child(div().child("Two"))
-                    .render(theme),
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
             )
-            .render(theme);
+            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
         let content = div()
             .flex()
@@ -188,17 +213,22 @@ impl gpui::Render for SmokeView {
                     .child(
                         components::Button::new("b1", "Primary")
                             .style(components::ButtonStyle::Filled)
-                            .render(theme),
+                            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
                     )
                     .child(
                         components::Button::new("b2", "Secondary")
                             .style(components::ButtonStyle::Outlined)
-                            .render(theme),
+                            .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
                     ),
             ))
             .into_any_element();
 
-        view::window_frame(theme, window.window_decorations(), content)
+        view::window_frame(
+            theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -270,7 +300,12 @@ impl gpui::Render for TextInputCursorScrollView {
             )
             .into_any_element();
 
-        view::window_frame(theme, window.window_decorations(), content)
+        view::window_frame(
+            theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -315,7 +350,12 @@ impl gpui::Render for TextInputHostView {
             )
             .into_any_element();
 
-        view::window_frame(self.theme, window.window_decorations(), content)
+        view::window_frame(
+            self.theme,
+            window.window_decorations(),
+            content,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
     }
 }
 
@@ -802,6 +842,58 @@ fn text_input_context_menu_does_not_resize_input_container(cx: &mut gpui::TestAp
         f32::from(before.size.height),
         f32::from(after.size.width),
         f32::from(after.size.height)
+    );
+}
+
+#[gpui::test]
+fn text_input_context_menu_grows_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = cx.add_window_view(SmokeView::new);
+
+    cx.update(|window, app| {
+        let focus = view.update(app, |this, cx| this.input.read(cx).focus_handle());
+        window.focus(&focus, app);
+
+        view.update(app, |this, cx| {
+            this.input
+                .update(cx, |input, cx| input.set_text("hello world", cx));
+        });
+
+        let _ = window.draw(app);
+    });
+
+    let bounds = cx
+        .debug_bounds("smoke_input")
+        .expect("expected smoke input bounds");
+    let click = bounds.center();
+
+    open_text_input_context_menu(cx, click);
+
+    let default_row_width: f32 = cx
+        .debug_bounds("text_input_context_select_all")
+        .expect("expected text-input context menu row before zooming")
+        .size
+        .width
+        .into();
+
+    cx.update(|window, app| {
+        view.update(app, |_this, cx| {
+            crate::ui_scale::set_current(cx, 200);
+        });
+        crate::ui_scale::apply_to_window(window, 200);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    let zoomed_row_width: f32 = cx
+        .debug_bounds("text_input_context_select_all")
+        .expect("expected text-input context menu row after zooming")
+        .size
+        .width
+        .into();
+
+    assert!(
+        zoomed_row_width > default_row_width * 1.6,
+        "expected the text-input context menu to grow substantially with zoom (default={default_row_width}, zoomed={zoomed_row_width})"
     );
 }
 
@@ -1404,6 +1496,38 @@ fn wait_for_repo_open(store: &AppStore, repo_id: RepoId) {
     }
 }
 
+fn wait_for_initial_worktrees_load_to_settle(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    repo_id: RepoId,
+) {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        sync_view_for_tests(cx, view);
+
+        let settled = store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| {
+                repo.sidebar_data_request.worktrees
+                    && !matches!(repo.worktrees, Loadable::Loading | Loadable::NotLoaded)
+            });
+        if settled {
+            return;
+        }
+
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for initial worktrees load to settle");
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    }
+}
+
 fn wait_until(description: &str, ready: impl Fn() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -1496,6 +1620,15 @@ fn click_debug_selector(
     selector: &'static str,
     click_count: usize,
 ) {
+    click_debug_selector_with_button(cx, selector, MouseButton::Left, click_count);
+}
+
+fn click_debug_selector_with_button(
+    cx: &mut gpui::VisualTestContext,
+    selector: &'static str,
+    button: MouseButton,
+    click_count: usize,
+) {
     let bounds = cx
         .debug_bounds(selector)
         .unwrap_or_else(|| panic!("expected debug selector {selector}"));
@@ -1504,14 +1637,14 @@ fn click_debug_selector(
     cx.simulate_event(MouseDownEvent {
         position: center,
         modifiers: Modifiers::default(),
-        button: MouseButton::Left,
+        button,
         click_count,
         first_mouse: false,
     });
     cx.simulate_event(MouseUpEvent {
         position: center,
         modifiers: Modifiers::default(),
-        button: MouseButton::Left,
+        button,
         click_count,
     });
 }
@@ -1707,6 +1840,78 @@ fn repo_tabs_drop_on_self_is_noop(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn repo_tabs_middle_click_closes_inactive_tab_without_reactivating(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_repo_tabs_middle_close_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let active_repo = repo_ids[0];
+    let closed_repo = repo_ids[1];
+    click_debug_selector_with_button(cx, repo_tab_selector(closed_repo), MouseButton::Middle, 1);
+
+    let state = wait_for_repo_count(&store_for_test, 2);
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![repo_ids[0], repo_ids[2]]
+    );
+    assert_eq!(state.active_repo, Some(active_repo));
+
+    sync_view_for_tests(cx, &view);
+    assert!(
+        cx.debug_bounds(repo_tab_selector(closed_repo)).is_none(),
+        "expected middle-clicked repo tab to be removed from the UI"
+    );
+}
+
+#[gpui::test]
+fn repo_tabs_right_click_does_not_close(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_repo_tabs_right_click_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    click_debug_selector_with_button(cx, repo_tab_selector(repo_ids[1]), MouseButton::Right, 1);
+
+    let state = store_for_test.snapshot();
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        repo_ids
+    );
+    assert_eq!(state.active_repo, Some(repo_ids[0]));
+
+    sync_view_for_tests(cx, &view);
+    assert!(
+        cx.debug_bounds(repo_tab_selector(repo_ids[1])).is_some(),
+        "expected right-clicked repo tab to remain visible"
+    );
+}
+
+#[gpui::test]
 fn worktrees_section_shows_spinner_while_removing_worktree(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_test = store.clone();
@@ -1857,6 +2062,7 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
         restore_session_and_draw(cx, &store_for_test, _view.clone(), vec![base.join("repo1")]);
     let repo_id = repo_ids[0];
     wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &_view, repo_id);
 
     let linked_repo = base.join("repo-feature");
     store_for_test.dispatch(Msg::Internal(
@@ -1897,6 +2103,240 @@ fn listed_workspace_badge_double_click_opens_closed_repo_tab(cx: &mut gpui::Test
                 .and_then(|active_repo| snapshot.repos.iter().find(|repo| repo.id == active_repo))
                 .is_some_and(|repo| repo.spec.workdir == linked_repo)
     });
+}
+
+#[gpui::test]
+fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_branch_worktree_menu_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    let row_selector = Box::leak(format!("branch_row_{}_{}", repo_id.0, badge_ix).into_boxed_str());
+    let badge_bounds = cx
+        .debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+        .expect("expected branch worktree badge bounds");
+    let row_bounds = cx
+        .debug_bounds(row_selector)
+        .expect("expected branch row bounds");
+    let menu_selector =
+        Box::leak(format!("branch_menu_indicator_{}_{}", repo_id.0, badge_ix).into_boxed_str());
+
+    assert!(
+        cx.debug_bounds(menu_selector).is_none(),
+        "expected branch hamburger menu indicator to be removed"
+    );
+    let edge_gap = row_bounds.right() - badge_bounds.right();
+    assert!(
+        edge_gap >= px(0.0) && edge_gap <= px(1.0),
+        "expected branch worktree badge to sit flush with the row edge"
+    );
+
+    let row_center = row_bounds.center();
+    cx.simulate_mouse_move(row_center, None, Modifiers::default());
+    cx.run_until_parked();
+    sync_view_for_tests(cx, &view);
+
+    cx.simulate_mouse_down(row_center, MouseButton::Right, Modifiers::default());
+    cx.run_until_parked();
+    sync_view_for_tests(cx, &view);
+
+    cx.update(|_window, app| {
+        assert!(
+            crate::view::test_support::popover_is_open(view.read(app), app),
+            "expected branch row right-click to open a popover even with a worktree badge"
+        );
+    });
+}
+
+#[gpui::test]
+fn worktree_branch_badge_shows_full_tooltip_when_truncated(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(760.0), px(440.0)));
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_worktree_branch_tooltip_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    let branch = "feature/super-long-worktree-branch-name-that-needs-truncation-to-fit-the-sidebar"
+        .to_string();
+    let linked_repo = base
+        .join("repo-feature")
+        .join("nested")
+        .join("workspace-with-a-long-path");
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: linked_repo,
+                head: None,
+                branch: Some(branch.clone()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
+
+    let label_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge_label", 128);
+    let label_bounds = cx
+        .debug_bounds(debug_selector("worktree_branch_badge_label", label_ix))
+        .expect("expected worktree branch badge label to render");
+    cx.simulate_mouse_move(label_bounds.center(), None, Modifiers::default());
+    view::test_support::wait_for_native_tooltip(cx);
+
+    assert_eq!(
+        view::test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some(branch)
+    );
+}
+
+#[gpui::test]
+fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(1200.0), px(440.0)));
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_worktree_row_layout_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::set_sidebar_width_for_test(this, px(500.0), cx);
+        });
+    });
+    sync_view_for_tests(cx, &view);
+
+    let worktree_root = base.join("ae");
+    let branch = "feature/badge-expands".to_string();
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: worktree_root.join("agent4"),
+                head: None,
+                branch: Some(branch.clone()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
+
+    let row_ix = wait_for_debug_index(cx, &view, "worktree_branch_badge", 128);
+    let row_selector = Box::leak(format!("worktree_row_{}_{}", repo_id.0, row_ix).into_boxed_str());
+    let branch_selector = debug_selector("worktree_branch_badge", row_ix);
+    let branch_label_selector = debug_selector("worktree_branch_badge_label", row_ix);
+    let path_selector = debug_selector("worktree_path_label", row_ix);
+
+    sync_view_for_tests(cx, &view);
+    let row_bounds = cx
+        .debug_bounds(row_selector)
+        .expect("expected worktree row bounds");
+    let branch_bounds = cx
+        .debug_bounds(branch_selector)
+        .expect("expected worktree branch badge bounds");
+    let branch_label_bounds = cx
+        .debug_bounds(branch_label_selector)
+        .expect("expected worktree branch badge label bounds");
+    let path_bounds = cx
+        .debug_bounds(path_selector)
+        .expect("expected worktree path label bounds");
+
+    assert_eq!(
+        path_bounds.center().y,
+        row_bounds.center().y,
+        "expected path label {path_bounds:?} to be centered in row {row_bounds:?}",
+    );
+    assert_eq!(
+        branch_bounds.center().y,
+        row_bounds.center().y,
+        "expected branch badge {branch_bounds:?} to be centered in row {row_bounds:?}",
+    );
+    assert!(
+        path_bounds.right() <= branch_bounds.left(),
+        "expected path label {path_bounds:?} to stay to the left of branch badge {branch_bounds:?}",
+    );
+    assert!(
+        branch_bounds.right() - branch_bounds.left() > px(104.0),
+        "expected branch badge {branch_bounds:?} to grow beyond the old fixed cap",
+    );
+    let available_label_width = row_bounds.right() - path_bounds.left();
+    assert!(
+        branch_bounds.right() - branch_bounds.left() <= (available_label_width / 2.0) + px(1.0),
+        "expected branch badge {branch_bounds:?} to stay within half of the available label width {available_label_width:?}",
+    );
+
+    cx.simulate_mouse_move(branch_label_bounds.center(), None, Modifiers::default());
+    view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        view::test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        None,
+        "expected branch badge label to fit without truncation when the row has room"
+    );
 }
 
 struct PanelLayoutTestView {
@@ -2073,7 +2513,12 @@ impl gpui::Render for PickerPromptScrollbarTestView {
                 components::PickerPrompt::new(self.input.clone(), self.scroll_handle.clone())
                     .items(items)
                     .max_height(px(120.0))
-                    .render(self.theme, cx, |_this, _ix, _event, _window, _cx| {}),
+                    .render(
+                        self.theme,
+                        ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                        cx,
+                        |_this, _ix, _event, _window, _cx| {},
+                    ),
             ),
         )
     }
@@ -2329,6 +2774,88 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn titlebar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let badge_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds");
+    let badge_center = badge_bounds.center();
+
+    cx.simulate_mouse_move(badge_center, None, Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("See GitComet editions".into())
+    );
+
+    cx.simulate_mouse_down(badge_center, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(badge_center, MouseButton::Left, Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    cx.update(|_window, app| {
+        assert!(
+            !crate::view::test_support::popover_is_open(view.read(app), app),
+            "expected titlebar free badge click to leave popovers closed"
+        );
+    });
+
+    cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
+    assert_eq!(crate::view::test_support::tooltip_text(cx, &view), None);
+}
+
+#[gpui::test]
+fn titlebar_free_badge_keeps_the_same_size_across_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let default_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds at the default zoom");
+    let default_width: f32 = default_bounds.size.width.into();
+    let default_height: f32 = default_bounds.size.height.into();
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.apply_ui_scale_percent(200, window, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    let zoomed_bounds = cx
+        .debug_bounds("titlebar_free_badge")
+        .expect("expected titlebar free badge bounds after zooming");
+    let zoomed_width: f32 = zoomed_bounds.size.width.into();
+    let zoomed_height: f32 = zoomed_bounds.size.height.into();
+
+    assert!(
+        (zoomed_width - default_width).abs() <= 0.5,
+        "expected the FREE badge width to stay fixed across zoom (default={default_width}, zoomed={zoomed_width})"
+    );
+    assert!(
+        (zoomed_height - default_height).abs() <= 0.5,
+        "expected the FREE badge height to stay fixed across zoom (default={default_height}, zoomed={zoomed_height})"
+    );
+}
+
+#[gpui::test]
 fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContext) {
     if cfg!(target_os = "macos") {
         // The custom Min/Max/Close controls are only rendered on non-macOS.
@@ -2348,13 +2875,11 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         .debug_bounds("titlebar_win_min")
         .expect("expected titlebar min control bounds");
     cx.simulate_mouse_move(min_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some("Minimize window".into())
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Minimize window".into())
+    );
 
     let max_bounds = cx
         .debug_bounds("titlebar_win_max")
@@ -2367,34 +2892,24 @@ fn titlebar_window_controls_update_tooltip_on_hover(cx: &mut gpui::TestAppContex
         }
     });
     cx.simulate_mouse_move(max_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some(expected_max)
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some(expected_max)
+    );
 
     let close_bounds = cx
         .debug_bounds("titlebar_win_close")
         .expect("expected titlebar close control bounds");
     cx.simulate_mouse_move(close_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            Some("Close window".into())
-        );
-    });
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Close window".into())
+    );
 
     cx.simulate_mouse_move(gpui::point(px(120.0), px(18.0)), None, Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            crate::view::test_support::tooltip_text(view.read(app), app),
-            None
-        );
-    });
+    assert_eq!(crate::view::test_support::tooltip_text(cx, &view), None);
 }
 
 struct ScrollbarTestView {

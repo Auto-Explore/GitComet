@@ -45,7 +45,7 @@ on:
         default: "main"
         type: string
       dry_run:
-        description: "Validate and print cask/formula without pushing to tap"
+        description: "Validate and print cask without pushing to tap"
         required: true
         default: false
         type: boolean
@@ -59,8 +59,8 @@ concurrency:
 
 jobs:
   deploy:
-    name: Publish Homebrew cask and formula
-    runs-on: ubuntu-latest
+    name: Publish Homebrew cask
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     env:
       GH_TOKEN: ${{ github.token }}
@@ -140,7 +140,7 @@ jobs:
           echo "tap_branch=$tap_branch" >> "$GITHUB_OUTPUT"
           echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
 
-      - name: Download cask and formula from release assets
+      - name: Download cask from release assets
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -148,17 +148,14 @@ jobs:
           gh release download "${{ steps.norm.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --pattern "gitcomet.rb" \
-            --pattern "gitcomet-cli.rb" \
             --dir dist \
             --clobber
           test -f dist/gitcomet.rb
-          test -f dist/gitcomet-cli.rb
 
-      - name: Validate cask and formula syntax
+      - name: Validate cask syntax
         run: |
           set -euo pipefail
           ruby -c dist/gitcomet.rb
-          ruby -c dist/gitcomet-cli.rb
 
       - name: Emit dry-run summary
         if: ${{ steps.norm.outputs.dry_run == 'true' }}
@@ -175,14 +172,9 @@ jobs:
             echo '```ruby'
             cat dist/gitcomet.rb
             echo '```'
-            echo ""
-            echo "Formula preview (Formula/gitcomet-cli.rb):"
-            echo '```ruby'
-            cat dist/gitcomet-cli.rb
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Publish cask and formula to tap repository
+      - name: Publish cask to tap repository
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -199,18 +191,20 @@ jobs:
 
           rm -rf tap-repo
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/${TAP_REPO}.git" tap-repo
-          mkdir -p tap-repo/Casks tap-repo/Formula
+          mkdir -p tap-repo/Casks
           cp dist/gitcomet.rb tap-repo/Casks/gitcomet.rb
-          cp dist/gitcomet-cli.rb tap-repo/Formula/gitcomet-cli.rb
 
           pushd tap-repo >/dev/null
-          git add Casks/gitcomet.rb Formula/gitcomet-cli.rb
+          git add Casks/gitcomet.rb
+          if git ls-files --error-unmatch Formula/gitcomet-cli.rb >/dev/null 2>&1; then
+            git rm -f Formula/gitcomet-cli.rb
+          fi
           if git ls-files --error-unmatch Formula/gitcomet.rb >/dev/null 2>&1; then
             git rm -f Formula/gitcomet.rb
           fi
 
           if git diff --cached --quiet -- Casks/gitcomet.rb Formula/gitcomet-cli.rb Formula/gitcomet.rb; then
-            echo "No Homebrew cask/formula changes detected; tap already up to date."
+            echo "No Homebrew cask changes detected; tap already up to date."
             popd >/dev/null
             exit 0
           fi

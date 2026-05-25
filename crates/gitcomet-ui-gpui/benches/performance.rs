@@ -63,6 +63,12 @@ exact_filtered_target!(bench_history_scope_switch_selected => bench_history_scop
 exact_filtered_target!(bench_repo_switch_selected => bench_repo_switch);
 exact_filtered_target!(bench_commit_details_selected => bench_commit_details);
 exact_filtered_target!(bench_status_list_selected => bench_status_list);
+exact_filtered_target!(bench_status_truncation_selected => bench_status_truncation, [
+    "status_truncation/path_aligned_long_paths",
+    "status_truncation/middle_long_paths",
+    "status_truncation/end_long_paths",
+    "status_truncation/focus_long_paths",
+]);
 exact_filtered_target!(bench_status_multi_select_selected => bench_status_multi_select);
 exact_filtered_target!(bench_status_select_diff_open_selected => bench_status_select_diff_open);
 exact_filtered_target!(bench_merge_open_bootstrap_selected => bench_merge_open_bootstrap);
@@ -239,6 +245,7 @@ criterion_group! {
         bench_repo_switch_selected,
         bench_commit_details_selected,
         bench_status_list_selected,
+        bench_status_truncation_selected,
         bench_status_multi_select_selected,
         bench_status_select_diff_open_selected,
         bench_merge_open_bootstrap_selected,

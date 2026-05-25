@@ -1,11 +1,12 @@
 use super::GixRepo;
+use super::history::gix_head_id_or_none;
 use crate::util::{
     bytes_to_text_preserving_utf8, path_buf_from_git_bytes, run_git_raw_output, run_git_simple,
     run_git_simple_with_paths, validate_hex_commit_id, validate_ref_like_arg,
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::services::Result;
+use gitcomet_core::services::{CommitOperationOutcome, Result};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::fs;
 use std::io::Write as _;
@@ -362,6 +363,11 @@ fn stash_tracked_change_paths(
 }
 
 impl GixRepo {
+    fn head_commit_id_for_outcome(&self) -> Result<Option<CommitId>> {
+        let repo = self.reopen_repo()?;
+        gix_head_id_or_none(&repo).map(|id| id.map(|id| CommitId(id.to_string().into())))
+    }
+
     fn ref_exists_in_repo(repo: &gix::Repository, ref_name: &str) -> Result<bool> {
         Ok(repo
             .try_find_reference(ref_name)
@@ -839,6 +845,18 @@ impl GixRepo {
         run_git_simple(cmd, label)
     }
 
+    pub(super) fn commit_with_outcome_impl(&self, message: &str) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
+        let pre_head = self.head_commit_id_for_outcome()?;
+        self.commit_impl(message)?;
+        let post_head = self.head_commit_id_for_outcome()?;
+        Ok(CommitOperationOutcome {
+            local_branch,
+            pre_head,
+            post_head,
+        })
+    }
+
     fn merge_in_progress_for_commit(&self) -> Result<bool> {
         let repo = self._repo.to_thread_local();
         Ok(repo.state() == Some(gix::state::InProgress::Merge))
@@ -848,6 +866,32 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("commit").arg("--amend").arg("-m").arg(message);
         run_git_simple(cmd, "git commit --amend")
+    }
+
+    pub(super) fn commit_amend_with_outcome_impl(
+        &self,
+        message: &str,
+    ) -> Result<CommitOperationOutcome> {
+        let local_branch = self.current_branch_name_for_outcome()?;
+        let pre_head = self.head_commit_id_for_outcome()?;
+        self.commit_amend_impl(message)?;
+        let post_head = self.head_commit_id_for_outcome()?;
+        Ok(CommitOperationOutcome {
+            local_branch,
+            pre_head,
+            post_head,
+        })
+    }
+}
+
+impl GixRepo {
+    fn current_branch_name_for_outcome(&self) -> Result<Option<String>> {
+        let head = self.current_branch_impl()?;
+        let head = head.trim();
+        if head.is_empty() || head == "HEAD" {
+            return Ok(None);
+        }
+        Ok(Some(head.to_string()))
     }
 }
 

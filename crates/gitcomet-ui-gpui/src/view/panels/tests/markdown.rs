@@ -244,7 +244,9 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 }
 
 #[gpui::test]
-fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui::TestAppContext) {
+fn secondary_f_from_markdown_file_preview_switches_back_to_text_search(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -300,7 +302,7 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
 
     focus_diff_panel(cx, &view);
 
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -312,15 +314,140 @@ fn ctrl_f_from_markdown_file_preview_switches_back_to_text_search(cx: &mut gpui:
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
             RenderedPreviewMode::Source,
-            "Ctrl+F should switch markdown preview back to source mode before search"
+            "secondary-f should switch markdown preview back to source mode before search"
         );
         assert!(
             pane.diff_search_active,
-            "Ctrl+F should activate diff search from markdown preview"
+            "secondary-f should activate diff search from markdown preview"
         );
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview fixture");
+}
+
+#[gpui::test]
+fn interactive_markdown_preview_text_multi_clicks_select_word_then_line(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(903);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_interactive_markdown_preview_multi_clicks",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/preview_clicks.md");
+    let abs_path = workdir.join(&file_rel);
+    let source = "# alpha_beta heading\n\nBody text.\n";
+    let preview_lines = Arc::new(vec![
+        "# alpha_beta heading".to_string(),
+        "".to_string(),
+        "Body text.".to_string(),
+    ]);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create markdown preview multi-click workdir");
+    std::fs::create_dir_all(
+        abs_path
+            .parent()
+            .expect("markdown preview fixture path should have a parent"),
+    )
+    .expect("create markdown preview fixture parent directory");
+    std::fs::write(&abs_path, source).expect("write markdown preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let abs_path = abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, abs_path.clone(), preview_lines, source.len(), cx);
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(source)
+                        .expect("markdown preview should parse"),
+                ));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    let expected_line = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.diff_text_line_for_region(0, DiffTextRegion::Inline)
+            .to_string()
+    });
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::Inline,
+        1..5,
+        "markdown preview multi-click hitbox",
+    );
+    let expected_word = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let offset = pane
+            .diff_text_offset_for_position_for_tests(0, DiffTextRegion::Inline, click)
+            .expect("expected markdown preview text offset");
+        let word_range = crate::text_selection::token_range_for_offset(&expected_line, offset);
+        expected_line[word_range].to_string()
+    });
+
+    simulate_counted_click(cx, click, 2);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_word)
+    );
+
+    simulate_counted_click(cx, click, 3);
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected_line)
+    );
+
+    simulate_counted_click(cx, click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.diff_text_has_selection(),
+            "single click should clear the markdown preview text selection"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview multi-click fixture");
 }
 
 #[gpui::test]
@@ -756,7 +883,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
 }
 
 #[gpui::test]
-fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
+fn secondary_f_from_conflict_markdown_preview_switches_back_to_text_search(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -816,7 +943,7 @@ fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
 
     focus_diff_panel(cx, &view);
 
-    cx.simulate_keystrokes("ctrl-f");
+    cx.simulate_keystrokes("secondary-f");
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -827,11 +954,11 @@ fn ctrl_f_from_conflict_markdown_preview_switches_back_to_text_search(
         assert_eq!(
             pane.conflict_resolver.resolver_preview_mode,
             ConflictResolverPreviewMode::Text,
-            "Ctrl+F should switch conflict markdown preview back to text mode before search"
+            "secondary-f should switch conflict markdown preview back to text mode before search"
         );
         assert!(
             pane.diff_search_active,
-            "Ctrl+F should activate diff search from conflict markdown preview"
+            "secondary-f should activate diff search from conflict markdown preview"
         );
     });
 
@@ -1385,7 +1512,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
                 pane.rendered_preview_modes
                     .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
                 pane.diff_view = DiffViewMode::Split;
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
@@ -1418,7 +1545,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Split);
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -1445,7 +1572,7 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(pane.diff_view, DiffViewMode::Inline);
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
@@ -1516,7 +1643,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::TwoWayDiff, cx);
-                pane.show_whitespace = false;
+                pane.reveal_whitespace_chars = false;
                 cx.notify();
             });
         });
@@ -1544,7 +1671,8 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         assert!(pane.is_conflict_rendered_preview_active());
     });
     assert!(
-        cx.debug_bounds("conflict_show_whitespace_pill").is_none(),
+        cx.debug_bounds("conflict_reveal_whitespace_chars_pill")
+            .is_none(),
         "conflict markdown preview should hide whitespace control"
     );
     assert!(
@@ -1576,7 +1704,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(pane.conflict_resolver.active_conflict, 0);
         assert!(
             pane.conflict_resolver.nav_anchor.is_none(),
@@ -1607,7 +1735,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             pane.conflict_resolver.view_mode,
             ConflictResolverViewMode::TwoWayDiff
         );
-        assert!(!pane.show_whitespace);
+        assert!(!pane.reveal_whitespace_chars);
         assert_eq!(pane.conflict_resolver.active_conflict, 1);
         assert!(
             pane.conflict_resolver.nav_anchor.is_none(),

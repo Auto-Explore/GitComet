@@ -6,11 +6,13 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(640.0))
+        .w(scaled_px(640.0))
         .child(
             div()
                 .px_2()
@@ -45,6 +47,7 @@ pub(super) fn panel(
                 )
                 .child(
                     components::Button::new("worktree_browse", "Browse")
+                        .focus_handle(this.worktree_browse_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |_this, _e, window, cx| {
                             cx.stop_propagation();
@@ -104,15 +107,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("worktree_add_cancel", "Cancel")
+                        .focus_handle(this.worktree_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("worktree_add_go", "Add")
+                        .focus_handle(this.worktree_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             let folder = this

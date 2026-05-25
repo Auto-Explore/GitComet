@@ -1,4 +1,62 @@
 use super::*;
+#[cfg(test)]
+use std::cell::RefCell;
+
+#[cfg(test)]
+thread_local! {
+    static VISIBLE_TOOLTIP_TEXT_FOR_TEST: RefCell<Option<SharedString>> = const { RefCell::new(None) };
+}
+
+pub(super) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
+    fn gitcomet_tooltip(self, theme: AppTheme, text: SharedString) -> Self {
+        self.tooltip(move |_window, cx| {
+            AnyView::from(cx.new(|_cx| TooltipBubbleView {
+                theme,
+                text: text.clone(),
+            }))
+        })
+    }
+}
+
+impl<T: gpui::StatefulInteractiveElement> GitCometTooltipExt for T {}
+
+struct TooltipBubbleView {
+    theme: AppTheme,
+    text: SharedString,
+}
+
+impl Render for TooltipBubbleView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| {
+            value.replace(Some(self.text.clone()));
+        });
+
+        div().pl(px(11.0)).pt(px(17.0)).child(
+            div()
+                .px_2()
+                .py_1()
+                .bg(self.theme.colors.tooltip_bg)
+                .rounded(px(self.theme.radii.row))
+                .shadow_sm()
+                .text_xs()
+                .text_color(self.theme.colors.tooltip_text)
+                .child(self.text.clone()),
+        )
+    }
+}
+
+#[cfg(test)]
+pub(super) fn clear_visible_tooltip_text_for_test() {
+    VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| {
+        value.replace(None);
+    });
+}
+
+#[cfg(test)]
+pub(super) fn tooltip_text_for_test() -> Option<SharedString> {
+    VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| value.borrow().clone())
+}
 
 impl GitCometView {
     pub(super) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
@@ -24,9 +82,6 @@ impl GitCometView {
                         let window_width = (ww.is_finite() && ww >= 1.0).then_some(ww as u32);
                         let window_height = (wh.is_finite() && wh >= 1.0).then_some(wh as u32);
 
-                        let sidebar_width: f32 = this.sidebar_width.round().into();
-                        let details_width: f32 = this.details_width.round().into();
-
                         let (
                             history_show_graph,
                             history_show_author,
@@ -49,12 +104,15 @@ impl GitCometView {
                         let settings = session::UiSettings {
                             window_width,
                             window_height,
-                            sidebar_width: (sidebar_width.is_finite() && sidebar_width >= 1.0)
-                                .then_some(sidebar_width as u32),
-                            details_width: (details_width.is_finite() && details_width >= 1.0)
-                                .then_some(details_width as u32),
+                            sidebar_width: ui_scale::stored_design_units(
+                                Some(this.ui_scale().design_units_from_pixels(this.sidebar_width)),
+                            ),
+                            details_width: ui_scale::stored_design_units(
+                                Some(this.ui_scale().design_units_from_pixels(this.details_width)),
+                            ),
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
                             theme_mode: Some(this.theme_mode.key().to_string()),
+                            ui_scale_percent: Some(this.ui_scale_percent),
                             ui_font_family: Some(font_preferences.ui_font_family),
                             editor_font_family: Some(font_preferences.editor_font_family),
                             use_font_ligatures: Some(font_preferences.use_font_ligatures),
@@ -63,6 +121,15 @@ impl GitCometView {
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
                             diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
+                            diff_content_mode: Some(this.diff_content_mode.key().to_string()),
+                            diff_whitespace_mode: Some(
+                                this.diff_whitespace_mode.key().to_string(),
+                            ),
+                            diff_reveal_whitespace_chars: Some(
+                                this.diff_reveal_whitespace_chars,
+                            ),
+                            diff_word_wrap: Some(this.diff_word_wrap),
+                            diff_show_line_numbers: Some(this.diff_show_line_numbers),
                             change_tracking_height,
                             untracked_height,
                             history_show_graph: Some(history_show_graph),
@@ -82,6 +149,8 @@ impl GitCometView {
                             } else {
                                 gitcomet_state::model::GitLogTagFetchMode::Disabled
                             }),
+                            default_history_mode: None,
+                            commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             git_executable_path: None,
                         };
 
@@ -109,18 +178,18 @@ impl GitCometView {
         let sidebar_handle_w = if self.sidebar_collapsed {
             px(0.0)
         } else {
-            px(PANE_RESIZE_HANDLE_PX)
+            self.pane_resize_handle_width()
         };
         let details_handle_w = if self.details_collapsed {
             px(0.0)
         } else {
-            px(PANE_RESIZE_HANDLE_PX)
+            self.pane_resize_handle_width()
         };
         let handles_w = sidebar_handle_w + details_handle_w;
-        let main_min = px(MAIN_MIN_PX);
-        let sidebar_min = px(SIDEBAR_MIN_PX);
-        let details_min = px(DETAILS_MIN_PX);
-        let collapsed_w = px(PANE_COLLAPSED_PX);
+        let main_min = self.main_min_width();
+        let sidebar_min = self.sidebar_min_width();
+        let details_min = self.details_min_width();
+        let collapsed_w = self.pane_collapsed_width();
 
         if !self.sidebar_collapsed {
             let details_w = if self.details_collapsed {
@@ -129,9 +198,11 @@ impl GitCometView {
                 self.details_width.max(details_min)
             };
             let max_sidebar = (total_w - details_w - main_min - handles_w).max(sidebar_min);
-            self.sidebar_width = self.sidebar_width.max(sidebar_min).min(max_sidebar);
+            self.set_sidebar_width_from_pixels(
+                self.sidebar_width.max(sidebar_min).min(max_sidebar),
+            );
         } else {
-            self.sidebar_width = self.sidebar_width.max(sidebar_min);
+            self.set_sidebar_width_from_pixels(self.sidebar_width.max(sidebar_min));
         }
 
         if !self.details_collapsed {
@@ -141,9 +212,11 @@ impl GitCometView {
                 self.sidebar_width.max(sidebar_min)
             };
             let max_details = (total_w - sidebar_w - main_min - handles_w).max(details_min);
-            self.details_width = self.details_width.max(details_min).min(max_details);
+            self.set_details_width_from_pixels(
+                self.details_width.max(details_min).min(max_details),
+            );
         } else {
-            self.details_width = self.details_width.max(details_min);
+            self.set_details_width_from_pixels(self.details_width.max(details_min));
         }
 
         let sidebar_target = if self.sidebar_collapsed {

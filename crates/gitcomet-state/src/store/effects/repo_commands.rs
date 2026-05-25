@@ -4,19 +4,19 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, GitRepository, PullMode, RemoteUrlKind, ResetMode,
-    SubmoduleTrustTarget,
+    CommandOutput, ConflictSide, ForcePushLease, GitRepository, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
-use super::super::{RepoId, executor::TaskExecutor};
+use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{RepoMap, send_or_log, spawn_with_repo};
 
 fn schedule_repo_command<F>(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     command: RepoCommandKind,
     run: F,
@@ -92,7 +92,7 @@ pub(super) struct AddSubmoduleRequest {
 pub(super) fn schedule_save_worktree_file(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     contents: String,
@@ -137,7 +137,7 @@ pub(super) fn schedule_save_worktree_file(
 pub(super) fn schedule_export_patch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
     dest: PathBuf,
@@ -160,7 +160,7 @@ pub(super) fn schedule_export_patch(
 pub(super) fn schedule_apply_patch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: PathBuf,
 ) {
@@ -180,7 +180,7 @@ pub(super) fn schedule_apply_patch(
 pub(super) fn schedule_add_worktree(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     reference: Option<String>,
@@ -203,7 +203,7 @@ pub(super) fn schedule_add_worktree(
 pub(super) fn schedule_remove_worktree(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -221,7 +221,7 @@ pub(super) fn schedule_remove_worktree(
 pub(super) fn schedule_force_remove_worktree(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -239,7 +239,7 @@ pub(super) fn schedule_force_remove_worktree(
 pub(super) fn schedule_add_submodule(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     request: AddSubmoduleRequest,
 ) {
@@ -288,7 +288,7 @@ pub(super) fn schedule_add_submodule(
 pub(super) fn schedule_update_submodules(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     approved_sources: Vec<SubmoduleTrustTarget>,
     auth: Option<StagedGitAuth>,
@@ -313,7 +313,7 @@ pub(super) fn schedule_update_submodules(
 pub(super) fn schedule_check_submodule_add_trust(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     url: String,
     path: PathBuf,
@@ -341,7 +341,7 @@ pub(super) fn schedule_check_submodule_add_trust(
 pub(super) fn schedule_check_submodule_update_trust(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
@@ -353,10 +353,81 @@ pub(super) fn schedule_check_submodule_update_trust(
     });
 }
 
+pub(super) fn schedule_check_submodule_load_trust(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.check_submodule_load_trust(&path);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SubmoduleLoadTrustChecked {
+                repo_id,
+                path,
+                result,
+            }),
+        );
+    });
+}
+
+pub(super) fn schedule_load_submodule(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: PathBuf,
+    approved_sources: Vec<SubmoduleTrustTarget>,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_path = path.clone();
+    let command_sources = approved_sources.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::LoadSubmodule {
+            path: command_path,
+            approved_sources: command_sources,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.load_submodule_with_output(&path, &approved_sources)
+            })
+        },
+    );
+}
+
+pub(super) fn schedule_change_submodule_pointer(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    path: PathBuf,
+    reference: String,
+) {
+    let command_path = path.clone();
+    let command_reference = reference.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ChangeSubmodulePointer {
+            path: command_path,
+            reference: command_reference,
+        },
+        move |repo| repo.change_submodule_pointer_with_output(&path, &reference),
+    );
+}
+
 pub(super) fn schedule_remove_submodule(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -374,7 +445,7 @@ pub(super) fn schedule_remove_submodule(
 pub(super) fn schedule_stage_hunk(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: String,
 ) {
@@ -391,7 +462,7 @@ pub(super) fn schedule_stage_hunk(
 pub(super) fn schedule_unstage_hunk(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: String,
 ) {
@@ -408,7 +479,7 @@ pub(super) fn schedule_unstage_hunk(
 pub(super) fn schedule_apply_worktree_patch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     patch: String,
     reverse: bool,
@@ -426,7 +497,7 @@ pub(super) fn schedule_apply_worktree_patch(
 pub(super) fn schedule_fetch_all(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     prune: bool,
     auth: Option<StagedGitAuth>,
@@ -444,7 +515,7 @@ pub(super) fn schedule_fetch_all(
 pub(super) fn schedule_prune_merged_branches(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     schedule_repo_command(
@@ -460,7 +531,7 @@ pub(super) fn schedule_prune_merged_branches(
 pub(super) fn schedule_prune_local_tags(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     schedule_repo_command(
@@ -476,7 +547,7 @@ pub(super) fn schedule_prune_local_tags(
 pub(super) fn schedule_pull(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     mode: PullMode,
     auth: Option<StagedGitAuth>,
@@ -494,7 +565,7 @@ pub(super) fn schedule_pull(
 pub(super) fn schedule_pull_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     branch: String,
@@ -518,7 +589,7 @@ pub(super) fn schedule_pull_branch(
 pub(super) fn schedule_merge_ref(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: String,
 ) {
@@ -538,7 +609,7 @@ pub(super) fn schedule_merge_ref(
 pub(super) fn schedule_squash_ref(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     reference: String,
 ) {
@@ -558,7 +629,7 @@ pub(super) fn schedule_squash_ref(
 pub(super) fn schedule_push(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
 ) {
@@ -572,10 +643,65 @@ pub(super) fn schedule_push(
     );
 }
 
+pub(super) fn schedule_push_after_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_target = target.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::PushAfterCommit {
+            target: command_target,
+            set_upstream,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                if set_upstream {
+                    repo.push_after_commit_set_upstream_with_output(&target)
+                } else {
+                    repo.push_after_commit_with_output(&target)
+                }
+            })
+        },
+    );
+}
+
+pub(super) fn schedule_safe_push_after_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    context: SafePushAfterCommitContext,
+    auth: Option<StagedGitAuth>,
+) {
+    let finish_context = context.clone();
+    let follow_up_auth = auth.clone();
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = run_with_git_auth(auth, || repo.safe_push_after_commit(&context));
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+                repo_id,
+                context: finish_context,
+                auth: follow_up_auth,
+                result,
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_force_push(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     auth: Option<StagedGitAuth>,
 ) {
@@ -589,10 +715,31 @@ pub(super) fn schedule_force_push(
     );
 }
 
+pub(super) fn schedule_force_push_with_lease(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    lease: ForcePushLease,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_lease = lease.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::ForcePushWithLease {
+            lease: command_lease,
+        },
+        move |repo| run_with_git_auth(auth, || repo.push_force_with_lease_with_output(&lease)),
+    );
+}
+
 pub(super) fn schedule_push_set_upstream(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     branch: String,
@@ -620,7 +767,7 @@ pub(super) fn schedule_push_set_upstream(
 pub(super) fn schedule_set_upstream_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
     upstream: String,
@@ -643,7 +790,7 @@ pub(super) fn schedule_set_upstream_branch(
 pub(super) fn schedule_unset_upstream_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     branch: String,
 ) {
@@ -663,7 +810,7 @@ pub(super) fn schedule_unset_upstream_branch(
 pub(super) fn schedule_delete_remote_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     branch: String,
@@ -691,7 +838,7 @@ pub(super) fn schedule_delete_remote_branch(
 pub(super) fn schedule_reset(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     target: String,
     mode: ResetMode,
@@ -713,7 +860,7 @@ pub(super) fn schedule_reset(
 pub(super) fn schedule_rebase(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     onto: String,
 ) {
@@ -731,7 +878,7 @@ pub(super) fn schedule_rebase(
 pub(super) fn schedule_rebase_continue(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     schedule_repo_command(
@@ -747,7 +894,7 @@ pub(super) fn schedule_rebase_continue(
 pub(super) fn schedule_rebase_abort(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     schedule_repo_command(
@@ -763,7 +910,7 @@ pub(super) fn schedule_rebase_abort(
 pub(super) fn schedule_merge_abort(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) {
     schedule_repo_command(
@@ -779,7 +926,7 @@ pub(super) fn schedule_merge_abort(
 pub(super) fn schedule_create_tag(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     target: String,
@@ -802,7 +949,7 @@ pub(super) fn schedule_create_tag(
 pub(super) fn schedule_delete_tag(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -820,7 +967,7 @@ pub(super) fn schedule_delete_tag(
 pub(super) fn schedule_push_tag(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     name: String,
@@ -844,7 +991,7 @@ pub(super) fn schedule_push_tag(
 pub(super) fn schedule_delete_remote_tag(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     name: String,
@@ -868,7 +1015,7 @@ pub(super) fn schedule_delete_remote_tag(
 pub(super) fn schedule_add_remote(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     url: String,
@@ -891,7 +1038,7 @@ pub(super) fn schedule_add_remote(
 pub(super) fn schedule_remove_remote(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -909,7 +1056,7 @@ pub(super) fn schedule_remove_remote(
 pub(super) fn schedule_set_remote_url(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     url: String,
@@ -934,7 +1081,7 @@ pub(super) fn schedule_set_remote_url(
 pub(super) fn schedule_checkout_conflict_side(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
     side: ConflictSide,
@@ -956,7 +1103,7 @@ pub(super) fn schedule_checkout_conflict_side(
 pub(super) fn schedule_checkout_conflict_base(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -974,7 +1121,7 @@ pub(super) fn schedule_checkout_conflict_base(
 pub(super) fn schedule_accept_conflict_deletion(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
@@ -992,7 +1139,7 @@ pub(super) fn schedule_accept_conflict_deletion(
 pub(super) fn schedule_launch_mergetool(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {

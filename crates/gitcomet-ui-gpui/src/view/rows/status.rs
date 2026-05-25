@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::domain::SubmoduleStatus;
 use std::sync::Arc;
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -258,7 +259,18 @@ pub(super) fn apply_status_multi_selection_click(
 
 fn status_paths_for_section(repo: &RepoState, section: StatusSection) -> Vec<std::path::PathBuf> {
     StatusSectionEntries::from_repo(repo, section)
-        .map_or_else(Vec::new, StatusSectionEntries::path_vec)
+        .map_or_else(Vec::new, |entries| entries.path_vec())
+}
+
+fn submodule_status_lookup(repo: &RepoState) -> HashMap<&std::path::Path, SubmoduleStatus> {
+    let mut lookup = HashMap::default();
+    if let Loadable::Ready(submodules) = &repo.submodules {
+        lookup.reserve(submodules.len());
+        for submodule in submodules.iter() {
+            lookup.insert(submodule.path.as_path(), submodule.status);
+        }
+    }
+    lookup
 }
 
 impl DetailsPaneView {
@@ -386,7 +398,13 @@ fn render_status_rows_for_section(
     let selected = repo.diff_state.diff_target.as_ref();
     let selected_paths = this.status_selected_paths_for_area(repo.id, section.diff_area());
     let multi_select_active = !selected_paths.is_empty();
+    let submodule_statuses = submodule_status_lookup(repo);
     let theme = this.theme;
+    let ui_scale = this.ui_scale();
+    let visible_signature = this.status_visible_signature(repo, section, &range, entries.len());
+    let path_alignment_group = this
+        .status_path_alignment_group(section)
+        .visible_rows(visible_signature);
     range
         .filter_map(|ix| entries.get(ix).map(|entry| (ix, entry)))
         .map(|(ix, entry)| {
@@ -401,14 +419,23 @@ fn render_status_rows_for_section(
                     _ => false,
                 })
             };
+            let submodule_status = (entry.kind != FileStatusKind::Untracked)
+                .then(|| submodule_statuses.get(entry.path.as_path()).copied())
+                .flatten();
+            let is_submodule = submodule_status.is_some();
             status_row(
                 theme,
+                ui_scale,
                 ix,
                 entry,
+                is_submodule,
+                submodule_status,
                 path_display,
                 section,
                 repo.id,
                 is_selected,
+                this.tooltip_host.clone(),
+                path_alignment_group.clone(),
                 this.active_context_menu_invoker.as_ref(),
                 cx,
             )
@@ -419,26 +446,49 @@ fn render_status_rows_for_section(
 #[allow(clippy::too_many_arguments)]
 fn status_row(
     theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
     ix: usize,
     entry: &FileStatus,
+    is_submodule: bool,
+    submodule_status: Option<SubmoduleStatus>,
     path_display: SharedString,
     section: StatusSection,
     repo_id: RepoId,
     selected: bool,
+    tooltip_host: WeakEntity<TooltipHost>,
+    path_alignment_group: components::PathTruncationAlignmentGroup,
     active_context_menu_invoker: Option<&SharedString>,
     cx: &mut gpui::Context<DetailsPaneView>,
 ) -> AnyElement {
+    let scaled_px = |value: f32| ui_scale.px(value);
     let area = section.diff_area();
-    let (icon, color) = match entry.kind {
-        FileStatusKind::Untracked => match area {
-            DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
-            DiffArea::Staged => ("icons/question.svg", theme.colors.warning),
-        },
-        FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
-        FileStatusKind::Added => ("icons/plus.svg", theme.colors.success),
-        FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
-        FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
-        FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+    let (icon, color) = if is_submodule {
+        let color = match submodule_status {
+            Some(SubmoduleStatus::NotInitialized) => with_alpha(
+                theme.colors.text_muted,
+                if theme.is_dark { 0.78 } else { 0.92 },
+            ),
+            Some(SubmoduleStatus::HeadMismatch) => theme.colors.warning,
+            Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping) => {
+                theme.colors.danger
+            }
+            Some(SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_)) | None => {
+                theme.colors.accent
+            }
+        };
+        ("icons/box.svg", color)
+    } else {
+        match entry.kind {
+            FileStatusKind::Untracked => match area {
+                DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
+                DiffArea::Staged => ("icons/question.svg", theme.colors.warning),
+            },
+            FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
+            FileStatusKind::Added => ("icons/plus.svg", theme.colors.success),
+            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
+            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+            FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+        }
     };
 
     let path = Arc::new(entry.path.clone());
@@ -454,7 +504,6 @@ fn status_row(
             DiffArea::Staged => "Unstage",
         }
     };
-    let row_tooltip = path_display.clone();
     let stage_tooltip: SharedString = match stage_label {
         "Stage" => "Stage file".into(),
         "Unstage" => "Unstage file".into(),
@@ -475,6 +524,7 @@ fn status_row(
     let context_menu_invoker_for_row = context_menu_invoker.clone();
     let row_group: SharedString =
         format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix).into();
+    let row_debug_selector = format!("status_row_{}_{}_{}", repo_id.0, section.id_label(), ix);
 
     let stage_button = components::Button::new(format!("stage_btn_{ix}"), stage_label)
         .style(components::ButtonStyle::Solid)
@@ -516,29 +566,20 @@ fn status_row(
 
             cx.notify();
         })
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let mut changed = false;
-            if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(stage_tooltip.clone()), cx);
-            } else {
-                changed |= this.clear_tooltip_if_matches(&stage_tooltip, cx);
-            }
-            if changed {
-                cx.notify();
-            }
-        }));
+        .gitcomet_tooltip(theme, stage_tooltip.clone());
 
     let path_display_for_label = path_display.clone();
 
     div()
         .id(ix)
+        .debug_selector(move || row_debug_selector.clone())
         .relative()
         .group(row_group.clone())
         .flex()
         .items_center()
-        .gap_2()
-        .px_2()
-        .h(px(STATUS_ROW_HEIGHT_PX))
+        .gap(scaled_px(8.0))
+        .px(scaled_px(8.0))
+        .h(scaled_px(STATUS_ROW_HEIGHT_PX))
         .w_full()
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
@@ -552,17 +593,6 @@ fn status_row(
             }
         })
         .active(move |s| s.bg(theme.colors.active))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let mut changed = false;
-            if *hovering {
-                changed |= this.set_tooltip_text_if_changed(Some(row_tooltip.clone()), cx);
-            } else {
-                changed |= this.clear_tooltip_if_matches(&row_tooltip, cx);
-            }
-            if changed {
-                cx.notify();
-            }
-        }))
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -612,36 +642,51 @@ fn status_row(
         )
         .child(
             div()
-                .w(px(16.0))
+                .w(scaled_px(16.0))
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg_icon(icon, color, px(14.0))),
+                .child(svg_icon(icon, color, scaled_px(14.0))),
         )
         .child(
             div()
                 .text_sm()
+                .line_height(scaled_px(18.0))
                 .flex_1()
                 .min_w(px(0.0))
-                .line_clamp(1)
-                .child(path_display_for_label.clone()),
+                .child(
+                    components::TruncatedText::aligned_path(
+                        path_display_for_label.clone(),
+                        path_alignment_group,
+                    )
+                    .id(("status_row_path", ix))
+                    .full_text_tooltip(tooltip_host)
+                    .render(cx),
+                ),
         )
         .child(
             div()
                 .absolute()
-                .right(px(6.0))
+                .right(scaled_px(6.0))
                 .top_0()
                 .bottom_0()
                 .flex()
                 .items_center()
                 .invisible()
                 .group_hover(row_group.clone(), |d| d.visible())
-                .gap_1()
+                .gap(scaled_px(4.0))
                 .child(stage_button),
         )
         .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
-            this.focus_diff_panel(window, cx);
             let modifiers = _e.modifiers();
+            let target = DiffTarget::WorkingTree {
+                path: (*path_for_row).clone(),
+                area,
+            };
+            let should_unselect = _e.standard_click()
+                && this.active_repo().is_some_and(|repo| {
+                    repo.id == repo_id && repo.diff_state.diff_target.as_ref() == Some(&target)
+                });
             let entries = if modifiers.shift {
                 this.active_repo()
                     .filter(|r| r.id == repo_id)
@@ -657,19 +702,17 @@ fn status_row(
                 modifiers,
                 entries.as_deref(),
             );
-            if is_conflicted && area == DiffArea::Unstaged {
+            if should_unselect {
+                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            } else if is_conflicted && area == DiffArea::Unstaged {
+                this.focus_diff_panel(window, cx);
                 this.store.dispatch(Msg::SelectConflictDiff {
                     repo_id,
                     path: (*path_for_row).clone(),
                 });
             } else {
-                this.store.dispatch(Msg::SelectDiff {
-                    repo_id,
-                    target: DiffTarget::WorkingTree {
-                        path: (*path_for_row).clone(),
-                        area,
-                    },
-                });
+                this.focus_diff_panel(window, cx);
+                this.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
             cx.notify();
         }))
@@ -682,6 +725,82 @@ mod tests {
 
     fn pb(s: &str) -> std::path::PathBuf {
         std::path::PathBuf::from(s)
+    }
+
+    fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: pb(path),
+            kind,
+            conflict: None,
+        }
+    }
+
+    fn repo_with_status_entries(entries: Vec<FileStatus>) -> RepoState {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            gitcomet_core::domain::RepoSpec {
+                workdir: pb("/tmp/status-section-entries-test"),
+            },
+        );
+        repo.worktree_status = Loadable::Ready(Arc::new(entries));
+        repo.worktree_status_rev = 1;
+        repo
+    }
+
+    fn commit_id(id: &str) -> gitcomet_core::domain::CommitId {
+        gitcomet_core::domain::CommitId(Arc::from(id))
+    }
+
+    #[test]
+    fn status_section_entries_index_filtered_sections_directly() {
+        let repo = repo_with_status_entries(vec![
+            file_status("tracked-a.txt", FileStatusKind::Modified),
+            file_status("new-a.txt", FileStatusKind::Untracked),
+            file_status("tracked-b.txt", FileStatusKind::Deleted),
+            file_status("new-b.txt", FileStatusKind::Untracked),
+        ]);
+
+        let untracked = StatusSectionEntries::from_repo(&repo, StatusSection::Untracked).unwrap();
+        assert_eq!(untracked.len(), 2);
+        assert_eq!(untracked.get(0).unwrap().path, pb("new-a.txt"));
+        assert_eq!(untracked.get(1).unwrap().path, pb("new-b.txt"));
+        assert!(untracked.get(2).is_none());
+
+        let unstaged = StatusSectionEntries::from_repo(&repo, StatusSection::Unstaged).unwrap();
+        assert_eq!(unstaged.len(), 2);
+        assert_eq!(unstaged.get(0).unwrap().path, pb("tracked-a.txt"));
+        assert_eq!(unstaged.get(1).unwrap().path, pb("tracked-b.txt"));
+        assert!(unstaged.get(2).is_none());
+    }
+
+    #[test]
+    fn submodule_status_lookup_maps_ready_submodules_by_path() {
+        let mut repo = repo_with_status_entries(Vec::new());
+        repo.submodules = Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::Submodule {
+                path: pb("vendor/ready"),
+                recorded_head: commit_id("1111111"),
+                checked_out_head: Some(commit_id("2222222")),
+                status: SubmoduleStatus::HeadMismatch,
+            },
+            gitcomet_core::domain::Submodule {
+                path: pb("vendor/missing"),
+                recorded_head: commit_id("3333333"),
+                checked_out_head: None,
+                status: SubmoduleStatus::NotInitialized,
+            },
+        ]));
+
+        let lookup = submodule_status_lookup(&repo);
+        assert_eq!(
+            lookup.get(std::path::Path::new("vendor/ready")).copied(),
+            Some(SubmoduleStatus::HeadMismatch)
+        );
+        assert_eq!(
+            lookup.get(std::path::Path::new("vendor/missing")).copied(),
+            Some(SubmoduleStatus::NotInitialized)
+        );
+        assert_eq!(lookup.get(std::path::Path::new("vendor/other")), None);
     }
 
     #[test]

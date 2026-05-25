@@ -6,7 +6,9 @@ use gitcomet_core::conflict_session::{
 };
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
-use gitcomet_core::services::{BlameLine, SubmoduleTrustTarget};
+use gitcomet_core::services::{
+    BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -85,6 +87,7 @@ impl RepoLoadsInFlight {
     pub const MERGE_COMMIT_MESSAGE: u32 = 1 << 12;
     pub const REMOTE_TAGS: u32 = 1 << 13;
     pub const WORKTREES: u32 = 1 << 14;
+    pub const SUBMODULES: u32 = 1 << 15;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -99,6 +102,12 @@ impl RepoLoadsInFlight {
 
     pub fn any_in_flight(&self) -> bool {
         self.in_flight != 0
+    }
+
+    pub fn clear(&mut self) {
+        self.in_flight = 0;
+        self.pending = 0;
+        self.pending_log = None;
     }
 
     /// Starts the common primary-refresh batch immediately when no work is already queued or
@@ -305,10 +314,15 @@ pub enum AuthRetryOperation {
         repo_id: RepoId,
         command: RepoCommandKind,
     },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+    },
     Commit {
         repo_id: RepoId,
         message: String,
         amend: bool,
+        push_after_commit: bool,
     },
     Clone {
         url: String,
@@ -333,6 +347,9 @@ pub enum SubmoduleTrustPromptOperation {
         force: bool,
     },
     Update,
+    Load {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -417,6 +434,7 @@ pub struct CommandLogEntry {
 pub struct PendingCommitRetry {
     pub message: String,
     pub amend: bool,
+    pub push_after_commit: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -440,7 +458,7 @@ pub struct HistoryState {
 impl Default for HistoryState {
     fn default() -> Self {
         Self {
-            history_scope: LogScope::CurrentBranch,
+            history_scope: LogScope::default(),
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -461,6 +479,7 @@ impl Default for HistoryState {
 #[derive(Clone, Debug)]
 pub struct DiffState {
     pub diff_target: Option<DiffTarget>,
+    pub diff_target_rev: u64,
     pub diff_state_rev: u64,
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
@@ -468,6 +487,10 @@ pub struct DiffState {
     pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
     pub diff_preview_text_file_rev: u64,
     pub diff_preview_text_file: Loadable<Option<Shared<DiffPreviewTextFile>>>,
+    pub submodule_summary_rev: u64,
+    pub submodule_summary: Loadable<Shared<SubmoduleDiffSummary>>,
+    pub inline_submodule_diff_rev: u64,
+    pub inline_submodule_diff: Option<InlineSubmoduleDiffState>,
     pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
@@ -475,6 +498,7 @@ impl Default for DiffState {
     fn default() -> Self {
         Self {
             diff_target: None,
+            diff_target_rev: 0,
             diff_state_rev: 0,
             diff_rev: 0,
             diff: Loadable::NotLoaded,
@@ -482,9 +506,43 @@ impl Default for DiffState {
             diff_file: Loadable::NotLoaded,
             diff_preview_text_file_rev: 0,
             diff_preview_text_file: Loadable::NotLoaded,
+            submodule_summary_rev: 0,
+            submodule_summary: Loadable::NotLoaded,
+            inline_submodule_diff_rev: 0,
+            inline_submodule_diff: None,
             diff_file_image: Loadable::NotLoaded,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InlineSubmoduleDiffSection {
+    Range(SubmoduleDiffRangeKind),
+    LiveStaged,
+    LiveUnstaged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineSubmoduleDiffEntry {
+    pub path: PathBuf,
+    pub kind: FileStatusKind,
+    pub target: DiffTarget,
+    pub section: InlineSubmoduleDiffSection,
+}
+
+#[derive(Clone, Debug)]
+pub struct InlineSubmoduleDiffState {
+    pub submodule_repo_path: PathBuf,
+    pub parent_submodule_path: PathBuf,
+    pub entries: Vec<InlineSubmoduleDiffEntry>,
+    pub selected_ix: usize,
+    pub target: DiffTarget,
+    pub rev: u64,
+    pub diff_rev: u64,
+    pub diff: Loadable<Shared<Diff>>,
+    pub diff_file_rev: u64,
+    pub diff_file: Loadable<Option<Shared<FileDiffText>>>,
+    pub diff_file_image: Loadable<Option<Shared<FileDiffImage>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -579,6 +637,8 @@ pub struct RepoState {
     pub stashes: Loadable<Arc<Vec<StashEntry>>>,
     pub stashes_rev: u64,
     pub reflog: Loadable<Vec<ReflogEntry>>,
+    pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
+    pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
     pub merge_message_rev: u64,
@@ -604,6 +664,8 @@ pub struct RepoState {
 
     pub command_log: Vec<CommandLogEntry>,
     pub pending_commit_retry: Option<PendingCommitRetry>,
+    pub load_epoch: u64,
+    pub pending_force_push_lease: Option<ForcePushLease>,
 }
 
 impl RepoState {
@@ -650,6 +712,8 @@ impl RepoState {
             stashes: Loadable::NotLoaded,
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,
+            recent_commit_messages: Loadable::NotLoaded,
+            recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
             merge_message_rev: 0,
@@ -670,6 +734,8 @@ impl RepoState {
             diagnostics: Vec::new(),
             command_log: Vec::new(),
             pending_commit_retry: None,
+            load_epoch: 0,
+            pending_force_push_lease: None,
         }
     }
 
@@ -754,6 +820,23 @@ impl RepoState {
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    pub(crate) fn set_recent_commit_messages(
+        &mut self,
+        messages: Loadable<Vec<RecentCommitMessage>>,
+    ) {
+        let messages = loadable_into_arc(messages);
+        if self.recent_commit_messages == messages {
+            return;
+        }
+        self.recent_commit_messages = messages;
+        self.recent_commit_messages_rev = self.recent_commit_messages_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn clear_head_dependent_cached_state(&mut self) {
+        self.pending_force_push_lease = None;
+        self.set_recent_commit_messages(Loadable::NotLoaded);
     }
 
     pub(crate) fn set_worktrees(&mut self, worktrees: Loadable<Vec<Worktree>>) {
@@ -933,6 +1016,12 @@ impl RepoState {
                 && matches!(self.status, Loadable::Loading))
     }
 
+    #[inline]
+    pub(crate) fn bump_log_revs(&mut self) {
+        self.log_rev = self.log_rev.wrapping_add(1);
+        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+    }
+
     pub(crate) fn set_log(&mut self, log: Loadable<Shared<LogPage>>) {
         if self.history_state.log == log && self.log == log {
             return;
@@ -942,7 +1031,7 @@ impl RepoState {
         }
         self.history_state.log = log.clone();
         self.log = log;
-        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+        self.bump_log_revs();
     }
 
     pub(crate) fn retain_log_while_loading(&mut self) {
@@ -961,7 +1050,7 @@ impl RepoState {
         }
         self.history_state.log_loading_more = v;
         self.log_loading_more = v;
-        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+        self.bump_log_revs();
     }
 
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
@@ -969,7 +1058,7 @@ impl RepoState {
             return;
         }
         self.history_state.history_scope = scope;
-        self.history_state.log_rev = self.history_state.log_rev.wrapping_add(1);
+        self.bump_log_revs();
     }
 
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
@@ -1039,12 +1128,25 @@ impl RepoState {
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
+    pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
+        if self.diff_state.diff_target != target {
+            self.diff_state.diff_target_rev = self.diff_state.diff_target_rev.wrapping_add(1);
+        }
+        self.diff_state.diff_target = target;
+    }
+
     pub(crate) fn bump_diff_state_rev(&mut self) {
         self.diff_state.diff_state_rev = self.diff_state.diff_state_rev.wrapping_add(1);
     }
 
     pub(crate) fn bump_ops_rev(&mut self) {
         self.ops_rev = self.ops_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn bump_load_epoch(&mut self) -> u64 {
+        let previous = self.load_epoch;
+        self.load_epoch = self.load_epoch.wrapping_add(1);
+        previous
     }
 }
 
@@ -1216,6 +1318,55 @@ mod tests {
     }
 
     #[test]
+    fn request_log_scope_change_replaces_pending_log_request() {
+        let mut loads = RepoLoadsInFlight::default();
+        assert!(loads.request_log(LogScope::FullReachable, 20, None));
+
+        assert!(!loads.request_log(
+            LogScope::AllBranches,
+            20,
+            Some(LogCursor {
+                last_seen: CommitId("older".into()),
+                resume_from: None,
+                resume_token: None,
+            }),
+        ));
+        assert!(!loads.request_log(LogScope::NoMerges, 20, None));
+
+        assert_eq!(
+            loads.finish_log(),
+            Some(PendingLogLoad {
+                scope: LogScope::NoMerges,
+                limit: 20,
+                cursor: None,
+            })
+        );
+    }
+
+    #[test]
+    fn request_log_same_scope_refresh_does_not_clobber_pending_pagination() {
+        let mut loads = RepoLoadsInFlight::default();
+        let cursor = LogCursor {
+            last_seen: CommitId("page-1".into()),
+            resume_from: None,
+            resume_token: None,
+        };
+
+        assert!(loads.request_log(LogScope::MergesOnly, 20, None));
+        assert!(!loads.request_log(LogScope::MergesOnly, 20, Some(cursor.clone())));
+        assert!(!loads.request_log(LogScope::MergesOnly, 20, None));
+
+        assert_eq!(
+            loads.finish_log(),
+            Some(PendingLogLoad {
+                scope: LogScope::MergesOnly,
+                limit: 20,
+                cursor: Some(cursor),
+            })
+        );
+    }
+
+    #[test]
     fn set_spec_refreshes_session_workdir_key() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -1302,9 +1453,10 @@ mod tests {
     #[test]
     fn set_log_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.history_state.log_rev;
+        let before = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log(Loadable::Loading);
-        assert_eq!(repo.history_state.log_rev, before + 1);
+        assert_eq!(repo.log_rev, before.0 + 1);
+        assert_eq!(repo.history_state.log_rev, before.1 + 1);
     }
 
     #[test]
@@ -1343,19 +1495,22 @@ mod tests {
     #[test]
     fn set_log_loading_more_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.history_state.log_rev;
+        let before = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_loading_more(true);
-        assert_eq!(repo.history_state.log_rev, before + 1);
+        assert_eq!(repo.log_rev, before.0 + 1);
+        assert_eq!(repo.history_state.log_rev, before.1 + 1);
         repo.set_log_loading_more(false);
-        assert_eq!(repo.history_state.log_rev, before + 2);
+        assert_eq!(repo.log_rev, before.0 + 2);
+        assert_eq!(repo.history_state.log_rev, before.1 + 2);
     }
 
     #[test]
     fn set_log_scope_bumps_log_rev() {
         let mut repo = new_repo();
-        let before = repo.history_state.log_rev;
+        let before = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_scope(LogScope::AllBranches);
-        assert_eq!(repo.history_state.log_rev, before + 1);
+        assert_eq!(repo.log_rev, before.0 + 1);
+        assert_eq!(repo.history_state.log_rev, before.1 + 1);
     }
 
     #[test]
@@ -1479,6 +1634,26 @@ mod tests {
         assert_eq!(repo.diff_state.diff_state_rev, before + 1);
         repo.bump_diff_state_rev();
         assert_eq!(repo.diff_state.diff_state_rev, before + 2);
+    }
+
+    #[test]
+    fn set_diff_target_bumps_target_rev_only_on_change() {
+        let mut repo = new_repo();
+        let target = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        };
+
+        repo.set_diff_target(Some(target.clone()));
+        assert_eq!(repo.diff_state.diff_target, Some(target.clone()));
+        assert_eq!(repo.diff_state.diff_target_rev, 1);
+
+        repo.set_diff_target(Some(target));
+        assert_eq!(repo.diff_state.diff_target_rev, 1);
+
+        repo.set_diff_target(None);
+        assert!(repo.diff_state.diff_target.is_none());
+        assert_eq!(repo.diff_state.diff_target_rev, 2);
     }
 
     #[test]
@@ -1623,27 +1798,30 @@ mod tests {
     fn set_log_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_log(Loadable::Loading);
-        let rev = repo.history_state.log_rev;
+        let rev = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log(Loadable::Loading);
-        assert_eq!(repo.history_state.log_rev, rev);
+        assert_eq!(repo.log_rev, rev.0);
+        assert_eq!(repo.history_state.log_rev, rev.1);
     }
 
     #[test]
     fn set_log_loading_more_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_log_loading_more(true);
-        let rev = repo.history_state.log_rev;
+        let rev = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_loading_more(true);
-        assert_eq!(repo.history_state.log_rev, rev);
+        assert_eq!(repo.log_rev, rev.0);
+        assert_eq!(repo.history_state.log_rev, rev.1);
     }
 
     #[test]
     fn set_log_scope_skips_rev_bump_when_unchanged() {
         let mut repo = new_repo();
         repo.set_log_scope(LogScope::AllBranches);
-        let rev = repo.history_state.log_rev;
+        let rev = (repo.log_rev, repo.history_state.log_rev);
         repo.set_log_scope(LogScope::AllBranches);
-        assert_eq!(repo.history_state.log_rev, rev);
+        assert_eq!(repo.log_rev, rev.0);
+        assert_eq!(repo.history_state.log_rev, rev.1);
     }
 
     // --- Isolation tests: one setter does not bump another's rev ---
@@ -1653,6 +1831,7 @@ mod tests {
         let mut repo = new_repo();
         let snap = (
             repo.status_rev,
+            repo.log_rev,
             repo.history_state.log_rev,
             repo.history_state.selected_commit_rev,
             repo.history_state.commit_details_rev,
@@ -1660,27 +1839,31 @@ mod tests {
             repo.upstream_divergence_rev,
             repo.open_rev,
             repo.conflict_state.conflict_rev,
+            repo.diff_state.diff_target_rev,
             repo.diff_state.diff_state_rev,
             repo.ops_rev,
         );
 
         repo.set_status(Loadable::Loading);
         assert_eq!(repo.status_rev, snap.0 + 1);
-        assert_eq!(repo.history_state.log_rev, snap.1);
-        assert_eq!(repo.history_state.selected_commit_rev, snap.2);
-        assert_eq!(repo.history_state.commit_details_rev, snap.3);
-        assert_eq!(repo.merge_message_rev, snap.4);
-        assert_eq!(repo.upstream_divergence_rev, snap.5);
-        assert_eq!(repo.open_rev, snap.6);
-        assert_eq!(repo.conflict_state.conflict_rev, snap.7);
-        assert_eq!(repo.diff_state.diff_state_rev, snap.8);
-        assert_eq!(repo.ops_rev, snap.9);
+        assert_eq!(repo.log_rev, snap.1);
+        assert_eq!(repo.history_state.log_rev, snap.2);
+        assert_eq!(repo.history_state.selected_commit_rev, snap.3);
+        assert_eq!(repo.history_state.commit_details_rev, snap.4);
+        assert_eq!(repo.merge_message_rev, snap.5);
+        assert_eq!(repo.upstream_divergence_rev, snap.6);
+        assert_eq!(repo.open_rev, snap.7);
+        assert_eq!(repo.conflict_state.conflict_rev, snap.8);
+        assert_eq!(repo.diff_state.diff_target_rev, snap.9);
+        assert_eq!(repo.diff_state.diff_state_rev, snap.10);
+        assert_eq!(repo.ops_rev, snap.11);
     }
 
     #[test]
     fn all_rev_counters_start_at_zero() {
         let repo = new_repo();
         assert_eq!(repo.status_rev, 0);
+        assert_eq!(repo.log_rev, 0);
         assert_eq!(repo.history_state.log_rev, 0);
         assert_eq!(repo.history_state.selected_commit_rev, 0);
         assert_eq!(repo.history_state.commit_details_rev, 0);
@@ -1688,6 +1871,7 @@ mod tests {
         assert_eq!(repo.upstream_divergence_rev, 0);
         assert_eq!(repo.open_rev, 0);
         assert_eq!(repo.conflict_state.conflict_rev, 0);
+        assert_eq!(repo.diff_state.diff_target_rev, 0);
         assert_eq!(repo.diff_state.diff_state_rev, 0);
         assert_eq!(repo.ops_rev, 0);
         assert_eq!(repo.head_branch_rev, 0);
@@ -1704,7 +1888,7 @@ mod tests {
     #[test]
     fn grouped_state_defaults_are_initialized() {
         let repo = new_repo();
-        assert_eq!(repo.history_state.history_scope, LogScope::CurrentBranch);
+        assert_eq!(repo.history_state.history_scope, LogScope::FullReachable);
         assert!(matches!(repo.history_state.log, Loadable::NotLoaded));
         assert!(matches!(
             repo.history_state.file_history,

@@ -15,6 +15,87 @@ pub(super) use std::path::Path;
 pub(super) use std::sync::Arc;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 
+pub(super) fn simulate_counted_click(
+    cx: &mut gpui::VisualTestContext,
+    position: gpui::Point<Pixels>,
+    click_count: usize,
+) {
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count,
+        first_mouse: false,
+    });
+    cx.simulate_event(MouseUpEvent {
+        position,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count,
+    });
+}
+
+fn diff_text_click_position_for_offset_range(
+    pane: &MainPaneView,
+    visible_ix: usize,
+    region: DiffTextRegion,
+    target: std::ops::Range<usize>,
+) -> Option<gpui::Point<Pixels>> {
+    let hitbox = pane.diff_text_hitboxes.get(&(visible_ix, region))?;
+    let y = hitbox.bounds.center().y;
+    (0..2048usize)
+        .find_map(|step| {
+            let position = point(hitbox.bounds.left() + px(step as f32), y);
+            pane.diff_text_offset_for_position_for_tests(visible_ix, region, position)
+                .filter(|offset| target.contains(offset))
+                .map(|_| position)
+        })
+        .or_else(|| Some(hitbox.bounds.center()))
+}
+
+pub(super) fn wait_for_diff_text_click_position_for_offset_range(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    visible_ix: usize,
+    region: DiffTextRegion,
+    target: std::ops::Range<usize>,
+    description: &str,
+) -> gpui::Point<Pixels> {
+    let deadline = std::time::Instant::now() + DEFAULT_MAIN_PANE_WAIT_TIMEOUT;
+    loop {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+
+        if let Some(position) = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            diff_text_click_position_for_offset_range(pane, visible_ix, region, target.clone())
+        }) {
+            return position;
+        }
+
+        if std::time::Instant::now() >= deadline {
+            let snapshot = cx.update(|_window, app| {
+                let pane = view.read(app).main_pane.read(app);
+                (
+                    pane.diff_visible_len(),
+                    pane.diff_text_hitboxes
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<(usize, DiffTextRegion)>>(),
+                )
+            });
+            panic!(
+                "timed out waiting for {description}: visible_ix={visible_ix} region={region:?} target={target:?} snapshot={snapshot:?}"
+            );
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 const _: () = {
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX > 0.0);
     assert!(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX <= 400.0);
@@ -301,19 +382,19 @@ pub(super) fn conflict_split_cached_styled<'a>(
     pane.conflict_diff_segments_cache_split.get(&(row_ix, side))
 }
 
-pub(super) fn styled_has_leading_muted_highlight(
+pub(super) fn styled_has_leading_color_highlight(
     styled: &super::CachedDiffStyledText,
     comment_prefix_end: usize,
-    muted: gpui::Hsla,
+    color: gpui::Hsla,
 ) -> bool {
     let has_muted_prefix_start = styled
         .highlights
         .iter()
-        .any(|(range, style)| range.start == 0 && style.color == Some(muted));
+        .any(|(range, style)| range.start == 0 && style.color == Some(color));
     let max_muted_end = styled
         .highlights
         .iter()
-        .filter(|(range, style)| range.start < comment_prefix_end && style.color == Some(muted))
+        .filter(|(range, style)| range.start < comment_prefix_end && style.color == Some(color))
         .map(|(range, _)| range.end)
         .max()
         .unwrap_or(0);
@@ -515,6 +596,19 @@ pub(super) fn set_diff_scroll_sync_for_test(
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.set_diff_scroll_sync(mode, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+}
+
+pub(super) fn set_diff_content_mode_for_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    mode: DiffContentMode,
+) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(mode, cx);
         });
     });
     draw_and_drain_test_window(cx);

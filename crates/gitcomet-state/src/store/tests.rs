@@ -1,6 +1,6 @@
 use super::*;
 use crate::model::{CloneOpStatus, CloneProgressStage, DiagnosticKind, Loadable, RepoState};
-use crate::msg::{Effect, RepoCommandKind};
+use crate::msg::{Effect, RepoActionKind, RepoCommandKind};
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, DiffArea, DiffTarget, LogCursor, LogPage, LogScope,
     ReflogEntry, Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
@@ -10,11 +10,11 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::process::{
     GitExecutablePreference, current_git_executable_preference, install_git_executable_preference,
 };
-use gitcomet_core::services::{CommandOutput, PullMode, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 struct DummyRepo {
@@ -340,14 +340,15 @@ fn app_store_dispatch_does_not_reprobe_git_runtime_for_git_messages() {
 
     let _restore =
         GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(script_path));
+    let initial_probe_count = git_runtime_probe_count(&probe_log);
 
     let backend: Arc<dyn GitBackend> = Arc::new(FailingBackend);
     let (store, _event_rx) = AppStore::new(backend);
 
     assert_eq!(
         git_runtime_probe_count(&probe_log),
-        1,
-        "installing the custom runtime should probe exactly once"
+        initial_probe_count,
+        "creating the store should reuse the installed runtime state without probing again"
     );
 
     store.dispatch(Msg::ReloadRepo {
@@ -356,7 +357,7 @@ fn app_store_dispatch_does_not_reprobe_git_runtime_for_git_messages() {
 
     assert_eq!(
         git_runtime_probe_count(&probe_log),
-        1,
+        initial_probe_count,
         "dispatch should not re-run `git --version` for regular Git-backed messages"
     );
 }

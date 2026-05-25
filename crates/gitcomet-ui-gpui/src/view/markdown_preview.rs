@@ -1595,10 +1595,8 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
                     style: MarkdownInlineStyle::Link,
                 });
             }
-            Event::SoftBreak | Event::HardBreak => {
-                if !text_buf.is_empty() {
-                    text_buf.push(' ');
-                }
+            Event::SoftBreak | Event::HardBreak if !text_buf.is_empty() => {
+                text_buf.push(' ');
             }
             Event::Html(cow) | Event::InlineHtml(cow) => {
                 match classify_supported_html(cow.as_ref()) {

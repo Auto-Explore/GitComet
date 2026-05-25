@@ -85,6 +85,28 @@ pub(crate) fn build_synthetic_repo_state(
     stashes: usize,
     commits: &[Commit],
 ) -> RepoState {
+    build_synthetic_repo_state_with_tags(
+        local_branches,
+        remote_branches,
+        remotes,
+        worktrees,
+        submodules,
+        stashes,
+        32,
+        commits,
+    )
+}
+
+pub(crate) fn build_synthetic_repo_state_with_tags(
+    local_branches: usize,
+    remote_branches: usize,
+    remotes: usize,
+    worktrees: usize,
+    submodules: usize,
+    stashes: usize,
+    tags: usize,
+    commits: &[Commit],
+) -> RepoState {
     let id = RepoId(1);
     let spec = RepoSpec {
         workdir: std::path::PathBuf::from("/tmp/bench"),
@@ -168,9 +190,18 @@ pub(crate) fn build_synthetic_repo_state(
 
     let mut submodules_vec = Vec::with_capacity(submodules);
     for ix in 0..submodules {
+        let recorded_head = CommitId(format!("{:040x}", 200_000usize.saturating_add(ix)).into());
+        let checked_out_head = if ix % 5 == 0 {
+            Some(CommitId(
+                format!("{:040x}", 400_000usize.saturating_add(ix)).into(),
+            ))
+        } else {
+            Some(recorded_head.clone())
+        };
         submodules_vec.push(Submodule {
             path: std::path::PathBuf::from(format!("deps/submodule_{ix}")),
-            head: CommitId(format!("{:040x}", 200_000usize.saturating_add(ix)).into()),
+            recorded_head,
+            checked_out_head,
             status: if ix % 5 == 0 {
                 SubmoduleStatus::HeadMismatch
             } else {
@@ -191,6 +222,11 @@ pub(crate) fn build_synthetic_repo_state(
         });
     }
     repo.stashes = Loadable::Ready(Arc::new(stashes_vec));
+
+    repo.tags = Loadable::Ready(Arc::new(build_tags_targeting_commits(commits, tags)));
+    repo.tags_rev = 1;
+    repo.remote_tags = Loadable::Ready(Arc::new(Vec::new()));
+    repo.remote_tags_rev = 1;
 
     // Minimal "repo is open" status.
     repo.open = Loadable::Ready(());
@@ -278,6 +314,7 @@ pub(crate) fn build_repo_switch_repo_state(
         next_cursor: commits.get(200).map(|commit| LogCursor {
             last_seen: commit.id.clone(),
             resume_from: None,
+            resume_token: None,
         }),
     });
     repo.history_state.log = Loadable::Ready(Arc::clone(&log_page));
@@ -314,6 +351,7 @@ pub(crate) fn build_repo_switch_repo_state(
                     } else {
                         FileStatusKind::Modified
                     },
+                    is_submodule: false,
                 })
                 .collect(),
         }));
@@ -768,7 +806,11 @@ pub(crate) fn build_synthetic_commit_details_with_message(
         }
         path.push(format!("file_{ix}.rs"));
 
-        out.push(CommitFileChange { path, kind });
+        out.push(CommitFileChange {
+            path,
+            kind,
+            is_submodule: false,
+        });
     }
 
     CommitDetails {
@@ -818,7 +860,11 @@ pub(crate) fn build_synthetic_commit_details_unique_paths(
             path.push(format!("dir{}_{}_{}", d, ix / 256, ix % 256));
         }
         path.push(format!("file_{ix}.rs"));
-        out.push(CommitFileChange { path, kind });
+        out.push(CommitFileChange {
+            path,
+            kind,
+            is_submodule: false,
+        });
     }
     CommitDetails {
         id,
@@ -997,7 +1043,8 @@ pub(crate) fn build_bench_file_diff_rebuild_from_text(
     let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
         &file,
         Path::new("/tmp/gitcomet-bench"),
-    );
+    )
+    .expect("benchmark file diff cache rebuild should index shared text");
     (rebuild.row_provider, rebuild.inline_row_provider)
 }
 

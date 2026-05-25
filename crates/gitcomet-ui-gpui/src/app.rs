@@ -1,8 +1,14 @@
 use crate::assets::GitCometAssets;
 use crate::launch_guard::{UiLaunchError, run_with_panic_guard};
+use crate::ui_scale;
 use crate::view::{
+    DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
+    GitCometViewMode, InitialRepositoryLaunchMode, MainPaneView, OpenActiveViewSearch,
+    PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
+    StartupCrashReport, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
+    TextInputDiffPrevSearchMatchOrChange, is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -13,8 +19,8 @@ use gpui::WindowsPlatform;
 #[cfg(target_os = "macos")]
 use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
-    App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, TitlebarOptions, Window,
-    WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
+    App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, Size, TitlebarOptions,
+    Window, WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
 };
 #[cfg(target_os = "windows")]
 use raw_window_handle::RawWindowHandle;
@@ -53,6 +59,9 @@ actions!(
         MinimizeWindow,
         ZoomWindow,
         ToggleFullScreen,
+        IncreaseUiScale,
+        DecreaseUiScale,
+        ResetUiScale,
         Hide,
         HideOthers,
         ShowAll,
@@ -82,6 +91,29 @@ struct WindowLaunchConfig {
     title: String,
     app_id: String,
     view_config: GitCometViewConfig,
+}
+
+pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
+    ui_scale::design_size_from_percent(WINDOW_MIN_WIDTH_PX, WINDOW_MIN_HEIGHT_PX, percent)
+}
+
+fn main_window_default_size_for_percent(percent: u32) -> Size<Pixels> {
+    ui_scale::design_size_from_percent(WINDOW_DEFAULT_WIDTH_PX, WINDOW_DEFAULT_HEIGHT_PX, percent)
+}
+
+fn window_traffic_light_position(_percent: u32) -> Point<Pixels> {
+    point(px(9.0), px(9.0))
+}
+
+pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Size<Pixels>) {
+    let current = window.viewport_size();
+    let next = size(
+        current.width.max(min_size.width),
+        current.height.max(min_size.height),
+    );
+    if next != current {
+        window.resize(next);
+    }
 }
 
 pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
@@ -245,17 +277,42 @@ pub(crate) struct WindowSystemMenuRequest {
 }
 
 #[cfg(target_os = "windows")]
-fn restore_maximized_window(window: &Window) -> bool {
+fn window_hwnd(window: &Window) -> Option<isize> {
     let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return false;
+        return None;
     };
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return None;
+    };
+
+    Some(handle.hwnd.get())
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn begin_window_move(window: &Window) {
+    if let Some(hwnd) = window_hwnd(window)
+        && gitcomet_win32_window_utils::begin_window_move(hwnd)
+    {
+        return;
+    }
+
+    window.start_window_move();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn begin_window_move(window: &Window) {
+    window.start_window_move();
+}
+
+#[cfg(target_os = "windows")]
+fn restore_maximized_window(window: &Window) -> bool {
+    let Some(hwnd) = window_hwnd(window) else {
         return false;
     };
 
     // GPUI's Windows zoom path currently maps directly to SW_MAXIMIZE, so
     // restore must go through the native Win32 API until upstream toggles.
-    gitcomet_win32_window_utils::restore_window(handle.hwnd.get())
+    gitcomet_win32_window_utils::restore_window(hwnd)
 }
 
 #[cfg(target_os = "windows")]
@@ -273,19 +330,9 @@ pub(crate) fn window_system_menu_request(
     window: &Window,
     position: Point<Pixels>,
 ) -> Option<WindowSystemMenuRequest> {
-    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return None;
-    };
-    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return None;
-    };
-
     let (x, y) = window_menu_position(position, window.scale_factor());
-    Some(WindowSystemMenuRequest {
-        hwnd: handle.hwnd.get(),
-        x,
-        y,
-    })
+    let hwnd = window_hwnd(window)?;
+    Some(WindowSystemMenuRequest { hwnd, x, y })
 }
 
 fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
@@ -319,7 +366,6 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
         if let Err(err) = crate::bundled_fonts::register(cx) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
-        bind_text_input_keys(cx);
         if quit_when_all_windows_closed {
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
@@ -341,6 +387,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
                 }
             }
         }
+        bind_text_input_keys(cx);
 
         open_gitcomet_window(cx, Arc::clone(&backend), &launch);
 
@@ -358,29 +405,33 @@ fn open_gitcomet_window(
     launch: &WindowLaunchConfig,
 ) -> gpui::WindowHandle<GitCometView> {
     let ui_session = session::load();
+    let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
+    let min_size = main_window_min_size_for_percent(ui_scale.percent);
+    let default_size = main_window_default_size_for_percent(ui_scale.percent);
     let restored_w = ui_session
         .window_width
         .map(|w| px(w as f32))
-        .unwrap_or(px(WINDOW_DEFAULT_WIDTH_PX))
-        .max(px(WINDOW_MIN_WIDTH_PX));
+        .unwrap_or(default_size.width)
+        .max(min_size.width);
     let restored_h = ui_session
         .window_height
         .map(|h| px(h as f32))
-        .unwrap_or(px(WINDOW_DEFAULT_HEIGHT_PX))
-        .max(px(WINDOW_MIN_HEIGHT_PX));
+        .unwrap_or(default_size.height)
+        .max(min_size.height);
     let bounds = Bounds::centered(None, size(restored_w, restored_h), cx);
     let window_title = launch.title.clone();
     let app_id = launch.app_id.clone();
     let view_config = launch.view_config.clone();
+    let ui_scale_percent = ui_scale.percent;
 
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            window_min_size: Some(size(px(WINDOW_MIN_WIDTH_PX), px(WINDOW_MIN_HEIGHT_PX))),
+            window_min_size: Some(min_size),
             titlebar: Some(TitlebarOptions {
                 title: Some(window_title.into()),
                 appears_transparent: true,
-                traffic_light_position: Some(point(px(9.0), px(9.0))),
+                traffic_light_position: Some(window_traffic_light_position(ui_scale_percent)),
             }),
             app_id: Some(app_id),
             window_decorations: Some(WindowDecorations::Client),
@@ -389,6 +440,7 @@ fn open_gitcomet_window(
             ..Default::default()
         },
         move |window, cx| {
+            ui_scale::apply_to_window(window, ui_scale_percent);
             let (store, events) = AppStore::new(Arc::clone(&backend));
             cx.new(|cx| {
                 GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
@@ -398,7 +450,53 @@ fn open_gitcomet_window(
     .expect("failed to open main GitComet window")
 }
 
+fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {
+    let current = ui_scale::current(cx);
+    if current.initialized {
+        current.percent
+    } else {
+        ui_scale::DEFAULT_UI_SCALE_PERCENT
+    }
+}
+
+fn apply_ui_scale_to_open_windows(cx: &mut App, percent: u32) {
+    for handle in cx.windows() {
+        let _ = handle.update(cx, |root_view, window, cx| {
+            let root_view = match root_view.downcast::<GitCometView>() {
+                Ok(view) => {
+                    view.update(cx, |view, cx| {
+                        view.apply_ui_scale_percent(percent, window, cx);
+                    });
+                    return;
+                }
+                Err(root_view) => root_view,
+            };
+
+            if let Ok(view) = root_view.downcast::<SettingsWindowView>() {
+                view.update(cx, |view, cx| {
+                    view.apply_ui_scale_percent(percent, window, cx);
+                });
+                return;
+            }
+
+            ui_scale::apply_to_window(window, percent);
+        });
+    }
+}
+
+pub(crate) fn set_app_ui_scale_percent(cx: &mut App, percent: u32) {
+    let current = ui_scale::current(cx);
+    let next = ui_scale::set_current(cx, percent);
+    if current.initialized && current.percent == next.percent {
+        return;
+    }
+
+    apply_ui_scale_to_open_windows(cx, next.percent);
+}
+
 fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    install_global_diff_shortcut_fallback(cx);
+
     let new_window_backend = Arc::clone(&backend);
     cx.on_action(move |_: &NewWindow, cx| {
         let backend = Arc::clone(&new_window_backend);
@@ -491,10 +589,68 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             }
         });
     });
+    cx.on_action(|_: &IncreaseUiScale, cx| {
+        cx.defer(|cx| {
+            let next = ui_scale::step_up(current_or_default_ui_scale_percent(cx));
+            set_app_ui_scale_percent(cx, next);
+        });
+    });
+    cx.on_action(|_: &DecreaseUiScale, cx| {
+        cx.defer(|cx| {
+            let next = ui_scale::step_down(current_or_default_ui_scale_percent(cx));
+            set_app_ui_scale_percent(cx, next);
+        });
+    });
+    cx.on_action(|_: &ResetUiScale, cx| {
+        cx.defer(|cx| {
+            set_app_ui_scale_percent(cx, ui_scale::DEFAULT_UI_SCALE_PERCENT);
+        });
+    });
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
     cx.on_action(|_: &Quit, cx| cx.defer(|cx| cx.quit()));
+}
+
+fn install_global_diff_shortcut_fallback(cx: &mut App) {
+    cx.observe_keystrokes(|event, window, cx| {
+        if !is_diff_shortcut_candidate(&event.keystroke)
+            || event
+                .context_stack
+                .iter()
+                .any(|context| context.contains("TextInput"))
+        {
+            return;
+        }
+
+        let window_id = window.window_handle().window_id();
+        let Some(entry) = gitcomet_window_entries(cx).into_iter().find(|entry| {
+            entry.handle.window_id() == window_id && entry.view_mode == GitCometViewMode::Normal
+        }) else {
+            return;
+        };
+
+        let handled = entry
+            .main_pane
+            .update(cx, |pane, cx| {
+                let handled = pane.handle_diff_shortcut(&event.keystroke, window, cx);
+                if handled {
+                    cx.notify();
+                    window.refresh();
+                }
+                handled
+            })
+            .unwrap_or(false);
+        if handled {
+            cx.stop_propagation();
+        }
+    })
+    .detach();
+}
+
+#[cfg(test)]
+pub(crate) fn install_global_diff_shortcut_fallback_for_test(cx: &mut App) {
+    install_global_diff_shortcut_fallback(cx);
 }
 
 #[cfg(target_os = "macos")]
@@ -522,11 +678,24 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
+        KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
         KeyBinding::new("secondary-pagedown", NextRepository, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-tab", PreviousRepository, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-tab", NextRepository, None),
+        KeyBinding::new("secondary-+", IncreaseUiScale, None),
+        KeyBinding::new("secondary-=", IncreaseUiScale, None),
+        KeyBinding::new("secondary--", DecreaseUiScale, None),
+        KeyBinding::new("secondary-0", ResetUiScale, None),
         KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("f1", DiffPrevFile, None),
+        KeyBinding::new("f4", DiffNextFile, None),
+        KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
+        KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-o", OpenRecentPicker, None),
         #[cfg(target_os = "macos")]
@@ -616,6 +785,10 @@ fn macos_app_menus() -> Vec<Menu> {
                 MenuItem::action("Minimize", MinimizeWindow),
                 MenuItem::action("Zoom", ZoomWindow),
                 MenuItem::separator(),
+                MenuItem::action("Zoom In", IncreaseUiScale),
+                MenuItem::action("Zoom Out", DecreaseUiScale),
+                MenuItem::action("Actual Size", ResetUiScale),
+                MenuItem::separator(),
                 MenuItem::action("Previous Repository", PreviousRepository),
                 MenuItem::action("Next Repository", NextRepository),
                 MenuItem::separator(),
@@ -645,7 +818,7 @@ fn register_macos_open_request_handler(
             }
 
             let backend = Arc::clone(&backend);
-            let _ = cx.update(move |cx| {
+            cx.update(move |cx| {
                 open_repositories_in_existing_or_new_window(cx, backend, paths);
             });
         }
@@ -683,6 +856,7 @@ pub(crate) fn recent_repository_label(path: &Path) -> String {
 struct GitCometWindowEntry {
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
+    main_pane: gpui::WeakEntity<MainPaneView>,
     view_mode: GitCometViewMode,
     repo_paths: Vec<PathBuf>,
 }
@@ -698,6 +872,7 @@ pub(crate) fn sync_gitcomet_window_state<C>(
     cx: &mut C,
     handle: gpui::AnyWindowHandle,
     view: gpui::WeakEntity<GitCometView>,
+    main_pane: gpui::WeakEntity<MainPaneView>,
     view_mode: GitCometViewMode,
     repo_paths: Vec<PathBuf>,
 ) where
@@ -709,6 +884,7 @@ pub(crate) fn sync_gitcomet_window_state<C>(
             GitCometWindowEntry {
                 handle,
                 view,
+                main_pane,
                 view_mode,
                 repo_paths,
             },
@@ -1044,7 +1220,7 @@ fn prompt_apply_patch(cx: &mut App) {
             return;
         };
 
-        let _ = cx.update(move |cx| {
+        cx.update(move |cx| {
             let Some(window) = find_normal_gitcomet_window(cx) else {
                 return;
             };
@@ -1096,6 +1272,9 @@ pub(crate) fn ensure_graphics_device_available(
 
 fn bind_text_input_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("escape", PopoverPromptDismiss, Some("PopoverPrompt")),
+        KeyBinding::new("tab", PopoverPromptTabNext, Some("PopoverPrompt")),
+        KeyBinding::new("shift-tab", PopoverPromptTabPrev, Some("PopoverPrompt")),
         KeyBinding::new("backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("shift-backspace", crate::kit::Backspace, Some("TextInput")),
         KeyBinding::new("delete", crate::kit::Delete, Some("TextInput")),
@@ -1116,6 +1295,24 @@ fn bind_text_input_keys(cx: &mut App) {
         ),
         KeyBinding::new("alt-delete", crate::kit::DeleteWordRight, Some("TextInput")),
         KeyBinding::new("enter", crate::kit::Enter, Some("TextInput")),
+        KeyBinding::new("shift-enter", crate::kit::ShiftEnter, Some("TextInput")),
+        KeyBinding::new("secondary-enter", TextInputCommitSubmit, Some("TextInput")),
+        KeyBinding::new("f1", TextInputDiffPrevFile, Some("TextInput")),
+        KeyBinding::new("f4", TextInputDiffNextFile, Some("TextInput")),
+        KeyBinding::new(
+            "f2",
+            TextInputDiffPrevSearchMatchOrChange,
+            Some("TextInput"),
+        ),
+        KeyBinding::new(
+            "f3",
+            TextInputDiffNextSearchMatchOrChange,
+            Some("TextInput"),
+        ),
+        KeyBinding::new("shift-f7", TextInputDiffPrevChange, Some("TextInput")),
+        KeyBinding::new("f7", TextInputDiffNextChange, Some("TextInput")),
+        KeyBinding::new("alt-up", TextInputDiffPrevChange, Some("TextInput")),
+        KeyBinding::new("alt-down", TextInputDiffNextChange, Some("TextInput")),
         KeyBinding::new("left", crate::kit::Left, Some("TextInput")),
         KeyBinding::new("right", crate::kit::Right, Some("TextInput")),
         KeyBinding::new("up", crate::kit::Up, Some("TextInput")),
@@ -1184,6 +1381,16 @@ fn bind_text_input_keys(cx: &mut App) {
             Some("TextInput"),
         ),
     ]);
+}
+
+#[cfg(test)]
+pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
+    bind_text_input_keys(cx);
+}
+
+#[cfg(test)]
+pub(crate) fn bind_app_keys_for_test(cx: &mut App) {
+    bind_app_keys(cx);
 }
 
 #[cfg(test)]
@@ -1309,6 +1516,7 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::DeleteWordLeft))
                 .on_action(record_action_listener!(crate::kit::DeleteWordRight))
                 .on_action(record_action_listener!(crate::kit::Enter))
+                .on_action(record_action_listener!(crate::kit::ShiftEnter))
                 .on_action(record_action_listener!(crate::kit::Left))
                 .on_action(record_action_listener!(crate::kit::Right))
                 .on_action(record_action_listener!(crate::kit::Up))
@@ -1335,6 +1543,30 @@ mod tests {
                 .on_action(record_action_listener!(crate::kit::Copy))
                 .on_action(record_action_listener!(crate::kit::Undo))
                 .on_action(record_action_listener!(crate::kit::Redo))
+                .on_action(record_action_listener!(crate::view::DiffPrevFile))
+                .on_action(record_action_listener!(crate::view::DiffNextFile))
+                .on_action(record_action_listener!(
+                    crate::view::DiffPrevSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::DiffNextSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(crate::view::TextInputCommitSubmit))
+                .on_action(record_action_listener!(crate::view::TextInputDiffPrevFile))
+                .on_action(record_action_listener!(crate::view::TextInputDiffNextFile))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffPrevSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffNextSearchMatchOrChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffPrevChange
+                ))
+                .on_action(record_action_listener!(
+                    crate::view::TextInputDiffNextChange
+                ))
+                .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenRepository))
@@ -1346,6 +1578,9 @@ mod tests {
                 .on_action(record_action_listener!(MinimizeWindow))
                 .on_action(record_action_listener!(ZoomWindow))
                 .on_action(record_action_listener!(ToggleFullScreen))
+                .on_action(record_action_listener!(IncreaseUiScale))
+                .on_action(record_action_listener!(DecreaseUiScale))
+                .on_action(record_action_listener!(ResetUiScale))
                 .on_action(record_action_listener!(Hide))
                 .on_action(record_action_listener!(HideOthers))
                 .on_action(record_action_listener!(ShowAll))
@@ -1432,6 +1667,22 @@ mod tests {
             ("alt-backspace", crate::kit::DeleteWordLeft.name()),
             ("alt-delete", crate::kit::DeleteWordRight.name()),
             ("enter", crate::kit::Enter.name()),
+            ("shift-enter", crate::kit::ShiftEnter.name()),
+            ("secondary-enter", crate::view::TextInputCommitSubmit.name()),
+            ("f1", crate::view::TextInputDiffPrevFile.name()),
+            ("f4", crate::view::TextInputDiffNextFile.name()),
+            (
+                "f2",
+                crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
+            ),
+            (
+                "f3",
+                crate::view::TextInputDiffNextSearchMatchOrChange.name(),
+            ),
+            ("shift-f7", crate::view::TextInputDiffPrevChange.name()),
+            ("f7", crate::view::TextInputDiffNextChange.name()),
+            ("alt-up", crate::view::TextInputDiffPrevChange.name()),
+            ("alt-down", crate::view::TextInputDiffNextChange.name()),
             ("left", crate::kit::Left.name()),
             ("right", crate::kit::Right.name()),
             ("up", crate::kit::Up.name()),
@@ -1496,6 +1747,55 @@ mod tests {
                 actual_action.as_deref(),
                 Some(expected_action),
                 "expected `{keystroke}` to resolve to `{expected_action}`"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn text_input_diff_keybindings_stay_scoped_when_app_keys_are_installed(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            KeyBindingProbe::new(Some("TextInput"), Arc::clone(&observed_actions), cx)
+        });
+
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+            bind_text_input_keys(app);
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+
+        let cases = [
+            ("f1", crate::view::TextInputDiffPrevFile.name()),
+            ("f4", crate::view::TextInputDiffNextFile.name()),
+            (
+                "f2",
+                crate::view::TextInputDiffPrevSearchMatchOrChange.name(),
+            ),
+            (
+                "f3",
+                crate::view::TextInputDiffNextSearchMatchOrChange.name(),
+            ),
+        ];
+
+        for (keystroke, expected_action) in cases {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_actions = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            assert_eq!(
+                actual_actions,
+                vec![expected_action.to_string()],
+                "expected `{keystroke}` to resolve only to the TextInput-scoped diff action"
             );
         }
     }
@@ -1667,11 +1967,20 @@ mod tests {
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
             ("secondary-shift-o", OpenRecentPicker.name()),
+            ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),
             ("secondary-pagedown", NextRepository.name()),
+            ("secondary-+", IncreaseUiScale.name()),
+            ("secondary-=", IncreaseUiScale.name()),
+            ("secondary--", DecreaseUiScale.name()),
+            ("secondary-0", ResetUiScale.name()),
             ("secondary-q", Quit.name()),
+            ("f1", crate::view::DiffPrevFile.name()),
+            ("f4", crate::view::DiffNextFile.name()),
+            ("f2", crate::view::DiffPrevSearchMatchOrChange.name()),
+            ("f3", crate::view::DiffNextSearchMatchOrChange.name()),
         ];
 
         #[cfg(target_os = "macos")]
@@ -1688,7 +1997,11 @@ mod tests {
         ]);
 
         #[cfg(not(target_os = "macos"))]
-        cases.push(("f11", ToggleFullScreen.name()));
+        cases.extend([
+            ("ctrl-shift-tab", PreviousRepository.name()),
+            ("ctrl-tab", NextRepository.name()),
+            ("f11", ToggleFullScreen.name()),
+        ]);
 
         for (keystroke, expected_action) in cases {
             observed_actions
@@ -1942,6 +2255,95 @@ mod tests {
         cx.simulate_keystrokes("secondary-shift-w");
         cx.run_until_parked();
         assert_eq!(cx.cx.update(|app| app.windows().len()), 0);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn ctrl_tab_shortcuts_cycle_repository_tabs_in_the_main_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+
+        let repos = vec![
+            PathBuf::from("/tmp/gitcomet-app-test-repo-1"),
+            PathBuf::from("/tmp/gitcomet-app-test-repo-2"),
+            PathBuf::from("/tmp/gitcomet-app-test-repo-3"),
+        ];
+
+        cx.update(|window, app| {
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+        });
+
+        store.dispatch(Msg::RestoreSession {
+            open_repos: repos.clone(),
+            active_repo: repos.first().cloned(),
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let repo_ids = loop {
+            cx.update(|window, app| {
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx)
+                });
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+
+            let snapshot = store.snapshot();
+            if snapshot.repos.len() == repos.len()
+                && !view.read_with(&cx.cx, |view, _| view.blocks_non_repository_actions())
+            {
+                break snapshot
+                    .repos
+                    .iter()
+                    .map(|repo| repo.id)
+                    .collect::<Vec<_>>();
+            }
+
+            if Instant::now() >= deadline {
+                panic!("timed out waiting for restored repository tabs to become interactive");
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
+        };
+
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
+
+        cx.simulate_keystrokes("ctrl-tab");
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[1]));
+
+        cx.simulate_keystrokes("ctrl-shift-tab");
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[0]));
+
+        cx.simulate_keystrokes("ctrl-shift-tab");
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                crate::view::test_support::sync_store_snapshot(this, cx)
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.snapshot().active_repo, Some(repo_ids[2]));
     }
 
     #[gpui::test]

@@ -2,7 +2,13 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let mut menu = div().flex().flex_col().min_w(px(420.0)).max_w(px(820.0));
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let mut menu = div()
+        .flex()
+        .flex_col()
+        .min_w(scaled_px(420.0))
+        .max_w(scaled_px(820.0));
 
     if let Some(repo) = this.active_repo() {
         match &repo.branches {
@@ -18,15 +24,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     menu = menu.child(
                         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
                             .items(items)
+                            .tooltip_host(this.tooltip_host.clone())
                             .empty_text("No branches")
-                            .max_height(px(240.0))
-                            .render(theme, cx, move |this, ix, _e, _w, cx| {
+                            .max_height(scaled_px(240.0))
+                            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                                 if let Some(name) = branch_names.get(ix).cloned() {
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                 }
-                                this.popover = None;
-                                this.popover_anchor = None;
-                                cx.notify();
+                                this.close_popover(cx);
                             }),
                     );
                 } else {
@@ -38,6 +43,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             components::context_menu_entry(
                                 ("branch_item", ix),
                                 theme,
+                                ui_scale_percent,
                                 false,
                                 false,
                                 None,
@@ -50,9 +56,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                         repo_id,
                                         name: name.clone(),
                                     });
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                    cx.notify();
+                                    this.close_popover(cx);
                                 },
                             )),
                         );
@@ -60,18 +64,45 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 }
             }
             Loadable::Loading => {
-                menu = menu.child(components::context_menu_label(theme, "Loading"));
+                menu = menu.child(branch_picker_status_panel(this, "Loading", cx));
             }
             Loadable::Error(e) => {
-                menu = menu.child(components::context_menu_label(theme, e.clone()));
+                menu = menu.child(branch_picker_status_panel(this, e.clone(), cx));
             }
             Loadable::NotLoaded => {
-                menu = menu.child(components::context_menu_label(theme, "Not loaded"));
+                menu = menu.child(branch_picker_status_panel(this, "Not loaded", cx));
             }
         }
     }
 
     components::context_menu(theme, menu)
-        .w(px(420.0))
-        .max_w(px(820.0))
+        .w(scaled_px(420.0))
+        .max_w(scaled_px(820.0))
+}
+
+fn branch_picker_status_panel(
+    this: &mut PopoverHost,
+    empty_text: impl Into<SharedString>,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Div {
+    let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+
+    if let Some(search) = this.branch_picker_search_input.clone() {
+        components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
+            .items(Vec::<SharedString>::new())
+            .tooltip_host(this.tooltip_host.clone())
+            .empty_text(empty_text)
+            .max_height(scaled_px(240.0))
+            .render(theme, ui_scale_percent, cx, |_, _, _, _, _| {})
+    } else {
+        components::context_menu_label(
+            theme,
+            ui_scale_percent,
+            empty_text.into(),
+            Some(this.tooltip_host.clone()),
+            cx,
+        )
+    }
 }

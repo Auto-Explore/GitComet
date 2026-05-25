@@ -24,6 +24,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("dest", dest)
                 .field("ok", &result.is_ok())
                 .finish(),
+            InternalMsg::RepoLoadFinished {
+                repo_id,
+                load_epoch,
+                message,
+            } => f
+                .debug_struct("RepoLoadFinished")
+                .field("repo_id", repo_id)
+                .field("load_epoch", load_epoch)
+                .field("message", message)
+                .finish(),
             InternalMsg::RepoOpenedOk { repo_id, spec, .. } => f
                 .debug_struct("RepoOpenedOk")
                 .field("repo_id", repo_id)
@@ -112,6 +122,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::RecentCommitMessagesLoaded {
+                repo_id,
+                request_rev,
+                result,
+            } => f
+                .debug_struct("RecentCommitMessagesLoaded")
+                .field("repo_id", repo_id)
+                .field("request_rev", request_rev)
+                .field("result", result)
+                .finish(),
             InternalMsg::RebaseStateLoaded { repo_id, result } => f
                 .debug_struct("RebaseStateLoaded")
                 .field("repo_id", repo_id)
@@ -189,6 +209,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SubmoduleLoadTrustChecked {
+                repo_id,
+                path,
+                result,
+            } => f
+                .debug_struct("SubmoduleLoadTrustChecked")
+                .field("repo_id", repo_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
             InternalMsg::CommitDetailsLoaded {
                 repo_id,
                 commit_id,
@@ -231,6 +261,52 @@ impl std::fmt::Debug for InternalMsg {
                 .field("side", side)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SubmoduleSummaryLoaded {
+                repo_id,
+                target,
+                result,
+            } => f
+                .debug_struct("SubmoduleSummaryLoaded")
+                .field("repo_id", repo_id)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
+            InternalMsg::InlineSubmoduleDiffLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            } => f
+                .debug_struct("InlineSubmoduleDiffLoaded")
+                .field("repo_id", repo_id)
+                .field("inline_rev", inline_rev)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
+            InternalMsg::InlineSubmoduleDiffFileLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            } => f
+                .debug_struct("InlineSubmoduleDiffFileLoaded")
+                .field("repo_id", repo_id)
+                .field("inline_rev", inline_rev)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
+            InternalMsg::InlineSubmoduleDiffFileImageLoaded {
+                repo_id,
+                inline_rev,
+                target,
+                result,
+            } => f
+                .debug_struct("InlineSubmoduleDiffFileImageLoaded")
+                .field("repo_id", repo_id)
+                .field("inline_rev", inline_rev)
+                .field("target", target)
+                .field("result", result)
+                .finish(),
             InternalMsg::DiffFileImageLoaded {
                 repo_id,
                 target,
@@ -241,9 +317,14 @@ impl std::fmt::Debug for InternalMsg {
                 .field("target", target)
                 .field("result", result)
                 .finish(),
-            InternalMsg::RepoActionFinished { repo_id, result } => f
+            InternalMsg::RepoActionFinished {
+                repo_id,
+                action,
+                result,
+            } => f
                 .debug_struct("RepoActionFinished")
                 .field("repo_id", repo_id)
+                .field("action", action)
                 .field("result", result)
                 .finish(),
             InternalMsg::CommitFinished { repo_id, result } => f
@@ -254,6 +335,18 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::CommitAmendFinished { repo_id, result } => f
                 .debug_struct("CommitAmendFinished")
                 .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::SafePushAfterCommitFinished {
+                repo_id,
+                context,
+                auth,
+                result,
+            } => f
+                .debug_struct("SafePushAfterCommitFinished")
+                .field("repo_id", repo_id)
+                .field("context", context)
+                .field("auth", auth)
                 .field("result", result)
                 .finish(),
             InternalMsg::RepoCommandFinished {

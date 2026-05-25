@@ -12,6 +12,7 @@ mod cli;
 mod crashlog;
 mod difftool_mode;
 mod extract_fixtures_mode;
+mod git_root;
 #[cfg(any(
     all(target_os = "linux", feature = "ui-gpui-runtime"),
     all(test, feature = "ui-gpui-runtime")
@@ -21,6 +22,8 @@ mod mergetool_mode;
 mod setup_mode;
 
 use cli::{AppMode, exit_code};
+#[cfg(feature = "ui-gpui-runtime")]
+use git_root::is_git_root_marker;
 use gitcomet_core::process::install_git_executable_path;
 #[cfg(all(target_os = "linux", feature = "ui-gpui-runtime"))]
 use linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
@@ -619,7 +622,7 @@ fn resolve_mergetool_repo_path(merged_path: &std::path::Path) -> Option<std::pat
 
     loop {
         let dot_git = cursor.join(".git");
-        if dot_git.is_dir() || dot_git.is_file() {
+        if is_git_root_marker(&dot_git) {
             return Some(cursor.to_path_buf());
         }
 
@@ -631,6 +634,7 @@ fn resolve_mergetool_repo_path(merged_path: &std::path::Path) -> Option<std::pat
 mod tests {
     use super::*;
     use gitcomet_core::merge::{ConflictStyle, DEFAULT_MARKER_SIZE, DiffAlgorithm};
+    #[cfg(feature = "ui-gpui-runtime")]
     use std::fs;
     use std::io::{self, Write};
 
@@ -699,6 +703,13 @@ mod tests {
             auto: false,
             gui: true,
         }
+    }
+
+    #[cfg(feature = "ui-gpui-runtime")]
+    fn create_git_root_marker(repo_root: &std::path::Path) {
+        let git_dir = repo_root.join(".git");
+        fs::create_dir_all(&git_dir).expect("create git dir marker");
+        fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").expect("write git HEAD marker");
     }
 
     #[test]
@@ -819,7 +830,7 @@ mod tests {
         let merged = repo_root.join("src/conflicted.txt");
         let base = repo_root.join("base.txt");
 
-        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        create_git_root_marker(&repo_root);
         fs::create_dir_all(merged.parent().unwrap()).unwrap();
 
         let config = mergetool_config(&repo_root, merged.clone(), Some(base));
@@ -839,7 +850,7 @@ mod tests {
         let repo_root = tmp.path().join("repo");
         let merged = repo_root.join("src/conflicted.txt");
 
-        fs::create_dir_all(repo_root.join(".git")).unwrap();
+        create_git_root_marker(&repo_root);
         fs::create_dir_all(merged.parent().unwrap()).unwrap();
 
         let config = mergetool_config(&repo_root, merged, None);

@@ -8,9 +8,11 @@ Usage: scripts/generate-homebrew-cask.sh \
   --github-repo OWNER/REPO \
   --arm-dmg PATH \
   --intel-dmg PATH \
+  --linux-arm-appimage PATH \
+  --linux-intel-appimage PATH \
   --output PATH
 
-Generates a Homebrew cask for GitComet from macOS DMG artifacts.
+Generates a Homebrew cask for GitComet from macOS DMG and Linux AppImage artifacts.
 USAGE
 }
 
@@ -18,6 +20,8 @@ version=""
 github_repo=""
 arm_dmg=""
 intel_dmg=""
+linux_arm_appimage=""
+linux_intel_appimage=""
 out_path=""
 
 while [[ $# -gt 0 ]]; do
@@ -38,6 +42,14 @@ while [[ $# -gt 0 ]]; do
       intel_dmg="${2:-}"
       shift 2
       ;;
+    --linux-arm-appimage)
+      linux_arm_appimage="${2:-}"
+      shift 2
+      ;;
+    --linux-intel-appimage)
+      linux_intel_appimage="${2:-}"
+      shift 2
+      ;;
     --output)
       out_path="${2:-}"
       shift 2
@@ -54,7 +66,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$version" || -z "$github_repo" || -z "$arm_dmg" || -z "$intel_dmg" || -z "$out_path" ]]; then
+if [[ -z "$version" || -z "$github_repo" || -z "$arm_dmg" || -z "$intel_dmg" || -z "$linux_arm_appimage" || -z "$linux_intel_appimage" || -z "$out_path" ]]; then
   echo "All arguments are required." >&2
   usage
   exit 2
@@ -75,6 +87,16 @@ if [[ ! -f "$intel_dmg" ]]; then
   exit 1
 fi
 
+if [[ ! -f "$linux_arm_appimage" ]]; then
+  echo "linux arm AppImage not found: $linux_arm_appimage" >&2
+  exit 1
+fi
+
+if [[ ! -f "$linux_intel_appimage" ]]; then
+  echo "linux intel AppImage not found: $linux_intel_appimage" >&2
+  exit 1
+fi
+
 sha256_file() {
   local file="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -91,31 +113,51 @@ sha256_file() {
 
 arm_sha="$(sha256_file "$arm_dmg")"
 intel_sha="$(sha256_file "$intel_dmg")"
+linux_arm_sha="$(sha256_file "$linux_arm_appimage")"
+linux_intel_sha="$(sha256_file "$linux_intel_appimage")"
 
 mkdir -p "$(dirname "$out_path")"
 
 cat > "$out_path" <<EOF2
 cask "gitcomet" do
-  arch arm: "arm64", intel: "x86_64"
-
   version "${version}"
-  sha256 arm: "${arm_sha}", intel: "${intel_sha}"
+  arch arm: "arm64", intel: "x86_64"
+  os macos: "macos", linux: "linux"
 
-  url "https://github.com/${github_repo}/releases/download/v#{version}/gitcomet-v#{version}-macos-#{arch}.dmg"
+  on_macos do
+    on_arm do
+      sha256 "${arm_sha}"
+    end
+
+    on_intel do
+      sha256 "${intel_sha}"
+    end
+
+    url "https://github.com/${github_repo}/releases/download/v#{version}/gitcomet-v#{version}-macos-#{arch}.dmg"
+    depends_on macos: ">= :ventura"
+
+    app "GitComet.app"
+    binary "#{appdir}/GitComet.app/Contents/MacOS/gitcomet", target: "gitcomet"
+  end
+
+  on_linux do
+    on_arm do
+      sha256 "${linux_arm_sha}"
+    end
+
+    on_intel do
+      sha256 "${linux_intel_sha}"
+    end
+
+    url "https://github.com/${github_repo}/releases/download/v#{version}/gitcomet-v#{version}-linux-#{arch}.AppImage"
+    container type: :naked
+
+    binary "gitcomet-v#{version}-linux-#{arch}.AppImage", target: "gitcomet"
+  end
+
   name "GitComet"
   desc "Fast, resource-efficient Git GUI written in Rust"
   homepage "https://github.com/${github_repo}"
-
-  depends_on macos: ">= :ventura"
-
-  app "GitComet.app"
-
-  caveats do
-    <<~EOS
-      Optional CLI:
-        brew install gitcomet-cli
-    EOS
-  end
 end
 EOF2
 

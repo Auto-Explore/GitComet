@@ -24,6 +24,7 @@ impl GitCometAssets {
             "icons/spinner.svg" => {
                 Some(Cow::Borrowed(include_bytes!("../assets/icons/spinner.svg")))
             }
+            "icons/stash.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/stash.svg"))),
             "icons/box.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/box.svg"))),
             "icons/check.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/check.svg"))),
             "icons/chevron_down.svg" => Some(Cow::Borrowed(include_bytes!(
@@ -46,6 +47,9 @@ impl GitCometAssets {
             "icons/refresh.svg" => {
                 Some(Cow::Borrowed(include_bytes!("../assets/icons/refresh.svg")))
             }
+            "icons/history.svg" => {
+                Some(Cow::Borrowed(include_bytes!("../assets/icons/history.svg")))
+            }
             "icons/undo.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/undo.svg"))),
             "icons/tag.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/tag.svg"))),
             "icons/terminal.svg" => Some(Cow::Borrowed(include_bytes!(
@@ -63,6 +67,9 @@ impl GitCometAssets {
                 "../assets/icons/arrow_right.svg"
             ))),
             "icons/link.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/link.svg"))),
+            "icons/line_break.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/line_break.svg"
+            ))),
             "icons/unlink.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/unlink.svg"))),
             "icons/cloud.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/cloud.svg"))),
             "icons/cog.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/cog.svg"))),
@@ -96,6 +103,7 @@ impl GitCometAssets {
             ))),
             "icons/menu.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/menu.svg"))),
             "icons/pencil.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/pencil.svg"))),
+            "icons/zoom.svg" => Some(Cow::Borrowed(include_bytes!("../assets/icons/zoom.svg"))),
             _ => None,
         }
     }
@@ -112,6 +120,7 @@ impl GitCometAssets {
                 "icons/arrow_down.svg".into(),
                 "icons/arrow_up.svg".into(),
                 "icons/spinner.svg".into(),
+                "icons/stash.svg".into(),
                 "icons/box.svg".into(),
                 "icons/check.svg".into(),
                 "icons/chevron_down.svg".into(),
@@ -124,6 +133,7 @@ impl GitCometAssets {
                 "icons/file.svg".into(),
                 "icons/copy.svg".into(),
                 "icons/refresh.svg".into(),
+                "icons/history.svg".into(),
                 "icons/undo.svg".into(),
                 "icons/tag.svg".into(),
                 "icons/terminal.svg".into(),
@@ -133,6 +143,7 @@ impl GitCometAssets {
                 "icons/arrow_left.svg".into(),
                 "icons/arrow_right.svg".into(),
                 "icons/link.svg".into(),
+                "icons/line_break.svg".into(),
                 "icons/unlink.svg".into(),
                 "icons/cloud.svg".into(),
                 "icons/cog.svg".into(),
@@ -148,6 +159,7 @@ impl GitCometAssets {
                 "icons/gitcomet_mark.svg".into(),
                 "icons/menu.svg".into(),
                 "icons/pencil.svg".into(),
+                "icons/zoom.svg".into(),
             ],
             _ => vec![],
         }
@@ -161,5 +173,41 @@ impl AssetSource for GitCometAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         Ok(Self::list_static(path))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitCometAssets;
+    use std::{collections::BTreeSet, path::Path};
+
+    #[test]
+    fn icon_assets_directory_matches_registry() {
+        let icons_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons");
+        let on_disk: BTreeSet<String> = std::fs::read_dir(&icons_dir)
+            .expect("expected icons asset directory")
+            .map(|entry| {
+                let entry = entry.expect("expected icon asset entry");
+                let name = entry.file_name();
+                format!("icons/{}", name.to_string_lossy())
+            })
+            .collect();
+
+        let registered: BTreeSet<String> = GitCometAssets::list_static("icons")
+            .into_iter()
+            .map(|path| path.to_string())
+            .collect();
+
+        assert_eq!(
+            registered, on_disk,
+            "expected the asset registry to cover every icons/*.svg file"
+        );
+
+        for icon in &registered {
+            assert!(
+                GitCometAssets::load_static(icon).is_some(),
+                "expected {icon} to be loadable from the asset registry"
+            );
+        }
     }
 }

@@ -1,26 +1,26 @@
-use crate::msg::{Msg, RepoPathList};
+use crate::msg::{Msg, RepoActionKind, RepoPathList};
 use gitcomet_core::auth::{
     StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
-use super::super::{RepoId, executor::TaskExecutor};
+use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{RepoMap, send_or_log, spawn_with_repo};
 
 fn schedule_repo_action_with_hook<F, H, M>(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     run: F,
     hook: H,
     finish: M,
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<(), Error> + Send + 'static,
-    H: FnOnce(&mpsc::Sender<Msg>, RepoId, &Result<(), Error>) + Send + 'static,
+    H: FnOnce(&StoreWorkerSender, RepoId, &Result<(), Error>) + Send + 'static,
     M: FnOnce(RepoId, Result<(), Error>) -> Msg + Send + 'static,
 {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
@@ -30,11 +30,42 @@ fn schedule_repo_action_with_hook<F, H, M>(
     });
 }
 
+fn schedule_repo_action_with_result<T, F, M>(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    run: F,
+    finish: M,
+) where
+    T: Send + 'static,
+    F: FnOnce(Arc<dyn GitRepository>) -> Result<T, Error> + Send + 'static,
+    M: FnOnce(RepoId, Result<T, Error>) -> Msg + Send + 'static,
+{
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = run(repo);
+        send_or_log(&msg_tx, finish(repo_id, result));
+    });
+}
+
+fn repo_action_finished(
+    action: RepoActionKind,
+) -> impl FnOnce(RepoId, Result<(), Error>) -> Msg + Send + 'static {
+    move |repo_id, result| {
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action,
+            result,
+        })
+    }
+}
+
 fn schedule_repo_action<F>(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    action: RepoActionKind,
     run: F,
 ) where
     F: FnOnce(Arc<dyn GitRepository>) -> Result<(), Error> + Send + 'static,
@@ -46,14 +77,12 @@ fn schedule_repo_action<F>(
         repo_id,
         run,
         |_msg_tx, _repo_id, _result| {},
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(action),
     );
 }
 
 fn send_refresh_branches_on_success(
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     result: &Result<(), Error>,
 ) {
@@ -63,7 +92,7 @@ fn send_refresh_branches_on_success(
 }
 
 fn send_load_worktrees_on_success(
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     result: &Result<(), Error>,
 ) {
@@ -73,7 +102,7 @@ fn send_load_worktrees_on_success(
 }
 
 fn send_refresh_branches_and_load_worktrees_on_success(
-    msg_tx: &mpsc::Sender<Msg>,
+    msg_tx: &StoreWorkerSender,
     repo_id: RepoId,
     result: &Result<(), Error>,
 ) {
@@ -104,7 +133,7 @@ fn run_with_git_auth<R>(
 pub(super) fn schedule_checkout_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -115,16 +144,14 @@ pub(super) fn schedule_checkout_branch(
         repo_id,
         move |repo| repo.checkout_branch(&name),
         send_refresh_branches_and_load_worktrees_on_success,
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::CheckoutBranch),
     );
 }
 
 pub(super) fn schedule_checkout_remote_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     remote: String,
     branch: String,
@@ -137,16 +164,14 @@ pub(super) fn schedule_checkout_remote_branch(
         repo_id,
         move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch),
         send_refresh_branches_and_load_worktrees_on_success,
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
     );
 }
 
 pub(super) fn schedule_checkout_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
@@ -157,40 +182,48 @@ pub(super) fn schedule_checkout_commit(
         repo_id,
         move |repo| repo.checkout_commit(&commit_id),
         send_load_worktrees_on_success,
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::CheckoutCommit),
     );
 }
 
 pub(super) fn schedule_cherry_pick_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        repo.cherry_pick(&commit_id)
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::CherryPickCommit,
+        move |repo| repo.cherry_pick(&commit_id),
+    );
 }
 
 pub(super) fn schedule_revert_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        repo.revert(&commit_id)
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::RevertCommit,
+        move |repo| repo.revert(&commit_id),
+    );
 }
 
 pub(super) fn schedule_create_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     target: String,
@@ -205,16 +238,14 @@ pub(super) fn schedule_create_branch(
             repo.create_branch(&name, &target)
         },
         send_refresh_branches_on_success,
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::CreateBranch),
     );
 }
 
 pub(super) fn schedule_create_branch_and_checkout(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
     target: String,
@@ -232,7 +263,11 @@ pub(super) fn schedule_create_branch_and_checkout(
         }
         send_or_log(
             &msg_tx,
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }),
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id,
+                action: RepoActionKind::CreateBranchAndCheckout,
+                result,
+            }),
         );
     });
 }
@@ -240,7 +275,7 @@ pub(super) fn schedule_create_branch_and_checkout(
 pub(super) fn schedule_delete_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -251,16 +286,14 @@ pub(super) fn schedule_delete_branch(
         repo_id,
         move |repo| repo.delete_branch(&name),
         send_refresh_branches_on_success,
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::DeleteBranch),
     );
 }
 
 pub(super) fn schedule_force_delete_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     name: String,
 ) {
@@ -271,108 +304,147 @@ pub(super) fn schedule_force_delete_branch(
         repo_id,
         move |repo| repo.delete_branch_force(&name),
         send_refresh_branches_on_success,
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::ForceDeleteBranch),
     );
 }
 
 pub(super) fn schedule_stage_path(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let path_ref: &Path = &path;
-        repo.stage(&[path_ref])
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::StagePath,
+        move |repo| {
+            let path_ref: &Path = &path;
+            repo.stage(&[path_ref])
+        },
+    );
 }
 
 pub(super) fn schedule_stage_paths(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths.as_slice().to_vec());
-        let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-        repo.stage(&refs)
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::StagePaths,
+        move |repo| {
+            let unique = dedup_paths(paths.as_slice().to_vec());
+            let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
+            repo.stage(&refs)
+        },
+    );
 }
 
 pub(super) fn schedule_unstage_path(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let path_ref: &Path = &path;
-        repo.unstage(&[path_ref])
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::UnstagePath,
+        move |repo| {
+            let path_ref: &Path = &path;
+            repo.unstage(&[path_ref])
+        },
+    );
 }
 
 pub(super) fn schedule_unstage_paths(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: RepoPathList,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths.as_slice().to_vec());
-        let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-        repo.unstage(&refs)
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::UnstagePaths,
+        move |repo| {
+            let unique = dedup_paths(paths.as_slice().to_vec());
+            let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
+            repo.unstage(&refs)
+        },
+    );
 }
 
 pub(super) fn schedule_discard_worktree_changes_path(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let path_ref: &Path = &path;
-        repo.discard_worktree_changes(&[path_ref])
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::DiscardWorktreeChangesPath,
+        move |repo| {
+            let path_ref: &Path = &path;
+            repo.discard_worktree_changes(&[path_ref])
+        },
+    );
 }
 
 pub(super) fn schedule_discard_worktree_changes_paths(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     paths: Vec<PathBuf>,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        let unique = dedup_paths(paths);
-        let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
-        repo.discard_worktree_changes(&refs)
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::DiscardWorktreeChangesPaths,
+        move |repo| {
+            let unique = dedup_paths(paths);
+            let refs = unique.iter().map(|p| p.as_path()).collect::<Vec<_>>();
+            repo.discard_worktree_changes(&refs)
+        },
+    );
 }
 
 pub(super) fn schedule_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_action_with_hook(
+    schedule_repo_action_with_result(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| run_with_git_auth(auth, || repo.commit(&message)),
-        |_msg_tx, _repo_id, _result| {},
+        move |repo| run_with_git_auth(auth, || repo.commit_with_outcome(&message)),
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result })
         },
@@ -382,18 +454,17 @@ pub(super) fn schedule_commit(
 pub(super) fn schedule_commit_amend(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
     auth: Option<StagedGitAuth>,
 ) {
-    schedule_repo_action_with_hook(
+    schedule_repo_action_with_result(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| run_with_git_auth(auth, || repo.commit_amend(&message)),
-        |_msg_tx, _repo_id, _result| {},
+        move |repo| run_with_git_auth(auth, || repo.commit_amend_with_outcome(&message)),
         |repo_id, result| {
             Msg::Internal(crate::msg::InternalMsg::CommitAmendFinished { repo_id, result })
         },
@@ -403,7 +474,7 @@ pub(super) fn schedule_commit_amend(
 pub(super) fn schedule_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     message: String,
     include_untracked: bool,
@@ -419,28 +490,31 @@ pub(super) fn schedule_stash(
                 send_or_log(msg_tx, Msg::LoadStashes { repo_id });
             }
         },
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::Stash),
     );
 }
 
 pub(super) fn schedule_apply_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
 ) {
-    schedule_repo_action(executor, repos, msg_tx, repo_id, move |repo| {
-        repo.stash_apply(index)
-    });
+    schedule_repo_action(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoActionKind::ApplyStash,
+        move |repo| repo.stash_apply(index),
+    );
 }
 
 pub(super) fn schedule_pop_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
 ) {
@@ -455,7 +529,11 @@ pub(super) fn schedule_pop_stash(
                 send_or_log(&msg_tx, Msg::LoadStashes { repo_id });
                 send_or_log(
                     &msg_tx,
-                    Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result }),
+                    Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                        repo_id,
+                        action: RepoActionKind::PopStash,
+                        result,
+                    }),
                 );
             }
             Err(err) => {
@@ -463,6 +541,7 @@ pub(super) fn schedule_pop_stash(
                     &msg_tx,
                     Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                         repo_id,
+                        action: RepoActionKind::PopStash,
                         result: Err(err),
                     }),
                 );
@@ -474,7 +553,7 @@ pub(super) fn schedule_pop_stash(
 pub(super) fn schedule_drop_stash(
     executor: &TaskExecutor,
     repos: &RepoMap,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     index: usize,
 ) {
@@ -487,8 +566,6 @@ pub(super) fn schedule_drop_stash(
         |msg_tx, repo_id, _result| {
             send_or_log(msg_tx, Msg::LoadStashes { repo_id });
         },
-        |repo_id, result| {
-            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished { repo_id, result })
-        },
+        repo_action_finished(RepoActionKind::DropStash),
     );
 }

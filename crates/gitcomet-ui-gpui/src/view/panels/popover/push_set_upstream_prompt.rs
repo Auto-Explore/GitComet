@@ -8,11 +8,13 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let remote_for_action = remote.clone();
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(320.0))
+        .w(scaled_px(320.0))
         .child(
             div()
                 .px_2()
@@ -47,15 +49,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("push_upstream_cancel", "Cancel")
+                        .focus_handle(this.push_upstream_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("push_upstream_go", "Push")
+                        .focus_handle(this.push_upstream_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             let branch = this

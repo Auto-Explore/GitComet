@@ -293,11 +293,7 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
 
     cx.update(|window, app| {
-        app.bind_keys([gpui::KeyBinding::new(
-            "enter",
-            crate::kit::Enter,
-            Some("TextInput"),
-        )]);
+        crate::app::bind_text_input_keys_for_test(app);
         let _ = window.draw(app);
     });
 
@@ -397,6 +393,117 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
         .expect("expected create-branch Cancel shortcut separator");
     cx.debug_bounds("create_branch_go_end_slot_separator")
         .expect("expected create-branch Create shortcut separator");
+}
+
+#[gpui::test]
+fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id: RepoId(1),
+                        target: "main".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("feature", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_input.read(app).focus_handle(),
+            "expected create-branch-from-ref to focus the name input first",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_from_ref_checkout_focus_handle.clone(),
+            "expected Tab to move from the name input to Checkout",
+        );
+    });
+
+    simulate_key_press(cx, "space");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            !host.create_branch_checkout_enabled,
+            "expected Space to toggle Checkout off"
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_from_ref_cancel_focus_handle.clone(),
+            "expected Tab to move from Checkout to Cancel",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_from_ref_submit_focus_handle.clone(),
+            "expected Tab to move from Cancel to Create",
+        );
+    });
+
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_input.read(app).focus_handle(),
+            "expected Tab to wrap from Create back to the name input",
+        );
+    });
+
+    cx.simulate_keystrokes("shift-tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_from_ref_submit_focus_handle.clone(),
+            "expected Shift-Tab to wrap from the name input back to Create",
+        );
+    });
 }
 
 #[gpui::test]

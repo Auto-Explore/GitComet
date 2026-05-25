@@ -13,7 +13,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::repo_load_trace;
 use super::send_diagnostics::{SendFailureKind, send_or_log};
+use super::worker_channel::StoreWorkerSender;
 
 enum MonitorMsg {
     Event(notify::Result<notify::Event>),
@@ -101,11 +103,13 @@ fn send_stop_or_log(tx: &mpsc::Sender<MonitorMsg>, repo_id: RepoId, context: &'s
 }
 
 fn send_watcher_event_or_log(
+    repo_id: RepoId,
     tx: &mpsc::Sender<MonitorMsg>,
     event: notify::Result<notify::Event>,
-    callback_enabled: &AtomicBool,
+    monitor_enabled: &AtomicBool,
 ) -> bool {
-    if !callback_enabled.load(Ordering::Relaxed) {
+    if !monitor_enabled.load(Ordering::Relaxed) {
+        repo_load_trace::trace!("repo_monitor_drop_event_after_stop repo_id={:?}", repo_id);
         return false;
     }
 
@@ -145,6 +149,29 @@ pub(super) fn join_monitor_or_log(
     }
 }
 
+fn spawn_monitor_join(repo_id: RepoId, join: thread::JoinHandle<()>, context: &'static str) {
+    let thread_name = format!("gitcomet-repo-monitor-join-{}", repo_id.0);
+    if let Err(error) = thread::Builder::new().name(thread_name).spawn(move || {
+        repo_load_trace::trace!(
+            "repo_monitor_async_join_start repo_id={:?} context={}",
+            repo_id,
+            context
+        );
+        join_monitor_or_log(join, repo_id, context);
+        repo_load_trace::trace!(
+            "repo_monitor_async_join_finish repo_id={:?} context={}",
+            repo_id,
+            context
+        );
+    }) {
+        record_monitor_failure(
+            MonitorFailureKind::Join,
+            context,
+            format!("repo_id={repo_id:?}; failed to spawn async join thread: {error}"),
+        );
+    }
+}
+
 #[cfg(test)]
 pub(super) fn monitor_failure_count(kind: MonitorFailureKind) -> u64 {
     monitor_failure_counter(kind).load(Ordering::Relaxed)
@@ -169,11 +196,7 @@ pub(super) fn repo_monitor_ignore_lookup_stats() -> RepoMonitorIgnoreLookupStats
     let fallback_count = REPO_MONITOR_IGNORE_LOOKUP_FALLBACKS.load(Ordering::Relaxed);
     let total_lookup_nanos = REPO_MONITOR_IGNORE_LOOKUP_TOTAL_NANOS.load(Ordering::Relaxed);
     let max_lookup_nanos = REPO_MONITOR_IGNORE_LOOKUP_MAX_NANOS.load(Ordering::Relaxed);
-    let average_lookup_nanos = if cache_misses == 0 {
-        0
-    } else {
-        total_lookup_nanos / cache_misses
-    };
+    let average_lookup_nanos = total_lookup_nanos.checked_div(cache_misses).unwrap_or(0);
 
     RepoMonitorIgnoreLookupStats {
         request_count,
@@ -273,8 +296,7 @@ impl RepoMonitorManager {
 
     pub(super) fn stop_all(&mut self) {
         for (repo_id, handle) in self.handles.drain() {
-            send_stop_or_log(&handle.msg_tx, repo_id, "RepoMonitorManager::stop_all");
-            join_monitor_or_log(handle.join, repo_id, "RepoMonitorManager::stop_all");
+            stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop_all");
         }
     }
 
@@ -282,19 +304,24 @@ impl RepoMonitorManager {
         let Some(handle) = self.handles.remove(&repo_id) else {
             return;
         };
-        send_stop_or_log(&handle.msg_tx, repo_id, "RepoMonitorManager::stop");
-        join_monitor_or_log(handle.join, repo_id, "RepoMonitorManager::stop");
+        stop_monitor_handle(repo_id, handle, "RepoMonitorManager::stop");
     }
 
     pub(super) fn running_repo_ids(&self) -> Vec<RepoId> {
         self.handles.keys().copied().collect()
     }
 
+    pub(super) fn is_running(&self, repo_id: RepoId) -> bool {
+        self.handles
+            .get(&repo_id)
+            .is_some_and(|handle| handle.monitor_enabled.load(Ordering::Relaxed))
+    }
+
     pub(super) fn start(
         &mut self,
         repo_id: RepoId,
         workdir: PathBuf,
-        msg_tx: mpsc::Sender<Msg>,
+        msg_tx: StoreWorkerSender,
         active_repo_id: Arc<AtomicU64>,
     ) {
         let std::collections::hash_map::Entry::Vacant(entry) = self.handles.entry(repo_id) else {
@@ -302,6 +329,8 @@ impl RepoMonitorManager {
         };
         let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
         let monitor_tx_for_notify = monitor_tx.clone();
+        let monitor_enabled = Arc::new(AtomicBool::new(true));
+        let monitor_enabled_for_thread = Arc::clone(&monitor_enabled);
         let join = thread::spawn(move || {
             repo_monitor_thread(
                 repo_id,
@@ -310,18 +339,57 @@ impl RepoMonitorManager {
                 monitor_rx,
                 monitor_tx_for_notify,
                 active_repo_id,
+                monitor_enabled_for_thread,
             )
         });
         entry.insert(RepoMonitorHandle {
             msg_tx: monitor_tx,
             join,
+            monitor_enabled,
         });
+    }
+
+    #[cfg(test)]
+    pub(super) fn insert_blocked_monitor_for_test(
+        &mut self,
+        repo_id: RepoId,
+        release_rx: mpsc::Receiver<()>,
+        exited_tx: mpsc::Sender<()>,
+    ) -> Arc<AtomicBool> {
+        let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
+        let monitor_enabled = Arc::new(AtomicBool::new(true));
+        let join = thread::spawn(move || {
+            let _ = monitor_rx.recv();
+            let _ = release_rx.recv();
+            let _ = exited_tx.send(());
+        });
+        self.handles.insert(
+            repo_id,
+            RepoMonitorHandle {
+                msg_tx: monitor_tx,
+                join,
+                monitor_enabled: Arc::clone(&monitor_enabled),
+            },
+        );
+        monitor_enabled
     }
 }
 
 struct RepoMonitorHandle {
     msg_tx: mpsc::Sender<MonitorMsg>,
     join: thread::JoinHandle<()>,
+    monitor_enabled: Arc<AtomicBool>,
+}
+
+fn stop_monitor_handle(repo_id: RepoId, handle: RepoMonitorHandle, context: &'static str) {
+    repo_load_trace::trace!(
+        "repo_monitor_stop_requested repo_id={:?} context={}",
+        repo_id,
+        context
+    );
+    handle.monitor_enabled.store(false, Ordering::Relaxed);
+    send_stop_or_log(&handle.msg_tx, repo_id, context);
+    spawn_monitor_join(repo_id, handle.join, context);
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -525,27 +593,32 @@ impl GitignoreRules {
 fn repo_monitor_thread(
     repo_id: RepoId,
     workdir: PathBuf,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
     monitor_rx: mpsc::Receiver<MonitorMsg>,
     monitor_tx: mpsc::Sender<MonitorMsg>,
     active_repo_id: Arc<AtomicU64>,
+    monitor_enabled: Arc<AtomicBool>,
 ) {
     let workdir = super::canonicalize_path(workdir);
+    if !monitor_enabled.load(Ordering::Relaxed) {
+        repo_load_trace::trace!("repo_monitor_exit_before_start repo_id={:?}", repo_id);
+        return;
+    }
     let git_dir = resolve_git_dir(&workdir);
     let mut gitignore = GitignoreRules::load(&workdir);
-    let callback_enabled = Arc::new(AtomicBool::new(true));
 
     let watcher = notify::recommended_watcher({
         let monitor_tx = monitor_tx.clone();
-        let callback_enabled = Arc::clone(&callback_enabled);
+        let monitor_enabled = Arc::clone(&monitor_enabled);
         move |res| {
-            send_watcher_event_or_log(&monitor_tx, res, callback_enabled.as_ref());
+            send_watcher_event_or_log(repo_id, &monitor_tx, res, monitor_enabled.as_ref());
         }
     });
 
     let mut watcher: RecommendedWatcher = match watcher {
         Ok(w) => w,
         Err(error) => {
+            monitor_enabled.store(false, Ordering::Relaxed);
             record_monitor_failure(
                 MonitorFailureKind::Start,
                 "repo_monitor_thread initialize watcher",
@@ -562,7 +635,7 @@ fn repo_monitor_thread(
         .watch(&workdir, RecursiveMode::Recursive)
         .or_else(|_| watcher.watch(&workdir, RecursiveMode::NonRecursive))
     {
-        callback_enabled.store(false, Ordering::Relaxed);
+        monitor_enabled.store(false, Ordering::Relaxed);
         record_monitor_failure(
             MonitorFailureKind::Start,
             "repo_monitor_thread watch workdir",
@@ -597,24 +670,25 @@ fn repo_monitor_thread(
     let mut debouncer = DebouncedChange::new(debounce, max_delay);
 
     let flush = |change: RepoExternalChange| {
-        if active_repo_id.load(Ordering::Relaxed) == repo_id.0 {
-            send_or_log(
-                &msg_tx,
+        let active = active_repo_id.load(Ordering::Relaxed);
+        if active == repo_id.0 {
+            trace_repo_monitor_flush("flush", repo_id, change, active);
+            msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
-                SendFailureKind::RepoMonitorMessage,
                 "repo monitor flush",
             );
         }
     };
 
     let flush_if_active = |pending: Option<RepoExternalChange>| {
-        if let Some(change) = pending
-            && active_repo_id.load(Ordering::Relaxed) == repo_id.0
-        {
-            send_or_log(
-                &msg_tx,
+        let Some(change) = pending else {
+            return;
+        };
+        let active = active_repo_id.load(Ordering::Relaxed);
+        if active == repo_id.0 {
+            trace_repo_monitor_flush("flush_if_active", repo_id, change, active);
+            msg_tx.send_repo_monitor_or_log(
                 Msg::RepoExternallyChanged { repo_id, change },
-                SendFailureKind::RepoMonitorMessage,
                 "repo monitor flush_if_active",
             );
         }
@@ -626,36 +700,71 @@ fn repo_monitor_thread(
 
         match monitor_rx.recv_timeout(timeout) {
             Ok(MonitorMsg::Stop) => {
-                callback_enabled.store(false, Ordering::Relaxed);
+                monitor_enabled.store(false, Ordering::Relaxed);
                 break;
             }
-            Ok(MonitorMsg::Event(Ok(event))) => {
-                if let Some(change) =
-                    classify_repo_event(&workdir, git_dir.as_deref(), &mut gitignore, &event)
-                {
-                    let now = Instant::now();
-                    if let Some(to_flush) = debouncer.push(change, now) {
-                        flush(to_flush);
+            Ok(MonitorMsg::Event(event)) => {
+                if !monitor_enabled.load(Ordering::Relaxed) {
+                    repo_load_trace::trace!(
+                        "repo_monitor_drop_queued_event_after_stop repo_id={:?}",
+                        repo_id
+                    );
+                    break;
+                }
+
+                match event {
+                    Ok(event) => {
+                        if let Some(change) = classify_repo_event(
+                            &workdir,
+                            git_dir.as_deref(),
+                            &mut gitignore,
+                            &event,
+                        ) {
+                            let now = Instant::now();
+                            if let Some(to_flush) = debouncer.push(change, now) {
+                                flush(to_flush);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        let now = Instant::now();
+                        if let Some(to_flush) = debouncer.push(RepoExternalChange::all(), now) {
+                            flush(to_flush);
+                        }
                     }
                 }
             }
-            Ok(MonitorMsg::Event(Err(_))) => {
-                let now = Instant::now();
-                if let Some(to_flush) = debouncer.push(RepoExternalChange::all(), now) {
-                    flush(to_flush);
-                }
-            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !monitor_enabled.load(Ordering::Relaxed) {
+                    break;
+                }
                 let now = Instant::now();
                 flush_if_active(debouncer.take_if_due(now));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                callback_enabled.store(false, Ordering::Relaxed);
+                monitor_enabled.store(false, Ordering::Relaxed);
                 break;
             }
         }
     }
-    callback_enabled.store(false, Ordering::Relaxed);
+    monitor_enabled.store(false, Ordering::Relaxed);
+}
+
+fn trace_repo_monitor_flush(
+    source: &'static str,
+    repo_id: RepoId,
+    change: RepoExternalChange,
+    active_repo: u64,
+) {
+    repo_load_trace::trace!(
+        "repo_monitor_flush source={} repo_id={:?} change_worktree={} change_index={} change_git_state={} active_repo={}",
+        source,
+        repo_id,
+        change.worktree,
+        change.index,
+        change.git_state,
+        active_repo
+    );
 }
 
 fn resolve_git_dir(workdir: &Path) -> Option<PathBuf> {
@@ -1550,15 +1659,16 @@ mod tests {
     fn watcher_callback_send_is_skipped_when_shutdown_gate_is_closed() {
         let (tx, rx) = mpsc::channel::<MonitorMsg>();
         drop(rx);
-        let callback_enabled = AtomicBool::new(false);
+        let monitor_enabled = AtomicBool::new(false);
         let did_send = send_watcher_event_or_log(
+            RepoId(1),
             &tx,
             Ok(notify::Event {
                 kind: EventKind::Any,
                 paths: vec![],
                 attrs: Default::default(),
             }),
-            &callback_enabled,
+            &monitor_enabled,
         );
         assert!(!did_send, "callback gate should suppress watcher sends");
     }
@@ -1571,16 +1681,17 @@ mod tests {
 
         let (tx, rx) = mpsc::channel::<MonitorMsg>();
         drop(rx);
-        let callback_enabled = AtomicBool::new(true);
+        let monitor_enabled = AtomicBool::new(true);
 
         let did_send = send_watcher_event_or_log(
+            RepoId(1),
             &tx,
             Ok(notify::Event {
                 kind: EventKind::Any,
                 paths: vec![],
                 attrs: Default::default(),
             }),
-            &callback_enabled,
+            &monitor_enabled,
         );
         assert!(
             did_send,

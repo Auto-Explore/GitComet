@@ -1,21 +1,31 @@
 use super::{
     GixRepo,
     conflict_stages::{
-        ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_blob_bytes_optional,
+        ConflictStageData, gix_index_conflict_stage_data, gix_index_stage_object_id_optional,
     },
 };
-use crate::util::{git_command_failed_error, run_git_parsed_stdout, run_git_raw_output};
+use crate::util::{
+    git_command_failed_error, run_git_parsed_stdout, run_git_parsed_stdout_cancellable,
+    run_git_raw_output,
+};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, canonicalize_stage_parts};
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
+    FileDiffTextSource,
 };
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::{ConflictFileStages, Result};
+use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
+use gitcomet_core::services::{CancellationToken, ConflictFileStages, Result};
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+
+#[cfg(not(test))]
+const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 1024;
 
 impl GixRepo {
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
@@ -40,6 +50,19 @@ impl GixRepo {
                     .arg("--no-ext-diff")
                     .arg("--pretty=format:")
                     .arg(commit_id.as_ref());
+                if let Some(path) = path {
+                    cmd.arg("--").arg(path);
+                }
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                cmd.arg("diff")
+                    .arg("--no-ext-diff")
+                    .arg(from_commit_id.as_ref())
+                    .arg(to_commit_id.as_ref());
                 if let Some(path) = path {
                     cmd.arg("--").arg(path);
                 }
@@ -86,6 +109,127 @@ impl GixRepo {
         )
     }
 
+    pub(super) fn diff_parsed_cancellable_impl(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        cancellation.check_cancelled()?;
+        if let Some(diff) = self.synthetic_simple_commit_path_diff(target)? {
+            cancellation.check_cancelled()?;
+            return Ok(diff);
+        }
+
+        let target = target.clone();
+        run_git_parsed_stdout_cancellable(
+            self.build_unified_diff_command(&target),
+            "git diff",
+            true,
+            cancellation,
+            move |stdout| {
+                Diff::from_unified_reader(target, BufReader::new(stdout)).map_err(|err| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "git diff produced non-UTF-8 output: {err}"
+                    )))
+                })
+            },
+        )
+    }
+
+    fn file_diff_source_from_blob_id(
+        &self,
+        blob_id: gix::ObjectId,
+        logical_path: &Path,
+    ) -> Result<Option<FileDiffTextSource>> {
+        let Some(path) = self.cached_preview_blob_file_path(blob_id, logical_path)? else {
+            return Ok(None);
+        };
+        Ok(Some(FileDiffTextSource::with_identity(
+            path,
+            format!("blob:{blob_id}"),
+        )))
+    }
+
+    fn file_diff_source_from_revision_path(
+        &self,
+        repo: &gix::Repository,
+        revision: &str,
+        path: &Path,
+    ) -> Result<Option<FileDiffTextSource>> {
+        let Some(blob_id) = gix_revision_path_blob_object_id_optional(repo, revision, path)? else {
+            return Ok(None);
+        };
+        self.file_diff_source_from_blob_id(blob_id, path)
+    }
+
+    fn file_diff_source_from_index_stage(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+        stage: u8,
+    ) -> Result<Option<FileDiffTextSource>> {
+        let Some(blob_id) = gix_index_stage_object_id_optional(repo, path, stage)? else {
+            return Ok(None);
+        };
+        self.file_diff_source_from_blob_id(blob_id, path)
+    }
+
+    fn file_diff_source_from_worktree_path_optional(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+    ) -> Result<Option<FileDiffTextSource>> {
+        self.cached_git_normalized_worktree_file_source(repo, path)
+    }
+
+    fn cached_git_normalized_worktree_file_source(
+        &self,
+        repo: &gix::Repository,
+        path: &Path,
+    ) -> Result<Option<FileDiffTextSource>> {
+        let full = match worktree_file_path_optional(&self.spec.workdir, path) {
+            Some(full) => full,
+            None => return Ok(None),
+        };
+
+        let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix worktree filter pipeline: {e}"
+            )))
+        })?;
+        let file = std::fs::File::open(&full).map_err(io_err_to_error)?;
+        let normalized = pipeline.convert_to_git(file, path, &index).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix worktree-to-git conversion: {e}"
+            )))
+        })?;
+
+        let mut tmp_file =
+            tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
+        let mut content_hasher = rustc_hash::FxHasher::default();
+        match normalized {
+            gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
+                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
+            }
+            gix::filter::plumbing::pipeline::convert::ToGitOutcome::Process(mut file) => {
+                copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
+            }
+            gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(bytes) => {
+                bytes.hash(&mut content_hasher);
+                tmp_file.write_all(bytes).map_err(io_err_to_error)?;
+            }
+        }
+        tmp_file.flush().map_err(io_err_to_error)?;
+
+        let identity = worktree_source_identity(&self.spec.workdir, path, content_hasher.finish());
+        let cache_path = worktree_git_cache_path(path, &identity);
+        persist_worktree_git_cache_file(tmp_file, &cache_path)?;
+        Ok(Some(FileDiffTextSource::with_identity(
+            cache_path,
+            format!("worktree-git:{identity}"),
+        )))
+    }
+
     pub(super) fn diff_file_text_impl(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
         match target {
             DiffTarget::WorkingTree { path, area } => {
@@ -99,55 +243,49 @@ impl GixRepo {
                 }
 
                 let repo = self._repo.to_thread_local();
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
-                            IndexUnconflictedBlob::Present(bytes) => {
-                                Some(decode_utf8_bytes(bytes)?)
+                        let old = match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)?
+                        {
+                            IndexUnconflictedBlobId::Present(blob_id) => {
+                                self.file_diff_source_from_blob_id(blob_id, &repo_path)?
                             }
-                            IndexUnconflictedBlob::Missing => None,
-                            IndexUnconflictedBlob::Unmerged => {
-                                let ours = decode_utf8_bytes_optional(
-                                    gix_index_stage_blob_bytes_optional(&repo, path, 2)?,
-                                )?;
-                                let theirs = decode_utf8_bytes_optional(
-                                    gix_index_stage_blob_bytes_optional(&repo, path, 3)?,
-                                )?;
-                                return Ok(Some(FileDiffText::new(path.clone(), ours, theirs)));
+                            IndexUnconflictedBlobId::Missing => None,
+                            IndexUnconflictedBlobId::Unmerged => {
+                                let ours =
+                                    self.file_diff_source_from_index_stage(&repo, &repo_path, 2)?;
+                                let theirs =
+                                    self.file_diff_source_from_index_stage(&repo, &repo_path, 3)?;
+                                return Ok(Some(FileDiffText::new_sources(
+                                    path.clone(),
+                                    ours,
+                                    theirs,
+                                )));
                             }
                         };
-                        let new = if path.is_absolute() {
-                            read_worktree_file_utf8_optional(&self.spec.workdir, path)?
-                        } else {
-                            read_worktree_file_utf8_as_git_optional(
-                                &repo,
-                                &self.spec.workdir,
-                                path,
-                            )?
-                        };
+                        let new =
+                            self.file_diff_source_from_worktree_path_optional(&repo, &repo_path)?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old = decode_utf8_bytes_optional(
-                            gix_revision_path_blob_bytes_optional(&repo, "HEAD", path)?,
-                        )?;
-                        let new = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
-                            IndexUnconflictedBlob::Present(bytes) => {
-                                Some(decode_utf8_bytes(bytes)?)
+                        let old =
+                            self.file_diff_source_from_revision_path(&repo, "HEAD", &repo_path)?;
+                        let new = match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)?
+                        {
+                            IndexUnconflictedBlobId::Present(blob_id) => {
+                                self.file_diff_source_from_blob_id(blob_id, &repo_path)?
                             }
-                            IndexUnconflictedBlob::Missing => None,
-                            IndexUnconflictedBlob::Unmerged => decode_utf8_bytes_optional(
-                                gix_index_stage_blob_bytes_optional(&repo, path, 2)?,
-                            )?
-                            .or(decode_utf8_bytes_optional(
-                                gix_index_stage_blob_bytes_optional(&repo, path, 3)?,
-                            )?),
+                            IndexUnconflictedBlobId::Missing => None,
+                            IndexUnconflictedBlobId::Unmerged => self
+                                .file_diff_source_from_index_stage(&repo, &repo_path, 2)?
+                                .or(self.file_diff_source_from_index_stage(&repo, &repo_path, 3)?),
                         };
                         (old, new)
                     }
                 };
 
-                Ok(Some(FileDiffText::new(path.clone(), old, new)))
+                Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
             DiffTarget::Commit { commit_id, path } => {
                 let Some(path) = path else {
@@ -158,16 +296,32 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => gix_revision_path_blob_entry_optional(&repo, &parent, path)?
-                        .map(|entry| decode_utf8_bytes(entry.bytes))
-                        .transpose()?,
+                    Some(parent) => {
+                        self.file_diff_source_from_revision_path(&repo, &parent, path)?
+                    }
                     None => None,
                 };
-                let new = gix_revision_path_blob_entry_optional(&repo, commit_id.as_ref(), path)?
-                    .map(|entry| decode_utf8_bytes(entry.bytes))
-                    .transpose()?;
+                let new =
+                    self.file_diff_source_from_revision_path(&repo, commit_id.as_ref(), path)?;
 
-                Ok(Some(FileDiffText::new(path.clone(), old, new)))
+                Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let repo = self._repo.to_thread_local();
+                let old =
+                    self.file_diff_source_from_revision_path(&repo, from_commit_id.as_ref(), path)?;
+                let new =
+                    self.file_diff_source_from_revision_path(&repo, to_commit_id.as_ref(), path)?;
+
+                Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
         }
     }
@@ -189,27 +343,35 @@ impl GixRepo {
                 }
 
                 let repo = self._repo.to_thread_local();
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 match (area, side) {
                     (DiffArea::Unstaged, DiffPreviewTextSide::New) => {
-                        Ok(worktree_file_path_optional(&self.spec.workdir, path))
+                        Ok(worktree_file_path_optional(&self.spec.workdir, &repo_path))
                     }
                     (DiffArea::Unstaged, DiffPreviewTextSide::Old)
                     | (DiffArea::Staged, DiffPreviewTextSide::New) => {
-                        let blob_id = match gix_index_unconflicted_blob_id_optional(&repo, path)? {
-                            IndexUnconflictedBlobId::Present(id) => Some(id),
-                            IndexUnconflictedBlobId::Missing
-                            | IndexUnconflictedBlobId::Unmerged => None,
-                        };
-                        blob_id
-                            .map(|blob_id| self.cached_preview_blob_file_path(blob_id, path))
-                            .transpose()
+                        let blob_id =
+                            match gix_index_unconflicted_blob_id_optional(&repo, &repo_path)? {
+                                IndexUnconflictedBlobId::Present(id) => Some(id),
+                                IndexUnconflictedBlobId::Missing
+                                | IndexUnconflictedBlobId::Unmerged => None,
+                            };
+                        match blob_id {
+                            Some(blob_id) => {
+                                self.cached_preview_blob_file_path(blob_id, &repo_path)
+                            }
+                            None => Ok(None),
+                        }
                     }
                     (DiffArea::Staged, DiffPreviewTextSide::Old) => {
                         let blob_id =
-                            gix_revision_path_blob_object_id_optional(&repo, "HEAD", path)?;
-                        blob_id
-                            .map(|blob_id| self.cached_preview_blob_file_path(blob_id, path))
-                            .transpose()
+                            gix_revision_path_blob_object_id_optional(&repo, "HEAD", &repo_path)?;
+                        match blob_id {
+                            Some(blob_id) => {
+                                self.cached_preview_blob_file_path(blob_id, &repo_path)
+                            }
+                            None => Ok(None),
+                        }
                     }
                 }
             }
@@ -232,9 +394,38 @@ impl GixRepo {
                     }
                 };
 
-                blob_id
-                    .map(|blob_id| self.cached_preview_blob_file_path(blob_id, path))
-                    .transpose()
+                match blob_id {
+                    Some(blob_id) => self.cached_preview_blob_file_path(blob_id, path),
+                    None => Ok(None),
+                }
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let repo = self._repo.to_thread_local();
+                let blob_id = match side {
+                    DiffPreviewTextSide::New => gix_revision_path_blob_object_id_optional(
+                        &repo,
+                        to_commit_id.as_ref(),
+                        path,
+                    )?,
+                    DiffPreviewTextSide::Old => gix_revision_path_blob_object_id_optional(
+                        &repo,
+                        from_commit_id.as_ref(),
+                        path,
+                    )?,
+                };
+
+                match blob_id {
+                    Some(blob_id) => self.cached_preview_blob_file_path(blob_id, path),
+                    None => Ok(None),
+                }
             }
         }
     }
@@ -243,10 +434,15 @@ impl GixRepo {
         &self,
         blob_id: gix::ObjectId,
         logical_path: &Path,
-    ) -> Result<std::path::PathBuf> {
+    ) -> Result<Option<std::path::PathBuf>> {
+        let repo = self._repo.to_thread_local();
+        if !gix_object_id_is_blob(&repo, blob_id)? {
+            return Ok(None);
+        }
+
         let cache_path = preview_blob_cache_path(&self.spec.workdir, logical_path, &blob_id);
         if std::fs::metadata(&cache_path).is_ok_and(|m| m.is_file()) {
-            return Ok(cache_path);
+            return Ok(Some(cache_path));
         }
 
         let mut tmp_file =
@@ -276,8 +472,10 @@ impl GixRepo {
             std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
         }
         match tmp_file.persist(&cache_path) {
-            Ok(_) => Ok(cache_path),
-            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(cache_path),
+            Ok(_) => Ok(Some(cache_path)),
+            Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
+                Ok(Some(cache_path))
+            }
             Err(err) => Err(io_err_to_error(err.error)),
         }
     }
@@ -298,14 +496,21 @@ impl GixRepo {
                 }
 
                 let repo = self._repo.to_thread_local();
+                let repo_path = to_repo_path(path, &self.spec.workdir)?;
                 let (old, new) = match area {
                     DiffArea::Unstaged => {
-                        let old = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
+                        let old = match gix_index_unconflicted_image_blob_bytes_optional(
+                            &repo, &repo_path,
+                        )? {
                             IndexUnconflictedBlob::Present(bytes) => Some(bytes),
                             IndexUnconflictedBlob::Missing => None,
                             IndexUnconflictedBlob::Unmerged => {
-                                let ours = gix_index_stage_blob_bytes_optional(&repo, path, 2)?;
-                                let theirs = gix_index_stage_blob_bytes_optional(&repo, path, 3)?;
+                                let ours = gix_index_stage_image_blob_bytes_optional(
+                                    &repo, &repo_path, 2,
+                                )?;
+                                let theirs = gix_index_stage_image_blob_bytes_optional(
+                                    &repo, &repo_path, 3,
+                                )?;
                                 return Ok(Some(FileDiffImage {
                                     path: path.clone(),
                                     old: ours,
@@ -313,17 +518,26 @@ impl GixRepo {
                                 }));
                             }
                         };
-                        let new = read_worktree_file_bytes_optional(&self.spec.workdir, path)?;
+                        let new = read_worktree_image_file_bytes_optional(
+                            &self.spec.workdir,
+                            &repo_path,
+                        )?;
                         (old, new)
                     }
                     DiffArea::Staged => {
-                        let old = gix_revision_path_blob_bytes_optional(&repo, "HEAD", path)?;
-                        let new = match gix_index_unconflicted_blob_bytes_optional(&repo, path)? {
+                        let old =
+                            gix_revision_path_image_blob_bytes_optional(&repo, "HEAD", &repo_path)?;
+                        let new = match gix_index_unconflicted_image_blob_bytes_optional(
+                            &repo, &repo_path,
+                        )? {
                             IndexUnconflictedBlob::Present(bytes) => Some(bytes),
                             IndexUnconflictedBlob::Missing => None,
                             IndexUnconflictedBlob::Unmerged => {
-                                gix_index_stage_blob_bytes_optional(&repo, path, 2)?
-                                    .or(gix_index_stage_blob_bytes_optional(&repo, path, 3)?)
+                                gix_index_stage_image_blob_bytes_optional(&repo, &repo_path, 2)?.or(
+                                    gix_index_stage_image_blob_bytes_optional(
+                                        &repo, &repo_path, 3,
+                                    )?,
+                                )
                             }
                         };
                         (old, new)
@@ -345,10 +559,40 @@ impl GixRepo {
                 let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
 
                 let old = match parent {
-                    Some(parent) => gix_revision_path_blob_bytes_optional(&repo, &parent, path)?,
+                    Some(parent) => {
+                        gix_revision_path_image_blob_bytes_optional(&repo, &parent, path)?
+                    }
                     None => None,
                 };
-                let new = gix_revision_path_blob_bytes_optional(&repo, commit_id.as_ref(), path)?;
+                let new =
+                    gix_revision_path_image_blob_bytes_optional(&repo, commit_id.as_ref(), path)?;
+
+                Ok(Some(FileDiffImage {
+                    path: path.clone(),
+                    old,
+                    new,
+                }))
+            }
+            DiffTarget::CommitRange {
+                from_commit_id,
+                to_commit_id,
+                path,
+            } => {
+                let Some(path) = path else {
+                    return Ok(None);
+                };
+
+                let repo = self._repo.to_thread_local();
+                let old = gix_revision_path_image_blob_bytes_optional(
+                    &repo,
+                    from_commit_id.as_ref(),
+                    path,
+                )?;
+                let new = gix_revision_path_image_blob_bytes_optional(
+                    &repo,
+                    to_commit_id.as_ref(),
+                    path,
+                )?;
 
                 Ok(Some(FileDiffImage {
                     path: path.clone(),
@@ -373,9 +617,10 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
+        let repo_path = to_repo_path(path, &self.spec.workdir)?;
         Ok(Some(conflict_file_stages_from_stage_data(
-            path,
-            gix_index_conflict_stage_data(&repo, path)?,
+            &repo_path,
+            gix_index_conflict_stage_data(&repo, &repo_path)?,
         )))
     }
 
@@ -418,21 +663,16 @@ impl GixRepo {
     }
 
     fn synthetic_simple_commit_path_diff(&self, target: &DiffTarget) -> Result<Option<Diff>> {
-        let DiffTarget::Commit {
-            commit_id,
-            path: Some(path),
-        } = target
+        let repo = self._repo.to_thread_local();
+        let Some((path, old_revision, new_revision)) = commit_path_diff_revisions(target, &repo)?
         else {
             return Ok(None);
         };
-
-        let repo = self._repo.to_thread_local();
-        let parent = gix_first_parent_optional(&repo, commit_id.as_ref())?;
-        let old = match parent.as_deref() {
-            Some(parent) => gix_revision_path_blob_entry_optional(&repo, parent, path)?,
+        let old = match old_revision.as_deref() {
+            Some(revision) => gix_revision_path_blob_entry_optional(&repo, revision, &path)?,
             None => None,
         };
-        let new = gix_revision_path_blob_entry_optional(&repo, commit_id.as_ref(), path)?;
+        let new = gix_revision_path_blob_entry_optional(&repo, &new_revision, &path)?;
 
         let (prefix, body_text, blob) = match (old, new) {
             (None, Some(new)) => {
@@ -462,11 +702,37 @@ impl GixRepo {
 
         Ok(Some(build_simple_commit_path_diff(
             target.clone(),
-            path,
+            &path,
             body_text.as_str(),
             prefix,
             &blob,
         )))
+    }
+}
+
+fn commit_path_diff_revisions(
+    target: &DiffTarget,
+    repo: &gix::Repository,
+) -> Result<Option<(std::path::PathBuf, Option<String>, String)>> {
+    match target {
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => Ok(Some((
+            path.clone(),
+            gix_first_parent_optional(repo, commit_id.as_ref())?,
+            commit_id.as_ref().to_string(),
+        ))),
+        DiffTarget::CommitRange {
+            from_commit_id,
+            to_commit_id,
+            path: Some(path),
+        } => Ok(Some((
+            path.clone(),
+            Some(from_commit_id.as_ref().to_string()),
+            to_commit_id.as_ref().to_string(),
+        ))),
+        _ => Ok(None),
     }
 }
 
@@ -492,78 +758,73 @@ fn conflict_file_stages_from_stage_data(
     }
 }
 
-fn to_repo_path(path: &Path, workdir: &Path) -> Result<std::path::PathBuf> {
-    if path.is_absolute() {
-        let relative = path.strip_prefix(workdir).map_err(|_| {
-            Error::new(ErrorKind::Backend(format!(
-                "path '{}' is outside repository workdir '{}'",
-                path.display(),
-                workdir.display()
-            )))
-        })?;
-        Ok(relative.to_path_buf())
+fn to_repo_path(path: &Path, workdir: &Path) -> Result<PathBuf> {
+    if !path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    if let Ok(relative) = path.strip_prefix(workdir) {
+        return Ok(relative.to_path_buf());
+    }
+
+    if let Some(normalized_path) = canonicalize_existing_path_prefix(path)
+        && let Ok(relative) = normalized_path.strip_prefix(workdir)
+    {
+        return Ok(relative.to_path_buf());
+    }
+
+    Err(Error::new(ErrorKind::Backend(format!(
+        "path '{}' is outside repository workdir '{}'",
+        path.display(),
+        workdir.display()
+    ))))
+}
+
+fn canonicalize_existing_path_prefix(path: &Path) -> Option<PathBuf> {
+    let mut missing_components = Vec::new();
+    let mut current = path;
+
+    loop {
+        match current.canonicalize() {
+            Ok(canonical) => {
+                let mut normalized = strip_windows_verbatim_prefix(canonical);
+                for component in missing_components.iter().rev() {
+                    normalized.push(component);
+                }
+                return Some(normalized);
+            }
+            Err(_) => {
+                missing_components.push(current.file_name()?.to_owned());
+                current = current.parent()?;
+            }
+        }
+    }
+}
+
+fn ensure_image_diff_side_size(path: &Path, bytes: u64) -> Result<()> {
+    if bytes > MAX_IMAGE_DIFF_SIDE_BYTES {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "image diff side '{}' is {bytes} bytes, above the {MAX_IMAGE_DIFF_SIDE_BYTES} byte limit",
+            path.display()
+        ))));
+    }
+    Ok(())
+}
+
+fn read_worktree_image_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
+    let full = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        Ok(path.to_path_buf())
-    }
-}
-
-fn read_worktree_file_utf8_optional(workdir: &Path, path: &Path) -> Result<Option<String>> {
-    let full = workdir.join(path);
-    match std::fs::read(&full) {
-        Ok(bytes) => String::from_utf8(bytes)
-            .map(Some)
-            .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8"))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::new(ErrorKind::Io(e.kind()))),
-    }
-}
-
-fn read_worktree_file_utf8_as_git_optional(
-    repo: &gix::Repository,
-    workdir: &Path,
-    path: &Path,
-) -> Result<Option<String>> {
-    let full = workdir.join(path);
+        workdir.join(path)
+    };
     let metadata = match std::fs::metadata(&full) {
-        Ok(metadata) => metadata,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(Error::new(ErrorKind::Io(err.kind()))),
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
     };
-    if !metadata.is_file() {
-        return Ok(None);
-    }
+    ensure_image_diff_side_size(path, metadata.len())?;
 
-    let (mut pipeline, index) = repo.filter_pipeline(None).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "gix worktree filter pipeline: {e}"
-        )))
-    })?;
-    let file = std::fs::File::open(&full).map_err(io_err_to_error)?;
-    let normalized = pipeline.convert_to_git(file, path, &index).map_err(|e| {
-        Error::new(ErrorKind::Backend(format!(
-            "gix worktree-to-git conversion: {e}"
-        )))
-    })?;
-
-    let bytes = match normalized {
-        gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf).map_err(io_err_to_error)?;
-            buf
-        }
-        gix::filter::plumbing::pipeline::convert::ToGitOutcome::Process(mut file) => {
-            let mut buf = Vec::new();
-            file.read_to_end(&mut buf).map_err(io_err_to_error)?;
-            buf
-        }
-        gix::filter::plumbing::pipeline::convert::ToGitOutcome::Buffer(buf) => buf.to_vec(),
-    };
-
-    decode_utf8_bytes(bytes).map(Some)
-}
-
-fn read_worktree_file_bytes_optional(workdir: &Path, path: &Path) -> Result<Option<Vec<u8>>> {
-    let full = workdir.join(path);
     match std::fs::read(&full) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -617,10 +878,6 @@ fn decode_utf8_bytes(bytes: Vec<u8>) -> Result<String> {
         .map_err(|_| Error::new(ErrorKind::Unsupported("file is not valid UTF-8")))
 }
 
-fn decode_utf8_bytes_optional(bytes: Option<Vec<u8>>) -> Result<Option<String>> {
-    bytes.map(decode_utf8_bytes).transpose()
-}
-
 fn gix_blob_bytes_from_object_id_optional(
     repo: &gix::Repository,
     object_id: gix::ObjectId,
@@ -636,6 +893,34 @@ fn gix_blob_bytes_from_object_id_optional(
         Ok(mut blob) => Some(blob.take_data()),
         Err(_) => None,
     })
+}
+
+fn gix_object_id_is_blob(repo: &gix::Repository, object_id: gix::ObjectId) -> Result<bool> {
+    let Some(header) = repo
+        .try_find_header(object_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_header: {e}"))))?
+    else {
+        return Ok(false);
+    };
+    Ok(header.kind() == gix::objs::Kind::Blob)
+}
+
+fn gix_image_blob_bytes_from_object_id_optional(
+    repo: &gix::Repository,
+    object_id: gix::ObjectId,
+    path: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let Some(header) = repo
+        .try_find_header(object_id)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix try_find_header: {e}"))))?
+    else {
+        return Ok(None);
+    };
+    if header.kind() != gix::objs::Kind::Blob {
+        return Ok(None);
+    }
+    ensure_image_diff_side_size(path, header.size())?;
+    gix_blob_bytes_from_object_id_optional(repo, object_id)
 }
 
 fn gix_revision_id_optional(
@@ -670,34 +955,6 @@ fn gix_revision_id_optional(
     Ok(Some(id))
 }
 
-fn gix_revision_path_blob_bytes_optional(
-    repo: &gix::Repository,
-    revision: &str,
-    path: &Path,
-) -> Result<Option<Vec<u8>>> {
-    let Some(object_id) = gix_revision_id_optional(repo, revision)? else {
-        return Ok(None);
-    };
-
-    let object = match repo.find_object(object_id) {
-        Ok(object) => object,
-        Err(_) => return Ok(None),
-    };
-    let tree = match object.peel_to_tree() {
-        Ok(tree) => tree,
-        Err(_) => return Ok(None),
-    };
-
-    let Some(entry) = tree
-        .lookup_entry_by_path(path)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix lookup_entry_by_path: {e}"))))?
-    else {
-        return Ok(None);
-    };
-
-    gix_blob_bytes_from_object_id_optional(repo, entry.object_id())
-}
-
 fn gix_revision_path_blob_object_id_optional(
     repo: &gix::Repository,
     revision: &str,
@@ -724,6 +981,17 @@ fn gix_revision_path_blob_object_id_optional(
     };
 
     Ok(Some(entry.object_id()))
+}
+
+fn gix_revision_path_image_blob_bytes_optional(
+    repo: &gix::Repository,
+    revision: &str,
+    path: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let Some(object_id) = gix_revision_path_blob_object_id_optional(repo, revision, path)? else {
+        return Ok(None);
+    };
+    gix_image_blob_bytes_from_object_id_optional(repo, object_id, path)
 }
 
 fn gix_revision_path_blob_entry_optional(
@@ -762,7 +1030,7 @@ fn gix_revision_path_blob_entry_optional(
     }))
 }
 
-fn gix_index_unconflicted_blob_bytes_optional(
+fn gix_index_unconflicted_image_blob_bytes_optional(
     repo: &gix::Repository,
     path: &Path,
 ) -> Result<IndexUnconflictedBlob> {
@@ -770,20 +1038,21 @@ fn gix_index_unconflicted_blob_bytes_optional(
         .index_or_load_from_head_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
 
-    let path = gix::path::os_str_into_bstr(path.as_os_str())
+    let path_key = gix::path::os_str_into_bstr(path.as_os_str())
         .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
 
-    if let Some(entry) = index.entry_by_path_and_stage(path, gix::index::entry::Stage::Unconflicted)
+    if let Some(entry) =
+        index.entry_by_path_and_stage(path_key, gix::index::entry::Stage::Unconflicted)
     {
         return Ok(
-            match gix_blob_bytes_from_object_id_optional(repo, entry.id)? {
+            match gix_image_blob_bytes_from_object_id_optional(repo, entry.id, path)? {
                 Some(bytes) => IndexUnconflictedBlob::Present(bytes),
                 None => IndexUnconflictedBlob::Missing,
             },
         );
     }
 
-    if index.entry_range(path).is_some() {
+    if index.entry_range(path_key).is_some() {
         return Ok(IndexUnconflictedBlob::Unmerged);
     }
 
@@ -813,6 +1082,17 @@ fn gix_index_unconflicted_blob_id_optional(
     Ok(IndexUnconflictedBlobId::Missing)
 }
 
+fn gix_index_stage_image_blob_bytes_optional(
+    repo: &gix::Repository,
+    path: &Path,
+    stage: u8,
+) -> Result<Option<Vec<u8>>> {
+    let Some(object_id) = gix_index_stage_object_id_optional(repo, path, stage)? else {
+        return Ok(None);
+    };
+    gix_image_blob_bytes_from_object_id_optional(repo, object_id, path)
+}
+
 fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path::PathBuf> {
     let full = if path.is_absolute() {
         path.to_path_buf()
@@ -823,6 +1103,74 @@ fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path:
         .ok()
         .filter(|metadata| metadata.is_file())
         .map(|_| full)
+}
+
+fn copy_and_hash(
+    reader: &mut impl Read,
+    writer: &mut impl Write,
+    hasher: &mut rustc_hash::FxHasher,
+) -> Result<()> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(io_err_to_error)?;
+        if read == 0 {
+            return Ok(());
+        }
+        buffer[..read].hash(hasher);
+        writer.write_all(&buffer[..read]).map_err(io_err_to_error)?;
+    }
+}
+
+fn persist_worktree_git_cache_file(
+    tmp_file: tempfile::NamedTempFile,
+    cache_path: &Path,
+) -> Result<()> {
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
+    }
+    match tmp_file.persist(cache_path) {
+        Ok(_) => Ok(()),
+        Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let tmp_file = err.file;
+            std::fs::remove_file(cache_path).map_err(io_err_to_error)?;
+            tmp_file
+                .persist(cache_path)
+                .map(|_| ())
+                .map_err(|err| io_err_to_error(err.error))
+        }
+        Err(err) => Err(io_err_to_error(err.error)),
+    }
+}
+
+fn hash_worktree_source_identity(
+    hasher: &mut rustc_hash::FxHasher,
+    workdir: &Path,
+    logical_path: &Path,
+    normalized_content_hash: u64,
+) {
+    workdir.hash(hasher);
+    logical_path.hash(hasher);
+    normalized_content_hash.hash(hasher);
+}
+
+fn worktree_source_identity(
+    workdir: &Path,
+    logical_path: &Path,
+    normalized_content_hash: u64,
+) -> String {
+    let mut hasher = rustc_hash::FxHasher::default();
+    hash_worktree_source_identity(&mut hasher, workdir, logical_path, normalized_content_hash);
+    format!("{:016x}", hasher.finish())
+}
+
+fn worktree_git_cache_path(logical_path: &Path, identity: &str) -> std::path::PathBuf {
+    let suffix = logical_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| format!(".{ext}"))
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!("gitcomet-diff-worktree-{identity}{suffix}"))
 }
 
 fn preview_blob_cache_path(
@@ -974,5 +1322,132 @@ fn unified_body_line_count(text: &str) -> usize {
             .filter(|&&byte| byte == b'\n')
             .count()
             + usize::from(!text.ends_with('\n'))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    use gitcomet_core::error::ErrorKind;
+    use std::process::Command;
+
+    fn run_git(workdir: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(workdir)
+            .args(args)
+            .output()
+            .expect("git command to run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn init_test_repo(workdir: &Path) {
+        run_git(workdir, &["init"]);
+        run_git(workdir, &["config", "commit.gpgsign", "false"]);
+        run_git(workdir, &["config", "user.name", "Test User"]);
+        run_git(workdir, &["config", "user.email", "test@example.com"]);
+    }
+
+    fn open_repo(workdir: &Path) -> GixRepo {
+        let thread_safe_repo = gix::open(workdir).expect("open repo").into_sync();
+        GixRepo::new(workdir.to_path_buf(), thread_safe_repo)
+    }
+
+    #[test]
+    fn read_worktree_image_file_bytes_rejects_oversized_file_before_reading() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("large.png");
+        let file = std::fs::File::create(&path).expect("create sparse image");
+        file.set_len(MAX_IMAGE_DIFF_SIDE_BYTES + 1)
+            .expect("make sparse image oversized");
+
+        let err = read_worktree_image_file_bytes_optional(tmp.path(), Path::new("large.png"))
+            .expect_err("oversized image should fail");
+
+        let ErrorKind::Backend(message) = err.kind() else {
+            panic!("expected backend size-limit error, got {err:?}");
+        };
+        assert!(message.contains("image diff side"));
+        assert!(message.contains("byte limit"));
+    }
+
+    #[test]
+    fn read_worktree_image_file_bytes_allows_file_at_size_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bytes = vec![7; MAX_IMAGE_DIFF_SIDE_BYTES as usize];
+        std::fs::write(tmp.path().join("limit.png"), &bytes).expect("write image at limit");
+
+        let loaded = read_worktree_image_file_bytes_optional(tmp.path(), Path::new("limit.png"))
+            .expect("load image at limit")
+            .expect("image at limit");
+
+        assert_eq!(loaded, bytes);
+    }
+
+    #[test]
+    fn worktree_source_identity_changes_with_normalized_content_hash() {
+        let workdir = Path::new("/tmp/repo");
+        let path = Path::new("src/lib.rs");
+
+        let first = worktree_source_identity(workdir, path, 0x11);
+        let second = worktree_source_identity(workdir, path, 0x22);
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn persist_worktree_git_cache_file_replaces_existing_cache_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("gitcomet-diff-worktree-test.txt");
+        std::fs::write(&cache_path, b"old normalized content").expect("write stale cache");
+
+        let mut replacement = tempfile::NamedTempFile::new_in(tmp.path()).expect("temp file");
+        replacement
+            .write_all(b"new normalized content")
+            .expect("write replacement cache");
+        replacement.flush().expect("flush replacement cache");
+
+        persist_worktree_git_cache_file(replacement, &cache_path)
+            .expect("replace stale normalized cache file");
+
+        assert_eq!(
+            std::fs::read(&cache_path).expect("read replaced cache"),
+            b"new normalized content"
+        );
+    }
+
+    #[test]
+    fn diff_file_text_for_staged_gitlink_returns_empty_sources() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        run_git(
+            tmp.path(),
+            &[
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000,1111111111111111111111111111111111111111,vendor/sub",
+            ],
+        );
+
+        let repo = open_repo(tmp.path());
+        let diff = repo
+            .diff_file_text_impl(&DiffTarget::WorkingTree {
+                path: "vendor/sub".into(),
+                area: DiffArea::Staged,
+            })
+            .expect("gitlink text diff should not error")
+            .expect("file diff text object");
+
+        assert_eq!(diff.path, Path::new("vendor/sub"));
+        assert!(diff.old_source.is_none());
+        assert!(diff.new_source.is_none());
     }
 }

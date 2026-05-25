@@ -14,19 +14,15 @@ pub struct StoreReducerDiagnostics {
 
 impl StoreReducerDiagnostics {
     pub fn average_reducer_nanos(self) -> u64 {
-        if self.dispatch_count == 0 {
-            0
-        } else {
-            self.reducer_total_nanos / self.dispatch_count
-        }
+        self.reducer_total_nanos
+            .checked_div(self.dispatch_count)
+            .unwrap_or(0)
     }
 
     pub fn average_clone_on_write_nanos(self) -> u64 {
-        if self.clone_on_write_count == 0 {
-            0
-        } else {
-            self.clone_on_write_total_nanos / self.clone_on_write_count
-        }
+        self.clone_on_write_total_nanos
+            .checked_div(self.clone_on_write_count)
+            .unwrap_or(0)
     }
 }
 

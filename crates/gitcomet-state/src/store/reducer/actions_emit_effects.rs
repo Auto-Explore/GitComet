@@ -4,12 +4,15 @@ use super::util::{
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, Loadable, RepoId, RepoState};
+use crate::model::{AppState, Loadable, RepoId, RepoLoadsInFlight, RepoState};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
+use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
-use gitcomet_core::domain::FileConflictKind;
+use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::{CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{
+    CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -149,6 +152,31 @@ pub(super) fn update_submodules(
     }]
 }
 
+pub(super) fn load_submodule(
+    repo_id: RepoId,
+    path: PathBuf,
+    approved_sources: Vec<gitcomet_core::services::SubmoduleTrustTarget>,
+) -> Vec<Effect> {
+    vec![Effect::LoadSubmodule {
+        repo_id,
+        path,
+        approved_sources,
+        auth: None,
+    }]
+}
+
+pub(super) fn change_submodule_pointer(
+    repo_id: RepoId,
+    path: PathBuf,
+    reference: String,
+) -> Vec<Effect> {
+    vec![Effect::ChangeSubmodulePointer {
+        repo_id,
+        path,
+        reference,
+    }]
+}
+
 pub(super) fn remove_submodule(repo_id: RepoId, path: PathBuf) -> Vec<Effect> {
     vec![Effect::RemoveSubmodule { repo_id, path }]
 }
@@ -203,6 +231,17 @@ pub(super) fn commit_amend(repo_id: RepoId, message: String) -> Vec<Effect> {
     vec![Effect::CommitAmend {
         repo_id,
         message,
+        auth: None,
+    }]
+}
+
+pub(super) fn safe_push_after_commit(
+    repo_id: RepoId,
+    context: gitcomet_core::services::SafePushAfterCommitContext,
+) -> Vec<Effect> {
+    vec![Effect::SafePushAfterCommit {
+        repo_id,
+        context,
         auth: None,
     }]
 }
@@ -320,6 +359,33 @@ pub(super) fn push(
     }]
 }
 
+pub(super) fn push_after_commit(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+) -> Vec<Effect> {
+    push_after_commit_with_auth(repos, state, repo_id, target, set_upstream, None)
+}
+
+fn push_after_commit_with_auth(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    target: SafePushAfterCommitTarget,
+    set_upstream: bool,
+    auth: Option<StagedGitAuth>,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::PushAfterCommit {
+        repo_id,
+        target,
+        set_upstream,
+        auth,
+    }]
+}
+
 pub(super) fn force_push(
     repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
@@ -328,6 +394,20 @@ pub(super) fn force_push(
     bump_in_flight(repos, state, repo_id, InFlightKind::Push);
     vec![Effect::ForcePush {
         repo_id,
+        auth: None,
+    }]
+}
+
+pub(super) fn force_push_with_lease(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    lease: gitcomet_core::services::ForcePushLease,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::ForcePushWithLease {
+        repo_id,
+        lease,
         auth: None,
     }]
 }
@@ -530,10 +610,13 @@ pub(super) fn commit_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
-            repo_state.diff_state.diff_target = None;
+            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
+            repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -580,10 +663,13 @@ pub(super) fn commit_amend_finished(
         Ok(()) => {
             repo_state.last_error = None;
             clear_banner = true;
-            repo_state.diff_state.diff_target = None;
+            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
+            repo_state.set_diff_target(None);
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             push_action_log(
@@ -614,6 +700,63 @@ pub(super) fn commit_amend_finished(
     refresh_primary_effects(repo_state)
 }
 
+pub(super) fn safe_push_after_commit_finished(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
+    result: std::result::Result<gitcomet_core::services::SafePushAfterCommitDecision, Error>,
+) -> Vec<Effect> {
+    match result {
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::Push { target }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.pending_force_push_lease = None;
+            }
+            push_after_commit_with_auth(repos, state, repo_id, target, false, auth)
+        }
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::PushSetUpstream { target }) => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.pending_force_push_lease = None;
+            }
+            push_after_commit_with_auth(repos, state, repo_id, target, true, auth)
+        }
+        Ok(gitcomet_core::services::SafePushAfterCommitDecision::Blocked { summary, lease }) => {
+            let git_log_settings = state.git_log_settings;
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            let full_summary = format!("Push after commit blocked: {summary}");
+            repo_state.pending_force_push_lease = lease;
+            repo_state.last_error = Some(full_summary.clone());
+            push_action_log(
+                repo_state,
+                false,
+                "Push after commit".to_string(),
+                full_summary,
+                None,
+            );
+            refresh_full_effects(repo_state, git_log_settings)
+        }
+        Err(e) => {
+            let git_log_settings = state.git_log_settings;
+            let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+                return Vec::new();
+            };
+            repo_state.pending_force_push_lease = None;
+            let summary = format_failure_summary("Push after commit", &e);
+            repo_state.last_error = Some(summary.clone());
+            push_action_log(
+                repo_state,
+                false,
+                "Push after commit".to_string(),
+                summary,
+                Some(&e),
+            );
+            refresh_full_effects(repo_state, git_log_settings)
+        }
+    }
+}
+
 fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
     matches!(
         command,
@@ -640,11 +783,62 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }
+            | RepoCommandKind::LoadSubmodule { .. }
+            | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
             | RepoCommandKind::StageHunk
             | RepoCommandKind::UnstageHunk
             | RepoCommandKind::ApplyWorktreePatch { .. }
     )
+}
+
+fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
+    matches!(
+        command,
+        RepoCommandKind::Pull { .. }
+            | RepoCommandKind::PullBranch { .. }
+            | RepoCommandKind::MergeRef { .. }
+            | RepoCommandKind::SquashRef { .. }
+            | RepoCommandKind::Push
+            | RepoCommandKind::PushAfterCommit { .. }
+            | RepoCommandKind::ForcePush
+            | RepoCommandKind::ForcePushWithLease { .. }
+            | RepoCommandKind::PushSetUpstream { .. }
+            | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::Rebase { .. }
+            | RepoCommandKind::RebaseContinue
+            | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::MergeAbort
+    )
+}
+
+fn changed_submodule_path(command: &RepoCommandKind) -> Option<&std::path::Path> {
+    match command {
+        RepoCommandKind::LoadSubmodule { path, .. }
+        | RepoCommandKind::ChangeSubmodulePointer { path, .. } => Some(path.as_path()),
+        _ => None,
+    }
+}
+
+fn selected_submodule_target_changed_by_command(
+    repo_state: &RepoState,
+    command: &RepoCommandKind,
+) -> Option<DiffTarget> {
+    let target = repo_state.diff_state.diff_target.as_ref()?;
+    let DiffTarget::WorkingTree { path, .. } = target else {
+        return None;
+    };
+    if let Some(changed_path) = changed_submodule_path(command) {
+        if path.as_path() != changed_path {
+            return None;
+        }
+    } else if !matches!(command, RepoCommandKind::UpdateSubmodules { .. }) {
+        return None;
+    }
+
+    let summary_is_active = !matches!(repo_state.diff_state.submodule_summary, Loadable::NotLoaded);
+    (summary_is_active || selected_diff_load_plan(repo_state, target).load_submodule_summary)
+        .then(|| target.clone())
 }
 
 pub(super) fn repo_command_finished(
@@ -663,6 +857,8 @@ pub(super) fn repo_command_finished(
         &command,
         RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }
+            | RepoCommandKind::LoadSubmodule { .. }
+            | RepoCommandKind::ChangeSubmodulePointer { .. }
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
@@ -683,7 +879,9 @@ pub(super) fn repo_command_finished(
             repo_state.bump_ops_rev();
         }
         RepoCommandKind::Push
+        | RepoCommandKind::PushAfterCommit { .. }
         | RepoCommandKind::ForcePush
+        | RepoCommandKind::ForcePushWithLease { .. }
         | RepoCommandKind::PushSetUpstream { .. }
         | RepoCommandKind::DeleteRemoteBranch { .. }
         | RepoCommandKind::PushTag { .. }
@@ -712,6 +910,10 @@ pub(super) fn repo_command_finished(
         Ok(output) => {
             repo_state.last_error = None;
             clear_banner = true;
+            if command_clears_pending_force_push_lease(&command) {
+                repo_state.pending_force_push_lease = None;
+            }
+            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }
@@ -720,10 +922,12 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::RebaseAbort
                     | RepoCommandKind::MergeAbort
             ) {
-                repo_state.diff_state.diff_target = None;
+                repo_state.set_diff_target(None);
                 repo_state.diff_state.diff = Loadable::NotLoaded;
                 repo_state.diff_state.diff_file = Loadable::NotLoaded;
                 repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+                repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+                repo_state.diff_state.inline_submodule_diff = None;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
@@ -751,9 +955,23 @@ pub(super) fn repo_command_finished(
         repo_state.set_worktrees(Loadable::Loading);
         extra_effects.push(Effect::LoadWorktrees { repo_id });
     }
+    if command_succeeded
+        && let Some(target) = selected_submodule_target_changed_by_command(repo_state, &command)
+    {
+        let load_plan = selected_diff_load_plan(repo_state, &target);
+        apply_selected_diff_load_plan_state(repo_state, load_plan);
+        repo_state.diff_state.inline_submodule_diff = None;
+        repo_state.bump_diff_state_rev();
+        extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
+    }
     if refresh_submodules {
         repo_state.set_submodules(Loadable::Loading);
-        extra_effects.push(Effect::LoadSubmodules { repo_id });
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::SUBMODULES)
+        {
+            extra_effects.push(Effect::LoadSubmodules { repo_id });
+        }
     }
     if matches!(
         &command,
@@ -766,6 +984,8 @@ pub(super) fn repo_command_finished(
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+            repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             match conflict_target {

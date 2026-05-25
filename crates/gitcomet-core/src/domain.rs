@@ -45,11 +45,45 @@ pub struct Commit {
     pub time: SystemTime,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum LogScope {
-    CurrentBranch,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecentCommitMessage {
+    pub id: CommitId,
+    pub summary: Arc<str>,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+pub enum HistoryMode {
+    #[default]
+    FullReachable,
+    FirstParent,
+    NoMerges,
+    MergesOnly,
     AllBranches,
 }
+
+impl HistoryMode {
+    #[allow(non_upper_case_globals)]
+    pub const CurrentBranch: Self = Self::FirstParent;
+
+    pub fn is_all_branches(self) -> bool {
+        matches!(self, Self::AllBranches)
+    }
+
+    pub fn is_current_branch_mode(self) -> bool {
+        !self.is_all_branches()
+    }
+
+    pub fn guarantees_head_visibility(self) -> bool {
+        matches!(self, Self::FullReachable | Self::FirstParent)
+    }
+
+    pub fn uses_first_parent_pagination(self) -> bool {
+        matches!(self, Self::FirstParent)
+    }
+}
+
+pub type LogScope = HistoryMode;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommitDetails {
@@ -64,6 +98,7 @@ pub struct CommitDetails {
 pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
+    pub is_submodule: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -152,7 +187,8 @@ impl SubmoduleStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Submodule {
     pub path: PathBuf,
-    pub head: CommitId,
+    pub recorded_head: CommitId,
+    pub checked_out_head: Option<CommitId>,
     pub status: SubmoduleStatus,
 }
 
@@ -179,6 +215,49 @@ pub struct FileStatus {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub conflict: Option<FileConflictKind>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleInnerChange {
+    pub path: PathBuf,
+    pub kind: FileStatusKind,
+    pub additions: Option<u32>,
+    pub deletions: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleDiffSummaryMode {
+    Worktree,
+    CommitHistory,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleDiffRangeKind {
+    StagedPointer,
+    UnstagedPointer,
+    CommitHistory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleDiffRange {
+    pub kind: SubmoduleDiffRangeKind,
+    pub from: Option<CommitId>,
+    pub to: Option<CommitId>,
+    pub changes: Vec<SubmoduleInnerChange>,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubmoduleDiffSummary {
+    pub path: PathBuf,
+    pub mode: SubmoduleDiffSummaryMode,
+    pub status: Option<SubmoduleStatus>,
+    pub commit_id: Option<CommitId>,
+    pub parent_commit_id: Option<CommitId>,
+    pub checked_out_head: Option<CommitId>,
+    pub ranges: Vec<SubmoduleDiffRange>,
+    pub live_staged: Vec<SubmoduleInnerChange>,
+    pub live_unstaged: Vec<SubmoduleInnerChange>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -212,6 +291,11 @@ pub enum DiffTarget {
     },
     Commit {
         commit_id: CommitId,
+        path: Option<PathBuf>,
+    },
+    CommitRange {
+        from_commit_id: CommitId,
+        to_commit_id: CommitId,
         path: Option<PathBuf>,
     },
 }
@@ -348,8 +432,46 @@ impl From<SharedLineText> for Arc<str> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileDiffTextSource {
+    pub path: PathBuf,
+    pub identity: Arc<str>,
+}
+
+impl FileDiffTextSource {
+    pub fn new(path: PathBuf) -> Self {
+        let identity = Self::filesystem_identity(&path);
+        Self { path, identity }
+    }
+
+    pub fn with_identity(path: PathBuf, identity: impl Into<Arc<str>>) -> Self {
+        Self {
+            path,
+            identity: identity.into(),
+        }
+    }
+
+    fn filesystem_identity(path: &std::path::Path) -> Arc<str> {
+        let mut hasher = FxHasher::default();
+        path.hash(&mut hasher);
+        if let Ok(metadata) = std::fs::metadata(path) {
+            metadata.len().hash(&mut hasher);
+            metadata.is_file().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified()
+                && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+            {
+                duration.as_secs().hash(&mut hasher);
+                duration.subsec_nanos().hash(&mut hasher);
+            }
+        }
+        Arc::from(format!("{:016x}", hasher.finish()))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileDiffText {
     pub path: PathBuf,
+    pub old_source: Option<FileDiffTextSource>,
+    pub new_source: Option<FileDiffTextSource>,
     pub old: Option<Arc<str>>,
     pub new: Option<Arc<str>>,
     content_signature: u64,
@@ -362,11 +484,35 @@ impl FileDiffText {
 
     pub fn new_shared(path: PathBuf, old: Option<Arc<str>>, new: Option<Arc<str>>) -> Self {
         let content_signature =
-            Self::content_signature_for_parts(&path, old.as_deref(), new.as_deref());
+            Self::content_signature_for_parts(&path, None, None, old.as_deref(), new.as_deref());
         Self {
             path,
+            old_source: None,
+            new_source: None,
             old,
             new,
+            content_signature,
+        }
+    }
+
+    pub fn new_sources(
+        path: PathBuf,
+        old_source: Option<FileDiffTextSource>,
+        new_source: Option<FileDiffTextSource>,
+    ) -> Self {
+        let content_signature = Self::content_signature_for_parts(
+            &path,
+            old_source.as_ref(),
+            new_source.as_ref(),
+            None,
+            None,
+        );
+        Self {
+            path,
+            old_source,
+            new_source,
+            old: None,
+            new: None,
             content_signature,
         }
     }
@@ -377,11 +523,19 @@ impl FileDiffText {
 
     fn content_signature_for_parts(
         path: &std::path::Path,
+        old_source: Option<&FileDiffTextSource>,
+        new_source: Option<&FileDiffTextSource>,
         old: Option<&str>,
         new: Option<&str>,
     ) -> u64 {
         let mut hasher = FxHasher::default();
         path.hash(&mut hasher);
+        old_source
+            .map(|source| (&source.path, &source.identity))
+            .hash(&mut hasher);
+        new_source
+            .map(|source| (&source.path, &source.identity))
+            .hash(&mut hasher);
         old.hash(&mut hasher);
         new.hash(&mut hasher);
         hasher.finish()
@@ -641,6 +795,10 @@ pub struct LogCursor {
     /// treat this as an opaque optimization and fall back to `last_seen`
     /// semantics when it is absent.
     pub resume_from: Option<CommitId>,
+    /// Optional backend-provided opaque token for resuming more complex walks.
+    /// Consumers must treat this as an implementation detail and fall back to
+    /// `last_seen` semantics when it is absent or stale.
+    pub resume_token: Option<Arc<str>>,
 }
 
 #[cfg(test)]
@@ -830,12 +988,14 @@ diff --git a/src/lib.rs b/src/lib.rs\n\
         let cursor = LogCursor {
             last_seen: CommitId("deadbeef".into()),
             resume_from: Some(CommitId("feedface".into())),
+            resume_token: Some(Arc::from("cursor-token")),
         };
         assert_eq!(cursor.last_seen.as_ref(), "deadbeef");
         assert_eq!(
             cursor.resume_from.as_ref().map(AsRef::as_ref),
             Some("feedface")
         );
+        assert_eq!(cursor.resume_token.as_deref(), Some("cursor-token"));
     }
 
     #[test]

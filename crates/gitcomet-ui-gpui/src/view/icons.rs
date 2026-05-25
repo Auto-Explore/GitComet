@@ -1,5 +1,7 @@
 use gpui::{Animation, AnimationExt, ElementId, IntoElement, Pixels, Styled, Transformation};
 
+pub(in crate::view) const STASH_ICON_PATH: &str = "icons/stash.svg";
+
 pub(super) fn svg_icon(path: &'static str, color: gpui::Rgba, size: Pixels) -> gpui::Svg {
     gpui::svg()
         .path(path)

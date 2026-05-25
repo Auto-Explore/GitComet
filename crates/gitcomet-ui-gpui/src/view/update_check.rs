@@ -1,7 +1,13 @@
 use super::*;
+#[cfg(not(test))]
+use futures::{AsyncReadExt, future};
+#[cfg(not(test))]
+use http_client::{AsyncBody, HttpClient, HttpRequestExt, RedirectPolicy, Request};
 use semver::Version;
 #[cfg(not(test))]
 use serde::Deserialize;
+#[cfg(not(test))]
+use std::sync::Arc;
 
 const UPDATE_CHECK_DISABLE_ENV: &str = "GITCOMET_NO_UPDATE_CHECK";
 #[cfg(not(test))]
@@ -45,10 +51,17 @@ impl GitCometView {
         let _ = cx;
 
         #[cfg(not(test))]
+        let http_client = cx.http_client();
+
+        #[cfg(not(test))]
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                let notice =
-                    fetch_update_notice(env!("CARGO_PKG_VERSION"), resolve_update_repo()).await;
+                let notice = fetch_update_notice(
+                    env!("CARGO_PKG_VERSION"),
+                    resolve_update_repo(),
+                    http_client,
+                )
+                .await;
                 let Some(notice) = notice else {
                     return;
                 };
@@ -75,34 +88,50 @@ impl GitCometView {
 async fn fetch_update_notice(
     current_version: &'static str,
     repo: GitHubRepo,
-) -> Option<UpdateNotice> {
-    smol::unblock(move || fetch_update_notice_blocking(current_version, repo)).await
-}
-
-#[cfg(not(test))]
-fn fetch_update_notice_blocking(
-    current_version: &'static str,
-    repo: GitHubRepo,
+    http_client: Arc<dyn HttpClient>,
 ) -> Option<UpdateNotice> {
     const UPDATE_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
 
+    match future::select(
+        Box::pin(fetch_update_notice_with_client(
+            current_version,
+            repo,
+            http_client,
+        )),
+        Box::pin(smol::Timer::after(UPDATE_CHECK_TIMEOUT)),
+    )
+    .await
+    {
+        future::Either::Left((notice, _)) => notice,
+        future::Either::Right((_, _)) => None,
+    }
+}
+
+#[cfg(not(test))]
+async fn fetch_update_notice_with_client(
+    current_version: &'static str,
+    repo: GitHubRepo,
+    http_client: Arc<dyn HttpClient>,
+) -> Option<UpdateNotice> {
     let user_agent = format!(
         "GitComet/{current_version} (+{})",
         env!("CARGO_PKG_REPOSITORY")
     );
-    let client = reqwest::blocking::Client::builder()
-        .timeout(UPDATE_CHECK_TIMEOUT)
-        .build()
+    let request = Request::get(repo.releases_latest_api_url())
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", user_agent)
+        .follow_redirects(RedirectPolicy::FollowAll)
+        .body(AsyncBody::empty())
         .ok()?;
 
-    let release: GitHubRelease = client
-        .get(repo.releases_latest_api_url())
-        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
-        .header(reqwest::header::USER_AGENT, user_agent)
-        .send()
-        .ok()
-        .and_then(|response| response.error_for_status().ok())
-        .and_then(|response| response.json::<GitHubRelease>().ok())?;
+    let mut response = http_client.send(request).await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let mut body = Vec::new();
+    response.body_mut().read_to_end(&mut body).await.ok()?;
+    let release = serde_json::from_slice::<GitHubRelease>(&body).ok()?;
 
     build_update_notice(current_version, &release, &repo)
 }

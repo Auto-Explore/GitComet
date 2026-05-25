@@ -18,10 +18,16 @@ impl GixRepo {
         selected.extend(paths.iter().copied());
 
         let mut checkout_paths: Vec<&Path> = Vec::with_capacity(paths.len());
+        let mut submodule_update_paths: Vec<&Path> = Vec::with_capacity(paths.len());
         let mut clean_paths: Vec<&Path> = Vec::with_capacity(paths.len());
         let mut unstaged_selected: HashSet<&Path> =
             HashSet::with_capacity_and_hasher(paths.len(), Default::default());
         let mut has_conflicts = false;
+        let submodule_paths: HashSet<std::path::PathBuf> = self
+            .list_submodules_impl()?
+            .into_iter()
+            .map(|submodule| submodule.path)
+            .collect();
 
         for entry in &status.unstaged {
             let path = entry.path.as_path();
@@ -33,6 +39,7 @@ impl GixRepo {
             match entry.kind {
                 FileStatusKind::Conflicted => has_conflicts = true,
                 FileStatusKind::Untracked => clean_paths.push(path),
+                _ if submodule_paths.contains(path) => submodule_update_paths.push(path),
                 _ => checkout_paths.push(path),
             }
         }
@@ -74,6 +81,17 @@ impl GixRepo {
                 "git clean -fd",
                 &["clean", "-fd"],
                 &clean_paths,
+            )?;
+        }
+        if !submodule_update_paths.is_empty() {
+            // `git checkout -- <submodule>` does not reliably move the nested HEAD back to the
+            // superproject-recorded commit. Use a path-scoped submodule update instead so discard
+            // actually checks out the recorded pointer again.
+            run_git_simple_with_paths(
+                &self.spec.workdir,
+                "git submodule update --checkout --force",
+                &["submodule", "update", "--checkout", "--force"],
+                &submodule_update_paths,
             )?;
         }
         if !checkout_paths.is_empty() {

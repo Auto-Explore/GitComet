@@ -1,5 +1,6 @@
 use super::super::conflict_resolver;
 use super::canvas::keyed_canvas;
+use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
 use super::*;
 use gpui::{
     App, Bounds, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle, Window, fill,
@@ -50,12 +51,13 @@ pub(super) fn split_conflict_row_canvas(
     right_text: SharedString,
     left_styled: Option<&CachedDiffStyledText>,
     right_styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
     chunk_context: Option<ConflictChunkContext>,
 ) -> AnyElement {
-    let left_prepared = prepare_conflict_text_for_canvas(left_text, left_styled, show_whitespace);
+    let left_prepared =
+        prepare_conflict_text_for_canvas(left_text, left_styled, reveal_whitespace_chars);
     let right_prepared =
-        prepare_conflict_text_for_canvas(right_text, right_styled, show_whitespace);
+        prepare_conflict_text_for_canvas(right_text, right_styled, reveal_whitespace_chars);
 
     keyed_canvas(
         ("conflict_resolver_split_row_canvas", visible_row_ix),
@@ -219,12 +221,12 @@ pub(super) fn single_column_conflict_canvas(
     fg: gpui::Rgba,
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
     chunk_context: Option<ConflictChunkContext>,
     chunk_menu_prefix: &'static str,
     is_three_way: bool,
 ) -> AnyElement {
-    let prepared = prepare_conflict_text_for_canvas(text, styled, show_whitespace);
+    let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
 
     keyed_canvas(
         (id_prefix, visible_row_ix),
@@ -317,11 +319,11 @@ struct PreparedConflictText {
 fn prepare_conflict_text_for_canvas(
     text: SharedString,
     styled: Option<&CachedDiffStyledText>,
-    show_whitespace: bool,
+    reveal_whitespace_chars: bool,
 ) -> PreparedConflictText {
     let Some(styled) = styled else {
-        let display = if show_whitespace {
-            whitespace_visible_text(text.as_ref())
+        let display = if reveal_whitespace_chars {
+            whitespace_visible_line_text(text.as_ref())
         } else {
             text
         };
@@ -334,8 +336,8 @@ fn prepare_conflict_text_for_canvas(
     };
 
     if styled.highlights.is_empty() {
-        let display = if show_whitespace {
-            whitespace_visible_text(styled.text.as_ref())
+        let display = if reveal_whitespace_chars {
+            whitespace_visible_line_text(text.as_ref())
         } else {
             styled.text.clone()
         };
@@ -347,21 +349,13 @@ fn prepare_conflict_text_for_canvas(
         };
     }
 
-    if show_whitespace {
-        let (display, remapped) = whitespace_visible_text_and_highlights(
-            styled.text.as_ref(),
-            styled.highlights.as_ref(),
-        );
-        let highlights = if remapped.is_empty() {
-            empty_highlights()
-        } else {
-            Arc::from(remapped)
-        };
+    if reveal_whitespace_chars {
+        let visible = whitespace_visible_line_styled_text_for_raw(styled, text.as_ref());
         return PreparedConflictText {
-            text_hash: hash_text(display.as_ref()),
-            text: display,
-            highlights,
-            highlights_hash: styled.highlights_hash,
+            text: visible.text,
+            highlights: visible.highlights,
+            text_hash: visible.text_hash,
+            highlights_hash: visible.highlights_hash,
         };
     }
 
@@ -379,10 +373,12 @@ fn hash_text(text: &str) -> u64 {
     hasher.finish()
 }
 
+#[cfg(test)]
 fn whitespace_visible_text(text: &str) -> SharedString {
     whitespace_visible_text_and_highlights(text, &[]).0
 }
 
+#[cfg(test)]
 fn whitespace_visible_text_and_highlights(
     text: &str,
     highlights: &[(Range<usize>, HighlightStyle)],
@@ -757,7 +753,7 @@ mod tests {
     #[test]
     fn prepare_text_cell_applies_whitespace_when_no_styled_text() {
         let prepared = prepare_conflict_text_for_canvas("a b\t".into(), None, true);
-        assert_eq!(prepared.text.as_ref(), "a·b→");
+        assert_eq!(prepared.text.as_ref(), "a·b→↵");
         assert!(prepared.highlights.is_empty());
     }
 
@@ -813,12 +809,12 @@ mod tests {
             text_hash: 7,
         };
 
-        let prepared = prepare_conflict_text_for_canvas("ignored".into(), Some(&styled), true);
-        assert_eq!(prepared.text.as_ref(), "a·b");
+        let prepared = prepare_conflict_text_for_canvas("a b".into(), Some(&styled), true);
+        assert_eq!(prepared.text.as_ref(), "a·b↵");
         assert_eq!(prepared.highlights.len(), 1);
         assert_eq!(prepared.highlights[0].0, 1..4);
-        assert_eq!(prepared.text_hash, hash_text("a·b"));
-        assert_eq!(prepared.highlights_hash, 11);
+        assert_eq!(prepared.text_hash, hash_text("a·b↵"));
+        assert_ne!(prepared.highlights_hash, 0);
     }
 
     #[test]
@@ -830,8 +826,8 @@ mod tests {
             text_hash: 1,
         };
 
-        let prepared = prepare_conflict_text_for_canvas("ignored".into(), Some(&styled), true);
-        assert_eq!(prepared.text.as_ref(), "a·b→");
+        let prepared = prepare_conflict_text_for_canvas("a b\t".into(), Some(&styled), true);
+        assert_eq!(prepared.text.as_ref(), "a·b→↵");
         assert!(prepared.highlights.is_empty());
         assert_eq!(prepared.highlights_hash, 0);
     }

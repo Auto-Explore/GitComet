@@ -3,7 +3,6 @@ use gitcomet_state::model::SubmoduleAddProgressState;
 
 pub(super) struct ToastHost {
     theme: AppTheme,
-    tooltip_host: WeakEntity<TooltipHost>,
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
@@ -160,14 +159,9 @@ fn apply_submodule_add_progress_sync(
 }
 
 impl ToastHost {
-    pub(super) fn new(
-        theme: AppTheme,
-        tooltip_host: WeakEntity<TooltipHost>,
-        root_view: WeakEntity<GitCometView>,
-    ) -> Self {
+    pub(super) fn new(theme: AppTheme, root_view: WeakEntity<GitCometView>) -> Self {
         Self {
             theme,
-            tooltip_host,
             root_view,
             toasts: Vec::new(),
             clone_progress: None,
@@ -181,7 +175,8 @@ impl ToastHost {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
-                root.push_toast(components::ToastKind::Error, message, cx);
+                root.show_error_banner(None, message);
+                cx.notify();
             });
         });
         true
@@ -189,6 +184,11 @@ impl ToastHost {
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        for toast in &self.toasts {
+            toast
+                .input
+                .update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         cx.notify();
     }
 
@@ -208,7 +208,14 @@ impl ToastHost {
             components::ToastKind::Warning => Duration::from_secs(10),
             components::ToastKind::Success => Duration::from_secs(6),
         };
-        let _ = self.push_toast_inner(kind, message, None, Some(ttl), cx);
+        let _ = self.push_toast_inner(
+            kind,
+            message,
+            Vec::new(),
+            ToastDismissBehavior::Remove,
+            Some(ttl),
+            cx,
+        );
     }
 
     #[cfg_attr(test, allow(dead_code))]
@@ -230,14 +237,63 @@ impl ToastHost {
             components::ToastKind::Warning => Duration::from_secs(10),
             components::ToastKind::Success => Duration::from_secs(6),
         };
-        let _ = self.push_toast_inner(kind, message, Some((link_url, link_label)), Some(ttl), cx);
+        let _ = self.push_toast_inner(
+            kind,
+            message,
+            vec![ToastAction::OpenUrl {
+                url: link_url,
+                label: link_label,
+            }],
+            ToastDismissBehavior::Remove,
+            Some(ttl),
+            cx,
+        );
+    }
+
+    pub(super) fn push_survey_toast(
+        &mut self,
+        survey_id: &str,
+        survey_name: &str,
+        message: &str,
+        url: &str,
+        open_label: &str,
+        postpone_label: &str,
+        postpone_seconds: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.push_toast_inner(
+            components::ToastKind::Warning,
+            message.to_string(),
+            vec![
+                ToastAction::OpenSurvey {
+                    survey_id: survey_id.to_string(),
+                    survey_name: survey_name.to_string(),
+                    url: url.to_string(),
+                    label: open_label.to_string(),
+                },
+                ToastAction::PostponeSurvey {
+                    survey_id: survey_id.to_string(),
+                    survey_name: survey_name.to_string(),
+                    postpone_seconds,
+                    label: postpone_label.to_string(),
+                },
+            ],
+            ToastDismissBehavior::PostponeSurvey {
+                survey_id: survey_id.to_string(),
+                survey_name: survey_name.to_string(),
+                postpone_seconds,
+            },
+            None,
+            cx,
+        );
     }
 
     fn push_toast_inner(
         &mut self,
         kind: components::ToastKind,
         message: String,
-        action: Option<(String, String)>,
+        actions: Vec<ToastAction>,
+        dismiss_behavior: ToastDismissBehavior,
         ttl: Option<Duration>,
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
@@ -277,16 +333,13 @@ impl ToastHost {
             None
         };
 
-        let (action_url, action_label) = action
-            .map(|(url, label)| (Some(url), Some(label)))
-            .unwrap_or((None, None));
         self.toasts.push(ToastState {
             id,
             kind,
             input,
             is_code_message,
-            action_url,
-            action_label,
+            actions,
+            dismiss_behavior,
             ttl,
         });
         cx.notify();
@@ -312,6 +365,91 @@ impl ToastHost {
         self.toasts.retain(|t| t.id != id);
         if self.toasts.len() != before {
             cx.notify();
+        }
+    }
+
+    fn dismiss_toast(
+        &mut self,
+        id: u64,
+        behavior: ToastDismissBehavior,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match behavior {
+            ToastDismissBehavior::Remove => {}
+            ToastDismissBehavior::PostponeSurvey {
+                survey_id,
+                survey_name,
+                postpone_seconds,
+            } => {
+                if let Err(err) = gitcomet_state::session::persist_survey_prompt_postponed(
+                    &survey_id,
+                    postpone_seconds,
+                ) {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to save {survey_name} reminder preference: {err}"),
+                        cx,
+                    );
+                }
+            }
+        }
+        self.remove_toast(id, cx);
+    }
+
+    fn handle_toast_action(&mut self, id: u64, action: ToastAction, cx: &mut gpui::Context<Self>) {
+        match action {
+            ToastAction::OpenUrl { url, .. } => match super::platform_open::open_url(&url) {
+                Ok(()) => {
+                    self.remove_toast(id, cx);
+                }
+                Err(err) => {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open link: {err}"),
+                        cx,
+                    );
+                }
+            },
+            ToastAction::OpenSurvey {
+                survey_id,
+                survey_name,
+                url,
+                ..
+            } => {
+                if let Err(err) = gitcomet_state::session::persist_survey_prompt_opened(&survey_id)
+                {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to save {survey_name} preference: {err}"),
+                        cx,
+                    );
+                }
+                let open_result = super::platform_open::open_url(&url);
+                self.remove_toast(id, cx);
+                if let Err(err) = open_result {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open {survey_name}: {err}"),
+                        cx,
+                    );
+                }
+            }
+            ToastAction::PostponeSurvey {
+                survey_id,
+                survey_name,
+                postpone_seconds,
+                ..
+            } => {
+                self.dismiss_toast(
+                    id,
+                    ToastDismissBehavior::PostponeSurvey {
+                        survey_id,
+                        survey_name,
+                        postpone_seconds,
+                    },
+                    cx,
+                );
+            }
         }
     }
 
@@ -390,14 +528,28 @@ impl ToastHost {
         let theme = self.theme;
         let spinner_color = crate::view::clone_progress::clone_progress_color(theme, &op);
         let percent = op.progress.percent.min(100);
-        let bar_track = with_alpha(
-            theme.colors.text_muted,
-            if theme.is_dark { 0.22 } else { 0.12 },
-        );
-        let bar_fill = crate::view::clone_progress::clone_progress_fill_ratio(percent);
+        let bar_fill_color = crate::view::clone_progress::clone_progress_bar_fill_color(theme, &op);
+        let bar_track = crate::view::clone_progress::clone_progress_bar_track_color(theme);
+        let bar_border = crate::view::clone_progress::clone_progress_bar_border_color(theme);
+        let (bar_fill_weight, bar_remainder_weight) =
+            crate::view::clone_progress::clone_progress_segment_weights(percent);
         let aborting = matches!(op.status, CloneOpStatus::Cancelling);
         let dest = op.dest.as_ref().clone();
         let root_view = self.root_view.clone();
+
+        let mut bar_fill = div()
+            .h_full()
+            .bg(bar_fill_color)
+            .rounded(px(999.0))
+            .when(percent > 0, |this| this.min_w(px(2.0)));
+        bar_fill.style().flex_grow = Some(bar_fill_weight);
+        bar_fill.style().flex_shrink = Some(0.0);
+        bar_fill.style().flex_basis = Some(relative(0.0).into());
+
+        let mut bar_remainder = div().h_full();
+        bar_remainder.style().flex_grow = Some(bar_remainder_weight);
+        bar_remainder.style().flex_shrink = Some(0.0);
+        bar_remainder.style().flex_basis = Some(relative(0.0).into());
 
         let mut abort_button = components::Button::new(
             "clone_progress_abort",
@@ -475,17 +627,15 @@ impl ToastHost {
             .child(
                 div()
                     .w_full()
-                    .h(px(6.0))
+                    .h(px(8.0))
+                    .flex()
                     .rounded(px(999.0))
                     .overflow_hidden()
                     .bg(bar_track)
-                    .child(
-                        div()
-                            .w(relative(bar_fill))
-                            .h_full()
-                            .rounded(px(999.0))
-                            .bg(spinner_color),
-                    ),
+                    .border_1()
+                    .border_color(bar_border)
+                    .child(bar_fill)
+                    .child(bar_remainder),
             )
             .child(div().pt_1().child(abort_button));
 
@@ -537,29 +687,6 @@ impl ToastHost {
         );
         self.render_progress_shell(content)
     }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
-    }
 }
 
 impl Render for ToastHost {
@@ -571,6 +698,7 @@ impl Render for ToastHost {
             return div().into_any_element();
         }
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         let mut progress_toasts = Vec::new();
         if let Some(progress) = self.clone_progress.clone() {
@@ -608,6 +736,8 @@ impl Render for ToastHost {
                     None => vec![Animation::new(fade_in).with_easing(gpui::quadratic)],
                 };
 
+                let toast_id = t.id;
+                let dismiss_behavior = t.dismiss_behavior.clone();
                 let close = components::Button::new(format!("toast_close_{}", t.id), "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
@@ -615,16 +745,10 @@ impl Render for ToastHost {
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.remove_toast(t.id, cx);
-                    })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Dismiss notification".into();
-                        if *hovering {
-                            this.set_tooltip_text_if_changed(Some(text), cx);
-                        } else {
-                            this.clear_tooltip_if_matches(&text, cx);
-                        }
+                    .render(theme, ui_scale_percent)
+                    .gitcomet_tooltip(theme, "Dismiss notification".into())
+                    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                        this.dismiss_toast(toast_id, dismiss_behavior.clone(), cx);
                     }));
 
                 let message_scroll = div()
@@ -648,35 +772,47 @@ impl Render for ToastHost {
                             .child(t.input.clone()),
                     );
 
-                let action_button =
-                    t.action_url
-                        .clone()
-                        .zip(t.action_label.clone())
-                        .map(|(url, label)| {
-                            components::Button::new(format!("toast_action_{}", t.id), label)
-                                .style(components::ButtonStyle::Outlined)
-                                .on_click(theme, cx, move |this, _e, _w, cx| {
-                                    match super::platform_open::open_url(&url) {
-                                        Ok(()) => {
-                                            this.remove_toast(t.id, cx);
-                                        }
-                                        Err(err) => {
-                                            this.push_toast(
-                                                components::ToastKind::Error,
-                                                format!("Failed to open link: {err}"),
-                                                cx,
-                                            );
-                                        }
-                                    }
-                                })
-                        });
+                let action_buttons = (!t.actions.is_empty()).then(|| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .children(t.actions.iter().enumerate().map(|(ix, action)| {
+                            let label = match action {
+                                ToastAction::OpenUrl { label, .. }
+                                | ToastAction::OpenSurvey { label, .. }
+                                | ToastAction::PostponeSurvey { label, .. } => label.clone(),
+                            };
+                            let style = match action {
+                                ToastAction::PostponeSurvey { .. } => {
+                                    components::ButtonStyle::Transparent
+                                }
+                                ToastAction::OpenUrl { .. } | ToastAction::OpenSurvey { .. } => {
+                                    components::ButtonStyle::Outlined
+                                }
+                            };
+                            let action = action.clone();
+                            components::Button::new(
+                                format!("toast_action_{}_{}", toast_id, ix),
+                                label,
+                            )
+                            .style(style)
+                            .on_click(
+                                theme,
+                                cx,
+                                move |this, _e, _w, cx| {
+                                    this.handle_toast_action(toast_id, action.clone(), cx);
+                                },
+                            )
+                        }))
+                });
 
                 let message = div()
                     .flex()
                     .flex_col()
                     .gap_1()
                     .child(message_scroll)
-                    .when_some(action_button, |this, button| this.child(button));
+                    .when_some(action_buttons, |this, buttons| this.child(buttons));
 
                 div()
                     .relative()
@@ -1059,6 +1195,48 @@ mod tests {
 
         assert!(apply_submodule_add_progress_sync(&mut progress, &[]));
         assert!(progress.is_empty());
+    }
+
+    #[gpui::test]
+    fn set_theme_rethemes_existing_toast_inputs(cx: &mut gpui::TestAppContext) {
+        let light = AppTheme::gitcomet_light();
+        let dark = AppTheme::gitcomet_dark();
+
+        let host = cx.update(|app| {
+            app.new(|cx| {
+                let mut host = ToastHost::new(light, gpui::WeakEntity::new_invalid());
+                host.push_survey_toast(
+                    "survey-id",
+                    "Survey",
+                    "Help shape GitComet by taking a short user survey.",
+                    "https://example.com",
+                    "Open Survey",
+                    "Later",
+                    60,
+                    cx,
+                );
+                host
+            })
+        });
+
+        let toast_input = cx.update(|app| {
+            let host = host.read(app);
+            assert_eq!(host.toasts.len(), 1);
+            let input = host.toasts[0].input.clone();
+            assert_eq!(input.read(app).debug_text_color(), light.colors.text.into());
+            input
+        });
+
+        cx.update(|app| {
+            host.update(app, |host, cx| host.set_theme(dark, cx));
+        });
+
+        cx.update(|app| {
+            assert_eq!(
+                toast_input.read(app).debug_text_color(),
+                dark.colors.text.into()
+            );
+        });
     }
 
     #[test]

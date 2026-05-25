@@ -26,8 +26,9 @@ pub(crate) fn bench_open_repo(c: &mut Criterion) {
     let extreme_fanout_remote_branches =
         env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_REMOTE_BRANCHES", 10_000);
     let extreme_fanout_remotes = env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_REMOTES", 1);
-    let extreme_fanout_worktrees = env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_WORKTREES", 5_000);
-    let extreme_fanout_submodules = env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_SUBMODULES", 1_000);
+    let extreme_fanout_worktrees = env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_WORKTREES", 1);
+    let extreme_fanout_submodules = env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_SUBMODULES", 259);
+    let extreme_fanout_tags = env_usize("GITCOMET_BENCH_OPEN_REPO_EXTREME_TAGS", 37_610);
 
     let balanced = OpenRepoFixture::new(commits, local_branches, remote_branches, remotes);
     let history_heavy = OpenRepoFixture::new(
@@ -42,13 +43,14 @@ pub(crate) fn bench_open_repo(c: &mut Criterion) {
         branch_heavy_remote_branches,
         branch_heavy_remotes,
     );
-    let extreme_metadata_fanout = OpenRepoFixture::with_sidebar_fanout(
+    let extreme_metadata_fanout = OpenRepoFixture::with_metadata_fanout(
         extreme_fanout_commits,
         extreme_fanout_local_branches,
         extreme_fanout_remote_branches,
         extreme_fanout_remotes,
         extreme_fanout_worktrees,
         extreme_fanout_submodules,
+        extreme_fanout_tags,
     );
 
     let mut group = c.benchmark_group("open_repo");

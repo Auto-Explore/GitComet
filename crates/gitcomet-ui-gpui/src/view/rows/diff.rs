@@ -1,11 +1,299 @@
 use super::diff_canvas;
 use super::diff_text::*;
 use super::*;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use crate::view::panes::main::{
+    CollapsedDiffExpansionKind, CollapsedDiffHunk, CollapsedDiffVisibleRow,
+    DiffHorizontalScrollColumn,
+};
 use crate::view::panes::main::{
     VersionedCachedDiffStyledText, versioned_query_cached_diff_styled_text_is_current,
 };
 use gitcomet_core::domain::DiffLineKind;
 use gitcomet_core::file_diff::FileDiffRowKind;
+
+const COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_shell";
+const COLLAPSED_DIFF_INLINE_HUNK_GUTTER_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_gutter";
+const COLLAPSED_DIFF_INLINE_HUNK_UP_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_up";
+const COLLAPSED_DIFF_INLINE_HUNK_DOWN_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_down";
+const COLLAPSED_DIFF_INLINE_HUNK_SHORT_DEBUG_SELECTOR: &str = "collapsed_diff_inline_hunk_short";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHELL_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_shell";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_GUTTER_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_gutter";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_UP_DEBUG_SELECTOR: &str = "collapsed_diff_split_left_hunk_up";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_DOWN_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_down";
+const COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHORT_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_left_hunk_short";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHELL_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_shell";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_GUTTER_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_gutter";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_UP_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_up";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_DOWN_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_down";
+const COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHORT_DEBUG_SELECTOR: &str =
+    "collapsed_diff_split_right_hunk_short";
+const COLLAPSED_HUNK_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CollapsedHunkRevealAction {
+    Up,
+    Down,
+    DownBefore,
+    Short,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CollapsedHunkRevealClick {
+    action: CollapsedHunkRevealAction,
+    src_ix: usize,
+}
+
+fn diff_row_height(ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_row_height_for_ui_scale(ui_scale_percent)
+}
+
+fn diff_file_header_height(ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_file_header_height_for_ui_scale(ui_scale_percent)
+}
+
+fn diff_hunk_header_height(ui_scale_percent: u32) -> Pixels {
+    crate::view::panes::main::diff_hunk_header_height_for_ui_scale(ui_scale_percent)
+}
+
+fn collapsed_hunk_header_row_height(ui_scale_percent: u32) -> Pixels {
+    diff_row_height(ui_scale_percent)
+}
+
+fn collapsed_hunk_shell_width(
+    handle: &gpui::UniformListScrollHandle,
+    fallback_width: Pixels,
+) -> Pixels {
+    let width = handle
+        .0
+        .borrow()
+        .base_handle
+        .bounds()
+        .size
+        .width
+        .max(px(0.0));
+    if width > px(0.0) {
+        width
+    } else {
+        fallback_width.max(px(0.0))
+    }
+}
+
+fn scroll_pinned_hunk_shell(
+    scroll_handle: gpui::UniformListScrollHandle,
+    background: Option<gpui::Rgba>,
+    child: AnyElement,
+) -> ScrollPinnedHunkShell {
+    ScrollPinnedHunkShell {
+        child,
+        scroll_handle,
+        background,
+    }
+}
+
+fn collapsed_hunk_bg_fill_bounds(bounds: gpui::Bounds<Pixels>) -> gpui::Bounds<Pixels> {
+    gpui::Bounds::new(
+        bounds.origin,
+        gpui::size(
+            bounds.size.width,
+            bounds.size.height + px(COLLAPSED_HUNK_BACKGROUND_OVERDRAW_PX),
+        ),
+    )
+}
+
+fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.text_muted,
+        if theme.is_dark { 0.14 } else { 0.10 },
+    )
+}
+
+fn focused_diff_row_alpha(theme: AppTheme) -> f32 {
+    if theme.is_dark { 0.30 } else { 0.20 }
+}
+
+fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.text_muted,
+        if theme.is_dark { 0.26 } else { 0.16 },
+    )
+}
+
+fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
+    match kind {
+        DiffLineKind::Add => with_alpha(theme.colors.success, focused_diff_row_alpha(theme)),
+        DiffLineKind::Remove => with_alpha(theme.colors.danger, focused_diff_row_alpha(theme)),
+        DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
+            focused_diff_neutral_row_bg(theme)
+        }
+    }
+}
+
+fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+    with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 })
+}
+
+fn collapsed_inline_hunk_bg(
+    theme: AppTheme,
+    _hunk: Option<CollapsedDiffHunk>,
+    _expansion_kind: CollapsedDiffExpansionKind,
+) -> gpui::Rgba {
+    collapsed_hunk_header_bg(theme)
+}
+
+fn collapsed_inline_hunk_fg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
+    theme.colors.text_muted
+}
+
+fn collapsed_split_hunk_bg(
+    theme: AppTheme,
+    _hunk: Option<CollapsedDiffHunk>,
+    _column: PatchSplitColumn,
+) -> gpui::Rgba {
+    collapsed_hunk_header_bg(theme)
+}
+
+fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
+    theme.colors.text_muted
+}
+
+fn collapsed_hunk_reveal_button(
+    id: impl Into<gpui::ElementId>,
+    debug_selector: &'static str,
+    theme: AppTheme,
+    enabled: bool,
+    icon: &'static str,
+    tooltip: &'static str,
+    icon_color: gpui::Rgba,
+    click: CollapsedHunkRevealClick,
+    cx: &mut gpui::Context<MainPaneView>,
+) -> AnyElement {
+    let mut button = div()
+        .id(id)
+        .debug_selector(move || debug_selector.to_string())
+        .w(px(18.0))
+        .h(px(18.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(theme.radii.row));
+
+    if enabled {
+        button = button
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+            .active(move |s| s.bg(theme.colors.active))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                }),
+            )
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                cx.stop_propagation();
+                match click.action {
+                    CollapsedHunkRevealAction::Up => {
+                        this.collapsed_diff_reveal_hunk_up(click.src_ix, cx);
+                    }
+                    CollapsedHunkRevealAction::Down => {
+                        this.collapsed_diff_reveal_hunk_down(click.src_ix, cx);
+                    }
+                    CollapsedHunkRevealAction::DownBefore => {
+                        this.collapsed_diff_reveal_hunk_down_before(click.src_ix, cx);
+                    }
+                    CollapsedHunkRevealAction::Short => {
+                        this.collapsed_diff_reveal_hunk_short(click.src_ix, cx);
+                    }
+                }
+            }));
+    }
+
+    button
+        .child(svg_icon(icon, icon_color, px(10.0)))
+        .gitcomet_tooltip(theme, tooltip.into())
+        .into_any_element()
+}
+
+struct ScrollPinnedHunkShell {
+    child: AnyElement,
+    scroll_handle: gpui::UniformListScrollHandle,
+    background: Option<gpui::Rgba>,
+}
+
+impl gpui::IntoElement for ScrollPinnedHunkShell {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl gpui::Element for ScrollPinnedHunkShell {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> Self::PrepaintState {
+        let scroll_x = -self.scroll_handle.0.borrow().base_handle.offset().x;
+        self.child.prepaint_at(
+            gpui::point(bounds.origin.x + scroll_x, bounds.origin.y),
+            window,
+            cx,
+        );
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&gpui::GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint_state: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        if let Some(background) = self.background {
+            window.paint_quad(gpui::fill(
+                collapsed_hunk_bg_fill_bounds(bounds),
+                background,
+            ));
+        }
+        self.child.paint(window, cx);
+    }
+}
 
 /// Returns the word-highlight color for a diff line kind.
 fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
@@ -31,10 +319,14 @@ fn file_diff_split_word_color(
     }
 }
 
-fn diff_placeholder_row(id: impl Into<gpui::ElementId>, theme: AppTheme) -> AnyElement {
+fn diff_placeholder_row(
+    id: impl Into<gpui::ElementId>,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+) -> AnyElement {
     div()
         .id(id)
-        .h(px(20.0))
+        .h(diff_row_height(ui_scale_percent))
         .px_2()
         .text_xs()
         .text_color(theme.colors.text_muted)
@@ -45,6 +337,8 @@ fn diff_placeholder_row(id: impl Into<gpui::ElementId>, theme: AppTheme) -> AnyE
 fn streamed_diff_text_spec_with_syntax(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
@@ -53,6 +347,8 @@ fn streamed_diff_text_spec_with_syntax(
         diff_canvas::StreamedDiffTextPaintSpec {
             raw_text,
             query: query.clone(),
+            query_options,
+            query_matcher,
             word_ranges: Arc::from(word_ranges),
             word_color,
             syntax,
@@ -63,6 +359,8 @@ fn streamed_diff_text_spec_with_syntax(
 fn heuristic_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -72,13 +370,23 @@ fn heuristic_streamed_diff_text_spec(
         Some(language) => diff_canvas::StreamedDiffTextSyntaxSource::Heuristic { language, mode },
         None => diff_canvas::StreamedDiffTextSyntaxSource::None,
     };
-    streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
+    streamed_diff_text_spec_with_syntax(
+        raw_text,
+        query,
+        query_options,
+        query_matcher,
+        word_ranges,
+        word_color,
+        syntax,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn prepared_streamed_diff_text_spec(
     raw_text: gitcomet_core::file_diff::FileDiffLineText,
     query: &SharedString,
+    query_options: DiffSearchOptions,
+    query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
     word_color: Option<gpui::Rgba>,
     language: Option<rows::DiffSyntaxLanguage>,
@@ -101,7 +409,108 @@ fn prepared_streamed_diff_text_spec(
         },
         (None, _) => diff_canvas::StreamedDiffTextSyntaxSource::None,
     };
-    streamed_diff_text_spec_with_syntax(raw_text, query, word_ranges, word_color, syntax)
+    streamed_diff_text_spec_with_syntax(
+        raw_text,
+        query,
+        query_options,
+        query_matcher,
+        word_ranges,
+        word_color,
+        syntax,
+    )
+}
+
+fn build_file_diff_cached_styled_text(
+    theme: AppTheme,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    word_ranges: &[Range<usize>],
+    context_prefix: &str,
+    language: Option<DiffSyntaxLanguage>,
+    syntax_mode: DiffSyntaxMode,
+    word_color: Option<gpui::Rgba>,
+) -> CachedDiffStyledText {
+    if should_truncate_file_diff_display(raw_text) {
+        let display = file_diff_display_text(raw_text);
+        return build_cached_diff_styled_text(
+            theme,
+            display.as_ref(),
+            &[],
+            context_prefix,
+            None,
+            DiffSyntaxMode::HeuristicOnly,
+            None,
+        );
+    }
+
+    build_cached_diff_styled_text(
+        theme,
+        raw_text.as_ref(),
+        word_ranges,
+        context_prefix,
+        language,
+        syntax_mode,
+        word_color,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+    theme: AppTheme,
+    raw_text: &gitcomet_core::file_diff::FileDiffLineText,
+    word_ranges: &[Range<usize>],
+    context_prefix: &str,
+    syntax: DiffSyntaxConfig,
+    word_color: Option<gpui::Rgba>,
+    projected: rows::PreparedDiffSyntaxLine,
+) -> (CachedDiffStyledText, bool) {
+    if should_truncate_file_diff_display(raw_text) {
+        let display = file_diff_display_text(raw_text);
+        return (
+            build_cached_diff_styled_text(
+                theme,
+                display.as_ref(),
+                &[],
+                context_prefix,
+                None,
+                DiffSyntaxMode::HeuristicOnly,
+                None,
+            ),
+            false,
+        );
+    }
+
+    build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+        theme,
+        raw_text.as_ref(),
+        word_ranges,
+        context_prefix,
+        syntax,
+        word_color,
+        projected,
+    )
+    .into_parts()
+}
+
+fn file_diff_split_side_text(
+    row: &FileDiffRow,
+    is_left: bool,
+) -> Option<&gitcomet_core::file_diff::FileDiffLineText> {
+    if is_left {
+        row.old.as_ref()
+    } else {
+        row.new.as_ref()
+    }
+}
+
+fn file_diff_split_side_text_owned(
+    row: &FileDiffRow,
+    is_left: bool,
+) -> Option<gitcomet_core::file_diff::FileDiffLineText> {
+    file_diff_split_side_text(row, is_left).cloned()
+}
+
+fn file_diff_split_side_line(row: &FileDiffRow, is_left: bool) -> Option<u32> {
+    if is_left { row.old_line } else { row.new_line }
 }
 
 impl MainPaneView {
@@ -109,14 +518,14 @@ impl MainPaneView {
         &mut self,
         key: usize,
         query: &str,
+        options: DiffSearchOptions,
         syntax_epoch: u64,
     ) -> Option<&CachedDiffStyledText> {
-        let query = query.trim();
         if query.is_empty() {
             return self.diff_text_segments_cache_get(key, syntax_epoch);
         }
 
-        self.sync_diff_text_query_overlay_cache(query);
+        self.sync_diff_text_query_overlay_cache(query, options);
         let query_generation = self.diff_text_query_cache_generation;
         if self.diff_text_query_segments_cache.len() <= key {
             self.diff_text_query_segments_cache
@@ -135,7 +544,11 @@ impl MainPaneView {
             let base = self
                 .diff_text_segments_cache_get(key, syntax_epoch)?
                 .clone();
-            let overlaid = build_cached_diff_query_overlay_styled_text(self.theme, &base, query);
+            let overlaid = build_cached_diff_query_overlay_styled_text(
+                self.theme,
+                &base,
+                self.diff_text_query_cache_matcher.as_ref()?,
+            );
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
                 syntax_epoch,
                 query_generation,
@@ -158,8 +571,236 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let min_width = this.diff_horizontal_min_width;
+        let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let reveal_whitespace_chars = this.reveal_whitespace_chars;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+
+        if this.is_collapsed_diff_projection_active() {
+            let theme = this.theme;
+            let language = this.file_diff_cache_language;
+            let old_document_text: Arc<str> = this.file_diff_old_text.clone().into();
+            let old_line_starts = Arc::clone(&this.file_diff_old_line_starts);
+            let new_document_text: Arc<str> = this.file_diff_new_text.clone().into();
+            let new_line_starts = Arc::clone(&this.file_diff_new_line_starts);
+            let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
+            let pinned_hunk_shell_scroll = this.diff_scroll.clone();
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                    let Some(source_visible_ix) =
+                        this.diff_source_visible_ix_for_visible_ix(visible_ix)
+                    else {
+                        return diff_placeholder_row(
+                            ("collapsed_diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+                    let Some(row) = this.collapsed_visible_row(source_visible_ix) else {
+                        return diff_placeholder_row(
+                            ("collapsed_diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
+                    };
+
+                    match row {
+                        CollapsedDiffVisibleRow::HunkHeader {
+                            src_ix,
+                            expansion_kind,
+                            hidden_rows,
+                            ..
+                        } => {
+                            let display_src_ix = row.header_display_src_ix();
+                            let display = display_src_ix
+                                .and_then(|display_src_ix| {
+                                    this.collapsed_diff_hunk_header_display(display_src_ix)
+                                })
+                                .unwrap_or_default();
+                            let context_menu_active = display_src_ix.is_some()
+                                && this.active_repo_id().is_some_and(|repo_id| {
+                                    let invoker: SharedString =
+                                        format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                                    this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                                });
+                            let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
+
+                            collapsed_inline_header_row(
+                                theme,
+                                ui_scale_percent,
+                                visible_ix,
+                                DiffClickKind::HunkHeader,
+                                selected,
+                                min_width,
+                                pinned_hunk_shell_width,
+                                pinned_hunk_shell_scroll.clone(),
+                                collapsed_hunk,
+                                None,
+                                display,
+                                None,
+                                context_menu_active,
+                                src_ix,
+                                expansion_kind,
+                                hidden_rows,
+                                cx,
+                            )
+                        }
+                        CollapsedDiffVisibleRow::FileRow { row_ix } => {
+                            let row_word_ranges = this.file_diff_inline_word_ranges(row_ix);
+                            let Some(row) = this.file_diff_inline_render_data(row_ix) else {
+                                return diff_placeholder_row(
+                                    ("collapsed_diff_oob", visible_ix),
+                                    theme,
+                                    ui_scale_percent,
+                                );
+                            };
+                            let visual_kind = this.file_diff_inline_visual_kind(row_ix);
+                            let line = AnnotatedDiffLine {
+                                kind: row.kind,
+                                text: "".into(),
+                                old_line: row.old_line,
+                                new_line: row.new_line,
+                            };
+                            let streamed_spec = {
+                                let line_language = matches!(
+                                    row.kind,
+                                    DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
+                                )
+                                .then_some(language)
+                                .flatten();
+                                let word_color = diff_line_word_color(visual_kind, theme);
+                                let prepared_line = match row.kind {
+                                    DiffLineKind::Remove => {
+                                        rows::prepared_diff_syntax_line_for_one_based_line(
+                                            this.file_diff_split_prepared_syntax_document(
+                                                DiffTextRegion::SplitLeft,
+                                            ),
+                                            row.old_line,
+                                        )
+                                    }
+                                    DiffLineKind::Add | DiffLineKind::Context => {
+                                        rows::prepared_diff_syntax_line_for_one_based_line(
+                                            this.file_diff_split_prepared_syntax_document(
+                                                DiffTextRegion::SplitRight,
+                                            ),
+                                            row.new_line,
+                                        )
+                                    }
+                                    DiffLineKind::Header | DiffLineKind::Hunk => {
+                                        rows::prepared_diff_syntax_line_for_one_based_line(
+                                            None, None,
+                                        )
+                                    }
+                                };
+                                let (document_text, line_starts) = match row.kind {
+                                    DiffLineKind::Remove => (
+                                        Arc::clone(&old_document_text),
+                                        Arc::clone(&old_line_starts),
+                                    ),
+                                    DiffLineKind::Add | DiffLineKind::Context => (
+                                        Arc::clone(&new_document_text),
+                                        Arc::clone(&new_line_starts),
+                                    ),
+                                    DiffLineKind::Header | DiffLineKind::Hunk => (
+                                        Arc::clone(&new_document_text),
+                                        Arc::clone(&new_line_starts),
+                                    ),
+                                };
+                                let syntax_mode = DiffSyntaxMode::Auto;
+                                prepared_streamed_diff_text_spec(
+                                    row.text.clone(),
+                                    &query,
+                                    query_options,
+                                    query_matcher.clone(),
+                                    row_word_ranges.clone(),
+                                    word_color,
+                                    line_language,
+                                    syntax_mode,
+                                    document_text,
+                                    line_starts,
+                                    prepared_line,
+                                )
+                            };
+
+                            let styled = if streamed_spec.is_some() {
+                                None
+                            } else {
+                                let cache_epoch =
+                                    this.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                                if this
+                                    .diff_text_segments_cache_get(row_ix, cache_epoch)
+                                    .is_none()
+                                {
+                                    let word_color = diff_line_word_color(visual_kind, theme);
+                                    let is_content_line = matches!(
+                                        line.kind,
+                                        DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
+                                    );
+                                    let line_language =
+                                        is_content_line.then_some(language).flatten();
+                                    let projected = this.file_diff_inline_projected_syntax(&line);
+                                    let syntax_mode = DiffSyntaxMode::Auto;
+                                    let (styled, is_pending) =
+                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+                                            theme,
+                                            &row.text,
+                                            row_word_ranges.as_slice(),
+                                            "",
+                                            DiffSyntaxConfig {
+                                                language: line_language,
+                                                mode: syntax_mode,
+                                            },
+                                            word_color,
+                                            projected,
+                                        );
+                                    if is_pending {
+                                        this.ensure_prepared_syntax_chunk_poll(cx);
+                                    }
+                                    this.diff_text_segments_cache_set(row_ix, cache_epoch, styled);
+                                }
+                                this.diff_text_segments_cache_get_for_query(
+                                    row_ix,
+                                    query.as_ref(),
+                                    query_options,
+                                    cache_epoch,
+                                )
+                            };
+
+                            diff_row(
+                                theme,
+                                ui_scale_percent,
+                                visible_ix,
+                                DiffClickKind::Line,
+                                selected,
+                                DiffViewMode::Inline,
+                                min_width,
+                                &line,
+                                visual_kind,
+                                None,
+                                None,
+                                styled,
+                                streamed_spec,
+                                Some(row.text.as_ref()),
+                                reveal_whitespace_chars,
+                                false,
+                                show_line_numbers,
+                                wrap,
+                                cx,
+                            )
+                        }
+                    }
+                })
+                .collect();
+        }
 
         if this.is_file_diff_view_active() {
             let theme = this.theme;
@@ -172,21 +813,34 @@ impl MainPaneView {
             // documents instead of parsing a synthetic mixed inline stream.
             // syntax_mode is determined per-row based on projection availability.
             if let Some(language) = language {
+                struct SyntaxOnlyBatchRow {
+                    inline_ix: usize,
+                    cache_epoch: u64,
+                    line: AnnotatedDiffLine,
+                    text: gitcomet_core::file_diff::FileDiffLineText,
+                }
+
                 let mut syntax_only_rows = Vec::new();
                 for visible_ix in range.clone() {
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         continue;
                     };
-                    if this
-                        .file_diff_inline_render_data(inline_ix)
-                        .is_some_and(|row| diff_canvas::is_streamable_diff_text(&row.text))
-                    {
-                        continue;
-                    }
-                    let Some(line) = this.file_diff_inline_row(inline_ix) else {
+                    let Some(row) = this.file_diff_inline_render_data(inline_ix) else {
                         continue;
                     };
-                    let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
+                    if diff_canvas::is_streamable_diff_text(&row.text) {
+                        continue;
+                    }
+                    if should_truncate_file_diff_display(&row.text) {
+                        continue;
+                    }
+                    let line = AnnotatedDiffLine {
+                        kind: row.kind,
+                        text: "".into(),
+                        old_line: row.old_line,
+                        new_line: row.new_line,
+                    };
+                    let cache_epoch = this.file_diff_style_cache_epochs.inline_epoch(row.kind);
                     if this
                         .diff_text_segments_cache_get(inline_ix, cache_epoch)
                         .is_some()
@@ -202,15 +856,20 @@ impl MainPaneView {
                     if this.file_diff_inline_modify_pair_texts(inline_ix).is_some() {
                         continue;
                     }
-                    syntax_only_rows.push((inline_ix, cache_epoch, line));
+                    syntax_only_rows.push(SyntaxOnlyBatchRow {
+                        inline_ix,
+                        cache_epoch,
+                        line,
+                        text: row.text,
+                    });
                 }
 
                 if !syntax_only_rows.is_empty() {
                     let batch_rows = syntax_only_rows
                         .iter()
-                        .map(|(_, _, line)| InlineDiffSyntaxOnlyRow {
-                            text: diff_content_text(line),
-                            line,
+                        .map(|row| InlineDiffSyntaxOnlyRow {
+                            text: row.text.as_ref(),
+                            line: &row.line,
                         })
                         .collect::<Vec<_>>();
                     let batched_styles =
@@ -228,14 +887,13 @@ impl MainPaneView {
                                 ),
                             },
                             batch_rows.as_slice(),
+                            DiffSyntaxMode::Auto,
                         );
                     let mut pending_batch = false;
-                    for ((inline_ix, cache_epoch, _), prepared) in
-                        syntax_only_rows.iter().zip(batched_styles.into_iter())
-                    {
+                    for (row, prepared) in syntax_only_rows.iter().zip(batched_styles) {
                         let (styled, is_pending) = prepared.into_parts();
                         pending_batch |= is_pending;
-                        this.diff_text_segments_cache_set(*inline_ix, *cache_epoch, styled);
+                        this.diff_text_segments_cache_set(row.inline_ix, row.cache_epoch, styled);
                     }
                     if pending_batch {
                         this.ensure_prepared_syntax_chunk_poll(cx);
@@ -248,23 +906,18 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                     let Some(inline_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return diff_placeholder_row(("diff_missing", visible_ix), theme);
+                        return diff_placeholder_row(
+                            ("diff_missing", visible_ix),
+                            theme,
+                            ui_scale_percent,
+                        );
                     };
-                    let row_word_ranges = this
-                        .file_diff_inline_modify_pair_texts(inline_ix)
-                        .map(|(old, new, kind)| {
-                            let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                            match kind {
-                                DiffLineKind::Remove => old_ranges,
-                                DiffLineKind::Add => new_ranges,
-                                DiffLineKind::Context
-                                | DiffLineKind::Header
-                                | DiffLineKind::Hunk => Vec::new(),
-                            }
-                        })
-                        .unwrap_or_default();
+                    let row_word_ranges = this.file_diff_inline_word_ranges(inline_ix);
+                    let visual_kind = this.file_diff_inline_visual_kind(inline_ix);
                     let render_data = this.file_diff_inline_render_data(inline_ix);
                     let streamed_spec = render_data.as_ref().and_then(|row| {
                         let line_language = matches!(
@@ -273,7 +926,7 @@ impl MainPaneView {
                         )
                         .then_some(language)
                         .flatten();
-                        let word_color = diff_line_word_color(row.kind, theme);
+                        let word_color = diff_line_word_color(visual_kind, theme);
                         let prepared_line = match row.kind {
                             DiffLineKind::Remove => rows::prepared_diff_syntax_line_for_one_based_line(
                                 this.file_diff_split_prepared_syntax_document(
@@ -307,10 +960,12 @@ impl MainPaneView {
                                 Arc::clone(&new_line_starts),
                             ),
                         };
-                        let syntax_mode = syntax_mode_for_prepared_document(prepared_line.document);
+                        let syntax_mode = DiffSyntaxMode::Auto;
                         prepared_streamed_diff_text_spec(
                             row.text.clone(),
                             &query,
+                            query_options,
+                            query_matcher.clone(),
                             row_word_ranges.clone(),
                             word_color,
                             line_language,
@@ -322,39 +977,30 @@ impl MainPaneView {
                     });
 
                     let (line, cache_epoch, styled) = if let Some(row) = render_data.as_ref() {
-                        if streamed_spec.is_some() {
-                            (
-                                AnnotatedDiffLine {
-                                    kind: row.kind,
-                                    text: "".into(),
-                                    old_line: row.old_line,
-                                    new_line: row.new_line,
-                                },
-                                this.file_diff_style_cache_epochs.inline_epoch(row.kind),
-                                None,
-                            )
-                        } else {
-                            let Some(line) = this.file_diff_inline_row(inline_ix) else {
-                                return diff_placeholder_row(("diff_oob", visible_ix), theme);
-                            };
-                            let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
-                            if this
+                        let line = AnnotatedDiffLine {
+                            kind: row.kind,
+                            text: "".into(),
+                            old_line: row.old_line,
+                            new_line: row.new_line,
+                        };
+                        let cache_epoch = this.file_diff_style_cache_epochs.inline_epoch(row.kind);
+                        if streamed_spec.is_none()
+                            && this
                                 .diff_text_segments_cache_get(inline_ix, cache_epoch)
                                 .is_none()
                             {
-                                let word_color = diff_line_word_color(line.kind, theme);
+                                let word_color = diff_line_word_color(visual_kind, theme);
                                 let is_content_line = matches!(
                                     line.kind,
                                     DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
                                 );
                                 let line_language = is_content_line.then_some(language).flatten();
                                 let projected = this.file_diff_inline_projected_syntax(&line);
-                                let syntax_mode =
-                                    syntax_mode_for_prepared_document(projected.document);
+                                let syntax_mode = DiffSyntaxMode::Auto;
                                 let (styled, is_pending) =
-                                    build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                                    build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                         theme,
-                                        diff_content_text(&line),
+                                        &row.text,
                                         row_word_ranges.as_slice(),
                                         "",
                                         DiffSyntaxConfig {
@@ -363,42 +1009,48 @@ impl MainPaneView {
                                         },
                                         word_color,
                                         projected,
-                                    )
-                                    .into_parts();
+                                    );
                                 if is_pending {
                                     this.ensure_prepared_syntax_chunk_poll(cx);
                                 }
                                 this.diff_text_segments_cache_set(inline_ix, cache_epoch, styled);
                             }
-                            let styled = this.diff_text_segments_cache_get_for_query(
+                        let styled = if streamed_spec.is_none() {
+                            this.diff_text_segments_cache_get_for_query(
                                 inline_ix,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
-                            );
-                            debug_assert!(
-                                styled.is_some(),
-                                "diff text segment cache missing for inline row {inline_ix} after populate"
-                            );
-                            (line, cache_epoch, styled)
-                        }
+                            )
+                        } else {
+                            None
+                        };
+                        debug_assert!(
+                            streamed_spec.is_some() || styled.is_some(),
+                            "diff text segment cache missing for inline row {inline_ix} after populate"
+                        );
+                        (line, cache_epoch, styled)
                     } else {
                         let Some(line) = this.file_diff_inline_row(inline_ix) else {
-                            return diff_placeholder_row(("diff_oob", visible_ix), theme);
+                            return diff_placeholder_row(
+                                ("diff_oob", visible_ix),
+                                theme,
+                                ui_scale_percent,
+                            );
                         };
                         let cache_epoch = this.file_diff_inline_style_cache_epoch(&line);
                         if this
                             .diff_text_segments_cache_get(inline_ix, cache_epoch)
                             .is_none()
                         {
-                            let word_color = diff_line_word_color(line.kind, theme);
+                            let word_color = diff_line_word_color(visual_kind, theme);
                             let is_content_line = matches!(
                                 line.kind,
                                 DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
                             );
                             let line_language = is_content_line.then_some(language).flatten();
                             let projected = this.file_diff_inline_projected_syntax(&line);
-                            let syntax_mode =
-                                syntax_mode_for_prepared_document(projected.document);
+                            let syntax_mode = DiffSyntaxMode::Auto;
                             let (styled, is_pending) =
                                 build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
                                     theme,
@@ -421,6 +1073,7 @@ impl MainPaneView {
                         let styled = this.diff_text_segments_cache_get_for_query(
                             inline_ix,
                             query.as_ref(),
+                            query_options,
                             cache_epoch,
                         );
                         debug_assert!(
@@ -433,17 +1086,26 @@ impl MainPaneView {
 
                     diff_row(
                         theme,
+                        ui_scale_percent,
                         visible_ix,
                         DiffClickKind::Line,
                         selected,
                         DiffViewMode::Inline,
                         min_width,
                         &line,
+                        visual_kind,
                         None,
                         None,
                         styled,
                         streamed_spec,
+                        render_data
+                            .as_ref()
+                            .map(|row| row.text.as_ref())
+                            .or_else(|| Some(diff_content_text(&line))),
+                        reveal_whitespace_chars,
                         false,
+                        show_line_numbers,
+                        wrap,
                         cx,
                     )
                 })
@@ -460,9 +1122,15 @@ impl MainPaneView {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                let show_line_numbers = this.diff_show_line_numbers;
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                 let Some(src_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return diff_placeholder_row(("diff_missing", visible_ix), theme);
+                    return diff_placeholder_row(
+                        ("diff_missing", visible_ix),
+                        theme,
+                        ui_scale_percent,
+                    );
                 };
                 let click_kind = this
                     .diff_click_kinds
@@ -481,15 +1149,18 @@ impl MainPaneView {
 
                 let language = this.diff_language_for_src_ix.get(src_ix).copied().flatten();
                 let Some(line) = this.patch_diff_row(src_ix) else {
-                    return diff_placeholder_row(("diff_oob", visible_ix), theme);
+                    return diff_placeholder_row(("diff_oob", visible_ix), theme, ui_scale_percent);
                 };
+                let visual_kind = this.patch_visual_line_kind(src_ix);
                 let streamed_spec = matches!(click_kind, DiffClickKind::Line)
                     .then(|| {
                         heuristic_streamed_diff_text_spec(
                             crate::view::diff_utils::diff_content_line_text(&line),
                             &query,
+                            query_options,
+                            query_matcher.clone(),
                             word_ranges.to_vec(),
-                            diff_line_word_color(line.kind, theme),
+                            diff_line_word_color(visual_kind, theme),
                             language,
                             syntax_mode,
                         )
@@ -504,7 +1175,7 @@ impl MainPaneView {
                         .is_none()
                 {
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
-                        let word_color = diff_line_word_color(line.kind, theme);
+                        let word_color = diff_line_word_color(visual_kind, theme);
                         let content_text = diff_content_text(&line);
 
                         build_cached_diff_styled_text_with_source_identity(
@@ -546,23 +1217,38 @@ impl MainPaneView {
                         active_context_menu_invoker.as_ref() == Some(&invoker)
                     });
                 let styled = if should_style && streamed_spec.is_none() {
-                    this.diff_text_segments_cache_get_for_query(src_ix, query.as_ref(), cache_epoch)
+                    this.diff_text_segments_cache_get_for_query(
+                        src_ix,
+                        query.as_ref(),
+                        query_options,
+                        cache_epoch,
+                    )
                 } else {
                     None
                 };
                 diff_row(
                     theme,
+                    ui_scale_percent,
                     visible_ix,
                     click_kind,
                     selected,
                     DiffViewMode::Inline,
                     min_width,
                     &line,
+                    visual_kind,
                     file_stat,
                     header_display,
                     styled,
                     streamed_spec,
+                    Some(if matches!(click_kind, DiffClickKind::Line) {
+                        diff_content_text(&line)
+                    } else {
+                        line.text.as_ref()
+                    }),
+                    reveal_whitespace_chars,
                     context_menu_active,
+                    show_line_numbers,
+                    wrap,
                     cx,
                 )
             })
@@ -593,8 +1279,18 @@ impl MainPaneView {
         range: Range<usize>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let min_width = this.diff_horizontal_min_width;
+        let min_width =
+            this.diff_horizontal_layout_min_width(if matches!(column, PatchSplitColumn::Right) {
+                DiffHorizontalScrollColumn::SplitRight
+            } else {
+                DiffHorizontalScrollColumn::Primary
+            });
         let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
+        let query_matcher = (!query.as_ref().is_empty())
+            .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
+        let reveal_whitespace_chars = this.reveal_whitespace_chars;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
         let region = if is_left {
@@ -619,12 +1315,195 @@ impl MainPaneView {
             )
         };
 
+        if this.is_collapsed_diff_projection_active() {
+            let theme = this.theme;
+            let language = this.file_diff_cache_language;
+            let cache_epoch = this.file_diff_split_style_cache_epoch(region);
+            let syntax_document = this.file_diff_split_prepared_syntax_document(region);
+            let syntax_mode = DiffSyntaxMode::Auto;
+            let document_text: Arc<str> = if is_left {
+                this.file_diff_old_text.clone().into()
+            } else {
+                this.file_diff_new_text.clone().into()
+            };
+            let line_starts = if is_left {
+                Arc::clone(&this.file_diff_old_line_starts)
+            } else {
+                Arc::clone(&this.file_diff_new_line_starts)
+            };
+            let pinned_hunk_shell_width = if is_left {
+                collapsed_hunk_shell_width(&this.diff_scroll, min_width)
+            } else {
+                collapsed_hunk_shell_width(&this.diff_split_right_scroll, min_width)
+            };
+            let pinned_hunk_shell_scroll = if is_left {
+                this.diff_scroll.clone()
+            } else {
+                this.diff_split_right_scroll.clone()
+            };
+
+            return range
+                .map(|visible_ix| {
+                    let selected = this
+                        .diff_selection_range
+                        .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                    let Some(source_visible_ix) =
+                        this.diff_source_visible_ix_for_visible_ix(visible_ix)
+                    else {
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
+                    };
+                    let Some(visible_row) = this.collapsed_visible_row(source_visible_ix) else {
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
+                    };
+
+                    match visible_row {
+                        CollapsedDiffVisibleRow::HunkHeader {
+                            src_ix,
+                            expansion_kind,
+                            hidden_rows,
+                            ..
+                        } => {
+                            let display_src_ix = visible_row.header_display_src_ix();
+                            let display = display_src_ix
+                                .and_then(|display_src_ix| {
+                                    this.collapsed_diff_hunk_header_display(display_src_ix)
+                                })
+                                .unwrap_or_default();
+                            let context_menu_active = display_src_ix.is_some()
+                                && this.active_repo_id().is_some_and(|repo_id| {
+                                    let invoker: SharedString =
+                                        format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                                    this.active_context_menu_invoker.as_ref() == Some(&invoker)
+                                });
+                            let collapsed_hunk = this.collapsed_diff_hunk_for_src_ix(src_ix);
+
+                            collapsed_split_header_row(
+                                theme,
+                                ui_scale_percent,
+                                column,
+                                visible_ix,
+                                DiffClickKind::HunkHeader,
+                                selected,
+                                min_width,
+                                pinned_hunk_shell_width,
+                                pinned_hunk_shell_scroll.clone(),
+                                collapsed_hunk,
+                                None,
+                                display,
+                                None,
+                                context_menu_active,
+                                src_ix,
+                                expansion_kind,
+                                hidden_rows,
+                                cx,
+                            )
+                        }
+                        CollapsedDiffVisibleRow::FileRow { row_ix } => {
+                            let Some(row) = this.file_diff_split_render_data(row_ix) else {
+                                return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
+                            };
+                            let visual_kind = this.file_diff_split_visual_kind(row_ix);
+                            let row_word_ranges =
+                                this.file_diff_split_word_ranges(row_ix, region);
+                            let row_word_color =
+                                file_diff_split_word_color(column, visual_kind, theme);
+                            let streamed_spec =
+                                file_diff_split_side_text_owned(&row, is_left).and_then(
+                                    |raw_text| {
+                                        prepared_streamed_diff_text_spec(
+                                            raw_text,
+                                            &query,
+                                            query_options,
+                                            query_matcher.clone(),
+                                            row_word_ranges.clone(),
+                                            row_word_color,
+                                            language,
+                                            syntax_mode,
+                                            Arc::clone(&document_text),
+                                            Arc::clone(&line_starts),
+                                            rows::prepared_diff_syntax_line_for_one_based_line(
+                                                syntax_document,
+                                                file_diff_split_side_line(&row, is_left),
+                                            ),
+                                        )
+                                    },
+                                );
+                            let key = this.file_diff_split_cache_key(row_ix, region);
+                            if let Some(key) = key
+                                && streamed_spec.is_none()
+                                && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
+                            {
+                                let raw_text = file_diff_split_side_text(&row, is_left);
+                                if let Some(raw_text) = raw_text {
+                                    let (styled, is_pending) =
+                                        build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
+                                            theme,
+                                            raw_text,
+                                            row_word_ranges.as_slice(),
+                                            "",
+                                            DiffSyntaxConfig {
+                                                language,
+                                                mode: syntax_mode,
+                                            },
+                                            row_word_color,
+                                            rows::prepared_diff_syntax_line_for_one_based_line(
+                                                syntax_document,
+                                                file_diff_split_side_line(&row, is_left),
+                                            ),
+                                        );
+                                    if is_pending {
+                                        this.ensure_prepared_syntax_chunk_poll(cx);
+                                    }
+                                    this.diff_text_segments_cache_set(key, cache_epoch, styled);
+                                }
+                            }
+
+                            let row_has_content = file_diff_split_side_text(&row, is_left).is_some();
+                            let styled = if row_has_content && streamed_spec.is_none() {
+                                if let Some(key) = key {
+                                    this.diff_text_segments_cache_get_for_query(
+                                        key,
+                                        query.as_ref(),
+                                        query_options,
+                                        cache_epoch,
+                                    )
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            patch_split_column_row(
+                                theme,
+                                ui_scale_percent,
+                                column,
+                                visible_ix,
+                                selected,
+                                min_width,
+                                &row,
+                                visual_kind,
+                                styled,
+                                streamed_spec,
+                                reveal_whitespace_chars,
+                                show_line_numbers,
+                                wrap,
+                                cx,
+                            )
+                        }
+                    }
+                })
+                .collect();
+        }
+
         if this.is_file_diff_view_active() {
             let theme = this.theme;
             let language = this.file_diff_cache_language;
             let cache_epoch = this.file_diff_split_style_cache_epoch(region);
             let syntax_document = this.file_diff_split_prepared_syntax_document(region);
-            let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
+            let syntax_mode = DiffSyntaxMode::Auto;
             let document_text: Arc<str> = if is_left {
                 this.file_diff_old_text.clone().into()
             } else {
@@ -641,66 +1520,48 @@ impl MainPaneView {
                     let selected = this
                         .diff_selection_range
                         .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                    let show_line_numbers = this.diff_show_line_numbers;
+                    let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                     let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                        return diff_placeholder_row(
-                            (id_missing, visible_ix),
-                            theme,
-                        );
+                        return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                     };
-                    let Some(row) = this.file_diff_split_row(row_ix) else {
-                        return diff_placeholder_row(
-                            (id_oob, visible_ix),
-                            theme,
-                        );
+                    let Some(row) = this.file_diff_split_render_data(row_ix) else {
+                        return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                     };
-                    let row_word_ranges = this
-                        .file_diff_split_modify_pair_texts(row_ix)
-                        .map(|(old, new)| {
-                            let (old_ranges, new_ranges) = capped_word_diff_ranges(old, new);
-                            if is_left {
-                                old_ranges
-                            } else {
-                                new_ranges
-                            }
-                        })
-                        .unwrap_or_default();
-                    let row_word_color = file_diff_split_word_color(column, row.kind, theme);
-                    let streamed_spec = if is_left {
-                        row.old.clone()
-                    } else {
-                        row.new.clone()
-                    }
-                    .and_then(|raw_text| {
-                        prepared_streamed_diff_text_spec(
-                            raw_text,
-                            &query,
-                            row_word_ranges.clone(),
-                            row_word_color,
-                            language,
-                            syntax_mode,
-                            Arc::clone(&document_text),
-                            Arc::clone(&line_starts),
-                            rows::prepared_diff_syntax_line_for_one_based_line(
-                                syntax_document,
-                                if is_left { row.old_line } else { row.new_line },
-                            ),
-                        )
-                    });
+                    let visual_kind = this.file_diff_split_visual_kind(row_ix);
+                    let row_word_ranges = this.file_diff_split_word_ranges(row_ix, region);
+                    let row_word_color = file_diff_split_word_color(column, visual_kind, theme);
+                    let streamed_spec = file_diff_split_side_text_owned(&row, is_left).and_then(
+                        |raw_text| {
+                            prepared_streamed_diff_text_spec(
+                                raw_text,
+                                &query,
+                                query_options,
+                                query_matcher.clone(),
+                                row_word_ranges.clone(),
+                                row_word_color,
+                                language,
+                                syntax_mode,
+                                Arc::clone(&document_text),
+                                Arc::clone(&line_starts),
+                                rows::prepared_diff_syntax_line_for_one_based_line(
+                                    syntax_document,
+                                    file_diff_split_side_line(&row, is_left),
+                                ),
+                            )
+                        },
+                    );
                     let key = this.file_diff_split_cache_key(row_ix, region);
                     if let Some(key) = key
                         && streamed_spec.is_none()
                         && this.diff_text_segments_cache_get(key, cache_epoch).is_none()
                     {
-                        let text = if is_left {
-                            row.old.as_deref()
-                        } else {
-                            row.new.as_deref()
-                        };
-                        if let Some(text) = text {
-                            let (styled, is_pending) = build_cached_diff_styled_text_for_prepared_document_line_nonblocking(
+                        let raw_text = file_diff_split_side_text(&row, is_left);
+                        if let Some(raw_text) = raw_text {
+                            let (styled, is_pending) = build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
                                 theme,
-                                text,
+                                raw_text,
                                 row_word_ranges.as_slice(),
                                 "",
                                 DiffSyntaxConfig {
@@ -710,10 +1571,9 @@ impl MainPaneView {
                                 row_word_color,
                                 rows::prepared_diff_syntax_line_for_one_based_line(
                                     syntax_document,
-                                    if is_left { row.old_line } else { row.new_line },
+                                    file_diff_split_side_line(&row, is_left),
                                 ),
-                            )
-                            .into_parts();
+                            );
                             if is_pending {
                                 this.ensure_prepared_syntax_chunk_poll(cx);
                             }
@@ -721,16 +1581,13 @@ impl MainPaneView {
                         }
                     }
 
-                    let row_has_content = if is_left {
-                        row.old.is_some()
-                    } else {
-                        row.new.is_some()
-                    };
+                    let row_has_content = file_diff_split_side_text(&row, is_left).is_some();
                     let styled = if row_has_content && streamed_spec.is_none() {
                         if let Some(key) = key {
                             this.diff_text_segments_cache_get_for_query(
                                 key,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -749,13 +1606,18 @@ impl MainPaneView {
 
                     patch_split_column_row(
                         theme,
+                        ui_scale_percent,
                         column,
                         visible_ix,
                         selected,
                         min_width,
                         &row,
+                        visual_kind,
                         styled,
                         streamed_spec,
+                        reveal_whitespace_chars,
+                        show_line_numbers,
+                        wrap,
                         cx,
                     )
                 })
@@ -770,12 +1632,14 @@ impl MainPaneView {
                 let selected = this
                     .diff_selection_range
                     .is_some_and(|(a, b)| visible_ix >= a.min(b) && visible_ix <= a.max(b));
+                let show_line_numbers = this.diff_show_line_numbers;
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
 
                 let Some(row_ix) = this.diff_mapped_ix_for_visible_ix(visible_ix) else {
-                    return diff_placeholder_row((id_missing, visible_ix), theme);
+                    return diff_placeholder_row((id_missing, visible_ix), theme, ui_scale_percent);
                 };
                 let Some(row) = this.patch_diff_split_row(row_ix) else {
-                    return diff_placeholder_row((id_oob, visible_ix), theme);
+                    return diff_placeholder_row((id_oob, visible_ix), theme, ui_scale_percent);
                 };
 
                 match row {
@@ -785,6 +1649,18 @@ impl MainPaneView {
                         new_src_ix,
                     } => {
                         let src_ix = if is_left { old_src_ix } else { new_src_ix };
+                        let old_changed = old_src_ix.is_some_and(|src_ix| {
+                            matches!(this.patch_visual_line_kind(src_ix), DiffLineKind::Remove)
+                        });
+                        let new_changed = new_src_ix.is_some_and(|src_ix| {
+                            matches!(this.patch_visual_line_kind(src_ix), DiffLineKind::Add)
+                        });
+                        let visual_kind = match (old_changed, new_changed) {
+                            (true, true) => FileDiffRowKind::Modify,
+                            (true, false) => FileDiffRowKind::Remove,
+                            (false, true) => FileDiffRowKind::Add,
+                            (false, false) => FileDiffRowKind::Context,
+                        };
                         let (streamed_spec, styled) = if let Some(src_ix) = src_ix {
                             let language =
                                 this.diff_language_for_src_ix.get(src_ix).copied().flatten();
@@ -794,44 +1670,49 @@ impl MainPaneView {
                                 .get(src_ix)
                                 .and_then(|r| r.as_ref().cloned())
                                 .unwrap_or_default();
-                            let word_color = this
-                                .patch_diff_row(src_ix)
-                                .and_then(|line| diff_line_word_color(line.kind, theme));
-                            let streamed_spec = if is_left {
-                                row.old.clone()
-                            } else {
-                                row.new.clone()
-                            }
-                            .and_then(|raw_text| {
-                                heuristic_streamed_diff_text_spec(
-                                    raw_text,
-                                    &query,
-                                    word_ranges.clone(),
-                                    word_color,
-                                    language,
-                                    syntax_mode,
-                                )
-                            });
+                            let word_color =
+                                diff_line_word_color(this.patch_visual_line_kind(src_ix), theme);
+                            let streamed_spec = file_diff_split_side_text_owned(&row, is_left)
+                                .and_then(|raw_text| {
+                                    heuristic_streamed_diff_text_spec(
+                                        raw_text,
+                                        &query,
+                                        query_options,
+                                        query_matcher.clone(),
+                                        word_ranges.clone(),
+                                        word_color,
+                                        language,
+                                        syntax_mode,
+                                    )
+                                });
                             if streamed_spec.is_none()
                                 && this
                                     .diff_text_segments_cache_get(src_ix, cache_epoch)
                                     .is_none()
                             {
-                                let text = if is_left {
-                                    row.old.as_deref()
+                                let computed = if let Some(raw_text) =
+                                    file_diff_split_side_text(&row, is_left)
+                                {
+                                    build_file_diff_cached_styled_text(
+                                        theme,
+                                        raw_text,
+                                        word_ranges.as_slice(),
+                                        "",
+                                        language,
+                                        syntax_mode,
+                                        word_color,
+                                    )
                                 } else {
-                                    row.new.as_deref()
-                                }
-                                .unwrap_or("");
-                                let computed = build_cached_diff_styled_text(
-                                    theme,
-                                    text,
-                                    word_ranges.as_slice(),
-                                    "",
-                                    language,
-                                    syntax_mode,
-                                    word_color,
-                                );
+                                    build_cached_diff_styled_text(
+                                        theme,
+                                        "",
+                                        word_ranges.as_slice(),
+                                        "",
+                                        language,
+                                        syntax_mode,
+                                        word_color,
+                                    )
+                                };
                                 this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                             }
 
@@ -839,6 +1720,7 @@ impl MainPaneView {
                                 this.diff_text_segments_cache_get_for_query(
                                     src_ix,
                                     query.as_ref(),
+                                    query_options,
                                     cache_epoch,
                                 )
                             } else {
@@ -851,19 +1733,28 @@ impl MainPaneView {
 
                         patch_split_column_row(
                             theme,
+                            ui_scale_percent,
                             column,
                             visible_ix,
                             selected,
                             min_width,
                             &row,
+                            visual_kind,
                             styled,
                             streamed_spec,
+                            reveal_whitespace_chars,
+                            show_line_numbers,
+                            wrap,
                             cx,
                         )
                     }
                     PatchSplitRow::Raw { src_ix, click_kind } => {
                         if this.patch_diff_row(src_ix).is_none() {
-                            return diff_placeholder_row((id_src_oob, visible_ix), theme);
+                            return diff_placeholder_row(
+                                (id_src_oob, visible_ix),
+                                theme,
+                                ui_scale_percent,
+                            );
                         };
                         let file_stat = this.diff_file_stats.get(src_ix).and_then(|s| *s);
                         let should_style = !query.is_empty();
@@ -885,7 +1776,11 @@ impl MainPaneView {
                             this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
                         }
                         let Some(line) = this.patch_diff_row(src_ix) else {
-                            return diff_placeholder_row((id_src_oob, visible_ix), theme);
+                            return diff_placeholder_row(
+                                (id_src_oob, visible_ix),
+                                theme,
+                                ui_scale_percent,
+                            );
                         };
                         if should_hide_unified_diff_header_line(&line) {
                             return div()
@@ -904,6 +1799,7 @@ impl MainPaneView {
                             this.diff_text_segments_cache_get_for_query(
                                 src_ix,
                                 query.as_ref(),
+                                query_options,
                                 cache_epoch,
                             )
                         } else {
@@ -911,6 +1807,7 @@ impl MainPaneView {
                         };
                         patch_split_header_row(
                             theme,
+                            ui_scale_percent,
                             column,
                             visible_ix,
                             click_kind,
@@ -933,17 +1830,23 @@ impl MainPaneView {
 #[allow(clippy::too_many_arguments)]
 fn diff_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     visible_ix: usize,
     click_kind: DiffClickKind,
     selected: bool,
     mode: DiffViewMode,
     min_width: Pixels,
     line: &AnnotatedDiffLine,
+    visual_kind: DiffLineKind,
     file_stat: Option<(usize, usize)>,
     header_display: Option<SharedString>,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
+    raw_text: Option<&str>,
+    reveal_whitespace_chars: bool,
     context_menu_active: bool,
+    show_line_numbers: bool,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -960,7 +1863,7 @@ fn diff_row(
             header_display.unwrap_or_else(|| SharedString::from(line.text.as_ref().to_owned()));
         let mut row = div()
             .id(("diff_file_hdr", visible_ix))
-            .h(px(28.0))
+            .h(diff_file_header_height(ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -988,10 +1891,7 @@ fn diff_row(
             .on_click(on_click);
 
         if selected {
-            row = row.bg(with_alpha(
-                theme.colors.accent,
-                if theme.is_dark { 0.10 } else { 0.07 },
-            ));
+            row = row.bg(focused_diff_neutral_row_bg(theme));
         }
 
         return row.into_any_element();
@@ -1003,7 +1903,7 @@ fn diff_row(
 
         let mut row = div()
             .id(("diff_hunk_hdr", visible_ix))
-            .h(px(24.0))
+            .h(diff_hunk_header_height(ui_scale_percent))
             .w_full()
             .min_w(min_width)
             .flex()
@@ -1032,6 +1932,9 @@ fn diff_row(
             .on_click(on_click);
         let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
             cx.stop_propagation();
+            if this.is_inline_submodule_diff_active() {
+                return;
+            }
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
@@ -1051,10 +1954,7 @@ fn diff_row(
         row = row.on_mouse_down(MouseButton::Right, on_right_click);
 
         if selected {
-            row = row.bg(with_alpha(
-                theme.colors.accent,
-                if theme.is_dark { 0.14 } else { 0.10 },
-            ));
+            row = row.bg(focused_diff_neutral_row_bg(theme));
         }
         if context_menu_active {
             row = row.bg(theme.colors.active);
@@ -1063,15 +1963,28 @@ fn diff_row(
         return row.into_any_element();
     }
 
-    let (bg, fg, gutter_fg) = diff_line_colors(theme, line.kind);
+    let (mut bg, fg, gutter_fg) = diff_line_colors(theme, visual_kind);
+    if selected {
+        bg = focused_diff_line_bg(theme, visual_kind);
+    }
 
-    let old = line_number_string(line.old_line);
-    let new = line_number_string(line.new_line);
+    let show_row_numbers = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    let old = if show_row_numbers {
+        line_number_string(line.old_line)
+    } else {
+        SharedString::default()
+    };
+    let new = if show_row_numbers {
+        line_number_string(line.new_line)
+    } else {
+        SharedString::default()
+    };
 
     match mode {
         DiffViewMode::Inline => diff_canvas::inline_diff_line_row_canvas(
             theme,
             cx.entity(),
+            ui_scale_percent,
             visible_ix,
             min_width,
             selected,
@@ -1082,21 +1995,29 @@ fn diff_row(
             gutter_fg,
             styled,
             streamed_spec,
+            raw_text,
+            reveal_whitespace_chars,
+            show_line_numbers,
+            wrap,
         ),
         DiffViewMode::Split => {
-            let left_kind = if line.kind == DiffLineKind::Remove {
+            let left_kind = if visual_kind == DiffLineKind::Remove {
                 DiffLineKind::Remove
             } else {
                 DiffLineKind::Context
             };
-            let right_kind = if line.kind == DiffLineKind::Add {
+            let right_kind = if visual_kind == DiffLineKind::Add {
                 DiffLineKind::Add
             } else {
                 DiffLineKind::Context
             };
 
-            let (left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
-            let (right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+            let (mut left_bg, left_fg, left_gutter) = diff_line_colors(theme, left_kind);
+            let (mut right_bg, right_fg, right_gutter) = diff_line_colors(theme, right_kind);
+            if selected {
+                left_bg = focused_diff_line_bg(theme, left_kind);
+                right_bg = focused_diff_line_bg(theme, right_kind);
+            }
 
             let (left_text, right_text) = match line.kind {
                 DiffLineKind::Remove => (styled, None),
@@ -1112,10 +2033,19 @@ fn diff_row(
                 DiffLineKind::Add | DiffLineKind::Context => streamed_spec,
                 _ => None,
             };
+            let left_raw_text = match line.kind {
+                DiffLineKind::Remove | DiffLineKind::Context => raw_text,
+                _ => None,
+            };
+            let right_raw_text = match line.kind {
+                DiffLineKind::Add | DiffLineKind::Context => raw_text,
+                _ => None,
+            };
 
             diff_canvas::split_diff_line_row_canvas(
                 theme,
                 cx.entity(),
+                ui_scale_percent,
                 visible_ix,
                 min_width,
                 selected,
@@ -1131,8 +2061,266 @@ fn diff_row(
                 right_text,
                 left_streamed_spec,
                 right_streamed_spec,
+                left_raw_text,
+                right_raw_text,
+                reveal_whitespace_chars,
+                show_line_numbers,
+                wrap,
             )
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collapsed_inline_header_row(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    visible_ix: usize,
+    click_kind: DiffClickKind,
+    selected: bool,
+    min_width: Pixels,
+    pinned_hunk_shell_width: Pixels,
+    pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
+    collapsed_hunk: Option<CollapsedDiffHunk>,
+    file_stat: Option<(usize, usize)>,
+    display: SharedString,
+    styled: Option<&CachedDiffStyledText>,
+    context_menu_active: bool,
+    src_ix: usize,
+    expansion_kind: CollapsedDiffExpansionKind,
+    hidden_rows: usize,
+    cx: &mut gpui::Context<MainPaneView>,
+) -> AnyElement {
+    match click_kind {
+        DiffClickKind::FileHeader => {
+            let mut row = div()
+                .id(("collapsed_diff_file_hdr", visible_ix))
+                .h(diff_file_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(selectable_cached_diff_text(
+                    visible_ix,
+                    DiffTextRegion::Inline,
+                    DiffClickKind::FileHeader,
+                    theme.colors.text,
+                    styled,
+                    display,
+                    cx,
+                ))
+                .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
+                    let (a, r) = file_stat.unwrap_or_default();
+                    this.child(components::diff_stat(theme, a, r))
+                });
+
+            if selected {
+                row = row.bg(focused_diff_neutral_row_bg(theme));
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::HunkHeader => {
+            let gutter_w = diff_canvas::diff_inline_text_start(ui_scale_percent);
+            let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
+            let text_color = collapsed_inline_hunk_fg(theme, collapsed_hunk);
+            let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                if this.is_inline_submodule_diff_active() {
+                    return;
+                }
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                let context_menu_invoker: SharedString =
+                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                this.activate_context_menu_invoker(context_menu_invoker, cx);
+                this.open_popover_at(
+                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    e.position,
+                    window,
+                    cx,
+                );
+            });
+            let button_color = if hidden_rows > 0 {
+                text_color
+            } else {
+                with_alpha(text_color, 0.45)
+            };
+            let controls = match expansion_kind {
+                CollapsedDiffExpansionKind::Up => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_up", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_UP_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Down => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_down", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_DOWN_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Down,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Both => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_down", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_DOWN_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::DownBefore,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_up", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_UP_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Short => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        ("collapsed_diff_hunk_short", visible_ix),
+                        COLLAPSED_DIFF_INLINE_HUNK_SHORT_DEBUG_SELECTOR,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/plus.svg",
+                        "Show hidden lines",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Short,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::None => div().into_any_element(),
+            };
+
+            let row_bg = collapsed_inline_hunk_bg(theme, collapsed_hunk, expansion_kind);
+            let painted_row_bg = if selected {
+                focused_collapsed_hunk_bg(theme, collapsed_hunk)
+            } else {
+                row_bg
+            };
+            let mut row = div()
+                .id(("collapsed_diff_hunk_hdr", visible_ix))
+                .debug_selector(|| COLLAPSED_DIFF_INLINE_HUNK_SHELL_DEBUG_SELECTOR.to_string())
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .w(pinned_hunk_shell_width)
+                .min_w(px(0.0))
+                .relative()
+                .overflow_hidden()
+                .flex()
+                .items_center()
+                .bg(painted_row_bg)
+                .text_xs()
+                .text_color(text_color);
+            row = row
+                .child(
+                    div()
+                        .debug_selector(|| {
+                            COLLAPSED_DIFF_INLINE_HUNK_GUTTER_DEBUG_SELECTOR.to_string()
+                        })
+                        .w(gutter_w)
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(controls),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .pr(trailing_pad)
+                        .overflow_hidden()
+                        .child(selectable_cached_diff_text(
+                            visible_ix,
+                            DiffTextRegion::Inline,
+                            DiffClickKind::HunkHeader,
+                            text_color,
+                            styled,
+                            display,
+                            cx,
+                        )),
+                )
+                .on_mouse_down(MouseButton::Right, on_right_click);
+
+            if selected {
+                row = row.bg(painted_row_bg);
+            }
+            if context_menu_active {
+                row = row.bg(theme.colors.active);
+            }
+
+            div()
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .min_w(min_width)
+                .bg(painted_row_bg)
+                .child(scroll_pinned_hunk_shell(
+                    pinned_hunk_shell_scroll,
+                    Some(painted_row_bg),
+                    row.into_any_element(),
+                ))
+                .into_any_element()
+        }
+        DiffClickKind::Line => diff_placeholder_row(
+            ("collapsed_diff_invalid", visible_ix),
+            theme,
+            ui_scale_percent,
+        ),
     }
 }
 
@@ -1145,16 +2333,21 @@ pub(super) enum PatchSplitColumn {
 #[allow(clippy::too_many_arguments)]
 fn patch_split_column_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     column: PatchSplitColumn,
     visible_ix: usize,
     selected: bool,
     min_width: Pixels,
     row: &gitcomet_core::file_diff::FileDiffRow,
+    visual_kind: FileDiffRowKind,
     styled: Option<&CachedDiffStyledText>,
     streamed_spec: Option<diff_canvas::StreamedDiffTextPaintSpec>,
+    reveal_whitespace_chars: bool,
+    show_line_numbers: bool,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
-    let line_kind = match (column, row.kind) {
+    let line_kind = match (column, visual_kind) {
         (PatchSplitColumn::Left, FileDiffRowKind::Remove | FileDiffRowKind::Modify) => {
             DiffLineKind::Remove
         }
@@ -1163,16 +2356,25 @@ fn patch_split_column_row(
         }
         _ => DiffLineKind::Context,
     };
-    let (bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
+    let (mut bg, fg, gutter_fg) = diff_line_colors(theme, line_kind);
+    if selected {
+        bg = focused_diff_line_bg(theme, line_kind);
+    }
 
-    let line_no = match column {
-        PatchSplitColumn::Left => line_number_string(row.old_line),
-        PatchSplitColumn::Right => line_number_string(row.new_line),
+    let show_row_number = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    let line_no = if show_row_number {
+        match column {
+            PatchSplitColumn::Left => line_number_string(row.old_line),
+            PatchSplitColumn::Right => line_number_string(row.new_line),
+        }
+    } else {
+        SharedString::default()
     };
 
     diff_canvas::patch_split_column_row_canvas(
         theme,
         cx.entity(),
+        ui_scale_percent,
         column,
         visible_ix,
         min_width,
@@ -1183,12 +2385,21 @@ fn patch_split_column_row(
         line_no,
         styled,
         streamed_spec,
+        match column {
+            PatchSplitColumn::Left => row.old.as_ref(),
+            PatchSplitColumn::Right => row.new.as_ref(),
+        }
+        .map(|text| text.as_ref()),
+        reveal_whitespace_chars,
+        show_line_numbers,
+        wrap,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
 fn patch_split_header_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     column: PatchSplitColumn,
     visible_ix: usize,
     click_kind: DiffClickKind,
@@ -1226,7 +2437,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(px(28.0))
+                .h(diff_file_header_height(ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -1254,10 +2465,7 @@ fn patch_split_header_row(
                 .on_click(on_click);
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.10 } else { 0.07 },
-                ));
+                row = row.bg(focused_diff_neutral_row_bg(theme));
             }
 
             row.into_any_element()
@@ -1274,7 +2482,7 @@ fn patch_split_header_row(
                     },
                     visible_ix,
                 ))
-                .h(px(24.0))
+                .h(diff_hunk_header_height(ui_scale_percent))
                 .w_full()
                 .min_w(min_width)
                 .flex()
@@ -1303,6 +2511,9 @@ fn patch_split_header_row(
                 .on_click(on_click);
             let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
+                if this.is_inline_submodule_diff_active() {
+                    return;
+                }
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
@@ -1329,10 +2540,7 @@ fn patch_split_header_row(
             row = row.on_mouse_down(MouseButton::Right, on_right_click);
 
             if selected {
-                row = row.bg(with_alpha(
-                    theme.colors.accent,
-                    if theme.is_dark { 0.14 } else { 0.10 },
-                ));
+                row = row.bg(focused_diff_neutral_row_bg(theme));
             }
             if context_menu_active {
                 row = row.bg(theme.colors.active);
@@ -1340,12 +2548,323 @@ fn patch_split_header_row(
 
             row.into_any_element()
         }
-        DiffClickKind::Line => patch_split_meta_row(theme, column, visible_ix, selected, line, cx),
+        DiffClickKind::Line => patch_split_meta_row(
+            theme,
+            ui_scale_percent,
+            column,
+            visible_ix,
+            selected,
+            line,
+            cx,
+        ),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collapsed_split_header_row(
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    column: PatchSplitColumn,
+    visible_ix: usize,
+    click_kind: DiffClickKind,
+    selected: bool,
+    min_width: Pixels,
+    pinned_hunk_shell_width: Pixels,
+    pinned_hunk_shell_scroll: gpui::UniformListScrollHandle,
+    collapsed_hunk: Option<CollapsedDiffHunk>,
+    file_stat: Option<(usize, usize)>,
+    display: SharedString,
+    styled: Option<&CachedDiffStyledText>,
+    context_menu_active: bool,
+    src_ix: usize,
+    expansion_kind: CollapsedDiffExpansionKind,
+    hidden_rows: usize,
+    cx: &mut gpui::Context<MainPaneView>,
+) -> AnyElement {
+    let region = match column {
+        PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
+        PatchSplitColumn::Right => DiffTextRegion::SplitRight,
+    };
+
+    match click_kind {
+        DiffClickKind::FileHeader => {
+            let mut row = div()
+                .id((
+                    match column {
+                        PatchSplitColumn::Left => "collapsed_diff_split_left_file_hdr",
+                        PatchSplitColumn::Right => "collapsed_diff_split_right_file_hdr",
+                    },
+                    visible_ix,
+                ))
+                .h(diff_file_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_b_1()
+                .border_color(theme.colors.border)
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(selectable_cached_diff_text(
+                    visible_ix,
+                    region,
+                    DiffClickKind::FileHeader,
+                    theme.colors.text,
+                    styled,
+                    display,
+                    cx,
+                ))
+                .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
+                    let (a, r) = file_stat.unwrap_or_default();
+                    this.child(components::diff_stat(theme, a, r))
+                });
+
+            if selected {
+                row = row.bg(focused_diff_neutral_row_bg(theme));
+            }
+
+            row.into_any_element()
+        }
+        DiffClickKind::HunkHeader => {
+            let gutter_w = diff_canvas::diff_single_column_text_start(ui_scale_percent);
+            let trailing_pad = diff_canvas::diff_row_horizontal_padding(ui_scale_percent);
+            let text_color = collapsed_split_hunk_fg(theme, column);
+            let (
+                row_id,
+                shell_debug_selector,
+                gutter_debug_selector,
+                up_id,
+                up_debug_selector,
+                down_id,
+                down_debug_selector,
+                short_id,
+                short_debug_selector,
+            ) = match column {
+                PatchSplitColumn::Left => (
+                    "collapsed_diff_split_left_hunk_hdr",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHELL_DEBUG_SELECTOR,
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_GUTTER_DEBUG_SELECTOR,
+                    "collapsed_diff_split_left_hunk_up",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_UP_DEBUG_SELECTOR,
+                    "collapsed_diff_split_left_hunk_down",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_DOWN_DEBUG_SELECTOR,
+                    "collapsed_diff_split_left_hunk_short",
+                    COLLAPSED_DIFF_SPLIT_LEFT_HUNK_SHORT_DEBUG_SELECTOR,
+                ),
+                PatchSplitColumn::Right => (
+                    "collapsed_diff_split_right_hunk_hdr",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHELL_DEBUG_SELECTOR,
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_GUTTER_DEBUG_SELECTOR,
+                    "collapsed_diff_split_right_hunk_up",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_UP_DEBUG_SELECTOR,
+                    "collapsed_diff_split_right_hunk_down",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_DOWN_DEBUG_SELECTOR,
+                    "collapsed_diff_split_right_hunk_short",
+                    COLLAPSED_DIFF_SPLIT_RIGHT_HUNK_SHORT_DEBUG_SELECTOR,
+                ),
+            };
+            let on_right_click = cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                if this.is_inline_submodule_diff_active() {
+                    return;
+                }
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                let context_menu_invoker: SharedString =
+                    format!("diff_hunk_menu_{}_{}", repo_id.0, src_ix).into();
+                this.activate_context_menu_invoker(context_menu_invoker, cx);
+                this.open_popover_at(
+                    PopoverKind::DiffHunkMenu { repo_id, src_ix },
+                    e.position,
+                    window,
+                    cx,
+                );
+            });
+            let button_color = if hidden_rows > 0 {
+                text_color
+            } else {
+                with_alpha(text_color, 0.45)
+            };
+            let controls = match expansion_kind {
+                CollapsedDiffExpansionKind::Up => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (up_id, visible_ix),
+                        up_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Down => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (down_id, visible_ix),
+                        down_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Down,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Both => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (down_id, visible_ix),
+                        down_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_down.svg",
+                        "Show hidden lines below",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::DownBefore,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .child(collapsed_hunk_reveal_button(
+                        (up_id, visible_ix),
+                        up_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/arrow_up.svg",
+                        "Show hidden lines above",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Up,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::Short => div()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(collapsed_hunk_reveal_button(
+                        (short_id, visible_ix),
+                        short_debug_selector,
+                        theme,
+                        hidden_rows > 0,
+                        "icons/plus.svg",
+                        "Show hidden lines",
+                        button_color,
+                        CollapsedHunkRevealClick {
+                            action: CollapsedHunkRevealAction::Short,
+                            src_ix,
+                        },
+                        cx,
+                    ))
+                    .into_any_element(),
+                CollapsedDiffExpansionKind::None => div().into_any_element(),
+            };
+
+            let row_bg = collapsed_split_hunk_bg(theme, collapsed_hunk, column);
+            let painted_row_bg = if selected {
+                focused_collapsed_hunk_bg(theme, collapsed_hunk)
+            } else {
+                row_bg
+            };
+            let mut row = div()
+                .id((row_id, visible_ix))
+                .debug_selector(move || shell_debug_selector.to_string())
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .w(pinned_hunk_shell_width)
+                .min_w(px(0.0))
+                .relative()
+                .overflow_hidden()
+                .flex()
+                .items_center()
+                .bg(painted_row_bg)
+                .text_xs()
+                .text_color(text_color)
+                .child(
+                    div()
+                        .debug_selector(move || gutter_debug_selector.to_string())
+                        .w(gutter_w)
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(controls),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .pr(trailing_pad)
+                        .overflow_hidden()
+                        .child(selectable_cached_diff_text(
+                            visible_ix,
+                            region,
+                            DiffClickKind::HunkHeader,
+                            text_color,
+                            styled,
+                            display,
+                            cx,
+                        )),
+                )
+                .on_mouse_down(MouseButton::Right, on_right_click);
+
+            if selected {
+                row = row.bg(painted_row_bg);
+            }
+            if context_menu_active {
+                row = row.bg(theme.colors.active);
+            }
+
+            div()
+                .h(collapsed_hunk_header_row_height(ui_scale_percent))
+                .min_w(min_width)
+                .bg(painted_row_bg)
+                .child(scroll_pinned_hunk_shell(
+                    pinned_hunk_shell_scroll,
+                    Some(painted_row_bg),
+                    row.into_any_element(),
+                ))
+                .into_any_element()
+        }
+        DiffClickKind::Line => diff_placeholder_row(
+            (
+                match column {
+                    PatchSplitColumn::Left => "collapsed_diff_split_left_invalid",
+                    PatchSplitColumn::Right => "collapsed_diff_split_right_invalid",
+                },
+                visible_ix,
+            ),
+            theme,
+            ui_scale_percent,
+        ),
     }
 }
 
 fn patch_split_meta_row(
     theme: AppTheme,
+    ui_scale_percent: u32,
     column: PatchSplitColumn,
     visible_ix: usize,
     selected: bool,
@@ -1374,7 +2893,7 @@ fn patch_split_meta_row(
             },
             visible_ix,
         ))
-        .h(px(20.0))
+        .h(diff_row_height(ui_scale_percent))
         .flex()
         .items_center()
         .px_2()
@@ -1394,11 +2913,238 @@ fn patch_split_meta_row(
         .on_click(on_click);
 
     if selected {
-        row = row.bg(with_alpha(
-            theme.colors.accent,
-            if theme.is_dark { 0.10 } else { 0.07 },
-        ));
+        row = row.bg(focused_diff_line_bg(theme, line.kind));
     }
 
     row.into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn collapsed_hunk(has_removals: bool, has_additions: bool) -> CollapsedDiffHunk {
+        CollapsedDiffHunk {
+            src_ix: 0,
+            base_row_start: 0,
+            base_row_end_exclusive: 1,
+            has_additions,
+            has_removals,
+            reveal_up_lines: 0,
+            reveal_down_lines: 0,
+        }
+    }
+
+    #[test]
+    fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let text_selection_bg =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 });
+            let add_focus = focused_diff_line_bg(theme, DiffLineKind::Add);
+            let remove_focus = focused_diff_line_bg(theme, DiffLineKind::Remove);
+            let neutral_focus = focused_diff_line_bg(theme, DiffLineKind::Context);
+            let (add_bg, _, _) = diff_line_colors(theme, DiffLineKind::Add);
+            let (remove_bg, _, _) = diff_line_colors(theme, DiffLineKind::Remove);
+            let (context_bg, _, _) = diff_line_colors(theme, DiffLineKind::Context);
+
+            assert_ne!(add_focus, text_selection_bg);
+            assert_ne!(remove_focus, text_selection_bg);
+            assert_ne!(neutral_focus, text_selection_bg);
+            assert_ne!(
+                neutral_focus,
+                with_alpha(theme.colors.warning, focused_diff_row_alpha(theme))
+            );
+            assert_ne!(add_focus, add_bg);
+            assert_ne!(remove_focus, remove_bg);
+            assert_ne!(neutral_focus, context_bg);
+            assert_ne!(add_focus, remove_focus);
+            assert_ne!(add_focus, neutral_focus);
+            assert_ne!(remove_focus, neutral_focus);
+
+            let collapsed_focus = focused_collapsed_hunk_bg(theme, None);
+            let expected_collapsed_focus =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 });
+            assert_eq!(collapsed_focus, expected_collapsed_focus);
+            assert_ne!(
+                collapsed_focus,
+                with_alpha(theme.colors.accent, focused_diff_row_alpha(theme))
+            );
+            assert_ne!(collapsed_focus, text_selection_bg);
+            assert_eq!(
+                focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(false, true))),
+                collapsed_focus
+            );
+            assert_eq!(
+                focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(true, false))),
+                collapsed_focus
+            );
+            assert_eq!(
+                focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(true, true))),
+                collapsed_focus
+            );
+            assert_eq!(focused_collapsed_hunk_bg(theme, None), collapsed_focus);
+        }
+    }
+
+    #[test]
+    fn collapsed_hunk_headers_use_uniform_diff_row_height() {
+        for ui_scale_percent in [75, 100, 125, 150, 200] {
+            assert_eq!(
+                collapsed_hunk_header_row_height(ui_scale_percent),
+                diff_row_height(ui_scale_percent)
+            );
+            assert_ne!(
+                collapsed_hunk_header_row_height(ui_scale_percent),
+                diff_hunk_header_height(ui_scale_percent)
+            );
+        }
+    }
+
+    #[test]
+    fn collapsed_inline_hunk_headers_use_neutral_colors() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let neutral = collapsed_hunk_header_bg(theme);
+
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, false)),
+                    CollapsedDiffExpansionKind::Up,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(false, true)),
+                    CollapsedDiffExpansionKind::Up,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Up,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Both,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Short,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    CollapsedDiffExpansionKind::Down,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_bg(theme, None, CollapsedDiffExpansionKind::Up),
+                neutral
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, false))),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(false, true))),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, true))),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_inline_hunk_fg(theme, None),
+                theme.colors.text_muted
+            );
+        }
+    }
+
+    #[test]
+    fn collapsed_split_hunk_headers_use_neutral_colors_for_both_sides() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let neutral = collapsed_hunk_header_bg(theme);
+
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, false)),
+                    PatchSplitColumn::Left,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, false)),
+                    PatchSplitColumn::Right,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(false, true)),
+                    PatchSplitColumn::Left,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(false, true)),
+                    PatchSplitColumn::Right,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    PatchSplitColumn::Left,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(
+                    theme,
+                    Some(collapsed_hunk(true, true)),
+                    PatchSplitColumn::Right,
+                ),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(theme, None, PatchSplitColumn::Left),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_bg(theme, None, PatchSplitColumn::Right),
+                neutral
+            );
+            assert_eq!(
+                collapsed_split_hunk_fg(theme, PatchSplitColumn::Left),
+                theme.colors.text_muted
+            );
+            assert_eq!(
+                collapsed_split_hunk_fg(theme, PatchSplitColumn::Right),
+                theme.colors.text_muted
+            );
+        }
+    }
 }

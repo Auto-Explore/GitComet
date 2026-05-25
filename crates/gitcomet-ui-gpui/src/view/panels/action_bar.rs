@@ -4,7 +4,14 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-pub(in super::super) const ACTION_BAR_HEIGHT: Pixels = px(components::CONTROL_HEIGHT_PX + 8.0);
+const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 8.0;
+
+pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
+where
+    C: gpui::BorrowAppContext,
+{
+    crate::ui_scale::design_px(ACTION_BAR_HEIGHT_PX, cx)
+}
 
 fn head_branch_has_tracking_upstream(
     head_branch: &Loadable<String>,
@@ -50,7 +57,6 @@ pub(in super::super) struct ActionBarView {
     theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
     open_terminal_repo_ids: HashSet<RepoId>,
@@ -82,7 +88,6 @@ impl ActionBarView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
-        tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
@@ -104,7 +109,6 @@ impl ActionBarView {
             theme,
             _ui_model_subscription: subscription,
             root_view,
-            tooltip_host,
             notify_fingerprint,
             active_context_menu_invoker: None,
             open_terminal_repo_ids: HashSet::default(),
@@ -152,29 +156,6 @@ impl ActionBarView {
     fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
-    }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-        false
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-        false
     }
 
     fn open_popover_at(
@@ -226,12 +207,17 @@ impl ActionBarView {
 impl Render for ActionBarView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let action_bar_height = action_bar_height(cx);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
         let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
-        let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, px(14.0));
-        let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
+        let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
+        let spinner =
+            |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(14.0));
         let count_badge = |count: usize, color: gpui::Rgba| {
             div()
                 .text_xs()
@@ -350,21 +336,13 @@ impl Render for ActionBarView {
                             .min_w(px(0.0))
                             .text_sm()
                             .text_color(theme.colors.text_muted)
-                            .line_clamp(1)
-                            .child(repo_title),
+                            .child(components::TruncatedText::path(repo_title).render(cx)),
                     ),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);
             }))
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Select repository".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+            .gitcomet_tooltip(theme, "Select repository".into());
 
         let branch_picker = div()
             .id("branch_picker")
@@ -391,14 +369,7 @@ impl Render for ActionBarView {
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(PopoverKind::BranchPicker, e.position(), window, cx);
             }))
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Select branch".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+            .gitcomet_tooltip(theme, "Select branch".into());
 
         let pull_color = if pull_count > 0 {
             theme.colors.warning
@@ -466,16 +437,12 @@ impl Render for ActionBarView {
                     ),
                 )
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme),
+                .render(theme, ui_scale_percent),
             )
-            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text = pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref());
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+            .gitcomet_tooltip(
+                theme,
+                pull_tooltip_text(pull_count, pull_tracking_branch_name.as_deref()),
+            );
 
         let push_color = if push_count > 0 {
             theme.colors.success
@@ -485,6 +452,11 @@ impl Render for ActionBarView {
         let terminal_is_open = self
             .active_repo_id()
             .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
+        let terminal_tooltip: SharedString = if terminal_is_open {
+            "Hide terminal".into()
+        } else {
+            "Show terminal".into()
+        };
         let terminal = components::Button::new("terminal", "Terminal")
             .start_slot(icon("icons/terminal.svg", icon_primary))
             .style(components::ButtonStyle::Outlined)
@@ -496,18 +468,7 @@ impl Render for ActionBarView {
                     root.toggle_terminal_for_active_repo(window, cx);
                 });
             })
-            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text: SharedString = if terminal_is_open {
-                    "Hide terminal".into()
-                } else {
-                    "Show terminal".into()
-                };
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+            .gitcomet_tooltip(theme, terminal_tooltip);
         let mut push_main = components::Button::new("push_main", "Push")
             .borderless()
             .start_slot(if push_loading {
@@ -613,16 +574,12 @@ impl Render for ActionBarView {
                     ),
                 )
                 .style(components::SplitButtonStyle::Outlined)
-                .render(theme),
+                .render(theme, ui_scale_percent),
             )
-            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text = push_tooltip_text(push_count, push_tracking_branch_name.as_deref());
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+            .gitcomet_tooltip(
+                theme,
+                push_tooltip_text(push_count, push_tracking_branch_name.as_deref()),
+            );
 
         let stash_prompt_invoker: SharedString = "stash_btn".into();
         let stash_prompt_active = self
@@ -630,7 +587,7 @@ impl Render for ActionBarView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == stash_prompt_invoker.as_ref());
         let stash = components::Button::new("stash", "Stash")
-            .start_slot(icon("icons/box.svg", icon_primary))
+            .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
             .style(components::ButtonStyle::Outlined)
             .selected(stash_prompt_active)
             .selected_bg(menu_selected_bg)
@@ -639,18 +596,14 @@ impl Render for ActionBarView {
                 this.activate_context_menu_invoker(stash_prompt_invoker.clone(), cx);
                 this.open_popover_for_bounds(PopoverKind::StashPrompt, bounds, window, cx);
             })
-            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                let text: SharedString = if can_stash {
+            .gitcomet_tooltip(
+                theme,
+                if can_stash {
                     "Create stash".into()
                 } else {
                     "No changes to stash".into()
-                };
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+                },
+            );
 
         let create_branch_invoker: SharedString = "create_branch_btn".into();
         let create_branch_active = self
@@ -666,18 +619,11 @@ impl Render for ActionBarView {
                 this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
                 this.open_popover_for_bounds(PopoverKind::CreateBranch, bounds, window, cx);
             })
-            .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                let text: SharedString = "Create branch".into();
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(text), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&text, cx);
-                }
-            }));
+            .gitcomet_tooltip(theme, "Create branch".into());
 
         div()
             .w_full()
-            .h(ACTION_BAR_HEIGHT)
+            .h(action_bar_height)
             .flex_none()
             .flex()
             .items_center()

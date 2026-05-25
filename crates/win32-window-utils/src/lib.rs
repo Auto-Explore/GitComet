@@ -2,18 +2,31 @@ use std::ptr::null;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, IsIconic, IsZoomed,
-    MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, PostMessageW, SC_CLOSE, SC_MAXIMIZE,
-    SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SW_RESTORE, SetForegroundWindow, ShowWindowAsync,
-    TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx, WINDOW_STYLE,
-    WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, HTCAPTION, IsIconic,
+    IsZoomed, MENU_ITEM_FLAGS, MF_BYCOMMAND, MF_ENABLED, MF_GRAYED, PostMessageW, SC_CLOSE,
+    SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SW_RESTORE, SetForegroundWindow,
+    ShowWindowAsync, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx,
+    WINDOW_STYLE, WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
+    WS_THICKFRAME,
 };
 
 /// Restore a Win32 window from the maximized state.
 pub fn restore_window(hwnd: isize) -> bool {
     let hwnd = hwnd as HWND;
     unsafe { ShowWindowAsync(hwnd, SW_RESTORE) != 0 }
+}
+
+/// Begin a native Win32 window move for a client-side titlebar drag.
+pub fn begin_window_move(hwnd: isize) -> bool {
+    let hwnd = hwnd as HWND;
+    let command: WPARAM = (SC_MOVE as usize) + (HTCAPTION as usize);
+
+    unsafe {
+        let _ = ReleaseCapture();
+        PostMessageW(hwnd, WM_SYSCOMMAND, command, LPARAM::default()) != 0
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

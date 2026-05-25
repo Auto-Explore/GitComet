@@ -1,23 +1,451 @@
 use super::*;
+use crate::view::panes::main::DiffHorizontalScrollColumn;
+use crate::view::panes::main::diff_search::DiffSearchOptions;
+use gitcomet_core::domain::{
+    SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
+    SubmoduleStatus,
+};
+use gitcomet_state::model::{InlineSubmoduleDiffEntry, InlineSubmoduleDiffSection};
+use gpui::Focusable;
+
+struct DiffSearchOverlayLayer {
+    child: AnyElement,
+}
+
+impl IntoElement for DiffSearchOverlayLayer {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for DiffSearchOverlayLayer {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let _ = self.child.prepaint(window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        // Diff text rows paint in their own layers, so layer the search UI as a unit.
+        window.paint_layer(bounds, |window| self.child.paint(window, cx));
+    }
+}
+
+fn short_submodule_hash(commit_id: &CommitId) -> String {
+    let raw = commit_id.as_ref();
+    raw.chars().take(12).collect()
+}
+
+fn short_submodule_hash_opt(commit_id: Option<&CommitId>) -> String {
+    commit_id
+        .map(short_submodule_hash)
+        .unwrap_or_else(|| "missing".to_string())
+}
+
+fn full_submodule_hash_opt(commit_id: Option<&CommitId>) -> String {
+    commit_id
+        .map(|commit_id| commit_id.as_ref().to_string())
+        .unwrap_or_else(|| "missing".to_string())
+}
+
+fn submodule_range_label(kind: SubmoduleDiffRangeKind) -> &'static str {
+    match kind {
+        SubmoduleDiffRangeKind::StagedPointer => "Committed -> Index",
+        SubmoduleDiffRangeKind::UnstagedPointer => "Index -> Checked out",
+        SubmoduleDiffRangeKind::CommitHistory => "Parent -> Commit",
+    }
+}
+
+fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmoduleDiffEntry> {
+    let mut entries = Vec::new();
+    for range in &summary.ranges {
+        let Some((from_commit_id, to_commit_id)) = range.from.clone().zip(range.to.clone()) else {
+            continue;
+        };
+        entries.extend(range.changes.iter().map(|change| InlineSubmoduleDiffEntry {
+            path: change.path.clone(),
+            kind: change.kind,
+            target: DiffTarget::CommitRange {
+                from_commit_id: from_commit_id.clone(),
+                to_commit_id: to_commit_id.clone(),
+                path: Some(change.path.clone()),
+            },
+            section: InlineSubmoduleDiffSection::Range(range.kind),
+        }));
+    }
+    entries.extend(
+        summary
+            .live_staged
+            .iter()
+            .map(|change| InlineSubmoduleDiffEntry {
+                path: change.path.clone(),
+                kind: change.kind,
+                target: DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Staged,
+                },
+                section: InlineSubmoduleDiffSection::LiveStaged,
+            }),
+    );
+    entries.extend(
+        summary
+            .live_unstaged
+            .iter()
+            .map(|change| InlineSubmoduleDiffEntry {
+                path: change.path.clone(),
+                kind: change.kind,
+                target: DiffTarget::WorkingTree {
+                    path: change.path.clone(),
+                    area: DiffArea::Unstaged,
+                },
+                section: InlineSubmoduleDiffSection::LiveUnstaged,
+            }),
+    );
+    entries
+}
+
+impl Focusable for MainPaneView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.diff_panel_focus_handle.clone()
+    }
+}
 
 impl MainPaneView {
-    fn toggle_show_whitespace(&mut self) {
-        self.show_whitespace = !self.show_whitespace;
-        // Clear styled text caches so they rebuild with new whitespace setting.
-        self.clear_diff_text_style_caches();
-        self.clear_conflict_diff_style_caches();
-        self.conflict_three_way_segments_cache.clear();
+    pub(crate) fn handle_diff_shortcut(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let key = keystroke.key.as_str();
+        let mods = keystroke.modifiers;
+
+        let mut handled = false;
+
+        if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
+            if self.diff_search_active {
+                self.deactivate_diff_search(window, cx);
+                handled = true;
+            }
+            if !handled
+                && self.is_inline_submodule_diff_active()
+                && let Some(repo_id) = self.active_repo_id()
+            {
+                self.store
+                    .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
+                handled = true;
+            }
+            if !handled && let Some(repo_id) = self.active_repo_id() {
+                self.clear_status_multi_selection(repo_id, cx);
+                self.clear_diff_selection_or_exit(repo_id, cx);
+                handled = true;
+            }
+        }
+
+        if !handled && mods.secondary() && mods.number_of_modifiers() == 1 && key == "f" {
+            handled = self.open_search_for_active_view(window, cx);
+        }
+
+        if !handled
+            && self.diff_search_active
+            && matches!(key, "f2" | "f3")
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+        {
+            if key == "f2" {
+                self.diff_search_prev_match();
+            } else {
+                self.diff_search_next_match();
+            }
+            handled = true;
+        }
+
+        if !handled
+            && key == "space"
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && !self.is_inline_submodule_diff_active()
+            && !self
+                .diff_raw_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && !self
+                .diff_search_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && let Some(repo_id) = self.active_repo_id()
+            && let Some(repo) = self.active_repo()
+            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+            && let DiffTarget::WorkingTree { path, area } = &diff_target
+        {
+            let path = path.clone();
+            let area = *area;
+            let change_tracking_view = self.active_change_tracking_view(cx);
+            let next_path_in_section = status_nav::status_navigation_context_for_repo(
+                repo,
+                &diff_target,
+                change_tracking_view,
+            )
+            .and_then(|navigation| navigation.next_or_prev_path());
+            let status_ready = repo.status_entries_for_area(area).is_some();
+
+            match (status_ready, area) {
+                (true, DiffArea::Unstaged) => {
+                    self.store.dispatch(Msg::StagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                    if let Some(next_path) = next_path_in_section {
+                        self.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::WorkingTree {
+                                path: next_path,
+                                area: DiffArea::Unstaged,
+                            },
+                        });
+                    } else {
+                        self.clear_diff_selection_or_exit(repo_id, cx);
+                    }
+                }
+                (true, DiffArea::Staged) => {
+                    self.store.dispatch(Msg::UnstagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                    if let Some(next_path) = next_path_in_section {
+                        self.store.dispatch(Msg::SelectDiff {
+                            repo_id,
+                            target: DiffTarget::WorkingTree {
+                                path: next_path,
+                                area: DiffArea::Staged,
+                            },
+                        });
+                    } else {
+                        self.clear_diff_selection_or_exit(repo_id, cx);
+                    }
+                }
+                (false, DiffArea::Unstaged) => {
+                    self.store.dispatch(Msg::StagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                }
+                (false, DiffArea::Staged) => {
+                    self.store.dispatch(Msg::UnstagePath {
+                        repo_id,
+                        path: path.clone(),
+                    });
+                }
+            }
+            self.rebuild_diff_cache(cx);
+            handled = true;
+        }
+
+        if !handled
+            && (key == "f1" || key == "f4")
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && let Some(repo_id) = self.active_repo_id()
+        {
+            let direction = if key == "f1" { -1 } else { 1 };
+            handled = self.try_select_adjacent_diff_file(repo_id, direction, window, cx);
+        }
+
+        let copy_target_is_focused = self
+            .diff_raw_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window);
+        let is_file_preview = self.is_file_preview_active();
+        if is_file_preview {
+            if !handled
+                && !copy_target_is_focused
+                && (mods.control || mods.platform)
+                && !mods.alt
+                && !mods.function
+                && key == "c"
+                && self.diff_text_has_selection()
+            {
+                self.copy_selected_diff_text_to_clipboard(cx);
+                handled = true;
+            }
+
+            if !handled
+                && !copy_target_is_focused
+                && (mods.control || mods.platform)
+                && !mods.alt
+                && !mods.function
+                && key == "a"
+            {
+                self.select_all_diff_text();
+                handled = true;
+            }
+
+            return handled;
+        }
+
+        let conflict_resolver_active = self.is_conflict_resolver_active();
+        let markdown_preview_active = self.is_markdown_preview_active();
+        let conflict_preview_active = self.is_conflict_rendered_preview_active();
+
+        if mods.alt && !mods.control && !mods.platform && !mods.function {
+            match key {
+                "i" | "s" => {
+                    if conflict_resolver_active {
+                        handled = false;
+                    } else if self.active_conflict_target().is_some() {
+                        self.diff_view = DiffViewMode::Split;
+                        self.clear_diff_text_style_caches();
+                        handled = true;
+                    } else if !markdown_preview_active && !self.is_file_preview_active() {
+                        self.diff_view = if key == "i" {
+                            DiffViewMode::Inline
+                        } else {
+                            DiffViewMode::Split
+                        };
+                        self.clear_diff_text_style_caches();
+                        handled = true;
+                    }
+                }
+                "w" if !markdown_preview_active && !conflict_preview_active => {
+                    self.toggle_reveal_whitespace_chars(cx);
+                    handled = true;
+                }
+                "up" => {
+                    handled = self.navigate_prev_diff_change(cx);
+                }
+                "down" => {
+                    handled = self.navigate_next_diff_change(cx);
+                }
+                _ => {}
+            }
+        }
+
+        if !handled
+            && matches!(key, "f2" | "f3" | "f7")
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+        {
+            match key {
+                "f2" => {
+                    let _ = self.navigate_prev_search_match_or_diff_change(cx);
+                }
+                "f3" => {
+                    let _ = self.navigate_next_search_match_or_diff_change(cx);
+                }
+                "f7" if mods.shift => {
+                    let _ = self.navigate_prev_diff_change(cx);
+                }
+                "f7" => {
+                    let _ = self.navigate_next_diff_change(cx);
+                }
+                _ => {}
+            }
+            handled = true;
+        }
+
+        if !handled
+            && conflict_resolver_active
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && !copy_target_is_focused
+            && !self
+                .conflict_resolver_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && self.conflict_resolver_conflict_count() > 0
+            && let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
+        {
+            self.conflict_resolver_pick_active_conflict(choice, cx);
+            handled = true;
+        }
+
+        if !handled
+            && !copy_target_is_focused
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && key == "c"
+            && self.diff_text_has_selection()
+        {
+            self.copy_selected_diff_text_to_clipboard(cx);
+            handled = true;
+        }
+
+        if !handled
+            && !copy_target_is_focused
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && key == "a"
+        {
+            self.select_all_diff_text();
+            handled = true;
+        }
+
+        handled
+    }
+
+    fn toggle_reveal_whitespace_chars(&mut self, cx: &mut gpui::Context<Self>) {
+        self.set_diff_reveal_whitespace_chars_and_persist(!self.reveal_whitespace_chars, cx);
     }
 
     fn prepare_source_mode_for_diff_search(&mut self, cx: &mut gpui::Context<Self>) {
         if self.is_markdown_preview_active() {
             self.rendered_preview_modes
                 .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
-            let wants_file_diff = !self.is_file_preview_active()
-                && !self.is_worktree_target_directory()
-                && self.active_repo().is_some_and(|repo| {
-                    Self::is_file_diff_target(repo.diff_state.diff_target.as_ref())
-                });
+            let wants_file_diff = self.wants_file_diff_view(self.is_file_preview_active());
             if wants_file_diff {
                 self.ensure_file_diff_cache(cx);
             }
@@ -29,59 +457,971 @@ impl MainPaneView {
 
     fn activate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.prepare_source_mode_for_diff_search(cx);
+        let was_search_active = self.diff_search_active;
         self.diff_search_active = true;
         self.clear_diff_text_query_overlay_cache();
         self.worktree_preview_segments_cache_path = None;
         self.worktree_preview_segments_cache.clear();
         self.clear_conflict_diff_query_overlay_caches();
-        self.diff_search_recompute_matches();
+        self.diff_search_cancel_pending_query_recompute();
+        if was_search_active {
+            self.diff_search_recompute_matches();
+        } else {
+            self.diff_search_recompute_matches_and_scroll_to_first();
+        }
+        let focus = self.diff_search_input.read(cx).focus_handle();
+        window.focus(&focus, cx);
+        self.diff_search_input
+            .update(cx, |input, cx| input.select_all_text(cx));
+    }
+
+    fn deactivate_diff_search(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.diff_search_cancel_pending_query_recompute();
+        self.diff_search_active = false;
+        self.diff_search_query = SharedString::default();
+        self.diff_search_regex_error = None;
+        self.diff_search_matches.clear();
+        self.diff_search_match_ix = None;
+        self.diff_search_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.diff_search_scroll.set_offset(point(px(0.0), px(0.0)));
+        self.clear_diff_text_query_overlay_cache();
+        self.clear_worktree_preview_segments_cache();
+        self.clear_conflict_diff_query_overlay_caches();
+        window.focus(&self.diff_panel_focus_handle, cx);
+    }
+
+    fn focus_diff_search_input(&self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         let focus = self.diff_search_input.read(cx).focus_handle();
         window.focus(&focus, cx);
     }
 
-    pub(in crate::view) fn diff_view(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
+    fn refresh_diff_search_after_option_change(&mut self) {
+        let query = self.diff_search_query.clone();
+        self.invalidate_diff_text_query_overlay_cache(query.as_ref(), self.diff_search_options);
+        self.clear_worktree_preview_segments_cache();
+        self.clear_conflict_diff_query_overlay_caches();
+        self.diff_search_cancel_pending_query_recompute();
+        self.diff_search_recompute_matches_and_scroll_to_first();
+    }
+
+    fn set_diff_search_options(
+        &mut self,
+        next: DiffSearchOptions,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_search_options != next {
+            self.diff_search_options = next;
+            self.refresh_diff_search_after_option_change();
+        }
+        self.focus_diff_search_input(window, cx);
+        cx.notify();
+    }
+
+    fn insert_diff_search_line_break(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.diff_search_input.update(cx, |input, cx| {
+            input.replace_selection_utf8("\n", cx);
+        });
+        self.focus_diff_search_input(window, cx);
+        cx.notify();
+    }
+
+    fn restore_diff_panel_focus_after_toolbar_action(
+        &self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let focus = self.diff_panel_focus_handle.clone();
+        window.focus(&focus, cx);
+        cx.focus_self(window);
+        let focus = self.diff_panel_focus_handle.clone();
+        window.on_next_frame(move |window, cx| {
+            window.focus(&focus, cx);
+        });
+    }
+
+    pub(in crate::view) fn open_search_for_active_view(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let diff_visible = self
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+            .is_some();
+        if !diff_visible {
+            return false;
+        }
+
+        self.activate_diff_search(window, cx);
+        true
+    }
+
+    fn render_diff_search_overlay(
+        &mut self,
+        theme: AppTheme,
+        ui_scale_percent: u32,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.diff_search_active {
+            return None;
+        }
+
+        let query = self.diff_search_query.as_ref();
+        let regex_invalid = self.diff_search_regex_error.is_some();
+        let match_label: SharedString = if query.is_empty() {
+            "Type to search".into()
+        } else if regex_invalid {
+            "Invalid regex".into()
+        } else if self.diff_search_matches.is_empty() {
+            "No matches".into()
+        } else {
+            let ix = self
+                .diff_search_match_ix
+                .unwrap_or(0)
+                .min(self.diff_search_matches.len().saturating_sub(1));
+            format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
+        };
+        let match_label_color = if regex_invalid && !query.is_empty() {
+            theme.colors.danger
+        } else {
+            theme.colors.text_muted
+        };
+        let option_selected_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
+        let options = self.diff_search_options;
+        let compact_control_height = px(26.0);
+        let compact_icon_button_width = px(22.0);
+        let compact_option_button_width = px(24.0);
+        let max_search_input_height = px(super::super::COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX);
+
+        let panel = div()
+            .flex()
+            .items_start()
+            .gap(px(2.0))
+            .px(px(4.0))
+            .py(px(2.0))
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(theme.colors.surface_bg_elevated)
+            .shadow_sm()
+            .child(
+                div()
+                    .relative()
+                    .w(px(220.0))
+                    .min_w(px(140.0))
+                    .debug_selector(|| "diff_search_input_slot".to_string())
+                    .child(
+                        div()
+                            .id("diff_search_input_scroll")
+                            .relative()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .max_h(max_search_input_height)
+                            .pr(components::Scrollbar::visible_gutter(
+                                self.diff_search_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            ))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.diff_search_scroll)
+                            .child(self.diff_search_input.clone()),
+                    )
+                    .child(
+                        components::Scrollbar::new(
+                            "diff_search_scrollbar",
+                            self.diff_search_scroll.clone(),
+                        )
+                        .render(theme),
+                    ),
+            )
+            .child(
+                components::Button::new("diff_search_newline", "")
+                    .start_slot(svg_icon(
+                        "icons/line_break.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.insert_diff_search_line_break(window, cx);
+                    })
+                    .w(compact_icon_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Insert newline (Shift+Enter)".into())
+                    .debug_selector(|| "diff_search_newline".to_string()),
+            )
+            .child(
+                components::Button::new("diff_search_match_case", "Aa")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(options.match_case)
+                    .selected_bg(option_selected_bg)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        let mut next = this.diff_search_options;
+                        next.match_case = !next.match_case;
+                        this.set_diff_search_options(next, window, cx);
+                    })
+                    .w(compact_option_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Match case".into())
+                    .debug_selector(|| "diff_search_match_case".to_string()),
+            )
+            .child(
+                components::Button::new("diff_search_whole_word", "W")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(options.whole_word)
+                    .selected_bg(option_selected_bg)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        let mut next = this.diff_search_options;
+                        next.whole_word = !next.whole_word;
+                        this.set_diff_search_options(next, window, cx);
+                    })
+                    .w(compact_option_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Match whole word".into())
+                    .debug_selector(|| "diff_search_whole_word".to_string()),
+            )
+            .child(
+                components::Button::new("diff_search_regex", ".*")
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(options.regex)
+                    .selected_bg(option_selected_bg)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        let mut next = this.diff_search_options;
+                        next.regex = !next.regex;
+                        this.set_diff_search_options(next, window, cx);
+                    })
+                    .w(compact_option_button_width)
+                    .h(compact_control_height)
+                    .gitcomet_tooltip(theme, "Use regular expression".into())
+                    .debug_selector(|| "diff_search_regex".to_string()),
+            )
+            .child(
+                div()
+                    .w(px(104.0))
+                    .min_w(px(104.0))
+                    .max_w(px(104.0))
+                    .h(compact_control_height)
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_xs()
+                    .text_color(match_label_color)
+                    .debug_selector(|| "diff_search_match_label".to_string())
+                    .child(match_label),
+            )
+            .child(
+                components::Button::new("diff_search_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.deactivate_diff_search(window, cx);
+                        cx.notify();
+                    })
+                    .w(compact_icon_button_width)
+                    .h(compact_control_height)
+                    .debug_selector(|| "diff_search_close".to_string()),
+            )
+            .occlude()
+            .with_animation(
+                "diff_search_overlay_mount",
+                Animation::new(Duration::from_millis(120)).with_easing(gpui::quadratic),
+                |panel, delta| {
+                    let slide_y = (1.0 - delta) * -8.0;
+                    panel.opacity(delta).relative().top(px(slide_y))
+                },
+            );
+
+        let overlay_panel = div()
+            .id("diff_search_overlay_panel")
+            .debug_selector(|| "diff_search_overlay".to_string())
+            .absolute()
+            .top(components::control_height_md(ui_scale_percent))
+            .right(px(8.0))
+            .child(panel)
+            .into_any_element();
+
+        let overlay = div()
+            .id("diff_search_overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(overlay_panel)
+            .into_any_element();
+
+        Some(DiffSearchOverlayLayer { child: overlay }.into_any_element())
+    }
+
+    fn prepare_submodule_hash_input(
+        &mut self,
+        slot: usize,
+        value: String,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let Some(input) = self
+            .submodule_hash_inputs
+            .get(slot % self.submodule_hash_inputs.len().max(1))
+            .cloned()
+        else {
+            return self.diff_raw_input.clone();
+        };
+        input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_text(value, cx);
+            input.set_read_only(true, cx);
+        });
+        input
+    }
+
+    fn render_submodule_summary(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let Some(repo) = self.active_repo() else {
+            return components::empty_state(theme, "Submodule", "No repository.")
+                .into_any_element();
+        };
+        let Some(repo_id) = self.active_repo_id() else {
+            return components::empty_state(theme, "Submodule", "No repository.")
+                .into_any_element();
+        };
+        let Some(selected_target) = repo.diff_state.diff_target.as_ref().cloned() else {
+            return components::empty_state(theme, "Submodule", "No submodule selected.")
+                .into_any_element();
+        };
+        let (submodule_path, selected_area) = match &selected_target {
+            DiffTarget::WorkingTree { path, area } => (path.clone(), Some(*area)),
+            DiffTarget::Commit {
+                path: Some(path), ..
+            } => (path.clone(), None),
+            _ => {
+                return components::empty_state(theme, "Submodule", "No submodule selected.")
+                    .into_any_element();
+            }
+        };
+
+        let repo_workdir = repo.spec.workdir.clone();
+        let open_path = repo_workdir.join(&submodule_path);
+        let fallback_status = match &repo.submodules {
+            Loadable::Ready(submodules) => submodules
+                .iter()
+                .find(|submodule| submodule.path == submodule_path)
+                .map(|submodule| submodule.status),
+            _ => None,
+        };
+        let fallback_initialized = open_path.join(".git").exists();
+
+        match &repo.diff_state.submodule_summary {
+            Loadable::NotLoaded | Loadable::Loading => {
+                components::empty_state(theme, "Submodule", "Loading submodule summary…")
+                    .into_any_element()
+            }
+            Loadable::Error(error) => {
+                components::empty_state(theme, "Submodule", error.clone()).into_any_element()
+            }
+            Loadable::Ready(summary) => {
+                let summary = (**summary).clone();
+                let inline_entries = inline_submodule_entries(&summary);
+                let summary_status = summary.status.or(fallback_status);
+                let initialized = match summary_status {
+                    Some(SubmoduleStatus::NotInitialized) => false,
+                    Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping) => false,
+                    Some(_) => true,
+                    None => fallback_initialized,
+                };
+                let can_open = initialized;
+                let can_change_pointer = summary.mode == SubmoduleDiffSummaryMode::Worktree
+                    && can_open
+                    && !matches!(
+                        summary_status,
+                        Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping)
+                    );
+                let show_load = summary.mode == SubmoduleDiffSummaryMode::Worktree
+                    && (matches!(summary_status, Some(SubmoduleStatus::NotInitialized))
+                        || (summary_status.is_none() && !fallback_initialized));
+                let submodule_repo_path = repo_workdir.join(&summary.path);
+                let summary_path = summary.path.clone();
+
+                let status_badge = |status: SubmoduleStatus| {
+                    let (label, color) = match status {
+                        SubmoduleStatus::UpToDate => ("Loaded", theme.colors.success),
+                        SubmoduleStatus::NotInitialized => (
+                            "Not loaded",
+                            with_alpha(
+                                theme.colors.text_muted,
+                                if theme.is_dark { 0.86 } else { 0.94 },
+                            ),
+                        ),
+                        SubmoduleStatus::HeadMismatch => ("Head mismatch", theme.colors.warning),
+                        SubmoduleStatus::MergeConflict => ("Conflict", theme.colors.danger),
+                        SubmoduleStatus::MissingMapping => ("Missing mapping", theme.colors.danger),
+                        SubmoduleStatus::Unknown(_) => ("Unknown", theme.colors.text_muted),
+                    };
+
+                    div()
+                        .px_1p5()
+                        .h(px(20.0))
+                        .rounded(px(theme.radii.row))
+                        .border_1()
+                        .border_color(with_alpha(color, if theme.is_dark { 0.45 } else { 0.32 }))
+                        .bg(with_alpha(color, if theme.is_dark { 0.14 } else { 0.10 }))
+                        .text_xs()
+                        .text_color(color)
+                        .child(label)
+                };
+
+                let change_row_icon = |kind: FileStatusKind| match kind {
+                    FileStatusKind::Untracked | FileStatusKind::Added => {
+                        ("icons/plus.svg", theme.colors.success)
+                    }
+                    FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
+                    FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
+                    FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+                    FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+                };
+
+                let render_change_rows =
+                    |section_key: &str,
+                     changes: &[SubmoduleInnerChange],
+                     range_commits: Option<(CommitId, CommitId)>,
+                     live_area: Option<DiffArea>,
+                     _this: &mut MainPaneView,
+                     cx: &mut gpui::Context<MainPaneView>| {
+                        if changes.is_empty() {
+                            return vec![
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .text_sm()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("No inner changes.")
+                                    .into_any_element(),
+                            ];
+                        }
+
+                        changes
+                            .iter()
+                            .map(|change| {
+                                let (icon, icon_color) = change_row_icon(change.kind);
+                                let additions = change
+                                    .additions
+                                    .map(|value| format!("+{value}"))
+                                    .unwrap_or_else(|| "—".to_string());
+                                let deletions = change
+                                    .deletions
+                                    .map(|value| format!("-{value}"))
+                                    .unwrap_or_else(|| "—".to_string());
+                                let change_path = change.path.clone();
+                                let target = range_commits.as_ref().map_or_else(
+                                    || {
+                                        live_area.map(|area| DiffTarget::WorkingTree {
+                                            path: change_path.clone(),
+                                            area,
+                                        })
+                                    },
+                                    |(from_commit_id, to_commit_id)| {
+                                        Some(DiffTarget::CommitRange {
+                                            from_commit_id: from_commit_id.clone(),
+                                            to_commit_id: to_commit_id.clone(),
+                                            path: Some(change_path.clone()),
+                                        })
+                                    },
+                                );
+                                let inline_selected_ix = target.as_ref().and_then(|target| {
+                                    inline_entries
+                                        .iter()
+                                        .position(|entry| &entry.target == target)
+                                });
+                                let repo_path_for_click = submodule_repo_path.clone();
+                                let repo_path_for_menu = submodule_repo_path.clone();
+                                let summary_path_for_inline = summary.path.clone();
+                                let inline_entries_for_click = inline_entries.clone();
+                                let context_menu_path = change_path.clone();
+
+                                let mut row = div()
+                                .id(format!("{}_{}", section_key, change_path.display()))
+                                .px_2()
+                                .py_1()
+                                .rounded(px(theme.radii.row))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(super::super::icons::svg_icon(
+                                    icon,
+                                    icon_color,
+                                    px(12.0),
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .text_sm()
+                                        .line_clamp(1)
+                                        .child(change_path.display().to_string()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_family(
+                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                        )
+                                        .text_color(theme.colors.success)
+                                        .child(additions),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_family(
+                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                        )
+                                        .text_color(theme.colors.danger)
+                                        .child(deletions),
+                                );
+
+                                if let Some(target) = target {
+                                    row = row
+                                        .cursor(CursorStyle::PointingHand)
+                                        .hover(move |row| row.bg(theme.colors.hover))
+                                        .on_click(cx.listener(
+                                            move |this, _e: &ClickEvent, _window, cx| {
+                                                let selected_ix = inline_selected_ix.unwrap_or(0);
+                                                this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+                                                    repo_id,
+                                                    submodule_repo_path: repo_path_for_click
+                                                        .clone(),
+                                                    parent_submodule_path: summary_path_for_inline
+                                                        .clone(),
+                                                    entries: inline_entries_for_click.clone(),
+                                                    selected_ix,
+                                                });
+                                                cx.notify();
+                                            },
+                                        ))
+                                        .on_mouse_down(
+                                            MouseButton::Right,
+                                            cx.listener(
+                                                move |this, e: &MouseDownEvent, window, cx| {
+                                                    cx.stop_propagation();
+                                                    this.activate_context_menu_invoker(
+                                                        format!(
+                                                            "submodule_inner_diff_menu_{}_{}",
+                                                            repo_id.0,
+                                                            context_menu_path.display()
+                                                        )
+                                                        .into(),
+                                                        cx,
+                                                    );
+                                                    this.open_popover_at(
+                                                        PopoverKind::SubmoduleInnerDiffMenu {
+                                                            repo_id,
+                                                            submodule_repo_path: repo_path_for_menu
+                                                                .clone(),
+                                                            target: target.clone(),
+                                                        },
+                                                        e.position,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                },
+                                            ),
+                                        );
+                                }
+
+                                row.into_any_element()
+                            })
+                            .collect::<Vec<_>>()
+                    };
+
+                let render_change_section =
+                    |title: &'static str,
+                     section_key: &str,
+                     changes: &[SubmoduleInnerChange],
+                     range_commits: Option<(CommitId, CommitId)>,
+                     live_area: Option<DiffArea>,
+                     this: &mut MainPaneView,
+                     cx: &mut gpui::Context<MainPaneView>| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(title),
+                            )
+                            .children(render_change_rows(
+                                section_key,
+                                changes,
+                                range_commits,
+                                live_area,
+                                this,
+                                cx,
+                            ))
+                            .into_any_element()
+                    };
+
+                let mut range_sections = Vec::new();
+                for (slot, range) in summary.ranges.iter().enumerate() {
+                    let emphasized = match range.kind {
+                        SubmoduleDiffRangeKind::StagedPointer => {
+                            selected_area == Some(DiffArea::Staged)
+                        }
+                        SubmoduleDiffRangeKind::UnstagedPointer => {
+                            selected_area == Some(DiffArea::Unstaged)
+                        }
+                        SubmoduleDiffRangeKind::CommitHistory => true,
+                    };
+                    let changed = range.from != range.to;
+                    let range_hash_input = self.prepare_submodule_hash_input(
+                        slot,
+                        format!(
+                            "{} -> {}",
+                            full_submodule_hash_opt(range.from.as_ref()),
+                            full_submodule_hash_opt(range.to.as_ref())
+                        ),
+                        theme,
+                        cx,
+                    );
+                    let range_commits = match (range.from.as_ref(), range.to.as_ref()) {
+                        (Some(from), Some(to)) => Some((from.clone(), to.clone())),
+                        _ => None,
+                    };
+
+                    let mut section = div()
+                        .id(format!("submodule_range_{:?}", range.kind))
+                        .px_2()
+                        .py_2()
+                        .rounded(px(theme.radii.row))
+                        .border_1()
+                        .border_color(if emphasized {
+                            theme.colors.active
+                        } else {
+                            theme.colors.border
+                        })
+                        .bg(if emphasized {
+                            with_alpha(theme.colors.hover, if theme.is_dark { 0.28 } else { 0.48 })
+                        } else {
+                            gpui::rgba(0x00000000)
+                        })
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(theme.colors.text_muted)
+                                        .child(submodule_range_label(range.kind)),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_family(
+                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                        )
+                                        .text_color(if changed {
+                                            theme.colors.text
+                                        } else {
+                                            theme.colors.text_muted
+                                        })
+                                        .child(format!(
+                                            "{} -> {}",
+                                            short_submodule_hash_opt(range.from.as_ref()),
+                                            short_submodule_hash_opt(range.to.as_ref())
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child("Hashes"),
+                                )
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .min_w(px(0.0))
+                                        .font_family(
+                                            crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                        )
+                                        .child(range_hash_input),
+                                ),
+                        );
+                    if let Some(reason) = range.unavailable_reason.as_ref() {
+                        section = section.child(
+                            div()
+                                .px_2()
+                                .text_sm()
+                                .text_color(theme.colors.text_muted)
+                                .child(reason.clone()),
+                        );
+                    }
+                    section = section.child(render_change_section(
+                        "Changes between hashes",
+                        &format!("submodule_range_{:?}", range.kind),
+                        &range.changes,
+                        range_commits,
+                        None,
+                        self,
+                        cx,
+                    ));
+                    range_sections.push(section.into_any_element());
+                }
+
+                div()
+                    .id("submodule_summary_scroll")
+                    .flex()
+                    .flex_col()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .gap_2()
+                    .bg(theme.colors.window_bg)
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(super::super::icons::svg_icon(
+                                        "icons/box.svg",
+                                        match summary_status.unwrap_or(SubmoduleStatus::UpToDate) {
+                                            SubmoduleStatus::NotInitialized => with_alpha(
+                                                theme.colors.text_muted,
+                                                if theme.is_dark { 0.82 } else { 0.94 },
+                                            ),
+                                            SubmoduleStatus::HeadMismatch => theme.colors.warning,
+                                            SubmoduleStatus::MergeConflict
+                                            | SubmoduleStatus::MissingMapping => {
+                                                theme.colors.danger
+                                            }
+                                            SubmoduleStatus::UpToDate
+                                            | SubmoduleStatus::Unknown(_) => theme.colors.accent,
+                                        },
+                                        px(14.0),
+                                    ))
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(summary.path.display().to_string()),
+                                    )
+                                    .when_some(summary_status, |this, status| {
+                                        this.child(status_badge(status))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        components::Button::new(
+                                            "submodule_summary_open",
+                                            "Open submodule",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .disabled(!can_open)
+                                        .on_click(
+                                            theme,
+                                            cx,
+                                            move |this, _e, _w, cx| {
+                                                if can_open {
+                                                    this.store
+                                                        .dispatch(Msg::OpenRepo(open_path.clone()));
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ),
+                                    )
+                                    .when(show_load, |row| {
+                                        let load_path = summary.path.clone();
+                                        row.child(
+                                            components::Button::new(
+                                                "submodule_summary_load",
+                                                "Load submodule",
+                                            )
+                                            .style(components::ButtonStyle::Outlined)
+                                            .on_click(
+                                                theme,
+                                                cx,
+                                                move |this, _e, _w, cx| {
+                                                    this.store.dispatch(Msg::LoadSubmodule {
+                                                        repo_id,
+                                                        path: load_path.clone(),
+                                                    });
+                                                    cx.notify();
+                                                },
+                                            ),
+                                        )
+                                    })
+                                    .child(
+                                        components::Button::new(
+                                            "submodule_summary_change_pointer",
+                                            "Change pointer…",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .disabled(!can_change_pointer)
+                                        .on_click(
+                                            theme,
+                                            cx,
+                                            move |this, e, window, cx| {
+                                                if !can_change_pointer {
+                                                    return;
+                                                }
+                                                this.open_popover_at(
+                                                    PopoverKind::submodule(
+                                                        repo_id,
+                                                        SubmodulePopoverKind::ChangePointerPrompt {
+                                                            path: summary_path.clone(),
+                                                        },
+                                                    ),
+                                                    e.position(),
+                                                    window,
+                                                    cx,
+                                                );
+                                                cx.notify();
+                                            },
+                                        ),
+                                    ),
+                            ),
+                    )
+                    .children(range_sections)
+                    .when(
+                        summary.mode == SubmoduleDiffSummaryMode::Worktree
+                            && !summary.live_staged.is_empty(),
+                        |this| {
+                            this.child(render_change_section(
+                                "Uncommitted inner staged",
+                                "submodule_live_staged",
+                                &summary.live_staged,
+                                None,
+                                Some(DiffArea::Staged),
+                                self,
+                                cx,
+                            ))
+                        },
+                    )
+                    .when(
+                        summary.mode == SubmoduleDiffSummaryMode::Worktree
+                            && !summary.live_unstaged.is_empty(),
+                        |this| {
+                            this.child(render_change_section(
+                                "Uncommitted inner unstaged",
+                                "submodule_live_unstaged",
+                                &summary.live_unstaged,
+                                None,
+                                Some(DiffArea::Unstaged),
+                                self,
+                                cx,
+                            ))
+                        },
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+
+    pub(in crate::view) fn diff_view(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let repo_id = self.active_repo_id();
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
 
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
-        let title = self.diff_panel_title(theme);
+        let title = self.diff_panel_title(theme, cx);
+        let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
 
-        let untracked_directory_notice = self.untracked_directory_notice();
+        let has_submodule_summary = self
+            .active_repo()
+            .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));
+        let untracked_directory_notice = if has_submodule_summary || inline_submodule_diff_active {
+            None
+        } else {
+            self.untracked_directory_notice()
+        };
 
-        let is_file_preview = self.is_file_preview_active() && untracked_directory_notice.is_none();
+        let is_file_preview = self.is_file_preview_active()
+            && untracked_directory_notice.is_none()
+            && !has_submodule_summary
+            && !inline_submodule_diff_active;
+        let supports_diff_content_toggle = (inline_submodule_diff_active || !has_submodule_summary)
+            && self.supports_diff_content_mode_toggle(is_file_preview);
 
         if is_file_preview {
             self.ensure_selected_file_preview_loaded(cx);
-        } else if untracked_directory_notice.is_some()
+        } else if (has_submodule_summary
+            || inline_submodule_diff_active
+            || untracked_directory_notice.is_some())
             && matches!(self.worktree_preview, Loadable::Loading)
         {
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
             self.reset_worktree_preview_source_state();
-            self.diff_horizontal_min_width = px(0.0);
+            self.reset_diff_horizontal_scroll_state();
         }
-        let wants_file_diff = !is_file_preview
-            && !self.is_worktree_target_directory()
-            && self
-                .active_repo()
-                .is_some_and(|r| Self::is_file_diff_target(r.diff_state.diff_target.as_ref()));
+        let wants_file_diff =
+            supports_diff_content_toggle && self.wants_file_diff_view(is_file_preview);
+        let wants_collapsed_diff =
+            supports_diff_content_toggle && self.wants_collapsed_diff_view(is_file_preview);
 
         let repo = self.active_repo();
-        let conflict_target = repo.and_then(|repo| {
-            let DiffTarget::WorkingTree { path, area } = repo.diff_state.diff_target.as_ref()?
-            else {
-                return None;
-            };
-            if *area != DiffArea::Unstaged {
-                return None;
-            }
-            let conflict = repo
-                .status_entry_for_path(DiffArea::Unstaged, path.as_path())
-                .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
-            Some((path.clone(), conflict.conflict))
-        });
+        let conflict_target = (!inline_submodule_diff_active)
+            .then_some(())
+            .and(repo)
+            .and_then(|repo| {
+                let DiffTarget::WorkingTree { path, area } =
+                    repo.diff_state.diff_target.as_ref()?
+                else {
+                    return None;
+                };
+                if *area != DiffArea::Unstaged {
+                    return None;
+                }
+                let conflict = repo
+                    .status_entry_for_path(DiffArea::Unstaged, path.as_path())
+                    .filter(|entry| entry.kind == FileStatusKind::Conflicted)?;
+                Some((path.clone(), conflict.conflict))
+            });
         let (conflict_target_path, conflict_kind) = conflict_target
             .map(|(path, kind)| (Some(path), kind))
             .unwrap_or((None, None));
@@ -106,9 +1446,8 @@ impl MainPaneView {
         let is_conflict_compare = conflict_target_path.is_some() && conflict_strategy.is_none();
         let conflict_rendered_preview_active = self.is_conflict_rendered_preview_active();
 
-        let rendered_preview_kind = super::super::diff_target_rendered_preview_kind(
-            repo.and_then(|repo| repo.diff_state.diff_target.as_ref()),
-        );
+        let rendered_preview_kind =
+            super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
             wants_file_diff,
             is_file_preview,
@@ -120,8 +1459,10 @@ impl MainPaneView {
                 .rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown)
                 == RenderedPreviewMode::Rendered;
-        let is_image_diff_loaded = repo
-            .is_some_and(|repo| !matches!(repo.diff_state.diff_file_image, Loadable::NotLoaded));
+        let is_image_diff_loaded = wants_file_diff
+            && self
+                .rendered_file_image_diff_loadable()
+                .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
         let is_image_diff_view = wants_file_diff
             && is_image_diff_loaded
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
@@ -131,6 +1472,20 @@ impl MainPaneView {
         let (prev_file_btn, next_file_btn) = self.diff_prev_next_file_buttons(repo_id, theme, cx);
 
         let mut controls = div().flex().items_center().gap_1();
+        if self.is_inline_submodule_diff_active()
+            && let Some(repo_id) = repo_id
+        {
+            controls = controls.child(
+                components::Button::new("inline_submodule_back", "Back")
+                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "Esc"))
+                    .style(components::ButtonStyle::Outlined)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        this.store
+                            .dispatch(Msg::CloseInlineSubmoduleDiff { repo_id });
+                        cx.notify();
+                    }),
+            );
+        }
         let is_simple_conflict_strategy = matches!(
             self.conflict_resolver.strategy,
             Some(
@@ -182,24 +1537,33 @@ impl MainPaneView {
                             .is_some();
 
                     d.child(
-                        components::Button::new("conflict_prev", "Prev")
-                            .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                        components::Button::new("conflict_prev", "")
+                            .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
                             .style(components::ButtonStyle::Outlined)
                             .disabled(!can_nav_prev)
                             .on_click(theme, cx, |this, _e, _w, cx| {
                                 this.conflict_jump_prev(cx);
                                 cx.notify();
-                            }),
+                            })
+                            .gitcomet_tooltip(
+                                theme,
+                                "Previous conflict (F2 / Shift+F7 / Alt+Up)".into(),
+                            ),
                     )
                     .child(
-                        components::Button::new("conflict_next", "Next")
-                            .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                        components::Button::new("conflict_next", "")
+                            .start_slot(svg_icon(
+                                "icons/arrow_down.svg",
+                                theme.colors.text,
+                                px(14.0),
+                            ))
                             .style(components::ButtonStyle::Outlined)
                             .disabled(!can_nav_next)
                             .on_click(theme, cx, |this, _e, _w, cx| {
                                 this.conflict_jump_next(cx);
                                 cx.notify();
-                            }),
+                            })
+                            .gitcomet_tooltip(theme, "Next conflict (F3 / F7 / Alt+Down)".into()),
                     )
                 })
                 .when_some(next_file_btn, |d, btn| d.child(btn));
@@ -301,126 +1665,144 @@ impl MainPaneView {
                     });
             }
         } else if !is_file_preview {
+            let view_toggle_selected_bg =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+            let view_toggle_border = with_alpha(
+                theme.colors.text_muted,
+                if theme.is_dark { 0.38 } else { 0.28 },
+            );
+            let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
+
+            if supports_diff_content_toggle {
+                let diff_mode_invoker: SharedString = "diff_content_mode_header".into();
+                let diff_mode_active = self
+                    .active_context_menu_invoker
+                    .as_ref()
+                    .is_some_and(|id| id == &diff_mode_invoker);
+                let diff_mode_label = self.diff_content_mode.label();
+
+                controls = controls.child(
+                    div()
+                        .id("diff_content_mode_header")
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_1()
+                        .h(components::control_height(ui_scale_percent))
+                        .rounded(px(theme.radii.row))
+                        .when(diff_mode_active, |d| d.bg(theme.colors.active))
+                        .hover(move |s| {
+                            if diff_mode_active {
+                                s.bg(theme.colors.active)
+                            } else {
+                                s.bg(with_alpha(theme.colors.hover, 0.55))
+                            }
+                        })
+                        .active(move |s| s.bg(theme.colors.active))
+                        .cursor(CursorStyle::PointingHand)
+                        .child(
+                            div()
+                                .min_w(px(0.0))
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .text_sm()
+                                .child(diff_mode_label),
+                        )
+                        .child(svg_icon(
+                            "icons/chevron_down.svg",
+                            theme.colors.text_muted,
+                            px(12.0),
+                        ))
+                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.activate_context_menu_invoker(diff_mode_invoker.clone(), cx);
+                            this.open_popover_at(
+                                PopoverKind::DiffContentModeSettings,
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                        })),
+                );
+            }
+
             controls = controls.when_some(prev_file_btn, |d, btn| d.child(btn));
 
             if !is_image_diff_view {
                 let nav_entries = self.diff_nav_entries();
-                let current_nav_ix = self.diff_selection_anchor.unwrap_or(0);
-                let can_nav_prev =
-                    diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-                let can_nav_next =
-                    diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+                let can_nav_prev = diff_navigation::diff_nav_prev_target(
+                    &nav_entries,
+                    self.diff_nav_prev_current_ix(),
+                )
+                .is_some();
+                let can_nav_next = diff_navigation::diff_nav_next_target(
+                    &nav_entries,
+                    self.diff_nav_next_current_ix(),
+                )
+                .is_some();
 
-                let prev_hunk_btn = components::Button::new("diff_prev_hunk", "Prev")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F2"))
+                let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
+                    .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_prev)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.diff_jump_prev();
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Previous change (F2 / Shift+F7 / Alt+Up)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, "Previous change (F2 / Shift+F7 / Alt+Up)".into());
 
-                let next_hunk_btn = components::Button::new("diff_next_hunk", "Next")
-                    .separated_end_slot(Self::diff_nav_hotkey_hint(theme, "F3"))
+                let next_hunk_btn = components::Button::new("diff_next_hunk", "")
+                    .start_slot(svg_icon(
+                        "icons/arrow_down.svg",
+                        theme.colors.text,
+                        px(14.0),
+                    ))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_next)
                     .on_click(theme, cx, |this, _e, _w, cx| {
                         this.diff_jump_next();
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Next change (F3 / F7 / Alt+Down)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .gitcomet_tooltip(theme, "Next change (F3 / F7 / Alt+Down)".into());
 
-                let view_toggle_selected_bg =
-                    with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
-                let view_toggle_border = with_alpha(
-                    theme.colors.text_muted,
-                    if theme.is_dark { 0.38 } else { 0.28 },
-                );
-                let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
                     .borderless()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Inline)
                     .selected_bg(view_toggle_selected_bg)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         this.diff_view = DiffViewMode::Inline;
                         this.clear_diff_text_style_caches();
-                        if this.diff_search_active
-                            && !this.diff_search_query.as_ref().trim().is_empty()
-                        {
-                            this.diff_search_recompute_matches();
+                        if this.diff_search_has_query() {
+                            this.diff_search_recompute_matches_preserving_current();
                         }
+                        this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Inline diff view (Alt+I)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .debug_selector(|| "diff_inline".to_string())
+                    .gitcomet_tooltip(theme, "Inline diff view (Alt+I)".into());
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
                     .borderless()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Split)
                     .selected_bg(view_toggle_selected_bg)
-                    .on_click(theme, cx, |this, _e, _w, cx| {
+                    .on_click(theme, cx, |this, _e, window, cx| {
                         this.diff_view = DiffViewMode::Split;
                         this.clear_diff_text_style_caches();
-                        if this.diff_search_active
-                            && !this.diff_search_query.as_ref().trim().is_empty()
-                        {
-                            this.diff_search_recompute_matches();
+                        if this.diff_search_has_query() {
+                            this.diff_search_recompute_matches_preserving_current();
                         }
+                        this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Split diff view (Alt+S)".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    }));
+                    .debug_selector(|| "diff_split".to_string())
+                    .gitcomet_tooltip(theme, "Split diff view (Alt+S)".into());
 
                 let view_toggle = div()
                     .id("diff_view_toggle")
                     .flex()
                     .items_center()
-                    .h(px(components::CONTROL_HEIGHT_PX))
+                    .h(components::control_height(ui_scale_percent))
                     .rounded(px(theme.radii.row))
                     .border_1()
                     .border_color(view_toggle_border)
@@ -435,35 +1817,7 @@ impl MainPaneView {
                     .child(prev_hunk_btn)
                     .child(next_hunk_btn)
                     .when_some(next_file_btn, |d, btn| d.child(btn))
-                    .child(view_toggle)
-                    .when(!wants_file_diff, |controls| {
-                        controls.child(
-                            components::Button::new("diff_hunks", "Hunks")
-                                .style(components::ButtonStyle::Outlined)
-                                .on_click(theme, cx, |this, e, window, cx| {
-                                    this.open_popover_at(
-                                        PopoverKind::DiffHunks,
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                    cx.notify();
-                                })
-                                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                    let text: SharedString = "Jump to hunk (Alt+H)".into();
-                                    let mut changed = false;
-                                    if *hovering {
-                                        changed |= this
-                                            .set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                    } else {
-                                        changed |= this.clear_tooltip_if_matches(&text, cx);
-                                    }
-                                    if changed {
-                                        cx.notify();
-                                    }
-                                })),
-                        )
-                    });
+                    .child(view_toggle);
             } else {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
@@ -492,11 +1846,16 @@ impl MainPaneView {
                         } else {
                             components::ButtonStyle::Outlined
                         })
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.rendered_preview_modes
-                                .set(preview_kind, RenderedPreviewMode::Rendered);
-                            cx.notify();
-                        }),
+                        .on_click(
+                            theme,
+                            cx,
+                            move |this, _e, window, cx| {
+                                this.rendered_preview_modes
+                                    .set(preview_kind, RenderedPreviewMode::Rendered);
+                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                                cx.notify();
+                            },
+                        ),
                     )
                     .child(
                         components::Button::new(
@@ -508,16 +1867,39 @@ impl MainPaneView {
                         } else {
                             components::ButtonStyle::Outlined
                         })
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.rendered_preview_modes
-                                .set(preview_kind, RenderedPreviewMode::Source);
-                            cx.notify();
-                        }),
+                        .on_click(
+                            theme,
+                            cx,
+                            move |this, _e, window, cx| {
+                                this.rendered_preview_modes
+                                    .set(preview_kind, RenderedPreviewMode::Source);
+                                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                                cx.notify();
+                            },
+                        ),
                     ),
             );
         }
 
         if let Some(repo_id) = repo_id {
+            let diff_action_invoker: SharedString = "diff_action_menu".into();
+            let diff_action_active = self
+                .active_context_menu_invoker
+                .as_ref()
+                .is_some_and(|id| id == &diff_action_invoker);
+            controls = controls.child(
+                components::Button::new("diff_action_menu", "")
+                    .start_slot(svg_icon("icons/cog.svg", theme.colors.text_muted, px(14.0)))
+                    .style(components::ButtonStyle::Transparent)
+                    .selected(diff_action_active)
+                    .selected_bg(theme.colors.active)
+                    .on_click(theme, cx, move |this, e, window, cx| {
+                        this.activate_context_menu_invoker(diff_action_invoker.clone(), cx);
+                        this.open_popover_at(PopoverKind::DiffActionMenu, e.position(), window, cx);
+                    })
+                    .debug_selector(|| "diff_action_menu".to_string())
+                    .gitcomet_tooltip(theme, "Diff actions".into()),
+            );
             controls = controls.child(
                 components::Button::new("diff_close", "")
                     .start_slot(svg_icon(
@@ -530,74 +1912,16 @@ impl MainPaneView {
                         this.clear_diff_selection_or_exit(repo_id, cx);
                         cx.notify();
                     })
-                    .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                        let text: SharedString = "Close diff".into();
-                        let mut changed = false;
-                        if *hovering {
-                            changed |= this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                        } else {
-                            changed |= this.clear_tooltip_if_matches(&text, cx);
-                        }
-                        if changed {
-                            cx.notify();
-                        }
-                    })),
+                    .debug_selector(|| "diff_close".to_string())
+                    .gitcomet_tooltip(theme, "Close diff".into()),
             );
-        }
-
-        if self.diff_search_active {
-            let query = self.diff_search_query.as_ref().trim();
-            let match_label: SharedString = if query.is_empty() {
-                "Type to search".into()
-            } else if self.diff_search_matches.is_empty() {
-                "No matches".into()
-            } else {
-                let ix = self
-                    .diff_search_match_ix
-                    .unwrap_or(0)
-                    .min(self.diff_search_matches.len().saturating_sub(1));
-                format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
-            };
-
-            controls = controls
-                .child(
-                    div()
-                        .w(px(240.0))
-                        .min_w(px(120.0))
-                        .child(self.diff_search_input.clone()),
-                )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child(match_label),
-                )
-                .child(
-                    components::Button::new("diff_search_close", "")
-                        .start_slot(svg_icon(
-                            "icons/generic_close.svg",
-                            theme.colors.text_muted,
-                            px(12.0),
-                        ))
-                        .style(components::ButtonStyle::Transparent)
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.diff_search_active = false;
-                            this.diff_search_matches.clear();
-                            this.diff_search_match_ix = None;
-                            this.clear_diff_text_query_overlay_cache();
-                            this.clear_worktree_preview_segments_cache();
-                            this.clear_conflict_diff_query_overlay_caches();
-                            window.focus(&this.diff_panel_focus_handle, cx);
-                            cx.notify();
-                        }),
-                );
         }
 
         let header = div()
             .flex()
             .items_center()
             .justify_between()
-            .h(px(components::CONTROL_HEIGHT_MD_PX))
+            .h(components::control_height_md(ui_scale_percent))
             .child(
                 div()
                     .flex_1()
@@ -610,7 +1934,9 @@ impl MainPaneView {
             )
             .child(controls);
 
-        let body: AnyElement = if let Some(message) = untracked_directory_notice {
+        let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
+            self.render_submodule_summary(theme, cx)
+        } else if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
         } else if is_file_preview {
             if is_markdown_preview_view {
@@ -880,71 +2206,12 @@ impl MainPaneView {
                                 if theme.is_dark { 0.38 } else { 0.28 },
                             );
                             let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
-                            let show_whitespace = self.show_whitespace;
-                            let ws_pill_border_hover = if show_whitespace {
-                                theme.colors.accent
-                            } else {
-                                view_toggle_border
-                            };
-                            let ws_pill_text = if theme.is_dark {
-                                theme.colors.text
-                            } else {
-                                gpui::rgba(0xffffffff)
-                            };
-                            let show_whitespace_control = div()
-                                .id("conflict_show_whitespace_pill")
-                                .h(px(components::CONTROL_HEIGHT_PX))
-                                .px(px(8.0))
-                                .py(px(2.0))
-                                .rounded(px(theme.radii.pill))
-                                .bg(gpui::rgba(0x000000ff))
-                                .border_1()
-                                .border_color(gpui::rgba(0x00000000))
-                                .text_xs()
-                                .text_color(ws_pill_text)
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(move |pill| pill.border_color(ws_pill_border_hover))
-                                .active(move |pill| pill.border_color(ws_pill_border_hover))
-                                .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
-                                .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
-                                    this.toggle_show_whitespace();
-                                    cx.notify();
-                                }))
-                                .on_hover(cx.listener(|this, hovering: &bool, _w, cx| {
-                                    let text: SharedString = "Show whitespace (Alt+W)".into();
-                                    let mut changed = false;
-                                    if *hovering {
-                                        changed |=
-                                            this.set_tooltip_text_if_changed(Some(text.clone()), cx);
-                                    } else {
-                                        changed |= this.clear_tooltip_if_matches(&text, cx);
-                                    }
-                                    if changed {
-                                        cx.notify();
-                                    }
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_1()
-                                        .child("Show whitespace")
-                                        .when(show_whitespace, |d| {
-                                            d.child(
-                                                div().child(svg_icon(
-                                                    "icons/check.svg",
-                                                    theme.colors.success,
-                                                    px(12.0),
-                                                )),
-                                            )
-                                        }),
-                                );
 
                             let view_mode_controls = div()
                                 .id("conflict_view_mode_toggle")
                                 .flex()
                                 .items_center()
-                                .h(px(components::CONTROL_HEIGHT_PX))
+                                .h(components::control_height(ui_scale_percent))
                                 .rounded(px(theme.radii.row))
                                 .border_1()
                                 .border_color(view_toggle_border)
@@ -1118,7 +2385,7 @@ impl MainPaneView {
                                     .id("conflict_preview_toggle")
                                     .flex()
                                     .items_center()
-                                    .h(px(components::CONTROL_HEIGHT_PX))
+                                    .h(components::control_height(ui_scale_percent))
                                     .rounded(px(theme.radii.row))
                                     .border_1()
                                     .border_color(view_toggle_border)
@@ -1195,8 +2462,7 @@ impl MainPaneView {
                                         .items_center()
                                         .gap_2()
                                         .when(!is_rendered_preview_active, |d| {
-                                            d.child(show_whitespace_control)
-                                                .child(view_mode_controls)
+                                            d.child(view_mode_controls)
                                         }),
                                 );
 
@@ -2291,8 +3557,12 @@ impl MainPaneView {
                                 "Theirs (deleted)".into()
                             };
 
-                            let columns_header =
-                                components::split_columns_header(theme, ours_label, theirs_label);
+                            let columns_header = components::split_columns_header(
+                                theme,
+                                ui_scale_percent,
+                                ours_label,
+                                theirs_label,
+                            );
 
                             let diff_len = self.conflict_resolver.two_way_split_visible_len();
 
@@ -2364,19 +3634,19 @@ impl MainPaneView {
                     }
                 }
             }
-        } else if wants_file_diff {
-            self.render_selected_file_diff(theme, cx)
+        } else if wants_file_diff || wants_collapsed_diff {
+            self.render_selected_file_diff(theme, window, cx)
         } else {
             match repo {
                 None => components::empty_state(theme, "Diff", "No repository.").into_any_element(),
-                Some(repo) => match &repo.diff_state.diff {
-                    Loadable::NotLoaded => {
+                Some(_repo) => match self.rendered_patch_diff_loadable() {
+                    Some(Loadable::NotLoaded) | None => {
                         components::empty_state(theme, "Diff", "Select a file.").into_any_element()
                     }
-                    Loadable::Loading => {
+                    Some(Loadable::Loading) => {
                         components::empty_state(theme, "Diff", "Loading").into_any_element()
                     }
-                    Loadable::Error(e) => {
+                    Some(Loadable::Error(e)) => {
                         self.diff_raw_input.update(cx, |input, cx| {
                             input.set_theme(theme, cx);
                             input.set_text(e.clone(), cx);
@@ -2393,49 +3663,15 @@ impl MainPaneView {
                             .child(self.diff_raw_input.clone())
                             .into_any_element()
                     }
-                    Loadable::Ready(diff) => {
-                        if wants_file_diff {
-                            self.render_selected_file_diff(theme, cx)
+                    Some(Loadable::Ready(_diff)) => {
+                        if wants_file_diff || wants_collapsed_diff {
+                            self.render_selected_file_diff(theme, window, cx)
                         } else {
-                            if self.diff_word_wrap {
-                                let approx_len: usize = diff
-                                    .lines
-                                    .iter()
-                                    .map(|l| l.text.len().saturating_add(1))
-                                    .sum();
-                                let mut raw = String::with_capacity(approx_len);
-                                for line in &diff.lines {
-                                    raw.push_str(line.text.as_ref());
-                                    raw.push('\n');
-                                }
-                                self.diff_raw_input.update(cx, |input, cx| {
-                                    input.set_theme(theme, cx);
-                                    input.set_soft_wrap(true, cx);
-                                    input.set_text(raw, cx);
-                                    input.set_read_only(true, cx);
-                                });
-                                div()
-                                    .id("diff_word_wrap_scroll")
-                                    .bg(theme.colors.window_bg)
-                                    .font_family(editor_font_family.clone())
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_h(px(0.0))
-                                    .overflow_y_scroll()
-                                    .child(self.diff_raw_input.clone())
-                                    .into_any_element()
-                            } else {
-                                if self.diff_cache_repo_id != Some(repo.id)
-                                    || self.diff_cache_rev != repo.diff_state.diff_rev
-                                    || self.diff_cache_target != repo.diff_state.diff_target
-                                    || self.patch_diff_row_len() != diff.lines.len()
-                                {
-                                    self.rebuild_diff_cache(cx);
-                                }
+                            self.ensure_diff_visible_indices();
+                            self.ensure_diff_wrap_visible_rows(window, cx);
+                            self.maybe_autoscroll_diff_to_first_change();
 
-                                self.ensure_diff_visible_indices();
-                                self.maybe_autoscroll_diff_to_first_change();
+                            {
                                 if self.patch_diff_row_len() == 0 {
                                     components::empty_state(theme, "Diff", "No differences.")
                                         .into_any_element()
@@ -2443,11 +3679,18 @@ impl MainPaneView {
                                     components::empty_state(theme, "Diff", "Nothing to render.")
                                         .into_any_element()
                                 } else {
-                                    let scroll_handle =
-                                        self.diff_scroll.0.borrow().base_handle.clone();
                                     let markers = self.diff_scrollbar_markers_cache.clone();
                                     match self.diff_view {
                                         DiffViewMode::Inline => {
+                                            let horizontal_scrollbar_gutter =
+                                                components::Scrollbar::gutter(
+                                                    components::ScrollbarAxis::Horizontal,
+                                                );
+                                            let scrollbar_gutter = self
+                                                .diff_vertical_scrollbar_gutter_for_column(
+                                                    DiffHorizontalScrollColumn::Primary,
+                                                    self.diff_scroll.clone(),
+                                                );
                                             let list = uniform_list(
                                                 "diff",
                                                 self.diff_visible_len(),
@@ -2455,10 +3698,17 @@ impl MainPaneView {
                                             )
                                             .h_full()
                                             .min_h(px(0.0))
+                                            .pb(if self.diff_word_wrap {
+                                                px(0.0)
+                                            } else {
+                                                horizontal_scrollbar_gutter
+                                            })
                                             .track_scroll(&self.diff_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
+                                            .when(!self.diff_word_wrap, |list| {
+                                                list.with_horizontal_sizing_behavior(
+                                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                                )
+                                            });
                                             div()
                                                 .id("diff_scroll_container")
                                                 .relative()
@@ -2470,10 +3720,7 @@ impl MainPaneView {
                                                     div()
                                                         .h_full()
                                                         .min_h(px(0.0))
-                                                        .pr(components::Scrollbar::visible_gutter(
-                                                            self.diff_scroll.clone(),
-                                                            components::ScrollbarAxis::Vertical,
-                                                        ))
+                                                        .pr(scrollbar_gutter)
                                                         .child(list),
                                                 )
                                                 .child(
@@ -2485,59 +3732,35 @@ impl MainPaneView {
                                                     .always_visible()
                                                     .render(theme),
                                                 )
-                                                .child(
-                                                    components::Scrollbar::horizontal(
+                                                .when(!self.diff_word_wrap, |d| {
+                                                    d.child(Self::render_diff_horizontal_scrollbar(
+                                                        theme,
                                                         "diff_hscrollbar",
-                                                        scroll_handle,
-                                                    )
-                                                    .always_visible()
-                                                    .render(theme),
-                                                )
+                                                        self.diff_scroll.clone(),
+                                                        scrollbar_gutter,
+                                                        "diff_hscrollbar",
+                                                    ))
+                                                })
                                                 .into_any_element()
                                         }
                                         DiffViewMode::Split => {
                                             self.sync_diff_split_scroll();
                                             let vertical_sync_enabled =
                                                 self.diff_scroll_sync.includes_vertical();
-                                            let right_scroll_handle = self
-                                                .diff_split_right_scroll
-                                                .0
-                                                .borrow()
-                                                .base_handle
-                                                .clone();
                                             let count = self.diff_visible_len();
-                                            let left = uniform_list(
-                                                "diff_split_left",
-                                                count,
-                                                cx.processor(Self::render_diff_split_left_rows),
-                                            )
-                                            .h_full()
-                                            .min_h(px(0.0))
-                                            .track_scroll(&self.diff_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
-                                            let right = uniform_list(
-                                                "diff_split_right",
-                                                count,
-                                                cx.processor(Self::render_diff_split_right_rows),
-                                            )
-                                            .h_full()
-                                            .min_h(px(0.0))
-                                            .track_scroll(&self.diff_split_right_scroll)
-                                            .with_horizontal_sizing_behavior(
-                                                gpui::ListHorizontalSizingBehavior::Unconstrained,
-                                            );
-
-                                            let left_scrollbar_gutter =
-                                                components::Scrollbar::visible_gutter(
-                                                    self.diff_scroll.clone(),
-                                                    components::ScrollbarAxis::Vertical,
+                                            let horizontal_scrollbar_gutter =
+                                                components::Scrollbar::gutter(
+                                                    components::ScrollbarAxis::Horizontal,
                                                 );
-                                            let right_scrollbar_gutter =
-                                                components::Scrollbar::visible_gutter(
+                                            let left_scrollbar_gutter = self
+                                                .diff_vertical_scrollbar_gutter_for_column(
+                                                    DiffHorizontalScrollColumn::Primary,
+                                                    self.diff_scroll.clone(),
+                                                );
+                                            let right_scrollbar_gutter = self
+                                                .diff_vertical_scrollbar_gutter_for_column(
+                                                    DiffHorizontalScrollColumn::SplitRight,
                                                     self.diff_split_right_scroll.clone(),
-                                                    components::ScrollbarAxis::Vertical,
                                                 );
                                             let shared_scrollbar_gutter = if vertical_sync_enabled {
                                                 left_scrollbar_gutter
@@ -2552,6 +3775,58 @@ impl MainPaneView {
                                             let (left_w, right_w) = diff_split_column_widths(
                                                 main_w,
                                                 self.diff_split_ratio,
+                                            );
+                                            let left = uniform_list(
+                                                "diff_split_left",
+                                                count,
+                                                cx.processor(Self::render_diff_split_left_rows),
+                                            )
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .pb(if self.diff_word_wrap {
+                                                px(0.0)
+                                            } else {
+                                                horizontal_scrollbar_gutter
+                                            })
+                                            .track_scroll(&self.diff_scroll)
+                                            .when(!self.diff_word_wrap, |list| {
+                                                list.with_horizontal_sizing_behavior(
+                                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                                )
+                                            });
+                                            let right = uniform_list(
+                                                "diff_split_right",
+                                                count,
+                                                cx.processor(Self::render_diff_split_right_rows),
+                                            )
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .pb(if self.diff_word_wrap {
+                                                px(0.0)
+                                            } else {
+                                                horizontal_scrollbar_gutter
+                                            })
+                                            .track_scroll(&self.diff_split_right_scroll)
+                                            .when(!self.diff_word_wrap, |list| {
+                                                list.with_horizontal_sizing_behavior(
+                                                    gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                                )
+                                            });
+                                            let collapsed_file_stat = self
+                                                .is_collapsed_diff_projection_active()
+                                                .then(|| self.collapsed_diff_total_file_stat())
+                                                .flatten();
+                                            let left_header = Self::split_column_header_label(
+                                                "A (local / before)",
+                                                collapsed_file_stat.map(|(_, removed)| removed),
+                                                '-',
+                                                theme.colors.diff_remove_text,
+                                            );
+                                            let right_header = Self::split_column_header_label(
+                                                "B (remote / after)",
+                                                collapsed_file_stat.map(|(added, _)| added),
+                                                '+',
+                                                theme.colors.diff_add_text,
                                             );
 
                                             let resize_handle = |id: &'static str| {
@@ -2669,7 +3944,7 @@ impl MainPaneView {
 
                                             let columns_header = div()
                                                 .id("diff_split_columns_header")
-                                                .h(px(components::CONTROL_HEIGHT_PX))
+                                                .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
                                                 .text_xs()
@@ -2684,7 +3959,7 @@ impl MainPaneView {
                                                         .px_2()
                                                         .overflow_hidden()
                                                         .whitespace_nowrap()
-                                                        .child("A (local / before)"),
+                                                        .child(left_header),
                                                 )
                                                 .child(resize_handle(
                                                     "diff_split_resize_handle_header",
@@ -2696,7 +3971,7 @@ impl MainPaneView {
                                                         .px_2()
                                                         .overflow_hidden()
                                                         .whitespace_nowrap()
-                                                        .child("B (remote / after)"),
+                                                        .child(right_header),
                                                 );
 
                                             div()
@@ -2757,13 +4032,23 @@ impl MainPaneView {
                                                                                 )
                                                                             },
                                                                         )
-                                                                        .child(
-                                                                            components::Scrollbar::horizontal(
-                                                                                "diff_split_left_hscrollbar",
-                                                                                scroll_handle.clone(),
-                                                                            )
-                                                                            .always_visible()
-                                                                            .render(theme),
+                                                                        .when(
+                                                                            !self.diff_word_wrap,
+                                                                            |d| {
+                                                                                d.child(
+                                                                                    Self::render_diff_horizontal_scrollbar(
+                                                                                        theme,
+                                                                                        "diff_split_left_hscrollbar",
+                                                                                        self.diff_scroll.clone(),
+                                                                                        if vertical_sync_enabled {
+                                                                                            px(0.0)
+                                                                                        } else {
+                                                                                            left_scrollbar_gutter
+                                                                                        },
+                                                                                        "diff_split_left_hscrollbar",
+                                                                                    ),
+                                                                                )
+                                                                            },
                                                                         ),
                                                                 )
                                                                 .child(resize_handle(
@@ -2805,13 +4090,23 @@ impl MainPaneView {
                                                                                 )
                                                                             },
                                                                         )
-                                                                        .child(
-                                                                            components::Scrollbar::horizontal(
-                                                                                "diff_split_right_hscrollbar",
-                                                                                right_scroll_handle,
-                                                                            )
-                                                                            .always_visible()
-                                                                            .render(theme),
+                                                                        .when(
+                                                                            !self.diff_word_wrap,
+                                                                            |d| {
+                                                                                d.child(
+                                                                                    Self::render_diff_horizontal_scrollbar(
+                                                                                        theme,
+                                                                                        "diff_split_right_hscrollbar",
+                                                                                        self.diff_split_right_scroll.clone(),
+                                                                                        if vertical_sync_enabled {
+                                                                                            px(0.0)
+                                                                                        } else {
+                                                                                            right_scrollbar_gutter
+                                                                                        },
+                                                                                        "diff_split_right_hscrollbar",
+                                                                                    ),
+                                                                                )
+                                                                            },
                                                                         ),
                                                                 ),
                                                         ),
@@ -2844,8 +4139,10 @@ impl MainPaneView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == "diff_editor_menu");
+        let diff_search_overlay = self.render_diff_search_overlay(theme, ui_scale_percent, cx);
 
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
@@ -2855,6 +4152,60 @@ impl MainPaneView {
             .bg(theme.colors.surface_bg_elevated)
             .when(diff_editor_menu_active, |d| d.bg(theme.colors.active))
             .track_focus(&self.diff_panel_focus_handle)
+            .on_action(
+                cx.listener(|this, _: &crate::view::TextInputDiffPrevFile, window, cx| {
+                    if let Some(repo_id) = this.active_repo_id()
+                        && this
+                            .try_select_adjacent_diff_file_preserving_focus(repo_id, -1, window, cx)
+                    {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::view::TextInputDiffNextFile, window, cx| {
+                    if let Some(repo_id) = this.active_repo_id()
+                        && this
+                            .try_select_adjacent_diff_file_preserving_focus(repo_id, 1, window, cx)
+                    {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffPrevSearchMatchOrChange, _window, cx| {
+                    if this.navigate_prev_search_match_or_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffNextSearchMatchOrChange, _window, cx| {
+                    if this.navigate_next_search_match_or_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffPrevChange, _window, cx| {
+                    if this.navigate_prev_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::view::TextInputDiffNextChange, _window, cx| {
+                    if this.navigate_next_diff_change(cx) {
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                },
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| {
@@ -2862,327 +4213,30 @@ impl MainPaneView {
                 }),
             )
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, window, cx| {
-                let key = e.keystroke.key.as_str();
-                let mods = e.keystroke.modifiers;
-
-                let mut handled = false;
-
-                if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function
-                {
-                    if this.diff_search_active {
-                        this.diff_search_active = false;
-                        this.diff_search_matches.clear();
-                        this.diff_search_match_ix = None;
-                        this.clear_diff_text_query_overlay_cache();
-                        this.clear_worktree_preview_segments_cache();
-                        this.clear_conflict_diff_query_overlay_caches();
-                        window.focus(&this.diff_panel_focus_handle, cx);
-                        handled = true;
-                    }
-                    if !handled && let Some(repo_id) = this.active_repo_id() {
-                        this.clear_status_multi_selection(repo_id, cx);
-                        this.clear_diff_selection_or_exit(repo_id, cx);
-                        handled = true;
-                    }
-                }
-
-                if !handled
-                    && (mods.control || mods.platform)
-                    && !mods.alt
-                    && !mods.function
-                    && key == "f"
-                {
-                    this.activate_diff_search(window, cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && this.diff_search_active
-                    && matches!(key, "f2" | "f3")
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    if key == "f2" {
-                        this.diff_search_prev_match();
-                    } else {
-                        this.diff_search_next_match();
-                    }
-                    handled = true;
-                }
-
-                if !handled
-                    && key == "space"
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && !this
-                        .diff_raw_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window)
-                    && let Some(repo_id) = this.active_repo_id()
-                    && let Some(repo) = this.active_repo()
-                    && let Some(diff_target) = repo.diff_state.diff_target.clone()
-                    && let DiffTarget::WorkingTree { path, area } = &diff_target
-                {
-                    let path = path.clone();
-                    let area = *area;
-                    let change_tracking_view = this.active_change_tracking_view(cx);
-                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
-                        repo,
-                        &diff_target,
-                        change_tracking_view,
-                    )
-                    .and_then(|navigation| navigation.next_or_prev_path());
-                    let status_ready = repo.status_entries_for_area(area).is_some();
-
-                    match (status_ready, area) {
-                        (true, DiffArea::Unstaged) => {
-                            this.store.dispatch(Msg::StagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                            if let Some(next_path) = next_path_in_section {
-                                this.store.dispatch(Msg::SelectDiff {
-                                    repo_id,
-                                    target: DiffTarget::WorkingTree {
-                                        path: next_path,
-                                        area: DiffArea::Unstaged,
-                                    },
-                                });
-                            } else {
-                                this.clear_diff_selection_or_exit(repo_id, cx);
-                            }
-                        }
-                        (true, DiffArea::Staged) => {
-                            this.store.dispatch(Msg::UnstagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                            if let Some(next_path) = next_path_in_section {
-                                this.store.dispatch(Msg::SelectDiff {
-                                    repo_id,
-                                    target: DiffTarget::WorkingTree {
-                                        path: next_path,
-                                        area: DiffArea::Staged,
-                                    },
-                                });
-                            } else {
-                                this.clear_diff_selection_or_exit(repo_id, cx);
-                            }
-                        }
-                        (false, DiffArea::Unstaged) => {
-                            this.store.dispatch(Msg::StagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                        }
-                        (false, DiffArea::Staged) => {
-                            this.store.dispatch(Msg::UnstagePath {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                        }
-                    }
-                    this.rebuild_diff_cache(cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && (key == "f1" || key == "f4")
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && let Some(repo_id) = this.active_repo_id()
-                {
-                    let direction = if key == "f1" { -1 } else { 1 };
-                    handled = this.try_select_adjacent_diff_file(repo_id, direction, window, cx);
-                }
-
-                let copy_target_is_focused = this
-                    .diff_raw_input
-                    .read(cx)
-                    .focus_handle()
-                    .is_focused(window);
-                let is_file_preview = this.is_file_preview_active();
-                if is_file_preview {
-                    if !handled
-                        && !copy_target_is_focused
-                        && (mods.control || mods.platform)
-                        && !mods.alt
-                        && !mods.function
-                        && key == "c"
-                        && this.diff_text_has_selection()
-                    {
-                        this.copy_selected_diff_text_to_clipboard(cx);
-                        handled = true;
-                    }
-
-                    if !handled
-                        && !copy_target_is_focused
-                        && (mods.control || mods.platform)
-                        && !mods.alt
-                        && !mods.function
-                        && key == "a"
-                    {
-                        this.select_all_diff_text();
-                        handled = true;
-                    }
-
-                    if handled {
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                    return;
-                }
-
-                let conflict_resolver_active = this.is_conflict_resolver_active();
-                let markdown_preview_active = this.is_markdown_preview_active();
-                let conflict_preview_active = this.is_conflict_rendered_preview_active();
-
-                if mods.alt && !mods.control && !mods.platform && !mods.function {
-                    match key {
-                        "i" | "s" => {
-                            if conflict_resolver_active {
-                                handled = false;
-                            } else if this.active_conflict_target().is_some() {
-                                this.diff_view = DiffViewMode::Split;
-                                this.clear_diff_text_style_caches();
-                                handled = true;
-                            } else if !markdown_preview_active && !this.is_file_preview_active() {
-                                this.diff_view = if key == "i" {
-                                    DiffViewMode::Inline
-                                } else {
-                                    DiffViewMode::Split
-                                };
-                                this.clear_diff_text_style_caches();
-                                handled = true;
-                            }
-                        }
-                        "h" => {
-                            let is_file_preview = this.is_file_preview_active();
-                            let wants_file_diff = !is_file_preview
-                                && !this.is_worktree_target_directory()
-                                && this.active_repo().is_some_and(|r| {
-                                    Self::is_file_diff_target(r.diff_state.diff_target.as_ref())
-                                });
-                            if !is_file_preview && !wants_file_diff {
-                                this.open_popover_at_cursor(PopoverKind::DiffHunks, window, cx);
-                                handled = true;
-                            }
-                        }
-                        "w" if !markdown_preview_active && !conflict_preview_active => {
-                            this.toggle_show_whitespace();
-                            handled = true;
-                        }
-                        "up" if !this.is_file_preview_active() => {
-                            this.diff_jump_prev();
-                            handled = true;
-                        }
-                        "down" if !this.is_file_preview_active() => {
-                            this.diff_jump_next();
-                            handled = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if !handled
-                    && matches!(key, "f2" | "f3" | "f7")
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                {
-                    if let Some(direction) =
-                        conflict_resolver::conflict_nav_direction_for_key(key, mods.shift)
-                    {
-                        if conflict_resolver_active {
-                            if !conflict_preview_active {
-                                match direction {
-                                    conflict_resolver::ConflictNavDirection::Prev => {
-                                        this.conflict_jump_prev(cx);
-                                    }
-                                    conflict_resolver::ConflictNavDirection::Next => {
-                                        this.conflict_jump_next(cx);
-                                    }
-                                }
-                            }
-                        } else if !this.is_file_preview_active() {
-                            match direction {
-                                conflict_resolver::ConflictNavDirection::Prev => {
-                                    this.diff_jump_prev()
-                                }
-                                conflict_resolver::ConflictNavDirection::Next => {
-                                    this.diff_jump_next()
-                                }
-                            }
-                        }
-                    }
-                    handled = true;
-                }
-
-                // A/B/C/D quick-pick for conflict resolver.
-                if !handled
-                    && conflict_resolver_active
-                    && !mods.control
-                    && !mods.alt
-                    && !mods.platform
-                    && !mods.function
-                    && !copy_target_is_focused
-                    && !this
-                        .conflict_resolver_input
-                        .read(cx)
-                        .focus_handle()
-                        .is_focused(window)
-                    && this.conflict_resolver_conflict_count() > 0
-                    && let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
-                {
-                    this.conflict_resolver_pick_active_conflict(choice, cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && !copy_target_is_focused
-                    && (mods.control || mods.platform)
-                    && !mods.alt
-                    && !mods.function
-                    && key == "c"
-                    && this.diff_text_has_selection()
-                {
-                    this.copy_selected_diff_text_to_clipboard(cx);
-                    handled = true;
-                }
-
-                if !handled
-                    && !copy_target_is_focused
-                    && (mods.control || mods.platform)
-                    && !mods.alt
-                    && !mods.function
-                    && key == "a"
-                {
-                    this.select_all_diff_text();
-                    handled = true;
-                }
-
-                if handled {
+                if this.handle_diff_shortcut(&e.keystroke, window, cx) {
                     cx.stop_propagation();
                     cx.notify();
                 }
             }))
             .child(
                 header
-                    .h(px(components::CONTROL_HEIGHT_MD_PX))
+                    .h(components::control_height_md(ui_scale_percent))
                     .px_2()
                     .bg(theme.colors.surface_bg_elevated)
                     .border_b_1()
                     .border_color(theme.colors.border),
             )
-            .child(div().flex_1().min_h(px(0.0)).w_full().h_full().child(body))
+            .child(
+                div()
+                    .id("diff_body_container")
+                    .debug_selector(|| "diff_body_container".to_string())
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .w_full()
+                    .h_full()
+                    .child(body),
+            )
+            .when_some(diff_search_overlay, |d, overlay| d.child(overlay))
             .child(DiffTextSelectionTracker { view: cx.entity() })
     }
 

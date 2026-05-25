@@ -10,9 +10,9 @@ use gitcomet_core::auth::{
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::process::{configure_background_command, git_command};
-use gitcomet_core::services::{CommandOutput, Result};
+use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use std::fs;
-use std::io;
+use std::io::{self, BufRead as _};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Output, Stdio};
 use std::sync::{Arc, OnceLock};
@@ -471,7 +471,12 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
     )))
 }
 
-fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) -> Result<Output> {
+fn run_command_with_timeout(
+    mut cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Output> {
     configure_background_command(&mut cmd);
     configure_non_interactive_git(&mut cmd);
     let askpass_context = if command_may_require_auth(&cmd) {
@@ -491,11 +496,20 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 
     let start = Instant::now();
     let mut timed_out = false;
+    let mut cancelled = false;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    cancelled = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(e) => return Err(io_err(e)),
+                    }
+                }
                 let elapsed = start.elapsed();
                 if elapsed >= timeout {
                     timed_out = true;
@@ -518,6 +532,10 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+    }
+
+    if cancelled {
+        return Err(Error::new(ErrorKind::Cancelled));
     }
 
     if timed_out {
@@ -544,13 +562,47 @@ fn run_command_with_timeout(mut cmd: Command, label: &str, timeout: Duration) ->
 }
 
 pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
-    run_command_with_timeout(cmd, label, git_command_timeout())
+    run_command_with_timeout(cmd, label, git_command_timeout(), None)
 }
 
 pub(crate) fn run_git_parsed_stdout<T, F>(
+    cmd: Command,
+    label: &str,
+    allow_exit_code_one: bool,
+    parse_stdout: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
+{
+    run_git_parsed_stdout_maybe_cancellable(cmd, label, allow_exit_code_one, None, parse_stdout)
+}
+
+pub(crate) fn run_git_parsed_stdout_cancellable<T, F>(
+    cmd: Command,
+    label: &str,
+    allow_exit_code_one: bool,
+    cancellation: &CancellationToken,
+    parse_stdout: F,
+) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
+{
+    run_git_parsed_stdout_maybe_cancellable(
+        cmd,
+        label,
+        allow_exit_code_one,
+        Some(cancellation),
+        parse_stdout,
+    )
+}
+
+fn run_git_parsed_stdout_maybe_cancellable<T, F>(
     mut cmd: Command,
     label: &str,
     allow_exit_code_one: bool,
+    cancellation: Option<&CancellationToken>,
     parse_stdout: F,
 ) -> Result<T>
 where
@@ -581,11 +633,20 @@ where
     let timeout = git_command_timeout();
     let start = Instant::now();
     let mut timed_out = false;
+    let mut cancelled = false;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    cancelled = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(err) => return Err(io_err(err)),
+                    }
+                }
                 let elapsed = start.elapsed();
                 if elapsed >= timeout {
                     timed_out = true;
@@ -610,6 +671,10 @@ where
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+    }
+
+    if cancelled {
+        return Err(Error::new(ErrorKind::Cancelled));
     }
 
     if timed_out {
@@ -857,29 +922,39 @@ pub(crate) fn run_git_capture(cmd: Command, label: &str) -> Result<String> {
     Ok(bytes_to_text_preserving_utf8(&bytes))
 }
 
+pub(crate) fn run_git_capture_cancellable(
+    cmd: Command,
+    label: &str,
+    cancellation: &CancellationToken,
+) -> Result<String> {
+    let output = run_command_with_timeout(cmd, label, git_command_timeout(), Some(cancellation))?;
+    if output.status.success() {
+        Ok(bytes_to_text_preserving_utf8(&output.stdout))
+    } else {
+        Err(git_command_failed_error(label, output))
+    }
+}
+
 pub(crate) fn run_git_capture_bytes(cmd: Command, label: &str) -> Result<Vec<u8>> {
     let output = run_git_checked_output(cmd, label)?;
     Ok(output.stdout)
 }
 
-pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
-    let approx_commits = output
-        .as_bytes()
-        .iter()
-        .filter(|&&b| b == b'\x1e')
-        .count()
-        .saturating_add(1);
-    let mut commits = Vec::with_capacity(approx_commits);
-    let mut repeated_author: Option<Arc<str>> = None;
-    let mut next_commit_id_cache: Option<CommitId> = None;
-    for record in output.split('\u{001e}') {
+#[derive(Default)]
+struct GitLogPrettyParseState {
+    repeated_author: Option<Arc<str>>,
+    next_commit_id_cache: Option<CommitId>,
+}
+
+impl GitLogPrettyParseState {
+    fn push_record(&mut self, record: &str, commits: &mut Vec<Commit>) {
         let record = record.trim();
         if record.is_empty() {
-            continue;
+            return;
         }
         let mut parts = record.split('\u{001f}');
         let Some(id) = parts.next().map(str::trim).filter(|s| !s.is_empty()) else {
-            continue;
+            return;
         };
         let parents = parts.next().unwrap_or_default();
         let author = parts.next().unwrap_or_default();
@@ -891,7 +966,7 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
 
         let time = unix_seconds_to_system_time_or_epoch(time_secs);
 
-        let id = if let Some(cached) = next_commit_id_cache.as_ref()
+        let id = if let Some(cached) = self.next_commit_id_cache.as_ref()
             && cached.as_ref() == id
         {
             cached.clone()
@@ -904,15 +979,15 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
             .map(|p| CommitId(p.into()))
             .collect::<CommitParentIds>();
 
-        next_commit_id_cache = parent_ids.first().cloned();
+        self.next_commit_id_cache = parent_ids.first().cloned();
 
-        let author = if let Some(cached) = repeated_author.as_ref()
+        let author = if let Some(cached) = self.repeated_author.as_ref()
             && cached.as_ref() == author
         {
             Arc::clone(cached)
         } else {
             let author: Arc<str> = author.into();
-            repeated_author = Some(Arc::clone(&author));
+            self.repeated_author = Some(Arc::clone(&author));
             author
         };
 
@@ -924,11 +999,53 @@ pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
             time,
         });
     }
+}
+
+#[cfg(test)]
+pub(crate) fn parse_git_log_pretty_records(output: &str) -> LogPage {
+    let approx_commits = output
+        .as_bytes()
+        .iter()
+        .filter(|&&b| b == b'\x1e')
+        .count()
+        .saturating_add(1);
+    let mut commits = Vec::with_capacity(approx_commits);
+    let mut state = GitLogPrettyParseState::default();
+    for record in output.split('\u{001e}') {
+        state.push_record(record, &mut commits);
+    }
 
     LogPage {
         commits,
         next_cursor: None,
     }
+}
+
+pub(crate) fn parse_git_log_pretty_records_from_reader(reader: impl io::Read) -> Result<LogPage> {
+    let mut reader = io::BufReader::new(reader);
+    let mut raw_record = Vec::new();
+    let mut commits = Vec::new();
+    let mut state = GitLogPrettyParseState::default();
+
+    loop {
+        raw_record.clear();
+        let bytes_read = reader
+            .read_until(b'\x1e', &mut raw_record)
+            .map_err(io_err)?;
+        if bytes_read == 0 {
+            break;
+        }
+        if raw_record.last() == Some(&b'\x1e') {
+            raw_record.pop();
+        }
+        let record = bytes_to_text_preserving_utf8(&raw_record);
+        state.push_record(&record, &mut commits);
+    }
+
+    Ok(LogPage {
+        commits,
+        next_cursor: None,
+    })
 }
 
 pub(crate) fn unix_seconds_to_system_time(seconds: i64) -> Option<SystemTime> {
@@ -1139,9 +1256,13 @@ mod tests {
 
     #[test]
     fn run_command_with_timeout_returns_structured_timeout_failure() {
-        let err =
-            run_command_with_timeout(sleep_command(2), "git synthetic", Duration::from_millis(50))
-                .expect_err("expected timed out command");
+        let err = run_command_with_timeout(
+            sleep_command(2),
+            "git synthetic",
+            Duration::from_millis(50),
+            None,
+        )
+        .expect_err("expected timed out command");
 
         match err.kind() {
             ErrorKind::Git(failure) => {
@@ -1331,6 +1452,30 @@ mod tests {
             page.commits[1].time,
             SystemTime::UNIX_EPOCH + Duration::from_secs(1_191_997_100)
         );
+    }
+
+    #[test]
+    fn parse_git_log_pretty_records_from_reader_matches_string_parser() {
+        let output = format!(
+            "{}{}",
+            gitpython_rev_list_fixture_to_pretty_record(GITPY_REV_LIST_SINGLE),
+            gitpython_rev_list_fixture_to_pretty_record(GITPY_REV_LIST_COMMIT_STATS)
+        );
+
+        let from_string = parse_git_log_pretty_records(&output);
+        let from_reader =
+            parse_git_log_pretty_records_from_reader(std::io::Cursor::new(output.as_bytes()))
+                .expect("streaming parser");
+
+        assert_eq!(from_reader, from_string);
+        assert!(Arc::ptr_eq(
+            &from_reader.commits[0].author,
+            &from_reader.commits[1].author
+        ));
+        assert!(Arc::ptr_eq(
+            &from_reader.commits[0].parent_ids[0].0,
+            &from_reader.commits[1].id.0
+        ));
     }
 
     #[test]

@@ -39,11 +39,13 @@ pub(super) fn panel(
         detail.push_str("The file may still be in an unresolved state.");
     }
     detail.push_str(" Staging this file may leave it in a broken state.");
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .min_w(px(360.0))
+        .min_w(scaled_px(360.0))
         .child(
             div()
                 .px_2()

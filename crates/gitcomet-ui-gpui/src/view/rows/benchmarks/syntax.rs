@@ -655,6 +655,7 @@ impl FileDiffInlineSyntaxProjectionFixture {
                     document: self.new_document,
                 },
                 visible_rows.as_slice(),
+                super::diff_text::DiffSyntaxMode::HeuristicOnly,
             );
         let mut pending = false;
         let mut h = FxHasher::default();
@@ -1594,6 +1595,7 @@ fn render_markdown_preview_window(
             bar_color: None,
             min_width: px(0.0),
             editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.into(),
+            ui_scale_percent: crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
             view: None,
             text_region: DiffTextRegion::Inline,
         },

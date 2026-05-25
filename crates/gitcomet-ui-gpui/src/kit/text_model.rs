@@ -131,10 +131,8 @@ impl LineIndex {
         if removed_breaks == inserted_breaks
             && let Some(updated) = Arc::get_mut(&mut self.starts)
         {
-            let mut write_ix = prefix_len;
-            for pos in memchr_iter(b'\n', inserted.as_bytes()) {
+            for (write_ix, pos) in (prefix_len..).zip(memchr_iter(b'\n', inserted.as_bytes())) {
                 updated[write_ix] = range.start.saturating_add(pos).saturating_add(1);
-                write_ix += 1;
             }
             for start in &mut updated[suffix_start..] {
                 *start = shift_offset_by_delta(*start, delta);

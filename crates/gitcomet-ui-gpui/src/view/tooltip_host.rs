@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) struct TooltipHost {
+pub(crate) struct TooltipHost {
     theme: AppTheme,
 
     tooltip_text: Option<SharedString>,
@@ -13,7 +13,7 @@ pub(super) struct TooltipHost {
 }
 
 impl TooltipHost {
-    pub(super) fn new(theme: AppTheme) -> Self {
+    pub(crate) fn new(theme: AppTheme) -> Self {
         Self {
             theme,
             tooltip_text: None,
@@ -26,12 +26,12 @@ impl TooltipHost {
         }
     }
 
-    pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
     }
 
-    pub(super) fn set_tooltip_text_if_changed(
+    pub(crate) fn set_tooltip_text_if_changed(
         &mut self,
         next: Option<SharedString>,
         cx: &mut gpui::Context<Self>,
@@ -46,7 +46,7 @@ impl TooltipHost {
         true
     }
 
-    pub(super) fn clear_tooltip_if_matches(
+    pub(crate) fn clear_tooltip_if_matches(
         &mut self,
         tooltip: &SharedString,
         cx: &mut gpui::Context<Self>,
@@ -61,7 +61,27 @@ impl TooltipHost {
         true
     }
 
-    pub(super) fn on_mouse_moved(&mut self, pos: Point<Pixels>, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn clear_tooltip(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        let had_tooltip = self.tooltip_text.is_some()
+            || self.tooltip_candidate_last.is_some()
+            || self.tooltip_visible_text.is_some()
+            || self.tooltip_pending_pos.is_some()
+            || self.tooltip_visible_pos.is_some();
+        if !had_tooltip {
+            return false;
+        }
+
+        self.tooltip_text = None;
+        self.tooltip_candidate_last = None;
+        self.tooltip_visible_text = None;
+        self.tooltip_pending_pos = None;
+        self.tooltip_visible_pos = None;
+        self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn on_mouse_moved(&mut self, pos: Point<Pixels>, cx: &mut gpui::Context<Self>) {
         self.last_mouse_pos = pos;
         self.maybe_restart_tooltip_delay(cx);
     }
@@ -192,7 +212,7 @@ impl TooltipHost {
     }
 
     #[cfg(test)]
-    pub(super) fn tooltip_text_for_test(&self) -> Option<SharedString> {
+    pub(crate) fn tooltip_text_for_test(&self) -> Option<SharedString> {
         self.tooltip_text.clone()
     }
 }

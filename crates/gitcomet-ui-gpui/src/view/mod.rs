@@ -1,4 +1,5 @@
 use crate::theme::AppTheme;
+use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
 #[cfg(test)]
 use gitcomet_core::diff::annotate_unified;
@@ -15,17 +16,18 @@ use gitcomet_state::model::{
     AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
     Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
-use gitcomet_state::msg::{Msg, RepoExternalChange, StoreEvent};
+use gitcomet_state::msg::{Msg, StoreEvent};
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, Corner, CursorStyle,
-    Decorations, Element, ElementId, Entity, FocusHandle, FontWeight, GlobalElementId,
-    InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle, ShapedLine, SharedString, Size,
-    Style, StyleRefinement, TextRun, Tiling, UniformListScrollHandle, WeakEntity, Window,
-    WindowControlArea, anchored, div, fill, point, px, relative, size, uniform_list,
+    Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
+    GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
+    ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, TextRun, Tiling,
+    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, fill,
+    point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -35,6 +37,70 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
 use std::time::{Duration, Instant};
+
+const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
+
+actions!(
+    text_input_diff_navigation,
+    [
+        DiffPrevFile,
+        DiffNextFile,
+        DiffPrevSearchMatchOrChange,
+        DiffNextSearchMatchOrChange,
+        TextInputCommitSubmit,
+        TextInputDiffPrevFile,
+        TextInputDiffNextFile,
+        TextInputDiffPrevSearchMatchOrChange,
+        TextInputDiffNextSearchMatchOrChange,
+        TextInputDiffPrevChange,
+        TextInputDiffNextChange,
+        OpenActiveViewSearch,
+        PopoverPromptDismiss,
+        PopoverPromptTabNext,
+        PopoverPromptTabPrev,
+    ]
+);
+
+pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
+    let key = keystroke.key.as_str();
+    let mods = keystroke.modifiers;
+    let no_command_modifiers = !mods.control && !mods.alt && !mods.platform && !mods.function;
+
+    (key == "escape" && no_command_modifiers)
+        || (mods.secondary() && mods.number_of_modifiers() == 1 && key == "f")
+        || (matches!(key, "f1" | "f2" | "f3" | "f4" | "f7") && no_command_modifiers)
+        || (key == "space" && no_command_modifiers)
+        || (mods.alt
+            && !mods.control
+            && !mods.platform
+            && !mods.function
+            && matches!(key, "i" | "s" | "w" | "up" | "down"))
+        || ((mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && matches!(key, "a" | "c"))
+        || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
+}
+
+fn repo_activation_msg(
+    state: &AppState,
+    last_activation_dispatch: &mut HashMap<RepoId, Instant>,
+    now: Instant,
+) -> Option<Msg> {
+    let repo_id = state.active_repo?;
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    if !matches!(repo.open, Loadable::Ready(_)) {
+        return None;
+    }
+    if last_activation_dispatch
+        .get(&repo_id)
+        .is_some_and(|last| now.saturating_duration_since(*last) < REPO_ACTIVATION_THROTTLE)
+    {
+        return None;
+    }
+    last_activation_dispatch.insert(repo_id, now);
+    Some(Msg::RepoActivated { repo_id })
+}
 
 mod app_model;
 mod branch_sidebar;
@@ -50,8 +116,10 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+mod file_diff_display;
 mod fingerprint;
 mod history_graph;
+pub(crate) mod history_mode;
 mod icons;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
@@ -79,18 +147,18 @@ mod toast_host;
 mod tooltip;
 mod tooltip_host;
 mod update_check;
+mod user_survey;
 mod word_diff;
 
 use app_model::AppUiModel;
 use branch_sidebar::{BranchSection, BranchSidebarRow};
 use caches::{
-    HistoryCache, HistoryCacheRequest, HistoryCommitRowVm, HistoryStashIdsCache,
+    HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryCache,
+    HistoryCacheBuildRequest, HistoryDecorationCache, HistoryDecorationCacheRequest,
+    HistoryDecorationRowVm, HistoryDisplayKey, HistoryStashIdsCache, HistoryTextVm,
     HistoryWorktreeSummaryCache,
 };
-use chrome::{
-    CLIENT_SIDE_DECORATION_INSET, TITLE_BAR_HEIGHT, TitleBarView, cursor_style_for_resize_edge,
-    resize_edge,
-};
+use chrome::{TitleBarView, cursor_style_for_resize_edge, resize_edge};
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
 #[cfg(test)]
 use date_time::format_datetime;
@@ -105,7 +173,7 @@ pub(in crate::view) use terminal_preferences::{
     launch_external_terminal_from_preferences, parse_terminal_args_multiline,
     resolve_embedded_shell_program,
 };
-use word_diff::capped_word_diff_ranges;
+use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
@@ -117,19 +185,28 @@ use diff_utils::{
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
-    scrollbar_markers_from_flags,
+    scrollbar_markers_from_flags, scrollbar_markers_from_visible_ranges,
+};
+use file_diff_display::{
+    LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
+    file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, StartupCrashReport,
 };
-use panels::{ACTION_BAR_HEIGHT, ActionBarView, PopoverHost, RepoTabsBarView};
-use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, MainPaneView, SidebarPaneView};
-pub(crate) use settings_window::open_settings_window;
+use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
+pub(crate) use panes::MainPaneView;
+use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
+pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
+use tooltip::GitCometTooltipExt;
+#[cfg(test)]
+use tooltip::clear_visible_tooltip_text_for_test;
 use tooltip_host::TooltipHost;
 
+#[cfg(test)]
 pub(crate) use chrome::window_frame;
 use color::with_alpha;
 use icons::{svg_icon, svg_spinner};
@@ -175,6 +252,7 @@ const TOAST_SLIDE_PX: f32 = 12.0;
 const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
+pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
 
 // Only use these wrappers for views that remain mounted while their parent is mounted.
 // Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
@@ -202,6 +280,107 @@ fn stable_overlay_view<V: Render>(view: Entity<V>) -> impl IntoElement {
     // temporarily unavailable. Reusing the cached overlay paint range then
     // replays a stale input-handler index and panics inside GPUI reuse_paint.
     div().absolute().top_0().left_0().size_full().child(view)
+}
+
+struct UiScaleScrollCapture {
+    view: Entity<GitCometView>,
+}
+
+impl IntoElement for UiScaleScrollCapture {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for UiScaleScrollCapture {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = px(0.0).into();
+        style.size.height = px(0.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !renders_full_chrome(self.view.read(cx).view_mode) {
+            return;
+        }
+
+        let view = self.view.clone();
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            let zoom_modifier = event.modifiers.secondary() || event.modifiers.control;
+            if phase != DispatchPhase::Capture
+                || !zoom_modifier
+                || event.modifiers.alt
+                || event.modifiers.function
+            {
+                return;
+            }
+
+            if !renders_full_chrome(view.read(cx).view_mode) {
+                return;
+            }
+
+            let delta_y = event.delta.pixel_delta(window.line_height()).y;
+            if delta_y.is_zero() {
+                return;
+            }
+
+            let current = crate::ui_scale::current(cx).percent;
+            let next = if delta_y > px(0.0) {
+                crate::ui_scale::step_up(current)
+            } else {
+                crate::ui_scale::step_down(current)
+            };
+
+            cx.stop_propagation();
+            if next == current {
+                return;
+            }
+
+            cx.defer(move |cx| {
+                crate::app::set_app_ui_scale_percent(cx, next);
+            });
+        });
+    }
 }
 
 pub(in crate::view) fn pane_resize_handles_width(
@@ -370,6 +549,7 @@ impl GitCometView {
         let main_pane = self.main_pane.clone();
         let details_pane = self.details_pane.clone();
         let action_bar = self.action_bar.clone();
+        let bottom_status_bar = self.bottom_status_bar.clone();
 
         cx.defer(move |cx| {
             sidebar_pane.update(cx, |pane, cx| {
@@ -382,6 +562,9 @@ impl GitCometView {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
             });
             action_bar.update(cx, |bar, cx| {
+                bar.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            bottom_status_bar.update(cx, |bar, cx| {
                 bar.set_active_context_menu_invoker(next.clone(), cx);
             });
         });
@@ -450,6 +633,7 @@ impl GitCometView {
         let store = Arc::new(store);
 
         let mut ui_session = session::load();
+        let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
         let _font_preferences =
             crate::font_preferences::current_or_initialize_from_session(window, &ui_session, cx);
         if should_seed_initial_repository_from_session(
@@ -467,6 +651,7 @@ impl GitCometView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_session
             .theme_mode
             .as_deref()
@@ -495,6 +680,20 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffScrollSync::from_key)
             .unwrap_or_default();
+        let diff_content_mode = ui_session
+            .diff_content_mode
+            .as_deref()
+            .and_then(DiffContentMode::from_key)
+            .unwrap_or_default();
+        let diff_whitespace_mode = ui_session
+            .diff_whitespace_mode
+            .as_deref()
+            .and_then(DiffWhitespaceMode::from_key)
+            .unwrap_or_default();
+        let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
+        let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
+        let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
+        let commit_push_after_enabled = ui_session.commit_push_after_enabled.unwrap_or(false);
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
 
@@ -585,15 +784,13 @@ impl GitCometView {
             )
         });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
-        let toast_host = cx
-            .new(|_cx| ToastHost::new(initial_theme, tooltip_host.downgrade(), weak_view.clone()));
+        let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),
                 ui_model.clone(),
                 initial_theme,
                 weak_view.clone(),
-                tooltip_host.downgrade(),
                 cx,
             )
         });
@@ -603,10 +800,11 @@ impl GitCometView {
                 ui_model.clone(),
                 initial_theme,
                 weak_view.clone(),
-                tooltip_host.downgrade(),
                 cx,
             )
         });
+        let bottom_status_bar =
+            cx.new(|_cx| BottomStatusBarView::new(initial_theme, weak_view.clone()));
 
         let sidebar_pane = cx.new(|cx| {
             SidebarPaneView::new(
@@ -628,6 +826,11 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 diff_scroll_sync,
+                diff_content_mode,
+                diff_whitespace_mode,
+                diff_reveal_whitespace_chars,
+                diff_word_wrap,
+                diff_show_line_numbers,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -655,6 +858,8 @@ impl GitCometView {
                     change_tracking_view,
                     change_tracking_height: restored_change_tracking_height,
                     untracked_height: restored_untracked_height,
+                    ui_scale_percent: ui_scale.percent,
+                    commit_push_after_enabled,
                     root_view: weak_view.clone(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
@@ -673,7 +878,14 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 change_tracking_view,
+                commit_push_after_enabled,
+                diff_content_mode,
+                diff_whitespace_mode,
+                diff_reveal_whitespace_chars,
+                diff_word_wrap,
+                diff_show_line_numbers,
                 weak_view.clone(),
+                tooltip_host.downgrade(),
                 main_pane.clone(),
                 details_pane.clone(),
                 window,
@@ -693,13 +905,12 @@ impl GitCometView {
             if !runtime.is_available() {
                 return;
             }
-            if let Some(repo) = this.active_repo()
-                && matches!(repo.open, Loadable::Ready(_))
-            {
-                this.store.dispatch(Msg::RepoExternallyChanged {
-                    repo_id: repo.id,
-                    change: RepoExternalChange::GitState,
-                });
+            if let Some(msg) = repo_activation_msg(
+                &this.state,
+                &mut this.last_repo_activation_dispatch_at,
+                Instant::now(),
+            ) {
+                this.store.dispatch(msg);
             }
         });
 
@@ -780,14 +991,17 @@ impl GitCometView {
             input
         });
 
-        let initial_sidebar_width = restored_sidebar_width
-            .map(|w| px(w as f32))
-            .unwrap_or(px(280.0))
-            .max(px(SIDEBAR_MIN_PX));
-        let initial_details_width = restored_details_width
-            .map(|w| px(w as f32))
-            .unwrap_or(px(420.0))
-            .max(px(DETAILS_MIN_PX));
+        let scale = ui_scale::UiScale::from_percent(ui_scale.percent);
+        let initial_sidebar_width_design =
+            ui_scale::design_units_from_stored(restored_sidebar_width)
+                .unwrap_or(280.0)
+                .max(SIDEBAR_MIN_PX);
+        let initial_details_width_design =
+            ui_scale::design_units_from_stored(restored_details_width)
+                .unwrap_or(420.0)
+                .max(DETAILS_MIN_PX);
+        let initial_sidebar_width = scale.px(initial_sidebar_width_design);
+        let initial_details_width = scale.px(initial_details_width_design);
 
         let mut view = Self {
             state: Arc::clone(&initial_state),
@@ -807,16 +1021,19 @@ impl GitCometView {
             details_pane,
             repo_tabs_bar,
             action_bar,
+            bottom_status_bar,
             tooltip_host,
             toast_host,
             popover_host,
             focused_mergetool_bootstrap,
+            submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
             startup_repo_bootstrap_pending,
             splash_backdrop_image: splash::load_splash_backdrop_image(),
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
+            last_repo_activation_dispatch_at: HashMap::default(),
             date_time_format,
             timezone,
             show_timezone,
@@ -831,12 +1048,21 @@ impl GitCometView {
             terminal_cursor_blink_active: false,
             terminal_cursor_blink_task_scheduled: false,
             terminal_cursor_blink_seq: 0,
+            commit_push_after_enabled,
             diff_scroll_sync,
+            diff_content_mode,
+            diff_whitespace_mode,
+            diff_reveal_whitespace_chars,
+            diff_word_wrap,
+            diff_show_line_numbers,
+            ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
             sidebar_collapsed: false,
             details_collapsed: false,
+            sidebar_width_design: initial_sidebar_width_design,
+            details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
             details_width: initial_details_width,
             sidebar_render_width: initial_sidebar_width,
@@ -868,12 +1094,15 @@ impl GitCometView {
         view.maybe_auto_install_linux_desktop_integration(cx);
 
         view.drive_focused_mergetool_bootstrap();
+        view.drive_submodule_diff_bootstrap();
+        view.maybe_show_user_survey_on_startup(cx);
         view.maybe_check_for_updates_on_startup(cx);
 
         crate::app::sync_gitcomet_window_state(
             cx,
             view.window_handle,
             cx.weak_entity(),
+            view.main_pane.downgrade(),
             view.view_mode,
             view.state
                 .repos
@@ -903,6 +1132,8 @@ impl GitCometView {
         self.repo_tabs_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.action_bar
+            .update(cx, |bar, cx| bar.set_theme(theme, cx));
+        self.bottom_status_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.tooltip_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
@@ -934,6 +1165,7 @@ impl GitCometView {
         self.details_pane.update(cx, |_pane, cx| cx.notify());
         self.repo_tabs_bar.update(cx, |_bar, cx| cx.notify());
         self.action_bar.update(cx, |_bar, cx| cx.notify());
+        self.bottom_status_bar.update(cx, |_bar, cx| cx.notify());
         self.tooltip_host.update(cx, |_host, cx| cx.notify());
         self.toast_host.update(cx, |_host, cx| cx.notify());
         self.popover_host.update(cx, |_host, cx| cx.notify());
@@ -944,6 +1176,98 @@ impl GitCometView {
         self.auth_prompt_secret_input
             .update(cx, |_input, cx| cx.notify());
         cx.notify();
+    }
+
+    fn ui_scale(&self) -> ui_scale::UiScale {
+        ui_scale::UiScale::from_percent(self.ui_scale_percent)
+    }
+
+    fn sync_cached_pane_widths_from_design(&mut self) {
+        let scale = self.ui_scale();
+        self.sidebar_width = scale.px(self.sidebar_width_design);
+        self.details_width = scale.px(self.details_width_design);
+    }
+
+    fn set_sidebar_width_from_pixels(&mut self, width: Pixels) {
+        self.sidebar_width = width;
+        self.sidebar_width_design = self.ui_scale().design_units_from_pixels(width);
+    }
+
+    fn set_details_width_from_pixels(&mut self, width: Pixels) {
+        self.details_width = width;
+        self.details_width_design = self.ui_scale().design_units_from_pixels(width);
+    }
+
+    fn scaled_px(&self, value: f32) -> Pixels {
+        self.ui_scale().px(value)
+    }
+
+    fn pane_collapsed_width(&self) -> Pixels {
+        self.scaled_px(PANE_COLLAPSED_PX)
+    }
+
+    fn main_min_width(&self) -> Pixels {
+        self.scaled_px(MAIN_MIN_PX)
+    }
+
+    fn sidebar_min_width(&self) -> Pixels {
+        self.scaled_px(SIDEBAR_MIN_PX)
+    }
+
+    fn details_min_width(&self) -> Pixels {
+        self.scaled_px(DETAILS_MIN_PX)
+    }
+
+    fn pane_resize_handle_width(&self) -> Pixels {
+        self.scaled_px(PANE_RESIZE_HANDLE_PX)
+    }
+
+    pub(crate) fn apply_ui_scale_percent(
+        &mut self,
+        percent: u32,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let percent = ui_scale::sanitize_percent(Some(percent));
+        if self.ui_scale_percent == percent {
+            return;
+        }
+
+        let previous_percent = self.ui_scale_percent;
+        let scale = self.ui_scale();
+        self.sidebar_width_design = scale.design_units_from_pixels(self.sidebar_width);
+        self.details_width_design = scale.design_units_from_pixels(self.details_width);
+        self.ui_scale_percent = percent;
+        self.pane_resize = None;
+        self.sidebar_width_anim_seq = self.sidebar_width_anim_seq.wrapping_add(1);
+        self.details_width_anim_seq = self.details_width_anim_seq.wrapping_add(1);
+        self.sidebar_width_animating = false;
+        self.details_width_animating = false;
+
+        ui_scale::apply_to_window(window, percent);
+        crate::app::ensure_window_respects_min_size(
+            window,
+            crate::app::main_window_min_size_for_percent(percent),
+        );
+
+        self.last_window_size = window.viewport_size();
+        self.ui_window_size_last_seen = self.last_window_size;
+        self.sync_cached_pane_widths_from_design();
+
+        let change_tracking_view = self.change_tracking_view;
+        self.details_pane.update(cx, |pane, cx| {
+            pane.apply_ui_scale_percent(previous_percent, percent, change_tracking_view, cx);
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.apply_ui_scale_percent(previous_percent, percent, cx);
+        });
+        self.popover_host.update(cx, |_host, cx| {
+            cx.notify();
+        });
+
+        self.clamp_pane_widths_to_window();
+        self.notify_font_preferences_changed(cx);
+        self.schedule_ui_settings_persist(cx);
     }
 
     fn set_theme_mode(
@@ -978,6 +1302,38 @@ impl GitCometView {
         self.schedule_ui_settings_persist(cx);
     }
 
+    pub(in crate::view) fn set_commit_push_after_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.commit_push_after_enabled == enabled {
+            return;
+        }
+
+        self.commit_push_after_enabled = enabled;
+        self.details_pane.update(cx, |pane, cx| {
+            pane.set_commit_push_after_enabled(enabled, cx)
+        });
+        self.popover_host.update(cx, |host, cx| {
+            host.sync_commit_push_after_enabled(enabled, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_commit_amend_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.details_pane
+            .update(cx, |pane, cx| pane.set_commit_amend_enabled(enabled, cx));
+        self.popover_host
+            .update(cx, |host, cx| host.sync_commit_amend_enabled(enabled, cx));
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_diff_scroll_sync(
         &mut self,
         next: DiffScrollSync,
@@ -991,6 +1347,192 @@ impl GitCometView {
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
         self.schedule_ui_settings_persist(cx);
+    }
+
+    fn apply_diff_content_mode_preference(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_content_mode == next {
+            return false;
+        }
+
+        self.diff_content_mode = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_content_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    // MainPaneView sometimes owns the active GPUI update when the diff-header
+    // toggle is clicked, so syncing the root preference must not call back into
+    // `main_pane.update(...)`.
+    pub(in crate::view) fn sync_diff_content_mode_from_pane(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_content_mode_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_content_mode(
+        &mut self,
+        next: DiffContentMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_content_mode_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_content_mode(next, cx));
+    }
+
+    fn apply_diff_whitespace_mode_preference(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_whitespace_mode == next {
+            return false;
+        }
+
+        self.diff_whitespace_mode = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_whitespace_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_whitespace_mode_from_pane(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_whitespace_mode_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_whitespace_mode(
+        &mut self,
+        next: DiffWhitespaceMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_whitespace_mode_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_whitespace_mode(next, cx));
+    }
+
+    fn apply_diff_reveal_whitespace_chars_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_reveal_whitespace_chars == next {
+            return false;
+        }
+
+        self.diff_reveal_whitespace_chars = next;
+        self.popover_host.update(cx, |host, cx| {
+            host.sync_diff_reveal_whitespace_chars(next, cx)
+        });
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_reveal_whitespace_chars_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_reveal_whitespace_chars_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_reveal_whitespace_chars(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_reveal_whitespace_chars_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_diff_reveal_whitespace_chars(next, cx)
+        });
+    }
+
+    fn apply_diff_word_wrap_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_word_wrap == next {
+            return false;
+        }
+
+        self.diff_word_wrap = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_word_wrap(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_word_wrap_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_word_wrap_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_word_wrap(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if !self.apply_diff_word_wrap_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_word_wrap(next, cx));
+    }
+
+    fn apply_diff_show_line_numbers_preference(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if self.diff_show_line_numbers == next {
+            return false;
+        }
+
+        self.diff_show_line_numbers = next;
+        self.popover_host
+            .update(cx, |host, cx| host.sync_diff_show_line_numbers(next, cx));
+        self.schedule_ui_settings_persist(cx);
+        true
+    }
+
+    pub(in crate::view) fn sync_diff_show_line_numbers_from_pane(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.apply_diff_show_line_numbers_preference(next, cx);
+    }
+
+    pub(in crate::view) fn set_diff_show_line_numbers(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.apply_diff_show_line_numbers_preference(next, cx) {
+            return;
+        }
+
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
     }
 
     pub(in crate::view) fn set_history_column_preferences(
@@ -1031,10 +1573,16 @@ impl GitCometView {
             tag_fetch_mode,
         });
         if show_tags
+            && auto_fetch_tags_on_repo_activation
             && let Some(repo) = self.main_pane.read(cx).active_repo()
-            && matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_))
         {
-            self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+            if matches!(repo.tags, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store.dispatch(Msg::LoadTags { repo_id: repo.id });
+            }
+            if matches!(repo.remote_tags, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store
+                    .dispatch(Msg::LoadRemoteTags { repo_id: repo.id });
+            }
         }
         self.schedule_ui_settings_persist(cx);
     }
@@ -1213,7 +1761,7 @@ impl GitCometView {
         }
 
         let target = if collapsed {
-            px(PANE_COLLAPSED_PX)
+            self.pane_collapsed_width()
         } else {
             self.sidebar_width
         };
@@ -1241,7 +1789,7 @@ impl GitCometView {
         }
 
         let target = if collapsed {
-            px(PANE_COLLAPSED_PX)
+            self.pane_collapsed_width()
         } else {
             self.details_width
         };
@@ -1266,7 +1814,7 @@ impl GitCometView {
 
         div()
             .id(id)
-            .w(px(PANE_RESIZE_HANDLE_PX))
+            .w(self.pane_resize_handle_width())
             .h_full()
             .flex()
             .items_center()
@@ -1329,7 +1877,7 @@ impl GitCometView {
                     match state.handle {
                         PaneResizeHandle::Sidebar => {
                             if this.sidebar_width != next_width {
-                                this.sidebar_width = next_width;
+                                this.set_sidebar_width_from_pixels(next_width);
                                 changed = true;
                             }
                             if this.sidebar_render_width != next_width {
@@ -1339,7 +1887,7 @@ impl GitCometView {
                         }
                         PaneResizeHandle::Details => {
                             if this.details_width != next_width {
-                                this.details_width = next_width;
+                                this.set_details_width_from_pixels(next_width);
                                 changed = true;
                             }
                             if this.details_render_width != next_width {
@@ -1375,6 +1923,11 @@ impl GitCometView {
 
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
+    }
+
+    fn active_repo(&self) -> Option<&RepoState> {
+        let repo_id = self.active_repo_id()?;
+        self.state.repos.iter().find(|repo| repo.id == repo_id)
     }
 
     fn drive_focused_mergetool_bootstrap(&mut self) {
@@ -1413,9 +1966,32 @@ impl GitCometView {
         }
     }
 
-    fn active_repo(&self) -> Option<&RepoState> {
-        let repo_id = self.active_repo_id()?;
-        self.state.repos.iter().find(|r| r.id == repo_id)
+    pub(super) fn drive_submodule_diff_bootstrap(&mut self) {
+        if !self.state.git_runtime.is_available() {
+            return;
+        }
+
+        let Some(bootstrap) = self.submodule_diff_bootstrap.as_ref() else {
+            return;
+        };
+        let Some(action) = submodule_diff_bootstrap_action(&self.state, bootstrap) else {
+            return;
+        };
+
+        match action {
+            SubmoduleDiffBootstrapAction::OpenRepo(path) => {
+                self.store.dispatch(Msg::OpenRepo(path))
+            }
+            SubmoduleDiffBootstrapAction::SetActiveRepo(repo_id) => {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+            SubmoduleDiffBootstrapAction::SelectDiff { repo_id, target } => {
+                self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
+            SubmoduleDiffBootstrapAction::Complete => {
+                self.submodule_diff_bootstrap = None;
+            }
+        }
     }
 
     #[cfg(test)]
@@ -1564,27 +2140,76 @@ impl GitCometView {
         platform_open::open_url(url)
     }
 
+    fn defer_text_input_main_pane_action<F>(&self, cx: &mut gpui::Context<Self>, action: F)
+    where
+        F: FnOnce(&mut MainPaneView, &mut Window, &mut gpui::Context<MainPaneView>) -> bool
+            + 'static,
+    {
+        let main_pane = self.main_pane.clone();
+        let window_handle = self.window_handle;
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                main_pane.update(cx, |pane, cx| {
+                    if action(pane, window, cx) {
+                        cx.notify();
+                        window.refresh();
+                    }
+                });
+            });
+        });
+    }
+
+    fn defer_text_input_adjacent_diff_file_navigation(
+        &self,
+        direction: i8,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
+            let Some(repo_id) = pane.active_repo_id() else {
+                return false;
+            };
+            pane.try_select_adjacent_diff_file_preserving_focus(repo_id, direction, window, cx)
+        });
+    }
+
+    fn defer_adjacent_diff_file_navigation(&self, direction: i8, cx: &mut gpui::Context<Self>) {
+        self.defer_text_input_main_pane_action(cx, move |pane, window, cx| {
+            let Some(repo_id) = pane.active_repo_id() else {
+                return false;
+            };
+            pane.try_select_adjacent_diff_file(repo_id, direction, window, cx)
+        });
+    }
+
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
         self.popover_host.read(app).is_open()
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
-        self.tooltip_host.read(app).tooltip_text_for_test()
+        self.tooltip_host
+            .read(app)
+            .tooltip_text_for_test()
+            .or_else(tooltip::tooltip_text_for_test)
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn open_repo_panel_visible_for_test(&self) -> bool {
         self.open_repo_panel
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn show_timezone_for_test(&self) -> bool {
         self.show_timezone
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
         self.change_tracking_view
     }
@@ -1624,6 +2249,7 @@ impl GitCometView {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
         self.diff_scroll_sync
     }
@@ -1631,6 +2257,9 @@ impl GitCometView {
 
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        clear_visible_tooltip_text_for_test();
+
         let theme = self.theme;
         let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(
@@ -1694,7 +2323,10 @@ impl Render for GitCometView {
 
         let decorations = window.window_decorations();
         let (tiling, client_inset) = match decorations {
-            Decorations::Client { tiling } => (Some(tiling), CLIENT_SIDE_DECORATION_INSET),
+            Decorations::Client { tiling } => (
+                Some(tiling),
+                chrome::client_side_decoration_inset(self.ui_scale_percent),
+            ),
             Decorations::Server => (None, px(0.0)),
         };
         window.set_client_inset(client_inset);
@@ -1730,7 +2362,7 @@ impl Render for GitCometView {
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(
                 self.title_bar.clone(),
-                TITLE_BAR_HEIGHT,
+                chrome::title_bar_height(self.ui_scale_percent),
             ));
         }
 
@@ -2055,6 +2687,88 @@ impl Render for GitCometView {
             .cursor(cursor)
             .text_color(theme.colors.text);
         root = root.relative();
+        root = root.child(UiScaleScrollCapture { view: cx.entity() });
+        root = root
+            .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {
+                let handled = this
+                    .main_pane
+                    .update(cx, |pane, cx| pane.open_search_for_active_view(window, cx));
+                if handled {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
+                let handled = this.details_pane.update(cx, |pane, cx| {
+                    pane.handle_commit_submit_shortcut(window, cx)
+                });
+                if handled {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
+                this.defer_text_input_adjacent_diff_file_navigation(-1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &TextInputDiffNextFile, _window, cx| {
+                this.defer_text_input_adjacent_diff_file_navigation(1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(
+                |this, _: &TextInputDiffPrevSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &TextInputDiffNextSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                },
+            ))
+            .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                this.defer_adjacent_diff_file_navigation(-1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                this.defer_adjacent_diff_file_navigation(1, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(
+                cx.listener(|this, _: &DiffPrevSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &DiffNextSearchMatchOrChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_search_match_or_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &TextInputDiffPrevChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_prev_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &TextInputDiffNextChange, _window, cx| {
+                    this.defer_text_input_main_pane_action(cx, |pane, _window, cx| {
+                        pane.navigate_next_diff_change(cx)
+                    });
+                    cx.stop_propagation();
+                }),
+            );
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             this.last_mouse_pos = e.position;
@@ -2070,7 +2784,12 @@ impl Render for GitCometView {
             };
 
             let size = window.viewport_size();
-            let next = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
+            let next = resize_edge(
+                e.position,
+                chrome::client_side_decoration_inset(this.ui_scale_percent),
+                size,
+                tiling,
+            );
             if next != this.hover_resize_edge {
                 this.hover_resize_edge = next;
                 cx.notify();
@@ -2079,13 +2798,18 @@ impl Render for GitCometView {
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|_this, e: &MouseDownEvent, window, cx| {
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
                     let Decorations::Client { tiling } = window.window_decorations() else {
                         return;
                     };
 
                     let size = window.viewport_size();
-                    let edge = resize_edge(e.position, CLIENT_SIDE_DECORATION_INSET, size, tiling);
+                    let edge = resize_edge(
+                        e.position,
+                        chrome::client_side_decoration_inset(this.ui_scale_percent),
+                        size,
+                        tiling,
+                    );
                     let Some(edge) = edge else {
                         return;
                     };
@@ -2098,7 +2822,12 @@ impl Render for GitCometView {
             self.hover_resize_edge = None;
         }
 
-        root = root.child(window_frame(theme, decorations, body.into_any_element()));
+        root = root.child(chrome::window_frame(
+            theme,
+            decorations,
+            body.into_any_element(),
+            self.ui_scale_percent,
+        ));
 
         root = root.child(stable_overlay_view(self.toast_host.clone()));
 

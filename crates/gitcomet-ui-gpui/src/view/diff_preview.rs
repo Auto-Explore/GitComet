@@ -18,6 +18,9 @@ fn preview_abs_path(
         DiffTarget::WorkingTree { path, .. } => path.clone(),
         DiffTarget::Commit {
             path: Some(path), ..
+        }
+        | DiffTarget::CommitRange {
+            path: Some(path), ..
         } => path.clone(),
         _ => return None,
     };

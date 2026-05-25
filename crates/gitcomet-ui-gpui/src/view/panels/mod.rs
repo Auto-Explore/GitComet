@@ -24,6 +24,10 @@ pub(in crate::view) enum ContextMenuAction {
     OpenRepo {
         path: std::path::PathBuf,
     },
+    OpenSubmoduleDiffInTab {
+        path: std::path::PathBuf,
+        target: DiffTarget,
+    },
     ExportPatch {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -52,8 +56,35 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
+    SetDiffContentMode {
+        mode: DiffContentMode,
+    },
+    SetDiffWhitespaceMode {
+        mode: DiffWhitespaceMode,
+    },
+    SetDiffRevealWhitespaceChars {
+        enabled: bool,
+    },
+    SetDiffWordWrap {
+        enabled: bool,
+    },
+    SetDiffShowLineNumbers {
+        enabled: bool,
+    },
     SetChangeTrackingView {
         view: ChangeTrackingView,
+    },
+    SetCommitAmendEnabled {
+        enabled: bool,
+    },
+    SetCommitPushAfterEnabled {
+        enabled: bool,
+    },
+    UseCommitMessage {
+        message: String,
+    },
+    SetUiScale {
+        percent: u32,
     },
     StageSelectionOrPath {
         repo_id: RepoId,
@@ -91,6 +122,10 @@ pub(in crate::view) enum ContextMenuAction {
     },
     UpdateSubmodules {
         repo_id: RepoId,
+    },
+    LoadSubmodule {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
     },
     LoadWorktrees {
         repo_id: RepoId,
@@ -191,8 +226,8 @@ pub(in crate::view) enum ContextMenuAction {
 #[derive(Clone)]
 enum ContextMenuItem {
     Separator,
-    Header(SharedString),
-    Label(SharedString),
+    Header(components::ContextMenuText),
+    Label(components::ContextMenuText),
     Entry {
         label: SharedString,
         icon: Option<SharedString>,
@@ -256,12 +291,14 @@ impl ContextMenuModel {
 
 mod action_bar;
 mod bars;
+mod bottom_status_bar;
 mod layout;
 mod main;
 mod popover;
 mod repo_tabs_bar;
 
-pub(super) use action_bar::{ACTION_BAR_HEIGHT, ActionBarView};
+pub(super) use action_bar::{ActionBarView, action_bar_height};
+pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::PopoverHost;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]

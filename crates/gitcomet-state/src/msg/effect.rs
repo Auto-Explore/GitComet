@@ -2,7 +2,8 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{
-    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -14,9 +15,29 @@ pub enum Effect {
         repo_id: Option<RepoId>,
         action: &'static str,
     },
+    PersistRecentRepo {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        action: &'static str,
+    },
+    PersistRepoHistoryMode {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        mode: HistoryMode,
+        action: &'static str,
+    },
+    PersistRepoHistoryModesBatch {
+        repo_id: Option<RepoId>,
+        updates: Vec<(PathBuf, HistoryMode)>,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,
+    },
+    CancelRepoLoads {
+        repo_id: RepoId,
+        load_epoch: u64,
     },
     LoadBranches {
         repo_id: RepoId,
@@ -62,6 +83,11 @@ pub enum Effect {
         repo_id: RepoId,
         limit: usize,
     },
+    LoadRecentCommitMessages {
+        repo_id: RepoId,
+        limit: usize,
+        request_rev: u64,
+    },
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -104,6 +130,22 @@ pub enum Effect {
         target: DiffTarget,
         side: DiffPreviewTextSide,
     },
+    LoadSubmoduleSummary {
+        repo_id: RepoId,
+        target: DiffTarget,
+    },
+    LoadInlineSubmoduleSelectedDiff {
+        repo_id: RepoId,
+        inline_rev: u64,
+    },
+    LoadInlineSubmoduleSelectedDiffFile {
+        repo_id: RepoId,
+        inline_rev: u64,
+    },
+    LoadInlineSubmoduleSelectedDiffFileImage {
+        repo_id: RepoId,
+        inline_rev: u64,
+    },
     LoadDiffFileImage {
         repo_id: RepoId,
         target: DiffTarget,
@@ -113,6 +155,7 @@ pub enum Effect {
         load_patch_diff: bool,
         load_file_text: bool,
         preview_text_side: Option<DiffPreviewTextSide>,
+        load_submodule_summary: bool,
         load_file_image: bool,
     },
     LoadSelectedConflictFile {
@@ -227,6 +270,21 @@ pub enum Effect {
         approved_sources: Vec<SubmoduleTrustTarget>,
         auth: Option<StagedGitAuth>,
     },
+    CheckSubmoduleLoadTrust {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    LoadSubmodule {
+        repo_id: RepoId,
+        path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+        auth: Option<StagedGitAuth>,
+    },
+    ChangeSubmodulePointer {
+        repo_id: RepoId,
+        path: PathBuf,
+        reference: String,
+    },
     RemoveSubmodule {
         repo_id: RepoId,
         path: PathBuf,
@@ -278,6 +336,11 @@ pub enum Effect {
         message: String,
         auth: Option<StagedGitAuth>,
     },
+    SafePushAfterCommit {
+        repo_id: RepoId,
+        context: SafePushAfterCommitContext,
+        auth: Option<StagedGitAuth>,
+    },
     FetchAll {
         repo_id: RepoId,
         prune: bool,
@@ -312,8 +375,19 @@ pub enum Effect {
         repo_id: RepoId,
         auth: Option<StagedGitAuth>,
     },
+    PushAfterCommit {
+        repo_id: RepoId,
+        target: SafePushAfterCommitTarget,
+        set_upstream: bool,
+        auth: Option<StagedGitAuth>,
+    },
     ForcePush {
         repo_id: RepoId,
+        auth: Option<StagedGitAuth>,
+    },
+    ForcePushWithLease {
+        repo_id: RepoId,
+        lease: ForcePushLease,
         auth: Option<StagedGitAuth>,
     },
     PushSetUpstream {

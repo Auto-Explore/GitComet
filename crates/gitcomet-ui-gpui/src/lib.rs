@@ -1,6 +1,7 @@
 mod app;
 mod assets;
 mod bundled_fonts;
+mod clipboard;
 pub mod focused_diff;
 mod font_preferences;
 mod kit;
@@ -13,8 +14,10 @@ pub mod perf_ram_guard;
 #[doc(hidden)]
 pub mod perf_sidecar;
 mod startup_probe;
+mod text_selection;
 mod theme;
 mod ui_runtime;
+mod ui_scale;
 mod view;
 
 pub use app::{FocusedMergetoolConfig, run, run_focused_mergetool, run_with_startup_crash_report};

@@ -10,7 +10,7 @@ pub(super) fn model(
         BranchSection::Local => "Local branch".into(),
         BranchSection::Remote => "Remote branch".into(),
     };
-    let mut items = vec![ContextMenuItem::Header(header)];
+    let mut items = vec![ContextMenuItem::Header(header.into())];
     items.push(ContextMenuItem::Label(name.clone().into()));
     items.push(ContextMenuItem::Separator);
 

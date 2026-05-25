@@ -38,8 +38,38 @@ pub(crate) fn clone_progress_color(theme: AppTheme, op: &CloneOpState) -> gpui::
     }
 }
 
+pub(crate) fn clone_progress_bar_fill_color(theme: AppTheme, op: &CloneOpState) -> gpui::Rgba {
+    match op.status {
+        CloneOpStatus::Cancelling => with_alpha(
+            theme.colors.warning,
+            if theme.is_dark { 0.92 } else { 0.84 },
+        ),
+        _ => match op.progress.stage {
+            CloneProgressStage::Loading => {
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.82 } else { 0.74 })
+            }
+            CloneProgressStage::RemoteObjects => {
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.94 } else { 0.86 })
+            }
+        },
+    }
+}
+
+pub(crate) fn clone_progress_bar_track_color(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.border, if theme.is_dark { 0.40 } else { 0.22 })
+}
+
+pub(crate) fn clone_progress_bar_border_color(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.border, if theme.is_dark { 0.72 } else { 0.42 })
+}
+
 pub(crate) fn clone_progress_fill_ratio(percent: u8) -> f32 {
     f32::from(percent.min(100)) / 100.0
+}
+
+pub(crate) fn clone_progress_segment_weights(percent: u8) -> (f32, f32) {
+    let fill = clone_progress_fill_ratio(percent);
+    (fill, (1.0 - fill).max(0.0))
 }
 
 pub(crate) fn clone_progress_dest_label(dest: &Path) -> String {
@@ -100,6 +130,13 @@ mod tests {
     }
 
     #[test]
+    fn clone_progress_segment_weights_split_fill_and_remainder() {
+        assert_eq!(clone_progress_segment_weights(0), (0.0, 1.0));
+        assert_eq!(clone_progress_segment_weights(50), (0.5, 0.5));
+        assert_eq!(clone_progress_segment_weights(255), (1.0, 0.0));
+    }
+
+    #[test]
     fn clone_progress_color_uses_neutral_light_theme_alphas() {
         let theme = AppTheme::gitcomet_light();
         let loading = clone_op(CloneOpStatus::Running, CloneProgressStage::Loading, 10);
@@ -125,6 +162,26 @@ mod tests {
         assert_eq!(
             clone_progress_loading_color(theme),
             with_alpha(theme.colors.text, 0.34)
+        );
+        assert_eq!(
+            clone_progress_bar_fill_color(theme, &loading),
+            with_alpha(theme.colors.accent, 0.74)
+        );
+        assert_eq!(
+            clone_progress_bar_fill_color(theme, &remote),
+            with_alpha(theme.colors.accent, 0.86)
+        );
+        assert_eq!(
+            clone_progress_bar_fill_color(theme, &cancelling),
+            with_alpha(theme.colors.warning, 0.84)
+        );
+        assert_eq!(
+            clone_progress_bar_track_color(theme),
+            with_alpha(theme.colors.border, 0.22)
+        );
+        assert_eq!(
+            clone_progress_bar_border_color(theme),
+            with_alpha(theme.colors.border, 0.42)
         );
     }
 
@@ -154,6 +211,26 @@ mod tests {
         assert_eq!(
             clone_progress_loading_color(theme),
             with_alpha(theme.colors.text, 0.42)
+        );
+        assert_eq!(
+            clone_progress_bar_fill_color(theme, &loading),
+            with_alpha(theme.colors.accent, 0.82)
+        );
+        assert_eq!(
+            clone_progress_bar_fill_color(theme, &remote),
+            with_alpha(theme.colors.accent, 0.94)
+        );
+        assert_eq!(
+            clone_progress_bar_fill_color(theme, &cancelling),
+            with_alpha(theme.colors.warning, 0.92)
+        );
+        assert_eq!(
+            clone_progress_bar_track_color(theme),
+            with_alpha(theme.colors.border, 0.40)
+        );
+        assert_eq!(
+            clone_progress_bar_border_color(theme),
+            with_alpha(theme.colors.border, 0.72)
         );
     }
 

@@ -11,11 +11,13 @@ pub(super) fn panel(
     let upstream = format!("{remote}/{branch}");
     let remote_for_action = remote.clone();
     let branch_for_action = branch.clone();
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(540.0))
+        .w(scaled_px(540.0))
         .child(
             div()
                 .px_2()
@@ -59,15 +61,15 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("checkout_remote_branch_cancel", "Cancel")
+                        .focus_handle(this.checkout_remote_branch_cancel_focus_handle.clone())
                         .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, window, cx| {
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("checkout_remote_branch_go", "Checkout")
+                        .focus_handle(this.checkout_remote_branch_submit_focus_handle.clone())
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             let local_branch = this

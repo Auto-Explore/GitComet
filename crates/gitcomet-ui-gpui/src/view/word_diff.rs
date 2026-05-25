@@ -586,6 +586,20 @@ pub(super) fn capped_word_diff_ranges(
     (old_ranges.into_vec(), new_ranges.into_vec())
 }
 
+pub(super) fn capped_word_diff_ranges_for_file_diff_texts(
+    old: &gitcomet_core::file_diff::FileDiffLineText,
+    new: &gitcomet_core::file_diff::FileDiffLineText,
+) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
+        || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
+        || old.len().saturating_add(new.len()) > WORD_DIFF_MAX_TOTAL_BYTES
+    {
+        return (Vec::new(), Vec::new());
+    }
+
+    capped_word_diff_ranges(old.as_ref(), new.as_ref())
+}
+
 pub(crate) fn compact_capped_word_diff_ranges(old: &str, new: &str) -> CompactWordDiffRangePair {
     if old.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
         || new.len() > WORD_DIFF_MAX_BYTES_PER_SIDE
@@ -682,6 +696,21 @@ mod tests {
         let old = "a".repeat(WORD_DIFF_MAX_TOTAL_BYTES + 1);
         let new = format!("{old}x");
         let (old_ranges, new_ranges) = capped_word_diff_ranges(&old, &new);
+        assert!(old_ranges.is_empty());
+        assert!(new_ranges.is_empty());
+    }
+
+    #[test]
+    fn capped_word_diff_ranges_for_file_diff_texts_checks_len_before_loading() {
+        let old = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            std::sync::Arc::new(std::path::PathBuf::from("/definitely/missing/gitcomet-old")),
+            0..WORD_DIFF_MAX_BYTES_PER_SIDE.saturating_add(1),
+            true,
+            false,
+        );
+        let new = gitcomet_core::file_diff::FileDiffLineText::from("small");
+
+        let (old_ranges, new_ranges) = capped_word_diff_ranges_for_file_diff_texts(&old, &new);
         assert!(old_ranges.is_empty());
         assert!(new_ranges.is_empty());
     }

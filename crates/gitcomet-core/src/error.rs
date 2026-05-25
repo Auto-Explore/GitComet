@@ -100,6 +100,8 @@ pub enum ErrorKind {
     Io(std::io::ErrorKind),
     #[error("Not a repository")]
     NotARepository,
+    #[error("Cancelled")]
+    Cancelled,
     #[error("Unsupported: {0}")]
     Unsupported(&'static str),
     #[error("{0}")]

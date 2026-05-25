@@ -4,8 +4,36 @@ use crate::error::{Error, ErrorKind};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone, Debug, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+
+    pub fn check_cancelled(&self) -> Result<()> {
+        if self.is_cancelled() {
+            Err(Error::new(ErrorKind::Cancelled))
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
@@ -135,14 +163,109 @@ pub struct BlameLine {
     pub line: String,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommitOperationOutcome {
+    pub local_branch: Option<String>,
+    pub pre_head: Option<CommitId>,
+    pub post_head: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafePushAfterCommitContext {
+    pub amend: bool,
+    pub local_branch: Option<String>,
+    pub pre_head: Option<CommitId>,
+    pub post_head: Option<CommitId>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SafePushAfterCommitTarget {
+    pub remote: String,
+    pub branch: String,
+    pub local_branch: String,
+    pub local_head: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForcePushLease {
+    pub remote: String,
+    pub branch: String,
+    pub expected: CommitId,
+    pub local_branch: String,
+    pub local_head: CommitId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SafePushAfterCommitDecision {
+    Push {
+        target: SafePushAfterCommitTarget,
+    },
+    PushSetUpstream {
+        target: SafePushAfterCommitTarget,
+    },
+    Blocked {
+        summary: String,
+        lease: Option<ForcePushLease>,
+    },
+}
+
 pub trait GitRepository: Send + Sync {
     fn spec(&self) -> &RepoSpec;
 
+    fn log_history_mode_page(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        match mode {
+            HistoryMode::AllBranches => self.log_all_branches_page(limit, cursor),
+            HistoryMode::FullReachable
+            | HistoryMode::FirstParent
+            | HistoryMode::NoMerges
+            | HistoryMode::MergesOnly => self.log_head_page(limit, cursor),
+        }
+    }
+    fn log_history_mode_page_cancellable(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_history_mode_page(mode, limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
+    }
+
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
+    fn log_head_page_cancellable(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_head_page(limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
+    }
     fn log_all_branches_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
         Err(Error::new(ErrorKind::Unsupported(
             "all-branches history is not implemented for this backend",
         )))
+    }
+    fn log_all_branches_page_cancellable(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_all_branches_page(limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
     }
     fn log_file_page(
         &self,
@@ -155,30 +278,115 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    fn recent_commit_messages(&self, _limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "recent commit messages are not implemented for this backend",
+        )))
+    }
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>>;
     fn current_branch(&self) -> Result<String>;
+    fn current_branch_cancellable(&self, cancellation: &CancellationToken) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let branch = self.current_branch()?;
+        cancellation.check_cancelled()?;
+        Ok(branch)
+    }
+    fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "reading HEAD commit id is not implemented for this backend",
+        )))
+    }
     fn list_branches(&self) -> Result<Vec<Branch>>;
+    fn list_branches_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
+        cancellation.check_cancelled()?;
+        let branches = self.list_branches()?;
+        cancellation.check_cancelled()?;
+        Ok(branches)
+    }
     fn list_tags(&self) -> Result<Vec<Tag>> {
         Err(Error::new(ErrorKind::Unsupported(
             "tag listing is not implemented for this backend",
         )))
+    }
+    fn list_tags_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
+        cancellation.check_cancelled()?;
+        let tags = self.list_tags()?;
+        cancellation.check_cancelled()?;
+        Ok(tags)
     }
     fn list_remote_tags(&self) -> Result<Vec<RemoteTag>> {
         Err(Error::new(ErrorKind::Unsupported(
             "remote tag listing is not implemented for this backend",
         )))
     }
+    fn list_remote_tags_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteTag>> {
+        cancellation.check_cancelled()?;
+        let tags = self.list_remote_tags()?;
+        cancellation.check_cancelled()?;
+        Ok(tags)
+    }
     fn list_remotes(&self) -> Result<Vec<Remote>>;
+    fn list_remotes_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
+        cancellation.check_cancelled()?;
+        let remotes = self.list_remotes()?;
+        cancellation.check_cancelled()?;
+        Ok(remotes)
+    }
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>>;
+    fn list_remote_branches_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        cancellation.check_cancelled()?;
+        let branches = self.list_remote_branches()?;
+        cancellation.check_cancelled()?;
+        Ok(branches)
+    }
     fn worktree_status(&self) -> Result<Vec<FileStatus>> {
         self.status().map(|status| status.unstaged)
+    }
+    fn worktree_status_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        cancellation.check_cancelled()?;
+        let status = self.worktree_status()?;
+        cancellation.check_cancelled()?;
+        Ok(status)
     }
     fn staged_status(&self) -> Result<Vec<FileStatus>> {
         self.status().map(|status| status.staged)
     }
+    fn staged_status_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        cancellation.check_cancelled()?;
+        let status = self.staged_status()?;
+        cancellation.check_cancelled()?;
+        Ok(status)
+    }
     fn status(&self) -> Result<RepoStatus>;
+    fn status_cancellable(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
+        let status = self.status()?;
+        cancellation.check_cancelled()?;
+        Ok(status)
+    }
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         Ok(None)
+    }
+    fn upstream_divergence_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<UpstreamDivergence>> {
+        cancellation.check_cancelled()?;
+        let divergence = self.upstream_divergence()?;
+        cancellation.check_cancelled()?;
+        Ok(divergence)
     }
     fn diff_unified(&self, target: &DiffTarget) -> Result<String>;
     /// Load and parse unified diff rows for the target.
@@ -189,10 +397,30 @@ pub trait GitRepository: Send + Sync {
         self.diff_unified(target)
             .map(|text| Diff::from_unified(target.clone(), &text))
     }
+    fn diff_parsed_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        cancellation.check_cancelled()?;
+        let diff = self.diff_parsed(target)?;
+        cancellation.check_cancelled()?;
+        Ok(diff)
+    }
     fn diff_file_text(&self, _target: &DiffTarget) -> Result<Option<FileDiffText>> {
         Err(Error::new(ErrorKind::Unsupported(
             "file diff view is not implemented for this backend",
         )))
+    }
+    fn diff_file_text_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffText>> {
+        cancellation.check_cancelled()?;
+        let result = self.diff_file_text(target)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
     fn diff_preview_text_file(
         &self,
@@ -203,10 +431,31 @@ pub trait GitRepository: Send + Sync {
             "preview text file loading is not implemented for this backend",
         )))
     }
+    fn diff_preview_text_file_cancellable(
+        &self,
+        target: &DiffTarget,
+        side: DiffPreviewTextSide,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<PathBuf>> {
+        cancellation.check_cancelled()?;
+        let result = self.diff_preview_text_file(target, side)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
+    }
     fn diff_file_image(&self, _target: &DiffTarget) -> Result<Option<FileDiffImage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "image diff view is not implemented for this backend",
         )))
+    }
+    fn diff_file_image_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<FileDiffImage>> {
+        cancellation.check_cancelled()?;
+        let result = self.diff_file_image(target)?;
+        cancellation.check_cancelled()?;
+        Ok(result)
     }
 
     fn conflict_file_stages(&self, _path: &Path) -> Result<Option<ConflictFileStages>> {
@@ -249,16 +498,30 @@ pub trait GitRepository: Send + Sync {
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
+    fn stash_list_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let stashes = self.stash_list()?;
+        cancellation.check_cancelled()?;
+        Ok(stashes)
+    }
     fn stash_apply(&self, index: usize) -> Result<()>;
     fn stash_drop(&self, index: usize) -> Result<()>;
 
     fn stage(&self, paths: &[&Path]) -> Result<()>;
     fn unstage(&self, paths: &[&Path]) -> Result<()>;
     fn commit(&self, message: &str) -> Result<()>;
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit(message)?;
+        Ok(CommitOperationOutcome::default())
+    }
     fn commit_amend(&self, _message: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "commit amend is not implemented for this backend",
         )))
+    }
+    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_amend(message)?;
+        Ok(CommitOperationOutcome::default())
     }
 
     fn rebase_with_output(&self, _onto: &str) -> Result<CommandOutput> {
@@ -284,9 +547,24 @@ pub trait GitRepository: Send + Sync {
     fn rebase_in_progress(&self) -> Result<bool> {
         Ok(false)
     }
+    fn rebase_in_progress_cancellable(&self, cancellation: &CancellationToken) -> Result<bool> {
+        cancellation.check_cancelled()?;
+        let in_progress = self.rebase_in_progress()?;
+        cancellation.check_cancelled()?;
+        Ok(in_progress)
+    }
 
     fn merge_commit_message(&self) -> Result<Option<String>> {
         Ok(None)
+    }
+    fn merge_commit_message_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<String>> {
+        cancellation.check_cancelled()?;
+        let message = self.merge_commit_message()?;
+        cancellation.check_cancelled()?;
+        Ok(message)
     }
 
     fn create_tag_with_output(&self, _name: &str, _target: &str) -> Result<CommandOutput> {
@@ -377,6 +655,38 @@ pub trait GitRepository: Send + Sync {
     fn push_force_with_output(&self) -> Result<CommandOutput> {
         self.push_force()?;
         Ok(CommandOutput::empty_success("git push --force-with-lease"))
+    }
+
+    fn safe_push_after_commit(
+        &self,
+        _context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "safe push after commit is not implemented for this backend",
+        )))
+    }
+
+    fn push_after_commit_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        validate_safe_push_after_commit_target(self, target)?;
+        self.push_with_output()
+    }
+
+    fn push_after_commit_set_upstream_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        validate_safe_push_after_commit_target(self, target)?;
+        self.push_set_upstream_with_output(&target.remote, &target.branch)
+    }
+
+    fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        let _ = lease;
+        Err(Error::new(ErrorKind::Unsupported(
+            "oid-specific force push with lease is not implemented for this backend",
+        )))
     }
 
     fn push_set_upstream_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
@@ -525,6 +835,15 @@ pub trait GitRepository: Send + Sync {
             "worktree listing is not implemented for this backend",
         )))
     }
+    fn list_worktrees_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Worktree>> {
+        cancellation.check_cancelled()?;
+        let worktrees = self.list_worktrees()?;
+        cancellation.check_cancelled()?;
+        Ok(worktrees)
+    }
 
     fn add_worktree_with_output(
         &self,
@@ -553,6 +872,34 @@ pub trait GitRepository: Send + Sync {
             "submodule listing is not implemented for this backend",
         )))
     }
+    fn list_submodules_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Submodule>> {
+        cancellation.check_cancelled()?;
+        let submodules = self.list_submodules()?;
+        cancellation.check_cancelled()?;
+        Ok(submodules)
+    }
+
+    fn submodule_diff_summary(
+        &self,
+        _target: &crate::domain::DiffTarget,
+    ) -> Result<crate::domain::SubmoduleDiffSummary> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule diff summary is not implemented for this backend",
+        )))
+    }
+    fn submodule_diff_summary_cancellable(
+        &self,
+        target: &crate::domain::DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<crate::domain::SubmoduleDiffSummary> {
+        cancellation.check_cancelled()?;
+        let summary = self.submodule_diff_summary(target)?;
+        cancellation.check_cancelled()?;
+        Ok(summary)
+    }
 
     fn check_submodule_add_trust(
         &self,
@@ -565,6 +912,12 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule trust checks are not implemented for this backend",
+        )))
+    }
+
+    fn check_submodule_load_trust(&self, _path: &Path) -> Result<SubmoduleTrustDecision> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule trust checks are not implemented for this backend",
         )))
@@ -593,6 +946,26 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn load_submodule_with_output(
+        &self,
+        _path: &Path,
+        _approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule update is not implemented for this backend",
+        )))
+    }
+
+    fn change_submodule_pointer_with_output(
+        &self,
+        _path: &Path,
+        _reference: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "submodule pointer changes are not implemented for this backend",
+        )))
+    }
+
     fn remove_submodule_with_output(&self, _path: &Path) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "submodule remove is not implemented for this backend",
@@ -600,6 +973,33 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn discard_worktree_changes(&self, paths: &[&Path]) -> Result<()>;
+}
+
+fn validate_safe_push_after_commit_target<R: GitRepository + ?Sized>(
+    repo: &R,
+    target: &SafePushAfterCommitTarget,
+) -> Result<()> {
+    let current_branch = repo.current_branch()?;
+    if current_branch != target.local_branch {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "stale push-after-commit target: expected branch {}, but current branch is {}",
+            target.local_branch, current_branch
+        ))));
+    }
+
+    let current_head = repo.head_commit_id()?.ok_or_else(|| {
+        Error::new(ErrorKind::Backend(
+            "stale push-after-commit target: current HEAD does not point to a commit".to_string(),
+        ))
+    })?;
+    if current_head != target.local_head {
+        return Err(Error::new(ErrorKind::Backend(format!(
+            "stale push-after-commit target: expected HEAD {}, but current HEAD is {}",
+            target.local_head, current_head
+        ))));
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -613,14 +1013,196 @@ pub enum PullMode {
 
 pub trait GitBackend: Send + Sync {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>>;
+
+    fn open_cancellable(
+        &self,
+        workdir: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<dyn GitRepository>> {
+        cancellation.check_cancelled()?;
+        let repo = self.open(workdir)?;
+        cancellation.check_cancelled()?;
+        Ok(repo)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BlameLine, CommandOutput, decode_utf8_optional, validate_conflict_resolution_text,
+        BlameLine, CommandOutput, GitRepository, decode_utf8_optional,
+        validate_conflict_resolution_text,
     };
-    use std::sync::Arc;
+    use crate::domain::{
+        Branch, CommitDetails, CommitId, DiffTarget, HistoryMode, LogCursor, LogPage, ReflogEntry,
+        Remote, RemoteBranch, RepoSpec, RepoStatus, StashEntry,
+    };
+    use crate::error::{Error, ErrorKind};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    fn unsupported<T>() -> super::Result<T> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "unused in services history-mode delegation test",
+        )))
+    }
+
+    struct RecordingHistoryModeRepo {
+        spec: RepoSpec,
+        calls: Mutex<Vec<(&'static str, usize, Option<String>)>>,
+    }
+
+    impl RecordingHistoryModeRepo {
+        fn new() -> Self {
+            Self {
+                spec: RepoSpec {
+                    workdir: PathBuf::from("/tmp/recording-history-mode-repo"),
+                },
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn record(&self, method: &'static str, limit: usize, cursor: Option<&LogCursor>) {
+            self.calls.lock().expect("recording mutex").push((
+                method,
+                limit,
+                cursor.map(|cursor| cursor.last_seen.as_ref().to_string()),
+            ));
+        }
+
+        fn calls(&self) -> Vec<(&'static str, usize, Option<String>)> {
+            self.calls.lock().expect("recording mutex").clone()
+        }
+    }
+
+    impl GitRepository for RecordingHistoryModeRepo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+
+        fn log_head_page(
+            &self,
+            limit: usize,
+            cursor: Option<&LogCursor>,
+        ) -> super::Result<LogPage> {
+            self.record("head", limit, cursor);
+            Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn log_all_branches_page(
+            &self,
+            limit: usize,
+            cursor: Option<&LogCursor>,
+        ) -> super::Result<LogPage> {
+            self.record("all", limit, cursor);
+            Ok(LogPage {
+                commits: Vec::new(),
+                next_cursor: None,
+            })
+        }
+
+        fn commit_details(&self, _id: &CommitId) -> super::Result<CommitDetails> {
+            unsupported()
+        }
+
+        fn reflog_head(&self, _limit: usize) -> super::Result<Vec<ReflogEntry>> {
+            unsupported()
+        }
+
+        fn current_branch(&self) -> super::Result<String> {
+            unsupported()
+        }
+
+        fn list_branches(&self) -> super::Result<Vec<Branch>> {
+            unsupported()
+        }
+
+        fn list_remotes(&self) -> super::Result<Vec<Remote>> {
+            unsupported()
+        }
+
+        fn list_remote_branches(&self) -> super::Result<Vec<RemoteBranch>> {
+            unsupported()
+        }
+
+        fn status(&self) -> super::Result<RepoStatus> {
+            unsupported()
+        }
+
+        fn diff_unified(&self, _target: &DiffTarget) -> super::Result<String> {
+            unsupported()
+        }
+
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn delete_branch(&self, _name: &str) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn checkout_branch(&self, _name: &str) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn checkout_commit(&self, _id: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn cherry_pick(&self, _id: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn revert(&self, _id: &CommitId) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stash_list(&self) -> super::Result<Vec<StashEntry>> {
+            unsupported()
+        }
+
+        fn stash_apply(&self, _index: usize) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stash_drop(&self, _index: usize) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn stage(&self, _paths: &[&Path]) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn unstage(&self, _paths: &[&Path]) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn commit(&self, _message: &str) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn fetch_all(&self) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn pull(&self, _mode: super::PullMode) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn push(&self) -> super::Result<()> {
+            unsupported()
+        }
+
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> super::Result<()> {
+            unsupported()
+        }
+    }
 
     // ── validate_conflict_resolution_text ────────────────────────────
 
@@ -815,5 +1397,37 @@ mod tests {
         assert!(Arc::ptr_eq(&line.author, &cloned.author));
         assert!(Arc::ptr_eq(&line.summary, &cloned.summary));
         assert_eq!(line.line, cloned.line);
+    }
+
+    #[test]
+    fn log_history_mode_page_delegates_current_branch_modes_to_head_log() {
+        let repo = RecordingHistoryModeRepo::new();
+        let cursor = LogCursor {
+            last_seen: CommitId("cursor".into()),
+            resume_from: Some(CommitId("resume".into())),
+            resume_token: Some(Arc::from("token")),
+        };
+
+        for mode in [
+            HistoryMode::FullReachable,
+            HistoryMode::FirstParent,
+            HistoryMode::NoMerges,
+            HistoryMode::MergesOnly,
+            HistoryMode::AllBranches,
+        ] {
+            repo.log_history_mode_page(mode, 7, Some(&cursor))
+                .expect("history mode delegation should succeed");
+        }
+
+        assert_eq!(
+            repo.calls(),
+            vec![
+                ("head", 7, Some("cursor".to_string())),
+                ("head", 7, Some("cursor".to_string())),
+                ("head", 7, Some("cursor".to_string())),
+                ("head", 7, Some("cursor".to_string())),
+                ("all", 7, Some("cursor".to_string())),
+            ]
+        );
     }
 }

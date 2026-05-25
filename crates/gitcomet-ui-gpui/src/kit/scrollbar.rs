@@ -585,10 +585,14 @@ impl Scrollbar {
         base
     }
 
+    pub fn gutter(_axis: ScrollbarAxis) -> Pixels {
+        px(SCROLLBAR_GUTTER_PX)
+    }
+
     pub fn visible_gutter(handle: impl Into<ScrollbarHandle>, axis: ScrollbarAxis) -> Pixels {
         let handle: ScrollbarHandle = handle.into();
         if handle.max_offset(axis) > px(0.0) {
-            px(SCROLLBAR_GUTTER_PX)
+            Self::gutter(axis)
         } else {
             px(0.0)
         }

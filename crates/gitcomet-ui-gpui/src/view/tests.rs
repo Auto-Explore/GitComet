@@ -64,6 +64,61 @@ fn unavailable_git_runtime_state() -> GitRuntimeState {
     }
 }
 
+fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn window_activation_dispatches_repo_activated_message() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    let msg = repo_activation_msg(&state, &mut last_activation_dispatch, now)
+        .expect("ready active repo should produce activation message");
+
+    assert!(matches!(msg, Msg::RepoActivated { repo_id: got } if got == repo_id));
+    assert!(!matches!(msg, Msg::RepoExternallyChanged { .. }));
+}
+
+#[test]
+fn window_activation_dispatch_is_throttled_per_repo() {
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    assert!(repo_activation_msg(&state, &mut last_activation_dispatch, now).is_some());
+    assert!(
+        repo_activation_msg(
+            &state,
+            &mut last_activation_dispatch,
+            now + Duration::from_secs(1),
+        )
+        .is_none()
+    );
+    assert!(matches!(
+        repo_activation_msg(
+            &state,
+            &mut last_activation_dispatch,
+            now + REPO_ACTIVATION_THROTTLE,
+        ),
+        Some(Msg::RepoActivated { repo_id: got }) if got == repo_id
+    ));
+}
+
 #[test]
 fn toast_total_lifetime_includes_fade_in_and_out() {
     let ttl = Duration::from_secs(6);
@@ -619,7 +674,8 @@ fn branch_sidebar_defaults_secondary_sections_to_collapsed() {
     }]));
     repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
         path: PathBuf::from("vendor/lib"),
-        head: CommitId("beadfeed".into()),
+        recorded_head: CommitId("beadfeed".into()),
+        checked_out_head: Some(CommitId("beadfeed".into())),
         status: SubmoduleStatus::UpToDate,
     }]));
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
@@ -848,7 +904,8 @@ fn branch_sidebar_collapses_branch_sections_without_hiding_other_sections() {
     }]));
     repo.submodules = Loadable::Ready(Arc::new(vec![Submodule {
         path: PathBuf::from("vendor/lib"),
-        head: CommitId("beadfeed".into()),
+        recorded_head: CommitId("beadfeed".into()),
+        checked_out_head: Some(CommitId("beadfeed".into())),
         status: SubmoduleStatus::UpToDate,
     }]));
     repo.stashes = Loadable::Ready(Arc::new(vec![StashEntry {
@@ -1718,9 +1775,14 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         "expected repo tabs bar to stay behind the stable cache boundary"
     );
     assert!(
-        normalized
-            .contains("stable_cached_fixed_height_view(self.action_bar.clone(),ACTION_BAR_HEIGHT"),
+        normalized.contains(
+            "stable_cached_fixed_height_view(self.action_bar.clone(),action_bar_height(cx)"
+        ),
         "expected action bar to stay behind the stable cache boundary"
+    );
+    assert!(
+        normalized.contains("self.bottom_status_bar.clone(),"),
+        "expected bottom status bar to mount directly"
     );
     assert!(
         normalized
@@ -1744,6 +1806,12 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
     assert!(
         !normalized.contains("stable_cached_fill_view(self.details_pane.clone())"),
         "details pane must stay outside the stable cache boundary"
+    );
+    assert!(
+        !normalized.contains(
+            "stable_cached_fixed_height_view(self.bottom_status_bar.clone(),components::Tab::container_height("
+        ),
+        "bottom status bar must stay outside the stable cache boundary"
     );
 }
 
@@ -1837,29 +1905,24 @@ fn git_unavailable_open_settings_button_publishes_expected_tooltip(cx: &mut gpui
         .expect("expected open settings call to action")
         .center();
     cx.simulate_mouse_move(button_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
+    test_support::wait_for_native_tooltip(cx);
 
-    cx.update(|_window, app| {
-        assert_eq!(
-            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
-            Some("Open settings".to_string())
-        );
-    });
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some("Open settings".to_string())
+    );
 
     let icon_center = cx
         .debug_bounds("git_unavailable_status_icon")
         .expect("expected git unavailable status icon")
         .center();
     cx.simulate_mouse_move(icon_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
 
-    cx.update(|_window, app| {
-        assert_eq!(
-            test_support::tooltip_text(view.read(app), app),
-            None,
-            "expected the open settings tooltip to clear after leaving the button"
-        );
-    });
+    assert_eq!(
+        test_support::tooltip_text(cx, &view),
+        None,
+        "expected the open settings tooltip to clear after leaving the button"
+    );
 }
 
 #[gpui::test]
@@ -2002,26 +2065,22 @@ fn splash_screen_buttons_publish_expected_tooltips(cx: &mut gpui::TestAppContext
         .expect("expected splash open repository button")
         .center();
     cx.simulate_mouse_move(open_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
-            Some("Open repository".to_string())
-        );
-    });
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some("Open repository".to_string())
+    );
 
     let clone_center = cx
         .debug_bounds("splash_clone_repo_action")
         .expect("expected splash clone repository button")
         .center();
     cx.simulate_mouse_move(clone_center, None, gpui::Modifiers::default());
-    cx.run_until_parked();
-    cx.update(|_window, app| {
-        assert_eq!(
-            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
-            Some("Clone repository".to_string())
-        );
-    });
+    test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some("Clone repository".to_string())
+    );
 }
 
 #[gpui::test]
@@ -2094,15 +2153,43 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
-fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppContext) {
+fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| {
+            host.open_popover_at(
+                PopoverKind::BranchPicker,
+                point(px(72.0), px(72.0)),
+                window,
+                cx,
+            );
+        });
+
+        let tooltip_host = view.read(app).tooltip_host.clone();
+        tooltip_host.update(app, |host, cx| {
+            host.set_tooltip_text_if_changed(Some("stale popover label".into()), cx);
+        });
+
+        popover_host.update(app, |host, cx| host.close_popover(cx));
+    });
+
+    assert_eq!(test_support::tooltip_text(cx, &view), None);
+}
+
+#[gpui::test]
+fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_assert = store.clone();
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
+    test_support::redraw(cx);
 
     store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from(
         "/tmp/splash-tooltip-clear-test",
@@ -2115,17 +2202,19 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
     });
     pump_for(cx, Duration::from_millis(120));
 
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.tooltip_host.update(cx, |host, cx| {
-                host.set_tooltip_text_if_changed(Some("Close repository".into()), cx);
-            });
-        });
-        assert_eq!(
-            test_support::tooltip_text(view.read(app), app).map(|text| text.to_string()),
-            Some("Close repository".to_string())
-        );
-    });
+    let repo_tab_center = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected repo tab to be rendered")
+        .center();
+    cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+
+    let expected_tooltip =
+        path_display::path_display_string(Path::new("/tmp/splash-tooltip-clear-test"));
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some(expected_tooltip)
+    );
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -2144,16 +2233,148 @@ fn splash_screen_clears_stale_close_repository_tooltip(cx: &mut gpui::TestAppCon
     });
     pump_for(cx, Duration::from_millis(120));
 
-    cx.update(|window, app| {
-        let _ = window.draw(app);
+    assert_eq!(
+        test_support::tooltip_text(cx, &view),
+        None,
+        "expected repo tab tooltip to clear once its source view is removed"
+    );
+
+    let neutral_point = gpui::point(px(700.0), px(500.0));
+    cx.simulate_mouse_move(neutral_point, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+
+    assert_eq!(
+        test_support::tooltip_text(cx, &view),
+        None,
+        "expected removed repo tab tooltip not to reappear after the mouse stops elsewhere"
+    );
+}
+
+#[gpui::test]
+fn removed_repo_tab_close_tooltip_does_not_reappear_after_hover_target_disappears(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    test_support::redraw(cx);
+
+    store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from(
+        "/tmp/splash-close-tooltip-clear-test",
+    )));
+    wait_until("repository tab to be added", || {
+        !store_for_assert.snapshot().repos.is_empty()
     });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    pump_for(cx, Duration::from_millis(120));
+
+    let repo_tab_center = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected repo tab to be rendered")
+        .center();
+    cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    let close_center = cx
+        .debug_bounds("repo_tab_close_1")
+        .expect("expected repo tab close button to be rendered while hovering the tab")
+        .center();
+    cx.simulate_mouse_move(close_center, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+
+    assert_eq!(
+        test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
+        Some("Close repository".to_string())
+    );
 
     cx.update(|_window, app| {
-        assert_eq!(
-            test_support::tooltip_text(view.read(app), app),
-            None,
-            "expected splash transition to clear stale repository-close tooltip text"
-        );
+        view.update(app, |this, cx| {
+            assert!(
+                this.close_active_repo_tab(cx),
+                "expected the active repo tab to close"
+            );
+        });
+    });
+
+    wait_until("last repository tab to close", || {
+        store_for_assert.snapshot().repos.is_empty()
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    pump_for(cx, Duration::from_millis(120));
+
+    assert_eq!(
+        test_support::tooltip_text(cx, &view),
+        None,
+        "expected repo tab close tooltip to clear once its source view is removed"
+    );
+
+    let neutral_point = gpui::point(px(700.0), px(500.0));
+    cx.simulate_mouse_move(neutral_point, None, gpui::Modifiers::default());
+    test_support::wait_for_native_tooltip(cx);
+
+    assert_eq!(
+        test_support::tooltip_text(cx, &view),
+        None,
+        "expected removed repo tab close tooltip not to reappear after the mouse stops elsewhere"
+    );
+}
+
+#[gpui::test]
+fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let mut state = AppState {
+        active_repo: Some(repo_id),
+        ..AppState::default()
+    };
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/loading-repo-tab-close-test"),
+        },
+    ));
+    store_for_assert.replace_snapshot_for_test(Arc::new(state));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+
+    let repo_tab_center = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected loading repo tab to be rendered")
+        .center();
+    cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    let close_center = cx
+        .debug_bounds("repo_tab_close_1")
+        .expect("expected loading repo tab close button to be rendered")
+        .center();
+    cx.simulate_mouse_move(close_center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        close_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        close_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+
+    wait_until("loading repo tab to close", || {
+        store_for_assert.snapshot().repos.is_empty()
     });
 }
 
@@ -2240,5 +2461,51 @@ fn apply_state_snapshot_routes_command_errors_into_store_backed_banner(
             .banner_error
             .as_ref()
             .is_some_and(|banner| banner.repo_id == Some(repo_id) && banner.message == error)
+    });
+}
+
+#[gpui::test]
+fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut next = AppState {
+        active_repo: Some(RepoId(1)),
+        ..AppState::default()
+    };
+    next.repos
+        .push(open_repo_state_with_workdir("/tmp/existing-active-repo"));
+    next.clone = Some(gitcomet_state::model::CloneOpState {
+        url: Arc::<str>::from("git@github.com:private/repo.git"),
+        dest: Arc::new(PathBuf::from("/tmp/private-repo")),
+        status: gitcomet_state::model::CloneOpStatus::FinishedErr(
+            "Clone failed:\n\ngit@github.com: Permission denied (publickey).".to_string(),
+        ),
+        progress: gitcomet_state::model::CloneProgressMeter::default(),
+        seq: 1,
+        output_tail: std::collections::VecDeque::new(),
+    });
+    let next = Arc::new(next);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&next), cx);
+        });
+    });
+    cx.run_until_parked();
+
+    wait_until("global clone banner error", || {
+        let snapshot = store_for_assert.snapshot();
+        snapshot.banner_error.as_ref().is_some_and(|banner| {
+            banner.repo_id.is_none()
+                && banner.message
+                    == "Clone failed:\n\ngit@github.com: Permission denied (publickey)."
+        })
     });
 }

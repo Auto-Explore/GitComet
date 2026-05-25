@@ -7,7 +7,7 @@ use gitcomet_core::domain::{
     FileConflictKind, FileStatus, FileStatusKind, RepoStatus, UpstreamDivergence,
 };
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::services::Result;
+use gitcomet_core::services::{CancellationToken, Result};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
@@ -54,8 +54,17 @@ impl GixRepo {
     }
 
     pub(super) fn status_impl(&self) -> Result<RepoStatus> {
+        self.status_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn status_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<RepoStatus> {
+        cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
+        cancellation.check_cancelled()?;
 
         // Check whether HEAD and the index file are unchanged since the last
         // status call.  When both match, the staged (Tree→Index) result is
@@ -63,6 +72,7 @@ impl GixRepo {
         // cheaper index-worktree-only iterator.
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
         let index_stamp = repo_file_stamp(repo.index_path().as_path());
+        cancellation.check_cancelled()?;
 
         let cached_staged = {
             let guard = self
@@ -85,10 +95,12 @@ impl GixRepo {
             // extra thread/channel hop.
             let direct =
                 collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+            cancellation.check_cancelled()?;
             has_conflicted_unstaged = direct.has_conflicted_unstaged;
             (cached_staged, direct.index_stamp_after_write)
         } else {
             // Full path: run both Tree→Index and Index→Worktree comparisons.
+            cancellation.check_cancelled()?;
             let platform = repo
                 .status(gix::progress::Discard)
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status platform: {e}"))))?
@@ -103,6 +115,7 @@ impl GixRepo {
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status iter: {e}"))))?;
 
             for item in iter.by_ref() {
+                cancellation.check_cancelled()?;
                 let item = item
                     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix status item: {e}"))))?;
 
@@ -152,6 +165,7 @@ impl GixRepo {
             }
         }
 
+        cancellation.check_cancelled()?;
         finalize_status(
             &self.spec.workdir,
             &repo,
@@ -163,16 +177,26 @@ impl GixRepo {
     }
 
     pub(super) fn worktree_status_impl(&self) -> Result<Vec<FileStatus>> {
+        self.worktree_status_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn worktree_status_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
         let mut unstaged = Vec::new();
         let direct = collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
+        cancellation.check_cancelled()?;
 
         if should_supplement_unmerged_conflicts(
             repo.state().is_some(),
             direct.has_conflicted_unstaged,
         ) {
             apply_unmerged_conflicts(&repo, &mut unstaged)?;
+            cancellation.check_cancelled()?;
         }
 
         if may_have_gitlinks {
@@ -181,6 +205,7 @@ impl GixRepo {
                 &mut Vec::new(),
                 &mut unstaged,
             )?;
+            cancellation.check_cancelled()?;
         }
 
         sort_and_dedup_status_entries(&mut unstaged);
@@ -188,28 +213,41 @@ impl GixRepo {
     }
 
     pub(super) fn staged_status_impl(&self) -> Result<Vec<FileStatus>> {
+        self.staged_status_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn staged_status_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<FileStatus>> {
+        cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
         let index_stamp = repo_file_stamp(repo.index_path().as_path());
+        cancellation.check_cancelled()?;
 
         if let Some(cached) = self.cached_staged_status(head_oid, &index_stamp) {
             return Ok(cached);
         }
 
         let Some(head_oid) = head_oid else {
-            return self.status_impl().map(|status| status.staged);
+            return self
+                .status_cancellable_impl(cancellation)
+                .map(|status| status.staged);
         };
 
         // `tree_index_status()` diffs a tree against the index, so resolve HEAD to HEAD^{tree}
         // while continuing to cache by commit id.
         let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
         let mut staged = collect_staged_status_from_tree_index(&repo, &head_tree_id)?;
+        cancellation.check_cancelled()?;
         if self.may_have_gitlink_status_supplement(&repo) {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
                 &mut staged,
                 &mut Vec::new(),
             )?;
+            cancellation.check_cancelled()?;
         }
         sort_and_dedup_status_entries(&mut staged);
         remove_conflicted_paths_from_staged(
@@ -223,8 +261,18 @@ impl GixRepo {
     }
 
     pub(super) fn upstream_divergence_impl(&self) -> Result<Option<UpstreamDivergence>> {
+        self.upstream_divergence_cancellable_impl(&CancellationToken::new())
+    }
+
+    pub(super) fn upstream_divergence_cancellable_impl(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<UpstreamDivergence>> {
+        cancellation.check_cancelled()?;
         let repo = self.reopen_repo()?;
-        head_upstream_divergence(&repo)
+        let divergence = head_upstream_divergence(&repo)?;
+        cancellation.check_cancelled()?;
+        Ok(divergence)
     }
 
     fn cached_staged_status(

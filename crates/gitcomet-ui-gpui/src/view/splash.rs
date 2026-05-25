@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/splash_backdrop.png"));
+const PANE_TOGGLE_EDGE_INSET_PX: f32 = 3.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 struct SplashInteractiveColors {
@@ -75,18 +76,20 @@ impl GitCometView {
             .to_string()
     }
 
-    fn git_unavailable_status_icon(theme: AppTheme) -> AnyElement {
+    fn git_unavailable_status_icon(theme: AppTheme, ui_scale_percent: u32) -> AnyElement {
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         div()
             .id("git_unavailable_status_icon")
             .debug_selector(|| "git_unavailable_status_icon".to_string())
-            .size(px(56.0))
+            .size(scaled_px(56.0))
             .flex()
             .items_center()
             .justify_center()
             .child(svg_icon(
                 "icons/warning.svg",
                 theme.colors.warning,
-                px(36.0),
+                scaled_px(36.0),
             ))
             .into_any_element()
     }
@@ -187,7 +190,10 @@ impl GitCometView {
         label: &'static str,
         icon_path: &'static str,
         colors: SplashCtaButtonColors,
+        ui_scale_percent: u32,
     ) -> gpui::Stateful<gpui::Div> {
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let focus_ring = gpui::rgba(0x79d0ffeb);
         let SplashCtaButtonColors {
             icon: icon_color,
@@ -210,22 +216,22 @@ impl GitCometView {
             .id(id)
             .debug_selector(move || id.to_string())
             .tab_index(0)
-            .h(px(36.0))
-            .px(px(16.0))
+            .h(scaled_px(36.0))
+            .px(scaled_px(16.0))
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(6.0))
-            .rounded(px(2.0))
+            .gap(scaled_px(6.0))
+            .rounded(scaled_px(2.0))
             .border_1()
             .border_color(border)
             .bg(bg)
-            .text_size(px(13.0))
+            .text_size(scaled_px(13.0))
             .font_weight(FontWeight::BOLD)
             .text_color(text_color)
             .cursor(CursorStyle::PointingHand)
             .whitespace_nowrap()
-            .child(svg_icon(icon_path, icon_color, px(14.0)))
+            .child(svg_icon(icon_path, icon_color, scaled_px(14.0)))
             .child(label)
             .focus(move |s| s.border_color(focus_ring))
             .hover(move |s| s.bg(hover_bg).border_color(hover_border))
@@ -306,21 +312,13 @@ impl GitCometView {
                     active: primary_active,
                 },
             },
+            self.ui_scale_percent,
         )
+        .gitcomet_tooltip(self.theme, settings_tooltip)
         .on_click(cx.listener(|this, _e, _window, cx| {
             this.open_repo_panel = false;
             cx.defer(crate::view::open_settings_window);
             cx.notify();
-        }))
-        .on_hover(cx.listener({
-            let settings_tooltip = settings_tooltip.clone();
-            move |this, hovering: &bool, _w, cx| {
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(settings_tooltip.clone()), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&settings_tooltip, cx);
-                }
-            }
         }))
     }
 
@@ -342,7 +340,10 @@ impl GitCometView {
             .flex_col()
             .items_center()
             .gap_3()
-            .child(Self::git_unavailable_status_icon(theme))
+            .child(Self::git_unavailable_status_icon(
+                theme,
+                self.ui_scale_percent,
+            ))
             .child(
                 div()
                     .text_lg()
@@ -446,6 +447,9 @@ impl GitCometView {
 
     pub(super) fn startup_repository_loading_screen(&mut self) -> AnyElement {
         let theme = self.theme;
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         self.interstitial_shell(
             "repository_loading_screen",
@@ -454,7 +458,7 @@ impl GitCometView {
                 .flex_col()
                 .items_center()
                 .gap_3()
-                .child(Self::interstitial_logo(theme, px(84.0)))
+                .child(Self::interstitial_logo(theme, scaled_px(84.0)))
                 .child(
                     div()
                         .text_lg()
@@ -478,7 +482,7 @@ impl GitCometView {
                         .child(svg_spinner(
                             ("repository_loading_spinner", 0u64),
                             theme.colors.accent,
-                            px(16.0),
+                            scaled_px(16.0),
                         ))
                         .child("Please wait…"),
                 ),
@@ -545,19 +549,11 @@ impl GitCometView {
             "Open Repository",
             "icons/folder.svg",
             primary_button_colors,
+            self.ui_scale_percent,
         )
+        .gitcomet_tooltip(self.theme, open_tooltip)
         .on_click(cx.listener(|this, _e, window, cx| {
             this.prompt_open_repo(window, cx);
-        }))
-        .on_hover(cx.listener({
-            let open_tooltip = open_tooltip.clone();
-            move |this, hovering: &bool, _w, cx| {
-                if *hovering {
-                    this.set_tooltip_text_if_changed(Some(open_tooltip.clone()), cx);
-                } else {
-                    this.clear_tooltip_if_matches(&open_tooltip, cx);
-                }
-            }
         }));
 
         let clone_button = {
@@ -570,21 +566,13 @@ impl GitCometView {
                 "Clone Repository",
                 "icons/cloud.svg",
                 secondary_button_colors,
+                self.ui_scale_percent,
             )
+            .gitcomet_tooltip(self.theme, clone_tooltip)
             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                 let bounds = (*last_bounds_for_click.borrow())
                     .unwrap_or_else(|| Bounds::new(e.position(), size(px(0.0), px(0.0))));
                 this.open_popover_for_bounds(PopoverKind::CloneRepo, bounds, window, cx);
-            }))
-            .on_hover(cx.listener({
-                let clone_tooltip = clone_tooltip.clone();
-                move |this, hovering: &bool, _w, cx| {
-                    if *hovering {
-                        this.set_tooltip_text_if_changed(Some(clone_tooltip.clone()), cx);
-                    } else {
-                        this.clear_tooltip_if_matches(&clone_tooltip, cx);
-                    }
-                }
             }));
 
             div()
@@ -826,6 +814,9 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale_percent = self.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
@@ -846,12 +837,12 @@ impl GitCometView {
                     .min_h(px(0.0))
                     .child(stable_cached_fixed_height_view(
                         self.repo_tabs_bar.clone(),
-                        components::Tab::container_height(),
+                        components::Tab::container_height(self.ui_scale_percent),
                     ))
                     .child(self.open_repo_panel(cx))
                     .child(stable_cached_fixed_height_view(
                         self.action_bar.clone(),
-                        ACTION_BAR_HEIGHT,
+                        action_bar_height(cx),
                     ))
                     .child(
                         div()
@@ -873,25 +864,29 @@ impl GitCometView {
                                         d.child(self.sidebar_pane.clone())
                                     })
                                     .child(
-                                        div().absolute().bottom(px(6.0)).right(px(6.0)).child(
-                                            components::Button::new("sidebar_toggle", "")
-                                                .start_slot(svg_icon(
-                                                    if self.sidebar_collapsed {
-                                                        "icons/arrow_right.svg"
-                                                    } else {
-                                                        "icons/arrow_left.svg"
-                                                    },
-                                                    theme.colors.text_muted,
-                                                    px(12.0),
-                                                ))
-                                                .style(components::ButtonStyle::Transparent)
-                                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                                    this.set_sidebar_collapsed(
-                                                        !this.sidebar_collapsed,
-                                                        cx,
-                                                    );
-                                                }),
-                                        ),
+                                        div()
+                                            .absolute()
+                                            .bottom(px(6.0))
+                                            .right(px(PANE_TOGGLE_EDGE_INSET_PX))
+                                            .child(
+                                                components::Button::new("sidebar_toggle", "")
+                                                    .start_slot(svg_icon(
+                                                        if self.sidebar_collapsed {
+                                                            "icons/arrow_right.svg"
+                                                        } else {
+                                                            "icons/arrow_left.svg"
+                                                        },
+                                                        theme.colors.text_muted,
+                                                        scaled_px(12.0),
+                                                    ))
+                                                    .style(components::ButtonStyle::Transparent)
+                                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                                        this.set_sidebar_collapsed(
+                                                            !this.sidebar_collapsed,
+                                                            cx,
+                                                        );
+                                                    }),
+                                            ),
                                     ),
                             )
                             .child(self.pane_resize_handle(
@@ -944,27 +939,38 @@ impl GitCometView {
                                         )
                                     })
                                     .child(
-                                        div().absolute().bottom(px(6.0)).left(px(6.0)).child(
-                                            components::Button::new("details_toggle", "")
-                                                .start_slot(svg_icon(
-                                                    if self.details_collapsed {
-                                                        "icons/arrow_left.svg"
-                                                    } else {
-                                                        "icons/arrow_right.svg"
-                                                    },
-                                                    theme.colors.text_muted,
-                                                    px(12.0),
-                                                ))
-                                                .style(components::ButtonStyle::Transparent)
-                                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                                    this.set_details_collapsed(
-                                                        !this.details_collapsed,
-                                                        cx,
-                                                    );
-                                                }),
-                                        ),
+                                        div()
+                                            .absolute()
+                                            .bottom(px(6.0))
+                                            .left(px(PANE_TOGGLE_EDGE_INSET_PX))
+                                            .child(
+                                                components::Button::new("details_toggle", "")
+                                                    .start_slot(svg_icon(
+                                                        if self.details_collapsed {
+                                                            "icons/arrow_left.svg"
+                                                        } else {
+                                                            "icons/arrow_right.svg"
+                                                        },
+                                                        theme.colors.text_muted,
+                                                        scaled_px(12.0),
+                                                    ))
+                                                    .style(components::ButtonStyle::Transparent)
+                                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                                        this.set_details_collapsed(
+                                                            !this.details_collapsed,
+                                                            cx,
+                                                        );
+                                                    }),
+                                            ),
                                     ),
                             ),
+                    )
+                    .child(
+                        // Keep the bottom bar uncached. It paints after the details pane,
+                        // so reusing its cached paint range can replay a stale input-handler
+                        // index while a focused TextInput is temporarily detached during a
+                        // Wayland text-input redraw.
+                        self.bottom_status_bar.clone(),
                     )
                     .into_any_element();
 

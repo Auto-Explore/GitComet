@@ -9,8 +9,9 @@ use crate::model::{
 use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, FileStatusKind, LogPage, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitId, FileStatusKind, LogPage, RecentCommitMessage, ReflogEntry,
+    Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence,
+    Worktree,
 };
 use gitcomet_core::error::Error;
 use std::path::PathBuf;
@@ -183,17 +184,28 @@ pub(super) fn submodules_loaded(
     repo_id: RepoId,
     result: std::result::Result<Vec<Submodule>, Error>,
 ) -> Vec<Effect> {
+    let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let submodules = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
+                } else {
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
             }
         };
         repo_state.set_submodules(submodules);
+        if repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::SUBMODULES)
+        {
+            effects.push(Effect::LoadSubmodules { repo_id });
+        }
     }
-    Vec::new()
+    effects
 }
 
 pub(super) fn select_commit(
@@ -260,7 +272,12 @@ pub(super) fn append_ensure_sidebar_data_effects(
 
     if request.submodules && matches!(repo_state.submodules, Loadable::NotLoaded) {
         repo_state.set_submodules(Loadable::Loading);
-        effects.push_effect(Effect::LoadSubmodules { repo_id });
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::SUBMODULES)
+        {
+            effects.push_effect(Effect::LoadSubmodules { repo_id });
+        }
     }
 
     if request.stashes && matches!(repo_state.stashes, Loadable::NotLoaded) {
@@ -394,6 +411,49 @@ pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> 
     }
 }
 
+pub(super) fn load_recent_commit_messages(
+    state: &mut AppState,
+    repo_id: RepoId,
+    limit: usize,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(()))
+        || matches!(repo_state.recent_commit_messages, Loadable::Loading)
+    {
+        return Vec::new();
+    }
+    repo_state.set_recent_commit_messages(Loadable::Loading);
+    let request_rev = repo_state.recent_commit_messages_rev;
+    vec![Effect::LoadRecentCommitMessages {
+        repo_id,
+        limit,
+        request_rev,
+    }]
+}
+
+pub(super) fn recent_commit_messages_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    request_rev: u64,
+    result: std::result::Result<Vec<RecentCommitMessage>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.recent_commit_messages_rev == request_rev
+    {
+        let value = match result {
+            Ok(v) => Loadable::Ready(v),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.set_recent_commit_messages(value);
+    }
+    Vec::new()
+}
+
 pub(super) fn load_file_history(
     state: &mut AppState,
     repo_id: RepoId,
@@ -453,7 +513,14 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
         return Vec::new();
     }
     repo_state.set_submodules(Loadable::Loading);
-    vec![Effect::LoadSubmodules { repo_id }]
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::SUBMODULES)
+    {
+        vec![Effect::LoadSubmodules { repo_id }]
+    } else {
+        Vec::new()
+    }
 }
 
 pub(super) fn branches_loaded(
@@ -697,6 +764,10 @@ pub(super) fn head_branch_loaded(
             Ok(v) => {
                 if v == "HEAD" {
                     if repo_state.detached_head_commit.is_none()
+                        && repo_state
+                            .history_state
+                            .history_scope
+                            .guarantees_head_visibility()
                         && let Loadable::Ready(page) = &repo_state.log
                     {
                         repo_state
@@ -760,6 +831,8 @@ pub(super) fn tags_loaded(
             Err(e) => {
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) {
                     Loadable::Ready(Vec::new())
+                } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
                 } else {
                     push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
@@ -786,6 +859,8 @@ pub(super) fn remote_tags_loaded(
             Err(e) => {
                 if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) {
                     Loadable::Ready(Vec::new())
+                } else if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                    Loadable::NotLoaded
                 } else {
                     push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
@@ -890,7 +965,7 @@ pub(super) fn commit_details_loaded(
 mod tests {
     use super::*;
     use crate::model::{ConflictFile, RepoState, SidebarDataRequest};
-    use gitcomet_core::domain::{FileConflictKind, FileStatus, RepoSpec};
+    use gitcomet_core::domain::{FileConflictKind, FileStatus, LogScope, RepoSpec};
     use gitcomet_core::error::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1370,6 +1445,15 @@ mod tests {
         ));
         assert!(repo_mut(&mut state, repo_id).submodules.is_loading());
 
+        let effects = load_tags(&mut state, repo_id);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadTags { repo_id: rid } if rid == repo_id
+        ));
+        assert!(repo_mut(&mut state, repo_id).tags.is_loading());
+        assert!(load_tags(&mut state, repo_id).is_empty());
+
         let effects = load_stashes(&mut state, repo_id);
         assert_eq!(effects.len(), 1);
         assert!(matches!(
@@ -1722,6 +1806,55 @@ mod tests {
     }
 
     #[test]
+    fn head_branch_loaded_does_not_backfill_detached_head_commit_from_filtered_logs() {
+        for (scope, page) in [
+            (
+                LogScope::NoMerges,
+                LogPage {
+                    commits: vec![gitcomet_core::domain::Commit {
+                        id: CommitId("visible-non-merge".into()),
+                        parent_ids: smallvec::smallvec![CommitId("hidden-head".into())],
+                        summary: "visible".into(),
+                        author: "a".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    }],
+                    next_cursor: None,
+                },
+            ),
+            (
+                LogScope::MergesOnly,
+                LogPage {
+                    commits: vec![gitcomet_core::domain::Commit {
+                        id: CommitId("visible-merge".into()),
+                        parent_ids: smallvec::smallvec![
+                            CommitId("p0".into()),
+                            CommitId("p1".into())
+                        ],
+                        summary: "merge".into(),
+                        author: "a".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    }],
+                    next_cursor: None,
+                },
+            ),
+        ] {
+            let repo_id = RepoId(1);
+            let mut state = new_state_with_repo(repo_id);
+            repo_mut(&mut state, repo_id).history_state.history_scope = scope;
+            repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(page)));
+
+            let _ = head_branch_loaded(&mut state, repo_id, Ok("HEAD".to_string()));
+
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(matches!(repo.head_branch, Loadable::Ready(ref v) if v == "HEAD"));
+            assert!(
+                repo.detached_head_commit.is_none(),
+                "{scope:?} should not infer detached HEAD from filtered log contents"
+            );
+        }
+    }
+
+    #[test]
     fn loaded_handler_error_paths_record_diagnostics() {
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
@@ -1890,6 +2023,32 @@ mod tests {
             Loadable::Error(_)
         ));
         assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn cancelled_metadata_results_reset_to_not_loaded_without_diagnostics() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let cancelled = || Error::new(ErrorKind::Cancelled);
+
+        assert!(tags_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).tags,
+            Loadable::NotLoaded
+        ));
+
+        assert!(remote_tags_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).remote_tags,
+            Loadable::NotLoaded
+        ));
+
+        assert!(submodules_loaded(&mut state, repo_id, Err(cancelled())).is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).submodules,
+            Loadable::NotLoaded
+        ));
+        assert_eq!(repo_mut(&mut state, repo_id).diagnostics.len(), 0);
     }
 
     #[test]

@@ -427,7 +427,8 @@ impl RealRepoFixture {
         let rebuild = crate::view::panes::main::diff_cache::build_file_diff_cache_rebuild(
             &file,
             self._repo_root.path(),
-        );
+        )
+        .expect("real_repo large diff file text should index");
         let split = rebuild.row_provider;
         let inline = rebuild.inline_row_provider;
         let split_rows_painted = split
@@ -713,6 +714,7 @@ fn build_real_repo_state(
         next_cursor: next_cursor_present.then(|| LogCursor {
             last_seen: CommitId("next".repeat(10).into()),
             resume_from: None,
+            resume_token: None,
         }),
     });
     repo.log = Loadable::Ready(Arc::clone(&log_page));

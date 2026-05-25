@@ -1607,7 +1607,7 @@ fn resolved_output_syntax_state_uses_prepared_document_for_multiline_comment() {
         highlights.iter().any(|(range, style)| {
             range.start <= second_line_start
                 && range.end > second_line_start
-                && style.color == Some(theme.colors.text_muted.into())
+                && style.color == Some(theme.syntax.comment.into())
         }),
         "second line should inherit comment highlighting from the multiline document parse"
     );

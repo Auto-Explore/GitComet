@@ -1,12 +1,11 @@
 use super::util::{
-    SelectedConflictTarget, append_requested_status_refresh_effects, clear_banner_error_for_repo,
-    diff_reload_effects, handle_session_persist_result, push_diagnostic, refresh_full_effects,
-    refresh_primary_effects, selected_conflict_target, start_conflict_target_reload,
-    start_current_conflict_target_reload,
+    SelectedConflictTarget, append_auto_background_metadata_effects,
+    append_requested_status_refresh_effects, clear_banner_error_for_repo, diff_reload_effects,
+    push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
+    start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
-use crate::msg::{Effect, RepoExternalChange};
-use crate::session;
+use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use std::sync::Arc;
@@ -61,11 +60,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_head_branch(Loadable::Loading);
     repo_state.set_detached_head_commit(None);
     repo_state.set_branches(Loadable::Loading);
-    if git_log_settings.show_history_tags && git_log_settings.auto_fetch_tags_on_repo_activation() {
-        repo_state.set_tags(Loadable::Loading);
-    } else {
-        repo_state.set_tags(Loadable::NotLoaded);
-    }
+    repo_state.set_tags(Loadable::NotLoaded);
     repo_state.set_remote_tags(Loadable::NotLoaded);
     repo_state.set_remotes(Loadable::Loading);
     repo_state.set_remote_branches(Loadable::Loading);
@@ -83,10 +78,13 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.history_state.blame = Loadable::NotLoaded;
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
+    repo_state.clear_head_dependent_cached_state();
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
 
-    refresh_full_effects(repo_state, git_log_settings)
+    let mut effects = refresh_full_effects(repo_state, git_log_settings);
+    append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
+    effects
 }
 
 pub(super) fn repo_externally_changed(
@@ -100,6 +98,10 @@ pub(super) fn repo_externally_changed(
 
     // Coalesce refreshes while a refresh is already in flight.
     let mut effects = if change.git_state {
+        // A git-state watcher event can be produced by the safety fetch that
+        // prepared a pending force-push lease. Preserve that offer; the force
+        // push command validates the branch and HEAD again before pushing.
+        repo_state.set_recent_commit_messages(Loadable::NotLoaded);
         let mut effects = refresh_primary_effects(repo_state);
         if repo_state
             .loads_in_flight
@@ -143,6 +145,7 @@ pub(super) fn repo_externally_changed(
                 change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
             }
             DiffTarget::Commit { .. } => false,
+            DiffTarget::CommitRange { .. } => false,
         });
 
     if should_reload_diff
@@ -187,28 +190,25 @@ pub(super) fn set_history_scope(
         repo_state.set_log_loading_more(false);
         repo_state.spec.workdir.clone()
     };
-    let persist_result = session::persist_repo_history_scope(&workdir, scope);
-    handle_session_persist_result(
-        state,
-        Some(repo_id),
-        "updating history scope",
-        persist_result,
-    );
-
+    let mut effects = vec![Effect::PersistRepoHistoryMode {
+        repo_id: Some(repo_id),
+        workdir,
+        mode: scope,
+        action: "updating history mode",
+    }];
     if state.repos[repo_ix].loads_in_flight.request_log(
         scope,
         super::util::DEFAULT_LOG_PAGE_SIZE,
         None,
     ) {
-        vec![Effect::LoadLog {
+        effects.push(Effect::LoadLog {
             repo_id,
             scope,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
-        }]
-    } else {
-        Vec::new()
+        });
     }
+    effects
 }
 
 pub(super) fn load_more_history(
@@ -337,8 +337,7 @@ pub(super) fn log_loaded(
                     existing.next_cursor = page.next_cursor;
                     // Re-share the updated Arc with history_state.
                     repo_state.history_state.log = repo_state.log.clone();
-                    repo_state.history_state.log_rev =
-                        repo_state.history_state.log_rev.wrapping_add(1);
+                    repo_state.bump_log_revs();
                 } else {
                     if page.next_cursor.is_some() {
                         reserve_initial_paginated_log_append_slack(&mut page.commits);
@@ -354,7 +353,7 @@ pub(super) fn log_loaded(
             }
         }
 
-        if scope == LogScope::CurrentBranch
+        if scope.guarantees_head_visibility()
             && matches!(repo_state.head_branch, Loadable::Ready(ref head) if head == "HEAD")
             && let Loadable::Ready(page) = &repo_state.log
         {
@@ -381,6 +380,7 @@ pub(super) fn log_loaded(
 pub(super) fn repo_action_finished(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
+    action: RepoActionKind,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
     let mut clear_banner = false;
@@ -390,6 +390,9 @@ pub(super) fn repo_action_finished(
         match result {
             Ok(()) => {
                 repo_state.last_error = None;
+                if repo_action_clears_head_dependent_state(action) {
+                    repo_state.clear_head_dependent_cached_state();
+                }
                 clear_banner = true;
             }
             Err(e) => {
@@ -423,6 +426,18 @@ pub(super) fn repo_action_finished(
         }
     }
     effects
+}
+
+fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {
+    matches!(
+        action,
+        RepoActionKind::CheckoutBranch
+            | RepoActionKind::CheckoutRemoteBranch
+            | RepoActionKind::CheckoutCommit
+            | RepoActionKind::CherryPickCommit
+            | RepoActionKind::RevertCommit
+            | RepoActionKind::CreateBranchAndCheckout
+    )
 }
 
 #[cfg(test)]

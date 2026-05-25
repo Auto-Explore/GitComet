@@ -1,6 +1,7 @@
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
-    ConflictSide, PullMode, RemoteUrlKind, ResetMode, SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+    SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -23,7 +24,14 @@ pub enum RepoCommandKind {
         reference: String,
     },
     Push,
+    PushAfterCommit {
+        target: SafePushAfterCommitTarget,
+        set_upstream: bool,
+    },
     ForcePush,
+    ForcePushWithLease {
+        lease: ForcePushLease,
+    },
     PushSetUpstream {
         remote: String,
         branch: String,
@@ -120,6 +128,14 @@ pub enum RepoCommandKind {
     },
     UpdateSubmodules {
         approved_sources: Vec<SubmoduleTrustTarget>,
+    },
+    LoadSubmodule {
+        path: PathBuf,
+        approved_sources: Vec<SubmoduleTrustTarget>,
+    },
+    ChangeSubmodulePointer {
+        path: PathBuf,
+        reference: String,
     },
     RemoveSubmodule {
         path: PathBuf,

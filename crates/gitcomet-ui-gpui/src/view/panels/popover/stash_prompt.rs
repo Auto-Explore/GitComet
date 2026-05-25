@@ -12,11 +12,13 @@ fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static st
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let can_stash = this.can_submit_stash(cx);
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     div()
         .flex()
         .flex_col()
-        .w(px(420.0))
+        .w(scaled_px(420.0))
         .child(
             div()
                 .px_2()
@@ -43,14 +45,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     components::Button::new("stash_cancel", "Cancel")
+                        .focus_handle(this.stash_cancel_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "stash_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_inline_popover(window, cx);
+                            this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("stash_go", "Stash")
+                        .focus_handle(this.stash_submit_focus_handle.clone())
                         .separated_end_slot(hotkey_hint(theme, "stash_go_hint", "Enter"))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_stash)

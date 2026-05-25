@@ -1,32 +1,73 @@
 use super::*;
 
+fn recent_repo_picker_item(path: &std::path::Path) -> components::PickerPromptItem {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return components::PickerPromptItem::single(
+            path.display().to_string(),
+            components::TextTruncationProfile::Path,
+        );
+    };
+
+    let Some(parent) = path.parent() else {
+        return components::PickerPromptItem::from_parts([components::PickerPromptItemPart::new(
+            name.to_owned(),
+        )
+        .profile(components::TextTruncationProfile::End)
+        .flexible(false)]);
+    };
+
+    components::PickerPromptItem::from_parts([
+        components::PickerPromptItemPart::new(name.to_owned())
+            .profile(components::TextTruncationProfile::End)
+            .flexible(false),
+        components::PickerPromptItemPart::separator(" - "),
+        components::PickerPromptItemPart::path(parent.display().to_string()),
+    ])
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
+    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let recent_repos = session::load().recent_repos;
     let labels = recent_repos
         .iter()
         .map(|path| crate::app::recent_repository_label(path).into())
         .collect::<Vec<SharedString>>();
+    let items = recent_repos
+        .iter()
+        .map(|path| recent_repo_picker_item(path))
+        .collect::<Vec<_>>();
 
     if let Some(search) = this.recent_repo_picker_search_input.clone() {
         components::context_menu(
             theme,
             components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-                .items(labels)
+                .items(items)
+                .tooltip_host(this.tooltip_host.clone())
                 .empty_text("No recent repositories")
-                .max_height(px(320.0))
-                .render(theme, cx, move |this, ix, _event, _window, cx| {
-                    let Some(path) = recent_repos.get(ix).cloned() else {
-                        return;
-                    };
+                .max_height(scaled_px(320.0))
+                .render(
+                    theme,
+                    ui_scale_percent,
+                    cx,
+                    move |this, ix, _event, _window, cx| {
+                        let Some(path) = recent_repos.get(ix).cloned() else {
+                            return;
+                        };
 
-                    select_recent_repository(this, path, cx);
-                }),
+                        select_recent_repository(this, path, cx);
+                    },
+                ),
         )
-        .w(px(480.0))
-        .max_w(px(860.0))
+        .w(scaled_px(480.0))
+        .max_w(scaled_px(860.0))
     } else {
-        let mut menu = div().flex().flex_col().min_w(px(480.0)).max_w(px(860.0));
+        let mut menu = div()
+            .flex()
+            .flex_col()
+            .min_w(scaled_px(480.0))
+            .max_w(scaled_px(860.0));
         for (ix, label) in labels.into_iter().enumerate() {
             let Some(path) = recent_repos.get(ix).cloned() else {
                 continue;
@@ -35,6 +76,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 components::context_menu_entry(
                     ("recent_repo_item", ix),
                     theme,
+                    ui_scale_percent,
                     false,
                     false,
                     None,

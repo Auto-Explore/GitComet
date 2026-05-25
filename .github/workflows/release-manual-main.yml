@@ -37,7 +37,7 @@ env:
 jobs:
   validate:
     name: Validate inputs and branch guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
     outputs:
       version: ${{ steps.norm.outputs.version }}
@@ -107,7 +107,7 @@ jobs:
 
   create_release:
     name: Create tag and draft GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     needs: validate
     environment: release
@@ -158,7 +158,7 @@ jobs:
 
   publish_release:
     name: Publish GitHub release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     needs: [validate, create_release, build_and_upload]
     if: ${{ fromJSON(needs.validate.outputs.draft) == false }}
@@ -221,9 +221,37 @@ jobs:
       dry_run: false
     secrets: inherit
 
+  deploy_windows_installer:
+    name: Deploy Windows MSI installer
+    needs: [validate, build_and_upload, publish_release, deploy_apt_repo]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' && needs.deploy_apt_repo.result == 'success' }}
+    uses: ./.github/workflows/deploy-windows-installer.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      storage_account: ${{ vars.APT_STORAGE_ACCOUNT }}
+      storage_container: "$web"
+      storage_prefix: "windows"
+      dry_run: false
+    secrets: inherit
+
+  deploy_microsoft_store:
+    name: Submit Microsoft Store update
+    needs: [validate, build_and_upload, publish_release, deploy_windows_installer]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' && needs.deploy_windows_installer.result == 'success' }}
+    uses: ./.github/workflows/deploy-microsoft-store.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      package_base_url: "https://apt.gitcomet.dev/windows"
+      product_id: ${{ vars.MICROSOFT_STORE_PRODUCT_ID }}
+      package_languages: ${{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}
+      dry_run: false
+    secrets: inherit
+
   cleanup_failed_release:
     name: Cleanup failed draft/tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     needs: [validate, create_release, build_and_upload]
     if: ${{ always() && needs.create_release.result == 'success' && needs.build_and_upload.result != 'success' }}

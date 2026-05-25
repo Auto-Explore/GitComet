@@ -45,12 +45,21 @@ fn schedule_effect_with_state_for_test(
     effect: Effect,
 ) {
     let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut repo_task_tokens = HashMap::default();
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
     super::effects::schedule_effect(
-        executor,
-        session_persist_executor,
+        super::effects::EffectExecutors {
+            executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor,
+            metadata_executor: &metadata_executor,
+        },
         &thread_state,
         backend,
         repos,
+        &mut repo_task_tokens,
         msg_tx,
         effect,
     );
@@ -73,6 +82,85 @@ fn schedule_effect_for_test(
         msg_tx,
         effect,
     );
+}
+
+#[test]
+fn session_update_effects_persist_on_session_executor() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            panic!("session persistence effects should not open repositories")
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session_file = dir.path().join("session.json");
+    let repo_a = dir.path().join("repo-a");
+    let repo_b = dir.path().join("repo-b");
+    let _session_file_override =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let session_executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::PersistRecentRepo {
+            repo_id: Some(RepoId(1)),
+            workdir: repo_a.clone(),
+            action: "test recent",
+        },
+    );
+    schedule_effect_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &repos,
+        msg_tx.clone(),
+        Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            workdir: repo_a.clone(),
+            mode: LogScope::NoMerges,
+            action: "test history mode",
+        },
+    );
+    schedule_effect_for_test(
+        &executor,
+        &session_executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::PersistRepoHistoryModesBatch {
+            repo_id: Some(RepoId(1)),
+            updates: vec![(repo_b.clone(), LogScope::FirstParent)],
+            action: "test history batch",
+        },
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let session = crate::session::load_from_path(&session_file);
+        let repo_a_mode = crate::session::load_repo_history_mode_from_path(&repo_a, &session_file);
+        let repo_b_mode = crate::session::load_repo_history_mode_from_path(&repo_b, &session_file);
+        if session.recent_repos.first() == Some(&repo_a)
+            && repo_a_mode == Some(LogScope::NoMerges)
+            && repo_b_mode == Some(LogScope::FirstParent)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session update effects did not persist before timeout"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -130,6 +218,66 @@ fn unavailable_git_effect_emits_synthetic_repo_command_error() {
                     .contains("Custom Git executable is not configured"),
                 "unexpected error: {err}"
             );
+        }
+        other => panic!("unexpected message: {other:?}"),
+    }
+}
+
+#[test]
+fn safe_push_after_commit_effect_carries_auth_to_finished_message() {
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo_id = RepoId(3);
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    repos.insert(
+        repo_id,
+        Arc::new(UnsupportedRepo {
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        }),
+    );
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let context = gitcomet_core::services::SafePushAfterCommitContext {
+        amend: false,
+        local_branch: Some("main".to_string()),
+        pre_head: None,
+        post_head: Some(CommitId("2222222222222222222222222222222222222222".into())),
+    };
+    let auth = gitcomet_core::auth::StagedGitAuth {
+        kind: gitcomet_core::auth::GitAuthKind::UsernamePassword,
+        username: Some("alice".to_string()),
+        secret: "token".to_string(),
+    };
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::SafePushAfterCommit {
+            repo_id,
+            context: context.clone(),
+            auth: Some(auth.clone()),
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("expected safe-push completion message");
+    match msg {
+        Msg::Internal(crate::msg::InternalMsg::SafePushAfterCommitFinished {
+            repo_id: emitted_repo_id,
+            context: emitted_context,
+            auth: emitted_auth,
+            result,
+        }) => {
+            assert_eq!(emitted_repo_id, repo_id);
+            assert_eq!(emitted_context, context);
+            assert_eq!(emitted_auth, Some(auth));
+            let err = result.expect_err("unsupported test repo should fail safe push");
+            assert!(err.to_string().contains("safe push after commit"));
         }
         other => panic!("unexpected message: {other:?}"),
     }
@@ -2332,6 +2480,7 @@ fn stash_effect_requests_stash_reload_on_success() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::Stash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2499,6 +2648,7 @@ fn pop_stash_effect_applies_and_drops_then_requests_stash_reload() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::PopStash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2666,6 +2816,7 @@ fn pop_stash_effect_propagates_apply_error_without_drop_or_reload() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::PopStash,
                 result: Err(_),
             }) => {
                 saw_finished_err = true;
@@ -2831,6 +2982,7 @@ fn drop_stash_effect_requests_stash_reload_on_success() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::DropStash,
                 result: Ok(()),
             }) => saw_finished = true,
             _ => {}
@@ -2994,6 +3146,7 @@ fn drop_stash_effect_requests_stash_reload_on_error() {
             Msg::LoadStashes { repo_id: RepoId(1) } => saw_load_stashes = true,
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: RepoId(1),
+                action: RepoActionKind::DropStash,
                 result: Err(_),
             }) => {
                 saw_finished_err = true;
@@ -3128,6 +3281,389 @@ struct PanicOpenBackend;
 impl GitBackend for PanicOpenBackend {
     fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
         panic!("open should not be called in effect scheduler tests")
+    }
+}
+
+struct BlockingReleaseGuard {
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl Drop for BlockingReleaseGuard {
+    fn drop(&mut self) {
+        let (lock, condvar) = &*self.release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+}
+
+fn wait_for_release_signal(release: &Arc<(Mutex<bool>, Condvar)>) {
+    let (lock, condvar) = &**release;
+    let mut released = lock.lock().expect("release mutex");
+    while !*released {
+        released = condvar.wait(released).expect("release wait");
+    }
+}
+
+enum MetadataRepoMode {
+    BlockingRemoteTags,
+    ReadyTags,
+}
+
+struct MetadataSchedulingRepo {
+    spec: RepoSpec,
+    mode: MetadataRepoMode,
+    started_tx: std::sync::mpsc::Sender<&'static str>,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GitRepository for MetadataSchedulingRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        unsupported_repo_result()
+    }
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_tags(&self) -> Result<Vec<gitcomet_core::domain::Tag>> {
+        match self.mode {
+            MetadataRepoMode::ReadyTags => {
+                let _ = self.started_tx.send("tags");
+                Ok(Vec::new())
+            }
+            MetadataRepoMode::BlockingRemoteTags => unsupported_repo_result(),
+        }
+    }
+    fn list_remote_tags(&self) -> Result<Vec<gitcomet_core::domain::RemoteTag>> {
+        match self.mode {
+            MetadataRepoMode::BlockingRemoteTags => {
+                let _ = self.started_tx.send("remote_tags");
+                wait_for_release_signal(&self.release);
+                Ok(Vec::new())
+            }
+            MetadataRepoMode::ReadyTags => unsupported_repo_result(),
+        }
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+}
+
+enum SelectedDiffRepoMode {
+    BlockingDiff,
+    ReadyDiff,
+}
+
+struct SelectedDiffSchedulingRepo {
+    spec: RepoSpec,
+    mode: SelectedDiffRepoMode,
+    started_tx: std::sync::mpsc::Sender<RepoId>,
+    started_repo_id: RepoId,
+    release: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl GitRepository for SelectedDiffSchedulingRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+        unsupported_repo_result()
+    }
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn diff_parsed_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<gitcomet_core::domain::Diff> {
+        let _ = self.started_tx.send(self.started_repo_id);
+        if matches!(self.mode, SelectedDiffRepoMode::BlockingDiff) {
+            while !cancellation.is_cancelled() {
+                let (lock, condvar) = &*self.release;
+                let released = lock.lock().expect("release mutex");
+                let (released, _) = condvar
+                    .wait_timeout(released, Duration::from_millis(10))
+                    .expect("release wait");
+                if *released {
+                    break;
+                }
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(gitcomet_core::domain::Diff::from_unified(
+            target.clone(),
+            "diff --git a/tracked.txt b/tracked.txt\n",
+        ))
+    }
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+}
+
+struct RecordingLogRepo {
+    spec: RepoSpec,
+    calls: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl GitRepository for RecordingLogRepo {
+    fn spec(&self) -> &RepoSpec {
+        &self.spec
+    }
+
+    fn log_history_mode_page(
+        &self,
+        mode: LogScope,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        self.calls
+            .lock()
+            .expect("log recording mutex")
+            .push(format!(
+                "history {mode:?} {limit} {}",
+                cursor
+                    .map(|cursor| cursor.last_seen.as_ref())
+                    .unwrap_or("none")
+            ));
+        Ok(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
+        self.calls
+            .lock()
+            .expect("log recording mutex")
+            .push(format!(
+                "head {limit} {}",
+                cursor
+                    .map(|cursor| cursor.last_seen.as_ref())
+                    .unwrap_or("none")
+            ));
+        Ok(LogPage {
+            commits: Vec::new(),
+            next_cursor: None,
+        })
+    }
+
+    fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+        unsupported_repo_result()
+    }
+    fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+        unsupported_repo_result()
+    }
+    fn current_branch(&self) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn list_branches(&self) -> Result<Vec<Branch>> {
+        unsupported_repo_result()
+    }
+    fn list_remotes(&self) -> Result<Vec<Remote>> {
+        unsupported_repo_result()
+    }
+    fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+        unsupported_repo_result()
+    }
+    fn status(&self) -> Result<RepoStatus> {
+        unsupported_repo_result()
+    }
+    fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+        unsupported_repo_result()
+    }
+    fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn delete_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_branch(&self, _name: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn revert(&self, _id: &CommitId) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_list(&self) -> Result<Vec<StashEntry>> {
+        unsupported_repo_result()
+    }
+    fn stash_apply(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stash_drop(&self, _index: usize) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn stage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn commit(&self, _message: &str) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn fetch_all(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn pull(&self, _mode: PullMode) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn push(&self) -> Result<()> {
+        unsupported_repo_result()
+    }
+    fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+        unsupported_repo_result()
     }
 }
 
@@ -3272,6 +3808,7 @@ fn wait_for_checkout_refresh_messages(
             }
             Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
                 repo_id: rid,
+                action: _,
                 result: Ok(()),
             }) if rid == repo_id => {
                 saw_finished = true;
@@ -3569,6 +4106,207 @@ fn open_repo_effect_emits_repo_opened_err() {
 }
 
 #[test]
+fn open_repo_effect_suppresses_result_after_cancellation() {
+    use std::sync::{Condvar, Mutex};
+
+    struct Backend {
+        started_tx: std::sync::mpsc::Sender<()>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+        repo: Arc<dyn GitRepository>,
+    }
+
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            let _ = self.started_tx.send(());
+            let (lock, condvar) = &*self.release;
+            let mut released = lock.lock().expect("release mutex");
+            while !*released {
+                released = condvar.wait(released).expect("release condvar");
+            }
+            Ok(Arc::clone(&self.repo))
+        }
+    }
+
+    let repo_id = RepoId(44);
+    let workdir = unique_temp_path("gitcomet-open-repo-cancelled");
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: RepoSpec {
+            workdir: workdir.clone(),
+        },
+    });
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend {
+        started_tx,
+        release: Arc::clone(&release),
+        repo,
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: workdir.clone(),
+        },
+    ));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = HashMap::default();
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+
+    super::effects::schedule_effect(
+        super::effects::EffectExecutors {
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor: &executor,
+            metadata_executor: &metadata_executor,
+        },
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::OpenRepo {
+            repo_id,
+            path: workdir,
+        },
+    );
+    started_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("open effect did not start");
+
+    super::effects::schedule_effect(
+        super::effects::EffectExecutors {
+            executor: &executor,
+            repo_load_executor: &repo_load_executor,
+            session_persist_executor: &executor,
+            metadata_executor: &metadata_executor,
+        },
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::CancelRepoLoads {
+            repo_id,
+            load_epoch: 0,
+        },
+    );
+    {
+        let (lock, condvar) = &*release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+
+    assert!(
+        msg_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "cancelled open effect should not emit a result"
+    );
+}
+
+#[test]
+fn open_repo_effects_are_bounded_by_repo_load_executor() {
+    struct Backend {
+        started_tx: std::sync::mpsc::Sender<PathBuf>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl GitBackend for Backend {
+        fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            let workdir = path.to_path_buf();
+            let _ = self.started_tx.send(workdir);
+            wait_for_release_signal(&self.release);
+            Err(Error::new(ErrorKind::Backend(
+                "open released by test".to_string(),
+            )))
+        }
+    }
+
+    let repo_a = RepoId(45);
+    let repo_b = RepoId(46);
+    let workdir_a = unique_temp_path("gitcomet-open-repo-bounded-a");
+    let workdir_b = unique_temp_path("gitcomet-open-repo-bounded-b");
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<PathBuf>();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend {
+        started_tx,
+        release: Arc::clone(&release),
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::default())));
+    let mut repo_task_tokens = HashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::OpenRepo {
+            repo_id: repo_a,
+            path: workdir_a.clone(),
+        },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first open did not start"),
+        workdir_a
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::OpenRepo {
+            repo_id: repo_b,
+            path: workdir_b.clone(),
+        },
+    );
+    assert!(
+        started_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "second open should wait for the single repo-load worker"
+    );
+
+    {
+        let (lock, condvar) = &*release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second open did not start after worker was released"),
+        workdir_b
+    );
+}
+
+#[test]
 fn worktree_and_submodule_effects_report_missing_repo_handle() {
     struct Backend;
     impl GitBackend for Backend {
@@ -3632,6 +4370,361 @@ fn worktree_and_submodule_effects_report_missing_repo_handle() {
         }
         _ => panic!("expected SubmodulesLoaded missing-handle error"),
     }
+}
+
+#[test]
+fn load_log_effect_uses_history_mode_api() {
+    let repo_id = RepoId(498);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let cursor = LogCursor {
+        last_seen: CommitId("cursor".into()),
+        resume_from: None,
+        resume_token: None,
+    };
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingLogRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-load-log-history-mode-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadLog {
+            repo_id,
+            scope: LogScope::NoMerges,
+            limit: 20,
+            cursor: Some(cursor.clone()),
+        },
+    );
+
+    let msg = msg_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("expected LogLoaded");
+    match msg {
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: got_repo_id,
+            scope,
+            cursor: got_cursor,
+            result: Ok(page),
+        }) => {
+            assert_eq!(got_repo_id, repo_id);
+            assert_eq!(scope, LogScope::NoMerges);
+            assert_eq!(got_cursor, Some(cursor));
+            assert!(page.commits.is_empty());
+            assert!(page.next_cursor.is_none());
+        }
+        _ => panic!("expected LogLoaded"),
+    }
+
+    assert_eq!(
+        *calls.lock().expect("log recording mutex"),
+        vec!["history NoMerges 20 cursor".to_string()]
+    );
+}
+
+#[test]
+fn activation_load_effect_is_not_blocked_by_main_executor_queue() {
+    let repo_id = RepoId(499);
+    let repo: Arc<dyn GitRepository> = Arc::new(UnsupportedRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-foreground-load-effect"),
+        },
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let (block_started_tx, block_started_rx) = std::sync::mpsc::channel();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let release_task = Arc::clone(&release);
+    executor.spawn(move || {
+        block_started_tx.send(()).expect("send block started");
+        let (lock, condvar) = &*release_task;
+        let mut released = lock.lock().expect("release mutex");
+        while !*released {
+            released = condvar.wait(released).expect("release wait");
+        }
+    });
+    block_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("executor blocker started");
+
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::LoadStatus { repo_id },
+    );
+
+    let msg = msg_rx.recv_timeout(Duration::from_secs(1));
+    {
+        let (lock, condvar) = &*release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+
+    match msg.expect("foreground load should not wait behind queued executor work") {
+        Msg::Internal(crate::msg::InternalMsg::StatusLoaded {
+            repo_id: got_repo_id,
+            ..
+        }) => assert_eq!(got_repo_id, repo_id),
+        other => panic!("expected status load result, got {other:?}"),
+    }
+}
+
+#[test]
+fn remote_tag_load_for_one_repo_does_not_block_other_repo_metadata_refresh() {
+    let repo_a = RepoId(510);
+    let repo_b = RepoId(511);
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<&'static str>();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(
+            repo_a,
+            Arc::new(MetadataSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-metadata-blocking-remote-tags"),
+                },
+                mode: MetadataRepoMode::BlockingRemoteTags,
+                started_tx: started_tx.clone(),
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos.insert(
+            repo_b,
+            Arc::new(MetadataSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-metadata-ready-tags"),
+                },
+                mode: MetadataRepoMode::ReadyTags,
+                started_tx,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor =
+        super::executor::TaskExecutor::new(super::executor::metadata_worker_threads());
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_a,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-metadata-state-a"),
+        },
+    ));
+    state.repos.push(RepoState::new_opening(
+        repo_b,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-metadata-state-b"),
+        },
+    ));
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = HashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::LoadRemoteTags { repo_id: repo_a },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("remote tag task did not start"),
+        "remote_tags"
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::LoadTags { repo_id: repo_b },
+    );
+
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("metadata refresh for repo B should not wait behind repo A remote tags"),
+        "tags"
+    );
+}
+
+#[test]
+fn cancelled_selected_diff_does_not_keep_executor_busy_for_next_repo() {
+    let repo_a = RepoId(520);
+    let repo_b = RepoId(521);
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<RepoId>();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(
+            repo_a,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-selected-diff-blocking-a"),
+                },
+                mode: SelectedDiffRepoMode::BlockingDiff,
+                started_tx: started_tx.clone(),
+                started_repo_id: repo_a,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos.insert(
+            repo_b,
+            Arc::new(SelectedDiffSchedulingRepo {
+                spec: RepoSpec {
+                    workdir: unique_temp_path("gitcomet-selected-diff-ready-b"),
+                },
+                mode: SelectedDiffRepoMode::ReadyDiff,
+                started_tx,
+                started_repo_id: repo_b,
+                release: Arc::clone(&release),
+            }) as Arc<dyn GitRepository>,
+        );
+        repos
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let target_a = DiffTarget::WorkingTree {
+        path: PathBuf::from("repo-a.txt"),
+        area: DiffArea::Unstaged,
+    };
+    let target_b = DiffTarget::WorkingTree {
+        path: PathBuf::from("repo-b.txt"),
+        area: DiffArea::Unstaged,
+    };
+    let mut state = AppState::default();
+    let mut repo_state_a = RepoState::new_opening(
+        repo_a,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-selected-diff-state-a"),
+        },
+    );
+    repo_state_a.diff_state.diff_target = Some(target_a.clone());
+    let mut repo_state_b = RepoState::new_opening(
+        repo_b,
+        RepoSpec {
+            workdir: unique_temp_path("gitcomet-selected-diff-state-b"),
+        },
+    );
+    repo_state_b.diff_state.diff_target = Some(target_b.clone());
+    state.repos.push(repo_state_a);
+    state.repos.push(repo_state_b);
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(state)));
+    let mut repo_task_tokens = HashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::LoadSelectedDiff {
+            repo_id: repo_a,
+            load_patch_diff: true,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: false,
+            load_file_image: false,
+        },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("repo A diff task did not start"),
+        repo_a
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::CancelRepoLoads {
+            repo_id: repo_a,
+            load_epoch: 0,
+        },
+    );
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::LoadSelectedDiff {
+            repo_id: repo_b,
+            load_patch_diff: true,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: false,
+            load_file_image: false,
+        },
+    );
+
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("repo B diff should start once repo A load epoch is cancelled"),
+        repo_b
+    );
 }
 
 #[test]
@@ -3702,6 +4795,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 cursor: Some(LogCursor {
                     last_seen: CommitId("cursor".into()),
                     resume_from: None,
+                    resume_token: None,
                 }),
             },
             1,
@@ -3765,6 +4859,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 load_patch_diff: true,
                 load_file_text: true,
                 load_file_image: false,
+                load_submodule_summary: false,
                 preview_text_side: None,
             },
             2,
@@ -3999,6 +5094,19 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::SafePushAfterCommit {
+                repo_id,
+                context: gitcomet_core::services::SafePushAfterCommitContext {
+                    amend: false,
+                    local_branch: None,
+                    pre_head: None,
+                    post_head: None,
+                },
+                auth: None,
+            },
+            1,
+        ),
+        (
             Effect::FetchAll {
                 repo_id,
                 prune: true,
@@ -4047,8 +5155,36 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::PushAfterCommit {
+                repo_id,
+                target: gitcomet_core::services::SafePushAfterCommitTarget {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    local_branch: "main".to_string(),
+                    local_head: CommitId("2222222222222222222222222222222222222222".into()),
+                },
+                set_upstream: false,
+                auth: None,
+            },
+            1,
+        ),
+        (
             Effect::ForcePush {
                 repo_id,
+                auth: None,
+            },
+            1,
+        ),
+        (
+            Effect::ForcePushWithLease {
+                repo_id,
+                lease: gitcomet_core::services::ForcePushLease {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                    expected: CommitId("1111111111111111111111111111111111111111".into()),
+                    local_branch: "main".to_string(),
+                    local_head: CommitId("2222222222222222222222222222222222222222".into()),
+                },
                 auth: None,
             },
             1,

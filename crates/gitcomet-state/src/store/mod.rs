@@ -1,8 +1,9 @@
 use crate::model::{AppState, RepoId};
-use crate::msg::{Msg, StoreEvent};
+use crate::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -14,11 +15,18 @@ mod effects;
 mod executor;
 mod reducer;
 mod reducer_diagnostics;
+mod repo_load_trace;
 mod repo_monitor;
 mod send_diagnostics;
+mod worker_channel;
 
-use effects::schedule_effect;
-use executor::{TaskExecutor, default_worker_threads};
+use effects::RepoTaskToken;
+use effects::{EffectExecutors, schedule_effect};
+#[cfg(any(test, feature = "test-support"))]
+use executor::StoreExecutorPool;
+use executor::{
+    TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
+};
 use reducer::{
     fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
     fill_stage_path_inline, fill_stage_paths_inline, fill_unstage_path_inline,
@@ -26,7 +34,8 @@ use reducer::{
     set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
-use send_diagnostics::{SendFailureKind, send_or_log, try_send_state_changed_or_log};
+use send_diagnostics::try_send_state_changed_or_log;
+use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};
 
 pub use reducer_diagnostics::StoreReducerDiagnostics;
 
@@ -46,14 +55,106 @@ fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {
     }
 }
 
+fn is_control_msg(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::OpenRepo(_)
+            | Msg::CloseRepo { .. }
+            | Msg::SetActiveRepo { .. }
+            | Msg::ReorderRepoTabs { .. }
+    )
+}
+
+fn is_control_command(command: &StoreWorkerCommand) -> bool {
+    match command {
+        StoreWorkerCommand::Msg(msg) => is_control_msg(msg),
+        StoreWorkerCommand::Shutdown => true,
+        #[cfg(any(test, feature = "test-support"))]
+        StoreWorkerCommand::InsertRepoForTest { .. } => true,
+    }
+}
+
+fn can_control_command_overtake(command: &StoreWorkerCommand) -> bool {
+    matches!(
+        command,
+        StoreWorkerCommand::Msg(msg) if matches!(msg.as_ref(), Msg::Internal(_))
+    )
+}
+
+fn first_control_command_before_order_barrier(
+    deferred: &VecDeque<StoreWorkerCommand>,
+) -> Option<usize> {
+    for (ix, command) in deferred.iter().enumerate() {
+        if is_control_command(command) {
+            return Some(ix);
+        }
+        if !can_control_command_overtake(command) {
+            return None;
+        }
+    }
+    None
+}
+
+fn has_order_barrier_before_control(deferred: &VecDeque<StoreWorkerCommand>) -> bool {
+    for command in deferred {
+        if is_control_command(command) {
+            return false;
+        }
+        if !can_control_command_overtake(command) {
+            return true;
+        }
+    }
+    false
+}
+
+fn recv_next_worker_command(
+    command_rx: &mpsc::Receiver<StoreWorkerCommand>,
+    deferred: &mut VecDeque<StoreWorkerCommand>,
+) -> Result<StoreWorkerCommand, mpsc::RecvError> {
+    if let Some(ix) = first_control_command_before_order_barrier(deferred) {
+        return Ok(deferred.remove(ix).expect("deferred command exists"));
+    }
+
+    let first = match deferred.pop_front() {
+        Some(command) => command,
+        None => command_rx.recv()?,
+    };
+    if is_control_command(&first) {
+        return Ok(first);
+    }
+    if !can_control_command_overtake(&first) {
+        return Ok(first);
+    }
+    if has_order_barrier_before_control(deferred) {
+        return Ok(first);
+    }
+
+    while let Ok(command) = command_rx.try_recv() {
+        if is_control_command(&command) {
+            deferred.push_front(first);
+            return Ok(command);
+        }
+        if !can_control_command_overtake(&command) {
+            deferred.push_back(command);
+            break;
+        }
+        deferred.push_back(command);
+    }
+
+    Ok(first)
+}
+
 struct ReducerEffectsContext<'a> {
     thread_state: &'a Arc<RwLock<Arc<AppState>>>,
     active_repo_id: &'a Arc<AtomicU64>,
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
     repos: &'a HashMap<RepoId, Arc<dyn GitRepository>>,
-    thread_msg_tx: &'a mpsc::Sender<Msg>,
+    repo_task_tokens: &'a mut HashMap<RepoId, RepoTaskToken>,
+    thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
+    repo_load_executor: &'a TaskExecutor,
+    metadata_executor: &'a TaskExecutor,
     session_persist_executor: &'a TaskExecutor,
     backend: &'a Arc<dyn GitBackend>,
 }
@@ -71,7 +172,12 @@ where
         .unwrap_or(0);
     ctx.active_repo_id.store(active_value, Ordering::Relaxed);
 
-    try_send_state_changed_or_log(ctx.event_tx, "store worker loop state notification");
+    try_send_state_changed_or_log(
+        ctx.event_tx,
+        "store worker loop state notification",
+        ctx.thread_msg_tx.store_id(),
+        ctx.thread_msg_tx.is_alive(),
+    );
 
     // Keep filesystem monitoring scoped to the active repository only, to minimize
     // OS watcher load in large multi-repo sessions.
@@ -107,12 +213,40 @@ where
     }
 
     for effect in effects {
+        if repo_load_trace::enabled() {
+            let effect_repo_id = repo_load_trace::effect_repo_id(&effect);
+            let (load_epoch, workdir) = effect_repo_id.map_or((None, None), |repo_id| {
+                let state = ctx.thread_state.read().unwrap_or_else(|e| e.into_inner());
+                state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map_or((None, None), |repo| {
+                        (Some(repo.load_epoch), Some(repo.spec.workdir.clone()))
+                    })
+            });
+            repo_load_trace::trace!(
+                "scheduling_effect effect={} repo_id={:?} load_epoch={:?} active_repo={:?} workdir={}",
+                repo_load_trace::effect_name(&effect),
+                effect_repo_id,
+                load_epoch,
+                active_repo,
+                workdir.as_ref().map_or("<unknown>", |workdir| workdir
+                    .to_str()
+                    .unwrap_or("<non-utf8>"))
+            );
+        }
         schedule_effect(
-            ctx.executor,
-            ctx.session_persist_executor,
+            EffectExecutors {
+                executor: ctx.executor,
+                repo_load_executor: ctx.repo_load_executor,
+                session_persist_executor: ctx.session_persist_executor,
+                metadata_executor: ctx.metadata_executor,
+            },
             ctx.thread_state,
             ctx.backend,
             ctx.repos,
+            ctx.repo_task_tokens,
             ctx.thread_msg_tx.clone(),
             effect,
         );
@@ -121,7 +255,24 @@ where
 
 pub struct AppStore {
     state: Arc<RwLock<Arc<AppState>>>,
-    msg_tx: mpsc::Sender<Msg>,
+    msg_tx: StoreWorkerSender,
+    public_lifetime: Arc<StorePublicLifetime>,
+}
+
+struct StorePublicLifetime {
+    msg_tx: StoreWorkerSender,
+}
+
+impl StorePublicLifetime {
+    fn new(msg_tx: StoreWorkerSender) -> Self {
+        Self { msg_tx }
+    }
+}
+
+impl Drop for StorePublicLifetime {
+    fn drop(&mut self) {
+        self.msg_tx.shutdown();
+    }
 }
 
 impl Clone for AppStore {
@@ -129,6 +280,7 @@ impl Clone for AppStore {
         Self {
             state: Arc::clone(&self.state),
             msg_tx: self.msg_tx.clone(),
+            public_lifetime: Arc::clone(&self.public_lifetime),
         }
     }
 }
@@ -140,7 +292,10 @@ impl AppStore {
 
     pub fn new(backend: Arc<dyn GitBackend>) -> (Self, smol::channel::Receiver<StoreEvent>) {
         let state = Arc::new(RwLock::new(Arc::new(AppState::default())));
-        let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
+        let (command_tx, command_rx) = mpsc::channel::<StoreWorkerCommand>();
+        let store_id = StoreInstanceId::next();
+        let store_alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let msg_tx = StoreWorkerSender::new(command_tx, Arc::clone(&store_alive), store_id);
         // Coalesced "state changed" notifications: at most one pending.
         let (event_tx, event_rx) = smol::channel::bounded::<StoreEvent>(1);
 
@@ -148,17 +303,119 @@ impl AppStore {
         let thread_msg_tx = msg_tx.clone();
 
         thread::spawn(move || {
+            #[cfg(any(test, feature = "test-support"))]
+            let executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::Primary,
+                default_worker_threads(),
+            );
+            #[cfg(not(any(test, feature = "test-support")))]
             let executor = TaskExecutor::new(default_worker_threads());
+
+            #[cfg(any(test, feature = "test-support"))]
+            let repo_load_executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::RepoLoad,
+                repo_load_worker_threads(),
+            );
+            #[cfg(not(any(test, feature = "test-support")))]
+            let repo_load_executor = TaskExecutor::new(repo_load_worker_threads());
+
+            #[cfg(any(test, feature = "test-support"))]
+            let metadata_executor = TaskExecutor::shared_for_store(
+                StoreExecutorPool::Metadata,
+                metadata_worker_threads(),
+            );
+            #[cfg(not(any(test, feature = "test-support")))]
+            let metadata_executor = TaskExecutor::new(metadata_worker_threads());
+
+            #[cfg(any(test, feature = "test-support"))]
+            let session_persist_executor =
+                TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
+            #[cfg(not(any(test, feature = "test-support")))]
             let session_persist_executor = TaskExecutor::new(1);
             let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+            let mut repo_task_tokens: HashMap<RepoId, RepoTaskToken> = HashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
+            let mut deferred_commands = VecDeque::new();
 
-            while let Ok(msg) = msg_rx.recv() {
+            while let Ok(command) = recv_next_worker_command(&command_rx, &mut deferred_commands) {
+                let msg = match command {
+                    StoreWorkerCommand::Msg(msg) => *msg,
+                    StoreWorkerCommand::Shutdown => break,
+                    #[cfg(any(test, feature = "test-support"))]
+                    StoreWorkerCommand::InsertRepoForTest { repo_id, repo } => {
+                        repos.insert(repo_id, repo);
+                        continue;
+                    }
+                };
+
+                if !thread_msg_tx.is_alive() {
+                    continue;
+                }
+
+                if repo_load_trace::enabled() {
+                    let msg_repo_id = repo_load_trace::msg_repo_id(&msg);
+                    let change_flags = repo_load_trace::msg_external_change(&msg).map(|change| {
+                        format!(
+                            "worktree={},index={},git_state={}",
+                            change.worktree, change.index, change.git_state
+                        )
+                    });
+                    repo_load_trace::trace!(
+                        "worker received msg={} repo_id={:?} change={} active_repo={:?} queued_tokens={}",
+                        repo_load_trace::msg_name(&msg),
+                        msg_repo_id,
+                        change_flags.as_deref().unwrap_or("-"),
+                        thread_state
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .active_repo,
+                        repo_task_tokens.len()
+                    );
+                }
+
                 match &msg {
-                    Msg::RestoreSession { .. } => repo_monitors.stop_all(),
-                    Msg::CloseRepo { repo_id } => repo_monitors.stop(*repo_id),
+                    Msg::RestoreSession { .. } => {
+                        repo_load_trace::trace!(
+                            "restore_session cancelling_all_repo_load_tokens count={}",
+                            repo_task_tokens.len()
+                        );
+                        repo_monitors.stop_all();
+                        for token in repo_task_tokens.values() {
+                            token.cancellation.cancel();
+                        }
+                        repo_task_tokens.clear();
+                    }
+                    Msg::CloseRepo { repo_id } => {
+                        repo_monitors.stop(*repo_id);
+                        if let Some(token) = repo_task_tokens.remove(repo_id) {
+                            repo_load_trace::trace!(
+                                "close_repo cancelling_repo_load_token repo_id={:?} load_epoch={}",
+                                repo_id,
+                                token.load_epoch
+                            );
+                            token.cancellation.cancel();
+                        }
+                    }
+                    Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+                        repo_id,
+                        load_epoch,
+                        message,
+                    }) if matches!(
+                        message.as_ref(),
+                        crate::msg::InternalMsg::RepoOpenedErr { .. }
+                    ) && repo_task_tokens
+                        .get(repo_id)
+                        .is_some_and(|token| token.load_epoch == *load_epoch) =>
+                    {
+                        repo_load_trace::trace!(
+                            "repo_opened_err removing_repo_load_token repo_id={:?} load_epoch={}",
+                            repo_id,
+                            load_epoch
+                        );
+                        repo_task_tokens.remove(repo_id);
+                    }
                     _ => {}
                 }
 
@@ -182,8 +439,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -216,8 +476,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -242,8 +505,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -268,8 +534,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -294,8 +563,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -320,8 +592,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -346,8 +621,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -381,8 +659,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -405,8 +686,59 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
+                                session_persist_executor: &session_persist_executor,
+                                backend: &backend,
+                            },
+                        );
+                    }
+                    Msg::RepoActivated { repo_id } => {
+                        if repo_monitors.is_running(repo_id) {
+                            repo_load_trace::trace!(
+                                "repo_activated_monitor_active_skip_refresh repo_id={:?} monitor_running=true",
+                                repo_id
+                            );
+                            continue;
+                        }
+
+                        repo_load_trace::trace!(
+                            "repo_activated_monitor_unavailable_fallback_refresh repo_id={:?} monitor_running=false",
+                            repo_id
+                        );
+                        let effects = {
+                            let mut app_state =
+                                thread_state.write().unwrap_or_else(|e| e.into_inner());
+                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+                            let reduce_started = Instant::now();
+                            let effects = reduce(
+                                &mut repos,
+                                &id_alloc,
+                                app_state,
+                                Msg::RepoExternallyChanged {
+                                    repo_id,
+                                    change: RepoExternalChange::GitState,
+                                },
+                            );
+                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+                            effects
+                        };
+                        handle_reducer_effects(
+                            effects,
+                            ReducerEffectsContext {
+                                thread_state: &thread_state,
+                                active_repo_id: &active_repo_id,
+                                event_tx: &event_tx,
+                                repo_monitors: &mut repo_monitors,
+                                repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
+                                thread_msg_tx: &thread_msg_tx,
+                                executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -430,8 +762,11 @@ impl AppStore {
                                 event_tx: &event_tx,
                                 repo_monitors: &mut repo_monitors,
                                 repos: &repos,
+                                repo_task_tokens: &mut repo_task_tokens,
                                 thread_msg_tx: &thread_msg_tx,
                                 executor: &executor,
+                                repo_load_executor: &repo_load_executor,
+                                metadata_executor: &metadata_executor,
                                 session_persist_executor: &session_persist_executor,
                                 backend: &backend,
                             },
@@ -439,23 +774,43 @@ impl AppStore {
                     }
                 }
             }
+
+            for token in repo_task_tokens.values() {
+                token.cancellation.cancel();
+            }
+            repo_monitors.stop_all();
         });
 
-        (Self { state, msg_tx }, event_rx)
+        (
+            Self {
+                state,
+                msg_tx: msg_tx.clone(),
+                public_lifetime: Arc::new(StorePublicLifetime::new(msg_tx)),
+            },
+            event_rx,
+        )
     }
 
     pub fn dispatch(&self, msg: Msg) {
-        send_or_log(
-            &self.msg_tx,
-            msg,
-            SendFailureKind::StoreDispatch,
-            "AppStore::dispatch",
-        );
+        self.msg_tx.dispatch(msg);
     }
 
     pub fn snapshot(&self) -> Arc<AppState> {
         let state = self.state.read().unwrap_or_else(|e| e.into_inner());
         Arc::clone(&state)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn replace_snapshot_for_test(&self, state: Arc<AppState>) {
+        let mut current = self.state.write().unwrap_or_else(|e| e.into_inner());
+        *current = state;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn insert_repo_for_test(&self, repo_id: RepoId, repo: Arc<dyn GitRepository>) {
+        self.msg_tx.insert_repo_for_test(repo_id, repo);
     }
 }
 

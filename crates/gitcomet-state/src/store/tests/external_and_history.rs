@@ -1,5 +1,82 @@
 use super::*;
 
+fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
+    gitcomet_core::services::ForcePushLease {
+        remote: "origin".to_string(),
+        branch: "main".to_string(),
+        expected: CommitId("1111111111111111111111111111111111111111".into()),
+        local_branch: "main".to_string(),
+        local_head: CommitId("2222222222222222222222222222222222222222".into()),
+    }
+}
+
+fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
+    gitcomet_core::domain::RecentCommitMessage {
+        id: CommitId("1111111111111111111111111111111111111111".into()),
+        summary: Arc::from("old message"),
+        message: "old message\n\nbody".to_string(),
+    }
+}
+
+#[test]
+fn repo_activated_is_reducer_noop_by_itself() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoActivated { repo_id },
+    );
+
+    assert!(effects.is_empty());
+    assert!(!state.repos[0].status.is_loading());
+    assert!(!state.repos[0].log.is_loading());
+}
+
+#[test]
+fn repo_load_trace_names_repo_activation_and_refresh_messages() {
+    let repo_id = RepoId(1);
+
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::RepoActivated { repo_id }),
+        "RepoActivated"
+    );
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        }),
+        "RepoExternallyChanged"
+    );
+    assert_eq!(
+        repo_load_trace::msg_name(&Msg::ReloadRepo { repo_id }),
+        "ReloadRepo"
+    );
+    assert_eq!(
+        repo_load_trace::msg_repo_id(&Msg::RepoActivated { repo_id }),
+        Some(repo_id)
+    );
+    assert_eq!(
+        repo_load_trace::msg_external_change(&Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        }),
+        Some(crate::msg::RepoExternalChange::GitState)
+    );
+}
+
 #[test]
 fn external_worktree_change_refreshes_status_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -117,6 +194,44 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
 }
 
 #[test]
+fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.pending_force_push_lease = Some(test_force_push_lease());
+    repo_state.set_recent_commit_messages(Loadable::Ready(vec![test_recent_commit_message()]));
+    let recent_rev = repo_state.recent_commit_messages_rev;
+    state.repos.push(repo_state);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert_eq!(
+        state.repos[0].pending_force_push_lease,
+        Some(test_force_push_lease())
+    );
+    assert!(matches!(
+        &state.repos[0].recent_commit_messages,
+        Loadable::NotLoaded
+    ));
+    assert!(state.repos[0].recent_commit_messages_rev > recent_rev);
+}
+
+#[test]
 fn external_git_state_change_refreshes_history_and_selected_diff() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -210,13 +325,14 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
             result: Ok(Vec::new()),
         }),
     );
+    let history_scope = state.repos[0].history_state.history_scope;
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
-            scope: LogScope::CurrentBranch,
+            scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
                 commits: Vec::new(),
@@ -458,13 +574,14 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         [Effect::LoadStagedStatus { repo_id: RepoId(1) }]
     ));
 
+    let history_scope = state.repos[0].history_state.history_scope;
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
-            scope: LogScope::CurrentBranch,
+            scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
                 commits: Vec::new(),
@@ -476,10 +593,10 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         effects.as_slice(),
         [Effect::LoadLog {
             repo_id: RepoId(1),
-            scope: LogScope::CurrentBranch,
+            scope,
             limit: 200,
             cursor: None
-        }]
+        }] if *scope == history_scope
     ));
 }
 
@@ -657,6 +774,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    state.repos[0].set_open(Loadable::Ready(()));
     state.active_repo = Some(RepoId(1));
 
     let effects = reduce(
@@ -670,7 +788,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.head_branch.is_loading());
     assert!(repo_state.branches.is_loading());
     assert!(repo_state.tags.is_loading());
-    assert!(matches!(repo_state.remote_tags, Loadable::NotLoaded));
+    assert!(repo_state.remote_tags.is_loading());
     assert!(repo_state.remotes.is_loading());
     assert!(repo_state.remote_branches.is_loading());
     assert!(repo_state.status.is_loading());
@@ -679,13 +797,28 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     assert!(repo_state.log.is_loading());
     assert!(!repo_state.history_state.log_loading_more);
     assert!(repo_state.merge_commit_message.is_loading());
+    assert!(repo_state.submodules.is_loading());
     assert!(has_status_refresh_effects(&effects, RepoId(1)));
     assert!(
-        !effects.iter().any(|effect| matches!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadTags { repo_id } if *repo_id == RepoId(1)
+        )),
+        "tags should auto-load in the background on repo reload"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
             effect,
             Effect::LoadRemoteTags { repo_id } if *repo_id == RepoId(1)
         )),
-        "remote tags should lazy-load from tag UI, not repo reload"
+        "remote tags should auto-load in the background on repo reload"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSubmodules { repo_id } if *repo_id == RepoId(1)
+        )),
+        "submodules should auto-load in the background on repo reload"
     );
 }
 
@@ -715,6 +848,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
             resume_from: None,
+            resume_token: None,
         }),
     }));
     repo_state.history_state.log_loading_more = false;
@@ -740,52 +874,86 @@ fn load_more_history_emits_paginated_load_log_effect() {
 }
 
 #[test]
-fn set_history_scope_to_all_branches_emits_load_log_all_branches_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
-    let id_alloc = AtomicU64::new(1);
-    let mut state = AppState::default();
-    state.repos.push(RepoState::new_opening(
-        RepoId(1),
-        RepoSpec {
-            workdir: PathBuf::from("/tmp/repo"),
-        },
-    ));
-    state.active_repo = Some(RepoId(1));
+fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
+    for target_scope in [
+        LogScope::FullReachable,
+        LogScope::FirstParent,
+        LogScope::NoMerges,
+        LogScope::MergesOnly,
+        LogScope::AllBranches,
+    ] {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(1);
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(RepoId(1));
 
-    let repo_state = &mut state.repos[0];
-    repo_state.history_state.history_scope = LogScope::CurrentBranch;
-    repo_state.log = Loadable::Ready(Arc::new(LogPage {
-        commits: vec![],
-        next_cursor: None,
-    }));
+        let repo_state = &mut state.repos[0];
+        repo_state.history_state.history_scope = if target_scope == LogScope::FullReachable {
+            LogScope::FirstParent
+        } else {
+            LogScope::FullReachable
+        };
+        repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: vec![Commit {
+                id: CommitId("old".into()),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                summary: "old".into(),
+                author: "a".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: None,
+        })));
 
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
-        Msg::SetHistoryScope {
-            repo_id: RepoId(1),
-            scope: LogScope::AllBranches,
-        },
-    );
-
-    let repo_state = &state.repos[0];
-    assert_eq!(
-        repo_state.history_state.history_scope,
-        LogScope::AllBranches
-    );
-    assert!(repo_state.log.is_loading());
-    assert!(
-        effects.iter().any(|e| matches!(
-            e,
-            Effect::LoadLog {
+        let effects = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::SetHistoryScope {
                 repo_id: RepoId(1),
-                scope: LogScope::AllBranches,
-                ..
-            }
-        )),
-        "expected a LoadLog(AllBranches) effect, got {effects:?}"
-    );
+                scope: target_scope,
+            },
+        );
+
+        let repo_state = &state.repos[0];
+        assert_eq!(repo_state.history_state.history_scope, target_scope);
+        assert!(repo_state.log.is_loading());
+        assert!(
+            repo_state
+                .history_state
+                .retained_log_while_loading
+                .is_some(),
+            "expected retained history page while switching to {target_scope:?}"
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::LoadLog {
+                    repo_id: RepoId(1),
+                    scope,
+                    cursor: None,
+                    ..
+                } if *scope == target_scope
+            )),
+            "expected LoadLog({target_scope:?}) effect, got {effects:?}"
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::PersistRepoHistoryMode {
+                    repo_id: Some(RepoId(1)),
+                    mode,
+                    ..
+                } if *mode == target_scope
+            )),
+            "expected async history mode persist effect for {target_scope:?}, got {effects:?}"
+        );
+    }
 }
 
 #[test]
@@ -833,6 +1001,109 @@ fn set_history_scope_retains_ready_log_while_loading() {
         .as_ref()
         .expect("scope switch should retain the previous ready log while loading");
     assert!(Arc::ptr_eq(retained, &retained_page));
+}
+
+#[test]
+fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::FullReachable;
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: vec![Commit {
+            id: CommitId("old".into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: "old".into(),
+            author: "a".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }],
+        next_cursor: None,
+    })));
+    assert!(
+        repo_state
+            .loads_in_flight
+            .request_log(LogScope::FullReachable, 200, None)
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryScope {
+            repo_id: RepoId(1),
+            scope: LogScope::AllBranches,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            mode: LogScope::AllBranches,
+            ..
+        }]
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryScope {
+            repo_id: RepoId(1),
+            scope: LogScope::NoMerges,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            mode: LogScope::NoMerges,
+            ..
+        }]
+    ));
+    assert_eq!(
+        state.repos[0].history_state.history_scope,
+        LogScope::NoMerges
+    );
+    assert!(state.repos[0].log.is_loading());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::FullReachable,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![],
+                next_cursor: None,
+            }),
+        }),
+    );
+
+    assert!(state.repos[0].log.is_loading());
+    assert!(!state.repos[0].history_state.log_loading_more);
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::LoadLog {
+                repo_id: RepoId(1),
+                scope: LogScope::NoMerges,
+                limit: 200,
+                cursor: None,
+            }]
+        ),
+        "expected stale result to replay the latest pending scope switch, got {effects:?}"
+    );
 }
 
 #[test]
@@ -898,9 +1169,11 @@ fn log_loaded_appends_when_loading_more() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
             resume_from: None,
+            resume_token: None,
         }),
     }));
     repo_state.history_state.log_loading_more = true;
+    let log_before = (repo_state.log_rev, repo_state.history_state.log_rev);
 
     let _effects = reduce(
         &mut repos,
@@ -912,6 +1185,7 @@ fn log_loaded_appends_when_loading_more() {
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
                 resume_from: None,
+                resume_token: None,
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -928,6 +1202,8 @@ fn log_loaded_appends_when_loading_more() {
 
     let repo_state = &state.repos[0];
     assert!(!repo_state.history_state.log_loading_more);
+    assert!(repo_state.log_rev > log_before.0);
+    assert!(repo_state.history_state.log_rev > log_before.1);
     let Loadable::Ready(page) = &repo_state.log else {
         panic!("expected log ready");
     };
@@ -963,6 +1239,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
         next_cursor: Some(LogCursor {
             last_seen: CommitId("c1".into()),
             resume_from: None,
+            resume_token: None,
         }),
     })));
     repo_state.history_state.log_loading_more = true;
@@ -977,6 +1254,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
                 resume_from: None,
+                resume_token: None,
             }),
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -989,6 +1267,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
                 next_cursor: Some(LogCursor {
                     last_seen: CommitId("c2".into()),
                     resume_from: None,
+                    resume_token: None,
                 }),
             }),
         }),
@@ -1111,6 +1390,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
         })
         .collect();
     let last_seen = commits.last().expect("last commit").id.clone();
+    let history_scope = state.repos[0].history_state.history_scope;
 
     let _effects = reduce(
         &mut repos,
@@ -1118,13 +1398,14 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
-            scope: LogScope::CurrentBranch,
+            scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
                 commits,
                 next_cursor: Some(LogCursor {
                     last_seen,
                     resume_from: None,
+                    resume_token: None,
                 }),
             }),
         }),
@@ -1153,7 +1434,8 @@ fn log_loaded_bumps_log_rev() {
     ));
     state.active_repo = Some(repo_id);
 
-    let log_before = state.repos[0].history_state.log_rev;
+    let log_before = (state.repos[0].log_rev, state.repos[0].history_state.log_rev);
+    let history_scope = state.repos[0].history_state.history_scope;
 
     reduce(
         &mut repos,
@@ -1161,7 +1443,7 @@ fn log_loaded_bumps_log_rev() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
-            scope: LogScope::CurrentBranch,
+            scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -1177,7 +1459,11 @@ fn log_loaded_bumps_log_rev() {
     );
 
     assert!(
-        state.repos[0].history_state.log_rev > log_before,
+        state.repos[0].log_rev > log_before.0,
+        "repo log_rev should bump after LogLoaded"
+    );
+    assert!(
+        state.repos[0].history_state.log_rev > log_before.1,
         "log_rev should bump after LogLoaded"
     );
 }
@@ -1196,6 +1482,7 @@ fn detached_head_target_tracks_current_branch_log_head() {
         },
     ));
     state.active_repo = Some(repo_id);
+    state.repos[0].history_state.history_scope = LogScope::CurrentBranch;
 
     reduce(
         &mut repos,
@@ -1244,6 +1531,78 @@ fn detached_head_target_tracks_current_branch_log_head() {
 }
 
 #[test]
+fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
+    for (scope, commits, expected_first_visible) in [
+        (
+            LogScope::NoMerges,
+            vec![Commit {
+                id: CommitId("visible-non-merge".into()),
+                parent_ids: smallvec::smallvec![CommitId("hidden-head".into())],
+                summary: "visible".into(),
+                author: "a".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            CommitId("visible-non-merge".into()),
+        ),
+        (
+            LogScope::MergesOnly,
+            vec![Commit {
+                id: CommitId("visible-merge".into()),
+                parent_ids: smallvec::smallvec![CommitId("p0".into()), CommitId("p1".into())],
+                summary: "merge".into(),
+                author: "a".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            CommitId("visible-merge".into()),
+        ),
+    ] {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(2);
+        let mut state = AppState::default();
+        let repo_id = RepoId(1);
+        repos.insert(repo_id, Arc::new(DummyRepo::new("/tmp/repo")));
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(repo_id);
+        state.repos[0].history_state.history_scope = scope;
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::HeadBranchLoaded {
+                repo_id,
+                result: Ok("HEAD".to_string()),
+            }),
+        );
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+                repo_id,
+                scope,
+                cursor: None,
+                result: Ok(LogPage {
+                    commits,
+                    next_cursor: None,
+                }),
+            }),
+        );
+
+        assert!(
+            state.repos[0].detached_head_commit.is_none(),
+            "{scope:?} should not infer detached HEAD from first visible commit {expected_first_visible}"
+        );
+    }
+}
+
+#[test]
 fn set_history_scope_bumps_log_rev() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);
@@ -1258,7 +1617,7 @@ fn set_history_scope_bumps_log_rev() {
     ));
     state.active_repo = Some(repo_id);
 
-    let log_before = state.repos[0].history_state.log_rev;
+    let log_before = (state.repos[0].log_rev, state.repos[0].history_state.log_rev);
 
     reduce(
         &mut repos,
@@ -1271,7 +1630,11 @@ fn set_history_scope_bumps_log_rev() {
     );
 
     assert!(
-        state.repos[0].history_state.log_rev > log_before,
+        state.repos[0].log_rev > log_before.0,
+        "repo log_rev should bump after SetHistoryScope"
+    );
+    assert!(
+        state.repos[0].history_state.log_rev > log_before.1,
         "log_rev should bump after SetHistoryScope"
     );
 }

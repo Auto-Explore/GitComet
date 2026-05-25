@@ -79,3 +79,59 @@ fn branch_picker_escape_closes(cx: &mut gpui::TestAppContext) {
     let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
     assert!(!is_open, "expected Escape to close Branch popover");
 }
+
+#[gpui::test]
+fn branch_picker_escape_closes_while_branches_unavailable(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) =
+        create_tracking_store("branch-picker-escape-unavailable");
+    let repo_id = store
+        .snapshot()
+        .active_repo
+        .expect("expected active repo for branch picker test");
+    store.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Err(Error::new(ErrorKind::Unsupported(
+                "branches unavailable in test",
+            ))),
+        },
+    ));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::BranchPicker,
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(is_open, "expected Branch popover to open");
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        !is_open,
+        "expected Escape to close unavailable Branch popover"
+    );
+}

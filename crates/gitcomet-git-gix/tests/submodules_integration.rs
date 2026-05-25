@@ -1,4 +1,6 @@
-use gitcomet_core::domain::SubmoduleStatus;
+use gitcomet_core::domain::{
+    CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind, SubmoduleStatus,
+};
 use gitcomet_core::services::{GitBackend, SubmoduleTrustDecision};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
@@ -233,7 +235,7 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     assert_eq!(submodules.len(), 1);
     assert_eq!(submodules[0].path, PathBuf::from("submod"));
     assert_eq!(submodules[0].status, SubmoduleStatus::MissingMapping);
-    assert_eq!(submodules[0].head.as_ref(), submodule_head);
+    assert_eq!(submodules[0].recorded_head.as_ref(), submodule_head);
 }
 
 #[test]
@@ -289,7 +291,8 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(not_initialized.len(), 1);
     assert_eq!(not_initialized[0].path, PathBuf::from("sm"));
     assert_eq!(not_initialized[0].status, SubmoduleStatus::NotInitialized);
-    assert_eq!(not_initialized[0].head.as_ref(), original_head);
+    assert_eq!(not_initialized[0].recorded_head.as_ref(), original_head);
+    assert_eq!(not_initialized[0].checked_out_head, None);
 
     run_git(
         &parent_repo,
@@ -333,7 +336,14 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     assert_eq!(head_mismatch.len(), 1);
     assert_eq!(head_mismatch[0].path, PathBuf::from("sm"));
     assert_eq!(head_mismatch[0].status, SubmoduleStatus::HeadMismatch);
-    assert_eq!(head_mismatch[0].head.as_ref(), mismatched_head);
+    assert_eq!(head_mismatch[0].recorded_head.as_ref(), original_head);
+    assert_eq!(
+        head_mismatch[0]
+            .checked_out_head
+            .as_ref()
+            .map(AsRef::as_ref),
+        Some(mismatched_head.as_str())
+    );
 }
 
 #[test]
@@ -572,8 +582,132 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     assert_eq!(listed[0].path, PathBuf::from("sm"));
     assert_eq!(listed[0].status, SubmoduleStatus::MergeConflict);
     assert_eq!(
-        listed[0].head.as_ref(),
+        listed[0].recorded_head.as_ref(),
         "0000000000000000000000000000000000000000"
+    );
+}
+
+#[test]
+fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    let submodule_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
+    let submodule_path = Path::new("mods/new-submodule");
+    add_submodule_raw(&parent_repo, &sub_repo, submodule_path, None);
+
+    let backend = GixBackend;
+    let opened = backend
+        .open(&parent_repo)
+        .expect("open parent repository with staged submodule");
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::WorkingTree {
+            path: submodule_path.to_path_buf(),
+            area: DiffArea::Staged,
+        })
+        .expect("load staged added submodule summary");
+    let staged_range = summary
+        .ranges
+        .iter()
+        .find(|range| range.kind == SubmoduleDiffRangeKind::StagedPointer)
+        .expect("summary should include staged pointer range");
+
+    assert_eq!(staged_range.from, None);
+    assert_eq!(
+        staged_range.to.as_ref().map(|commit| commit.as_ref()),
+        Some(submodule_head.as_str())
+    );
+    assert_eq!(
+        staged_range.unavailable_reason.as_deref(),
+        Some("Only one side of the submodule pointer is available.")
+    );
+}
+
+#[test]
+fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
+    if !require_git_shell_for_submodule_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let sub_repo = root.join("sub");
+    let parent_repo = root.join("parent");
+    fs::create_dir_all(&sub_repo).expect("create sub repository directory");
+    fs::create_dir_all(&parent_repo).expect("create parent repository directory");
+
+    init_repo_with_seed(&sub_repo, "file.txt", "hello\n", "seed submodule");
+    init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
+    let submodule_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
+    let submodule_path = Path::new("mods/submodule");
+    add_submodule_raw(&parent_repo, &sub_repo, submodule_path, None);
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add submodule",
+        ],
+    );
+
+    let missing_submodule_head = "2222222222222222222222222222222222222222";
+    let cacheinfo = format!(
+        "160000,{missing_submodule_head},{}",
+        submodule_path.display()
+    );
+    run_git(&parent_repo, &["update-index", "--cacheinfo", &cacheinfo]);
+    run_git(
+        &parent_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "advance submodule pointer",
+        ],
+    );
+    let parent_commit = git_stdout(&parent_repo, &["rev-parse", "HEAD"]);
+
+    let backend = GixBackend;
+    let opened = backend
+        .open(&parent_repo)
+        .expect("open parent repository with missing submodule commit");
+    let summary = opened
+        .submodule_diff_summary(&DiffTarget::Commit {
+            commit_id: CommitId(parent_commit.into()),
+            path: Some(submodule_path.to_path_buf()),
+        })
+        .expect("load committed submodule summary");
+    let range = summary
+        .ranges
+        .iter()
+        .find(|range| range.kind == SubmoduleDiffRangeKind::CommitHistory)
+        .expect("summary should include commit history range");
+
+    assert_eq!(
+        range.from.as_ref().map(|commit| commit.as_ref()),
+        Some(submodule_head.as_str())
+    );
+    assert_eq!(
+        range.to.as_ref().map(|commit| commit.as_ref()),
+        Some(missing_submodule_head)
+    );
+    assert!(range.changes.is_empty());
+    assert_eq!(
+        range.unavailable_reason.as_deref(),
+        Some("Submodule history is not available locally.")
     );
 }
 
@@ -634,7 +768,14 @@ fn submodule_add_update_remove_round_trip() {
         listed[0].status,
         gitcomet_core::domain::SubmoduleStatus::UpToDate
     );
-    assert_eq!(listed[0].head.as_ref().len(), 40);
+    assert_eq!(listed[0].recorded_head.as_ref().len(), 40);
+    assert_eq!(
+        listed[0]
+            .checked_out_head
+            .as_ref()
+            .map(|head| head.as_ref().len()),
+        Some(40)
+    );
 
     assert_eq!(
         opened

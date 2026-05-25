@@ -1,15 +1,18 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, LogCursor, LogPage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
+    FileDiffText, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
+    Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
-    BlameLine, CommandOutput, ConflictFileStages, ConflictSide, GitRepository, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
+    ConflictSide, ForcePushLease, GitRepository, MergetoolResult, PullMode, RemoteUrlKind,
+    ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,6 +86,7 @@ struct TreeIndexCacheEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LogHeadPageCacheKey {
+    mode: HistoryMode,
     head_oid: Option<gix::ObjectId>,
     limit: usize,
     last_seen: Option<CommitId>,
@@ -95,7 +99,41 @@ struct LogHeadPageCacheEntry {
     page: LogPage,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogFileFollowCacheKey {
+    head_oid: Option<gix::ObjectId>,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct LogFileFollowCacheEntry {
+    key: LogFileFollowCacheKey,
+    commits: Arc<Vec<Commit>>,
+}
+
+type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, fn(&gix::oid) -> bool>;
+
+struct LogPagedWalkState {
+    pending: Option<gix::traverse::commit::Info>,
+    walk: LogPagedWalk,
+}
+
+struct LogPagedWalkCacheEntry {
+    token: Arc<str>,
+    mode: HistoryMode,
+    head_oid: gix::ObjectId,
+    state: LogPagedWalkState,
+}
+
+#[derive(Default)]
+struct LogPagedWalkCache {
+    next_id: u64,
+    entries: Vec<LogPagedWalkCacheEntry>,
+}
+
 const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
+const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
 
 pub(crate) struct GixRepo {
     spec: RepoSpec,
@@ -104,6 +142,8 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
+    log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
 }
 
 impl GixRepo {
@@ -115,6 +155,8 @@ impl GixRepo {
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
             log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
+            log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
         }
     }
 
@@ -141,14 +183,55 @@ impl GitRepository for GixRepo {
         &self.spec
     }
 
+    fn log_history_mode_page(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_impl(mode, limit, cursor)
+    }
+
+    fn log_history_mode_page_cancellable(
+        &self,
+        mode: HistoryMode,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_cancellable_impl(mode, limit, cursor, cancellation)
+    }
+
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_head_page_impl(limit, cursor)
     }
 
+    fn log_head_page_cancellable(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_head_page_cancellable_impl(limit, cursor, cancellation)
+    }
+
     fn log_all_branches_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_all_branches_page_impl(limit, cursor)
+    }
+
+    fn log_all_branches_page_cancellable(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_all_branches_page_cancellable_impl(limit, cursor, cancellation)
     }
 
     fn log_file_page(
@@ -165,6 +248,10 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
+        self.recent_commit_messages_impl(limit)
+    }
+
     fn reflog_head(&self, limit: usize) -> Result<Vec<ReflogEntry>> {
         self.reflog_head_impl(limit)
     }
@@ -173,9 +260,28 @@ impl GitRepository for GixRepo {
         self.current_branch_impl()
     }
 
+    fn current_branch_cancellable(&self, cancellation: &CancellationToken) -> Result<String> {
+        cancellation.check_cancelled()?;
+        let branch = self.current_branch_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(branch)
+    }
+
+    fn head_commit_id(&self) -> Result<Option<CommitId>> {
+        self.head_commit_id_impl()
+    }
+
     fn list_branches(&self) -> Result<Vec<Branch>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_branches_impl()
+    }
+
+    fn list_branches_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Branch>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        cancellation.check_cancelled()?;
+        let branches = self.list_branches_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(branches)
     }
 
     fn list_tags(&self) -> Result<Vec<Tag>> {
@@ -183,9 +289,22 @@ impl GitRepository for GixRepo {
         self.list_tags_impl()
     }
 
+    fn list_tags_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Tag>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.list_tags_cancellable_impl(cancellation)
+    }
+
     fn list_remote_tags(&self) -> Result<Vec<RemoteTag>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_tags_impl()
+    }
+
+    fn list_remote_tags_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteTag>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.list_remote_tags_cancellable_impl(cancellation)
     }
 
     fn list_remotes(&self) -> Result<Vec<Remote>> {
@@ -193,9 +312,25 @@ impl GitRepository for GixRepo {
         self.list_remotes_impl()
     }
 
+    fn list_remotes_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<Remote>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        cancellation.check_cancelled()?;
+        let remotes = self.list_remotes_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(remotes)
+    }
+
     fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
         self.list_remote_branches_impl()
+    }
+
+    fn list_remote_branches_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<RemoteBranch>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::RefEnumerate);
+        self.list_remote_branches_cancellable_impl(cancellation)
     }
 
     fn worktree_status(&self) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
@@ -203,9 +338,25 @@ impl GitRepository for GixRepo {
         self.worktree_status_impl()
     }
 
+    fn worktree_status_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.worktree_status_cancellable_impl(cancellation)
+    }
+
     fn staged_status(&self) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
         self.staged_status_impl()
+    }
+
+    fn staged_status_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<gitcomet_core::domain::FileStatus>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.staged_status_cancellable_impl(cancellation)
     }
 
     fn status(&self) -> Result<RepoStatus> {
@@ -213,8 +364,20 @@ impl GitRepository for GixRepo {
         self.status_impl()
     }
 
+    fn status_cancellable(&self, cancellation: &CancellationToken) -> Result<RepoStatus> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Status);
+        self.status_cancellable_impl(cancellation)
+    }
+
     fn upstream_divergence(&self) -> Result<Option<UpstreamDivergence>> {
         self.upstream_divergence_impl()
+    }
+
+    fn upstream_divergence_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<UpstreamDivergence>> {
+        self.upstream_divergence_cancellable_impl(cancellation)
     }
 
     fn pull_branch_with_output(&self, remote: &str, branch: &str) -> Result<CommandOutput> {
@@ -237,6 +400,15 @@ impl GitRepository for GixRepo {
     fn diff_parsed(&self, target: &DiffTarget) -> Result<Diff> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_parsed_impl(target)
+    }
+
+    fn diff_parsed_cancellable(
+        &self,
+        target: &DiffTarget,
+        cancellation: &CancellationToken,
+    ) -> Result<Diff> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
+        self.diff_parsed_cancellable_impl(target, cancellation)
     }
 
     fn diff_file_text(&self, target: &DiffTarget) -> Result<Option<FileDiffText>> {
@@ -303,6 +475,13 @@ impl GitRepository for GixRepo {
         self.stash_list_impl()
     }
 
+    fn stash_list_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {
+        cancellation.check_cancelled()?;
+        let stashes = self.stash_list_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(stashes)
+    }
+
     fn stash_apply(&self, index: usize) -> Result<()> {
         self.stash_apply_impl(index)
     }
@@ -323,8 +502,16 @@ impl GitRepository for GixRepo {
         self.commit_impl(message)
     }
 
+    fn commit_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_with_outcome_impl(message)
+    }
+
     fn commit_amend(&self, message: &str) -> Result<()> {
         self.commit_amend_impl(message)
+    }
+
+    fn commit_amend_with_outcome(&self, message: &str) -> Result<CommitOperationOutcome> {
+        self.commit_amend_with_outcome_impl(message)
     }
 
     fn fetch_all(&self) -> Result<()> {
@@ -363,6 +550,31 @@ impl GitRepository for GixRepo {
         self.push_force_with_output_impl()
     }
 
+    fn safe_push_after_commit(
+        &self,
+        context: &SafePushAfterCommitContext,
+    ) -> Result<SafePushAfterCommitDecision> {
+        self.safe_push_after_commit_impl(context)
+    }
+
+    fn push_after_commit_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_with_output_impl(target)
+    }
+
+    fn push_after_commit_set_upstream_with_output(
+        &self,
+        target: &SafePushAfterCommitTarget,
+    ) -> Result<CommandOutput> {
+        self.push_after_commit_set_upstream_with_output_impl(target)
+    }
+
+    fn push_force_with_lease_with_output(&self, lease: &ForcePushLease) -> Result<CommandOutput> {
+        self.push_force_with_lease_with_output_impl(lease)
+    }
+
     fn reset_with_output(&self, target: &str, mode: ResetMode) -> Result<CommandOutput> {
         self.reset_with_output_impl(target, mode)
     }
@@ -387,8 +599,25 @@ impl GitRepository for GixRepo {
         self.rebase_in_progress_impl()
     }
 
+    fn rebase_in_progress_cancellable(&self, cancellation: &CancellationToken) -> Result<bool> {
+        cancellation.check_cancelled()?;
+        let in_progress = self.rebase_in_progress_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(in_progress)
+    }
+
     fn merge_commit_message(&self) -> Result<Option<String>> {
         self.merge_commit_message_impl()
+    }
+
+    fn merge_commit_message_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<String>> {
+        cancellation.check_cancelled()?;
+        let message = self.merge_commit_message_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(message)
     }
 
     fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
@@ -509,6 +738,16 @@ impl GitRepository for GixRepo {
         self.list_worktrees_impl()
     }
 
+    fn list_worktrees_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Worktree>> {
+        cancellation.check_cancelled()?;
+        let worktrees = self.list_worktrees_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(worktrees)
+    }
+
     fn add_worktree_with_output(
         &self,
         path: &Path,
@@ -529,12 +768,27 @@ impl GitRepository for GixRepo {
         self.list_submodules_impl()
     }
 
+    fn list_submodules_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Submodule>> {
+        self.list_submodules_cancellable_impl(cancellation)
+    }
+
+    fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {
+        self.submodule_diff_summary_impl(target)
+    }
+
     fn check_submodule_add_trust(&self, url: &str, path: &Path) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_add_trust_impl(url, path)
     }
 
     fn check_submodule_update_trust(&self) -> Result<SubmoduleTrustDecision> {
         self.check_submodule_update_trust_impl()
+    }
+
+    fn check_submodule_load_trust(&self, path: &Path) -> Result<SubmoduleTrustDecision> {
+        self.check_submodule_load_trust_impl(path)
     }
 
     fn add_submodule_with_output(
@@ -554,6 +808,22 @@ impl GitRepository for GixRepo {
         approved_sources: &[SubmoduleTrustTarget],
     ) -> Result<CommandOutput> {
         self.update_submodules_with_output_impl(approved_sources)
+    }
+
+    fn load_submodule_with_output(
+        &self,
+        path: &Path,
+        approved_sources: &[SubmoduleTrustTarget],
+    ) -> Result<CommandOutput> {
+        self.load_submodule_with_output_impl(path, approved_sources)
+    }
+
+    fn change_submodule_pointer_with_output(
+        &self,
+        path: &Path,
+        reference: &str,
+    ) -> Result<CommandOutput> {
+        self.change_submodule_pointer_with_output_impl(path, reference)
     }
 
     fn remove_submodule_with_output(&self, path: &Path) -> Result<CommandOutput> {

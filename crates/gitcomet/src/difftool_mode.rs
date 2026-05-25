@@ -1,4 +1,5 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
+use crate::git_root::is_git_root_marker;
 use gitcomet_core::process::git_command;
 use rustc_hash::FxHashSet as HashSet;
 use std::fs;
@@ -287,7 +288,7 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
         start.parent()?
     };
     for candidate in start_dir.ancestors() {
-        if candidate.join(".git").exists() {
+        if is_git_root_marker(&candidate.join(".git")) {
             return Some(fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf()));
         }
     }
@@ -666,7 +667,7 @@ fn resolve_labels(config: &DifftoolConfig) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn write_file(path: &std::path::Path, content: &str) {
         std::fs::write(path, content).expect("write fixture file");
@@ -674,6 +675,12 @@ mod tests {
 
     fn write_bytes(path: &std::path::Path, content: &[u8]) {
         std::fs::write(path, content).expect("write fixture bytes");
+    }
+
+    fn create_git_root_marker(repo_root: &Path) {
+        let git_dir = repo_root.join(".git");
+        std::fs::create_dir_all(&git_dir).expect("create git dir marker");
+        write_file(&git_dir.join("HEAD"), "ref: refs/heads/main\n");
     }
 
     fn config(local: PathBuf, remote: PathBuf) -> DifftoolConfig {
@@ -956,7 +963,7 @@ mod tests {
         let left = repo_root.join("left");
         let right = repo_root.join("right");
         let shared = repo_root.join("shared");
-        std::fs::create_dir_all(repo_root.join(".git")).unwrap();
+        create_git_root_marker(&repo_root);
         std::fs::create_dir_all(&left).unwrap();
         std::fs::create_dir_all(&right).unwrap();
         std::fs::create_dir_all(&shared).unwrap();

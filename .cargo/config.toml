@@ -1,5 +1,8 @@
 [target.x86_64-pc-windows-msvc]
 linker = "scripts/windows/msvc-linker.cmd"
 
+[target.aarch64-pc-windows-msvc]
+linker = "scripts/windows/msvc-linker.cmd"
+
 [target.'cfg(target_arch = "x86_64")']
 rustflags = ["-Ctarget-cpu=x86-64-v3"]

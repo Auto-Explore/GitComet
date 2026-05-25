@@ -1,8 +1,23 @@
 use super::*;
+use crate::ui_scale;
 
-pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(10.0);
-pub(super) const TITLE_BAR_HEIGHT: Pixels = px(34.0);
-const MACOS_TRAFFIC_LIGHTS_SAFE_INSET: Pixels = px(78.0);
+pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
+pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 34.0;
+const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
+#[cfg(test)]
+pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
+
+pub(super) fn client_side_decoration_inset(ui_scale_percent: u32) -> Pixels {
+    ui_scale::design_px_from_percent(CLIENT_SIDE_DECORATION_INSET_PX, ui_scale_percent)
+}
+
+pub(super) fn title_bar_height(_ui_scale_percent: u32) -> Pixels {
+    px(TITLE_BAR_HEIGHT_PX)
+}
+
+fn macos_traffic_lights_safe_inset(_ui_scale_percent: u32) -> Pixels {
+    px(MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX)
+}
 
 pub(super) struct TitleBarView {
     theme: AppTheme,
@@ -123,12 +138,12 @@ pub(super) fn titlebar_control_button(
     hover_bg: gpui::Rgba,
     active_bg: gpui::Rgba,
 ) -> gpui::Div {
-    const TITLEBAR_CONTROL_HITBOX_WIDTH: Pixels = px(32.0);
-    const TITLEBAR_CONTROL_VISUAL_SIZE: Pixels = px(26.0);
+    let hitbox_width = px(32.0);
+    let visual_size = px(26.0);
 
     div()
         .h_full()
-        .w(TITLEBAR_CONTROL_HITBOX_WIDTH)
+        .w(hitbox_width)
         .flex()
         .items_center()
         .justify_center()
@@ -146,7 +161,7 @@ pub(super) fn titlebar_control_button(
                 .active(move |s| s.bg(active_bg))
                 .child(
                     div()
-                        .size(TITLEBAR_CONTROL_VISUAL_SIZE)
+                        .size(visual_size)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -169,11 +184,11 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
-fn window_frame_visual_inset() -> Pixels {
+fn window_frame_visual_inset(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "macos") {
         px(0.0)
     } else {
-        CLIENT_SIDE_DECORATION_INSET
+        client_side_decoration_inset(ui_scale_percent)
     }
 }
 
@@ -309,38 +324,12 @@ impl TitleBarView {
             root.open_popover_at(kind, anchor, window, cx);
         });
     }
-
-    fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        self.root_view
-            .update(cx, |root, cx| {
-                root.tooltip_host
-                    .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx))
-            })
-            .unwrap_or(false)
-    }
-
-    fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        let tooltip = tooltip.clone();
-        self.root_view
-            .update(cx, |root, cx| {
-                root.tooltip_host
-                    .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx))
-            })
-            .unwrap_or(false)
-    }
 }
 
 impl Render for TitleBarView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
         let is_macos = cfg!(target_os = "macos");
         let workspace_actions_enabled = self.workspace_actions_enabled;
         let app_menu_open = self.app_menu_open;
@@ -370,7 +359,7 @@ impl Render for TitleBarView {
             .id("app_menu")
             .debug_selector(|| "app_menu".to_string())
             .h_full()
-            .pl_1()
+            .pl(px(2.0))
             .flex()
             .items_center()
             .cursor(CursorStyle::PointingHand)
@@ -422,16 +411,17 @@ impl Render for TitleBarView {
                 .child(
                     div()
                         .h(px(26.0))
-                        .px_2()
+                        .px(px(8.0))
                         .flex()
                         .items_center()
-                        .gap_1()
+                        .gap(px(4.0))
                         .child(titlebar_app_icon(theme))
                         .child(
                             div()
                                 .flex()
                                 .items_center()
-                                .text_sm()
+                                .text_size(px(13.0))
+                                .line_height(px(16.0))
                                 .font_weight(FontWeight::BOLD)
                                 .text_color(theme.colors.text)
                                 .whitespace_nowrap()
@@ -454,7 +444,7 @@ impl Render for TitleBarView {
             .flex()
             .items_center()
             .min_w(px(0.0))
-            .px_2()
+            .px(px(8.0))
             .window_control_area(WindowControlArea::Drag)
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
@@ -496,7 +486,7 @@ impl Render for TitleBarView {
             )
             .on_mouse_move(cx.listener(|this, _e, window, _cx| {
                 if this.title_drag_state.take_move_request() {
-                    window.start_window_move();
+                    crate::app::begin_window_move(window);
                 }
             }));
 
@@ -513,19 +503,10 @@ impl Render for TitleBarView {
         .id("win_min")
         .debug_selector(|| "titlebar_win_min".to_string())
         .window_control_area(WindowControlArea::Min)
+        .gitcomet_tooltip(theme, min_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             window.minimize_window();
-        }))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let changed = if *hovering {
-                this.set_tooltip_text_if_changed(Some(min_tooltip.clone()), cx)
-            } else {
-                this.clear_tooltip_if_matches(&min_tooltip, cx)
-            };
-            if changed {
-                cx.notify();
-            }
         }));
 
         let max_icon = if window.is_maximized() {
@@ -550,20 +531,11 @@ impl Render for TitleBarView {
         .id("win_max")
         .debug_selector(|| "titlebar_win_max".to_string())
         .window_control_area(WindowControlArea::Max)
+        .gitcomet_tooltip(theme, max_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             crate::app::toggle_window_zoom(window);
             cx.notify();
-        }))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let changed = if *hovering {
-                this.set_tooltip_text_if_changed(Some(max_tooltip.clone()), cx)
-            } else {
-                this.clear_tooltip_if_matches(&max_tooltip, cx)
-            };
-            if changed {
-                cx.notify();
-            }
         }));
 
         let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
@@ -579,19 +551,10 @@ impl Render for TitleBarView {
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
         .window_control_area(WindowControlArea::Close)
+        .gitcomet_tooltip(theme, close_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
             window.remove_window();
-        }))
-        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-            let changed = if *hovering {
-                this.set_tooltip_text_if_changed(Some(close_tooltip.clone()), cx)
-            } else {
-                this.clear_tooltip_if_matches(&close_tooltip, cx)
-            };
-            if changed {
-                cx.notify();
-            }
         }));
 
         let free_badge_bg = with_alpha(
@@ -604,39 +567,67 @@ impl Render for TitleBarView {
         );
         let free_badge_text =
             with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 });
+        let free_badge_hover_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
+        let free_badge_hover_border =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.42 } else { 0.34 });
+        let free_badge_active_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.20 });
+        let free_badge_active_border =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.58 } else { 0.46 });
+        let free_badge_tooltip: SharedString = "See GitComet editions".into();
         let free_badge = div()
             .id("free_badge")
+            .debug_selector(|| "titlebar_free_badge".to_string())
             .h(px(18.0))
             .px(px(6.0))
             .flex()
             .items_center()
             .justify_center()
             .rounded(px(2.0))
+            .cursor(CursorStyle::PointingHand)
             .bg(free_badge_bg)
             .border_1()
             .border_color(free_badge_border)
-            .text_xs()
+            .text_size(px(11.0))
+            .line_height(px(12.0))
             .font_weight(FontWeight::NORMAL)
             .text_color(free_badge_text)
+            .hover(move |s| {
+                s.bg(free_badge_hover_bg)
+                    .border_color(free_badge_hover_border)
+                    .text_color(theme.colors.accent)
+            })
+            .active(move |s| {
+                s.bg(free_badge_active_bg)
+                    .border_color(free_badge_active_border)
+                    .text_color(theme.colors.accent)
+            })
+            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                cx.open_url(EDITIONS_URL);
+            }))
+            .gitcomet_tooltip(theme, free_badge_tooltip.clone())
             .child("FREE");
 
         let macos_brand = div()
             .id("title_bar_macos_brand")
             .h_full()
-            .pl_2()
+            .pl(px(8.0))
             .flex()
             .items_center()
             .child(
                 div()
                     .h(px(26.0))
-                    .px_2()
+                    .px(px(8.0))
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(4.0))
                     .child(titlebar_app_icon(theme))
                     .child(
                         div()
-                            .text_sm()
+                            .text_size(px(13.0))
+                            .line_height(px(16.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(theme.colors.text)
                             .whitespace_nowrap()
@@ -648,8 +639,10 @@ impl Render for TitleBarView {
             .flex()
             .items_center()
             .h_full()
-            .gap_0p5()
-            .when(is_macos, |d| d.pl(MACOS_TRAFFIC_LIGHTS_SAFE_INSET))
+            .gap(px(2.0))
+            .when(is_macos, |d| {
+                d.pl(macos_traffic_lights_safe_inset(ui_scale_percent))
+            })
             .when(is_macos, |d| d.child(macos_brand))
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle).child(windows_brand())
@@ -662,7 +655,7 @@ impl Render for TitleBarView {
             .id("title_bar")
             .flex()
             .items_center()
-            .h(TITLE_BAR_HEIGHT)
+            .h(title_bar_height(ui_scale_percent))
             .w_full()
             .bg(bar_bg)
             .border_b_1()
@@ -673,10 +666,10 @@ impl Render for TitleBarView {
                 div()
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(px(4.0))
                     .child(free_badge)
                     .when(!is_macos, |d| d.child(min).child(max).child(close))
-                    .pr_2(),
+                    .pr(px(8.0)),
             )
             .into_any_element()
     }
@@ -686,9 +679,10 @@ pub(crate) fn window_frame(
     theme: AppTheme,
     decorations: Decorations,
     content: AnyElement,
+    ui_scale_percent: u32,
 ) -> AnyElement {
     let suppress_frame = should_suppress_window_frame(decorations);
-    let frame_inset = window_frame_visual_inset();
+    let frame_inset = window_frame_visual_inset(ui_scale_percent);
     let mut outer = div()
         .id("window_frame")
         .size_full()
@@ -758,9 +752,15 @@ mod tests {
     #[test]
     fn window_frame_visual_inset_matches_platform_chrome_strategy() {
         #[cfg(target_os = "macos")]
-        assert_eq!(window_frame_visual_inset(), px(0.0));
+        assert_eq!(
+            window_frame_visual_inset(ui_scale::DEFAULT_UI_SCALE_PERCENT),
+            px(0.0)
+        );
         #[cfg(not(target_os = "macos"))]
-        assert_eq!(window_frame_visual_inset(), CLIENT_SIDE_DECORATION_INSET);
+        assert_eq!(
+            window_frame_visual_inset(ui_scale::DEFAULT_UI_SCALE_PERCENT),
+            CLIENT_SIDE_DECORATION_INSET
+        );
     }
 
     #[test]

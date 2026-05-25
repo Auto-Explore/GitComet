@@ -180,11 +180,13 @@ impl GitCometView {
         }
         self.sync_title_bar_workspace_actions(cx);
         self.drive_focused_mergetool_bootstrap();
+        self.drive_submodule_diff_bootstrap();
 
         crate::app::sync_gitcomet_window_state(
             cx,
             self.window_handle,
             cx.weak_entity(),
+            self.main_pane.downgrade(),
             self.view_mode,
             self.state
                 .repos

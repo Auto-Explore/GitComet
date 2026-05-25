@@ -8,11 +8,15 @@ use gitcomet_core::domain::DiffRowProvider;
 mod file_diff;
 mod image_cache;
 mod patch_diff;
+mod word_highlight;
 
+#[cfg(any(test, feature = "benchmarks"))]
+#[allow(unused_imports)]
+pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
+use self::file_diff::file_diff_text_signature;
 pub(in crate::view) use self::file_diff::{
-    PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild,
+    PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
-use self::file_diff::{build_inline_text, file_diff_text_signature};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
@@ -27,10 +31,136 @@ pub(in crate::view) use self::patch_diff::{
 const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
 const FILE_DIFF_PAGE_SIZE: usize = 256;
 const FILE_DIFF_MAX_CACHED_PAGES: usize = 64;
+const COLLAPSED_DIFF_REVEAL_STEP: usize = 20;
 
 // Full-document views (file diff, worktree preview) always attempt prepared
 // syntax and fall back to plain/heuristic rendering until it is ready.
 const FULL_DOCUMENT_SYNTAX_MODE: rows::DiffSyntaxMode = rows::DiffSyntaxMode::Auto;
+
+fn patch_diff_content_signature(diff: &gitcomet_core::domain::Diff) -> u64 {
+    use std::hash::Hasher;
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    hasher.write_usize(diff.lines.len());
+    for line in diff.lines.iter() {
+        let kind = match line.kind {
+            gitcomet_core::domain::DiffLineKind::Header => 0,
+            gitcomet_core::domain::DiffLineKind::Hunk => 1,
+            gitcomet_core::domain::DiffLineKind::Add => 2,
+            gitcomet_core::domain::DiffLineKind::Remove => 3,
+            gitcomet_core::domain::DiffLineKind::Context => 4,
+        };
+        hasher.write_u8(kind);
+        hasher.write_usize(line.text.len());
+        hasher.write(line.text.as_ref().as_bytes());
+    }
+    hasher.finish()
+}
+
+fn append_non_whitespace(text: &str, out: &mut String) {
+    out.extend(text.chars().filter(|ch| !ch.is_whitespace()));
+}
+
+fn diff_line_content_text(line: &gitcomet_core::domain::DiffLine) -> &str {
+    match line.kind {
+        gitcomet_core::domain::DiffLineKind::Add => {
+            line.text.strip_prefix('+').unwrap_or(&line.text)
+        }
+        gitcomet_core::domain::DiffLineKind::Remove => {
+            line.text.strip_prefix('-').unwrap_or(&line.text)
+        }
+        gitcomet_core::domain::DiffLineKind::Context => {
+            line.text.strip_prefix(' ').unwrap_or(&line.text)
+        }
+        gitcomet_core::domain::DiffLineKind::Header | gitcomet_core::domain::DiffLineKind::Hunk => {
+            &line.text
+        }
+    }
+}
+
+fn is_unified_no_newline_marker(text: &str) -> bool {
+    text.starts_with("\\ No newline")
+}
+
+fn is_patch_diff_whitespace_group_line(line: &gitcomet_core::domain::DiffLine) -> bool {
+    matches!(
+        line.kind,
+        gitcomet_core::domain::DiffLineKind::Remove | gitcomet_core::domain::DiffLineKind::Add
+    ) || is_unified_no_newline_marker(&line.text)
+}
+
+fn visual_line_kinds_for_patch_diff(
+    diff: &gitcomet_core::domain::Diff,
+    mode: DiffWhitespaceMode,
+) -> Vec<gitcomet_core::domain::DiffLineKind> {
+    use gitcomet_core::domain::DiffLineKind as DK;
+
+    let mut visual = diff.lines.iter().map(|line| line.kind).collect::<Vec<_>>();
+    if mode == DiffWhitespaceMode::Show {
+        return visual;
+    }
+
+    let mut ix = 0usize;
+    while ix < diff.lines.len() {
+        if !matches!(diff.lines[ix].kind, DK::Remove | DK::Add) {
+            ix += 1;
+            continue;
+        }
+
+        let group_start = ix;
+        let mut old_stripped = String::new();
+        let mut new_stripped = String::new();
+        while ix < diff.lines.len() && is_patch_diff_whitespace_group_line(&diff.lines[ix]) {
+            let line = &diff.lines[ix];
+            match line.kind {
+                DK::Remove => {
+                    append_non_whitespace(diff_line_content_text(line), &mut old_stripped)
+                }
+                DK::Add => append_non_whitespace(diff_line_content_text(line), &mut new_stripped),
+                DK::Context | DK::Header | DK::Hunk => {}
+            }
+            ix += 1;
+        }
+
+        if old_stripped == new_stripped {
+            for kind in &mut visual[group_start..ix] {
+                *kind = DK::Context;
+            }
+        }
+    }
+
+    visual
+}
+
+fn file_diff_text_is_source_backed(file: &gitcomet_core::domain::FileDiffText) -> bool {
+    file.old_source.is_some() || file.new_source.is_some()
+}
+
+fn file_diff_markdown_source_len(
+    source: Option<&gitcomet_core::domain::FileDiffTextSource>,
+    legacy_text: Option<&Arc<str>>,
+) -> usize {
+    if let Some(text) = legacy_text {
+        return text.len();
+    }
+    source
+        .and_then(|source| std::fs::metadata(&source.path).ok())
+        .and_then(|metadata| usize::try_from(metadata.len()).ok())
+        .unwrap_or(0)
+}
+
+fn read_file_diff_markdown_source(
+    source: Option<&gitcomet_core::domain::FileDiffTextSource>,
+    legacy_text: Option<&Arc<str>>,
+) -> std::result::Result<String, String> {
+    if let Some(text) = legacy_text {
+        return Ok(text.to_string());
+    }
+    let Some(source) = source else {
+        return Ok(String::new());
+    };
+    std::fs::read_to_string(&source.path).map_err(|err| err.to_string())
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct FileDiffPreparedSyntaxApplyResult {
@@ -139,6 +269,28 @@ impl MainPaneView {
         }
     }
 
+    pub(in crate::view) fn file_diff_split_render_data(
+        &self,
+        row_ix: usize,
+    ) -> Option<FileDiffRow> {
+        if let Some(provider) = self.file_diff_row_provider.as_ref() {
+            provider.render_data(row_ix)
+        } else {
+            self.file_diff_cache_rows.get(row_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn file_diff_split_visual_kind(
+        &self,
+        row_ix: usize,
+    ) -> gitcomet_core::file_diff::FileDiffRowKind {
+        self.file_diff_row_provider
+            .as_ref()
+            .and_then(|provider| provider.visual_kind(row_ix))
+            .or_else(|| self.file_diff_cache_rows.get(row_ix).map(|row| row.kind))
+            .unwrap_or(gitcomet_core::file_diff::FileDiffRowKind::Context)
+    }
+
     pub(in crate::view) fn file_diff_inline_row_len(&self) -> usize {
         self.file_diff_inline_row_provider
             .as_ref()
@@ -174,10 +326,28 @@ impl MainPaneView {
         }
     }
 
+    pub(in crate::view) fn file_diff_inline_visual_kind(
+        &self,
+        inline_ix: usize,
+    ) -> gitcomet_core::domain::DiffLineKind {
+        self.file_diff_inline_row_provider
+            .as_ref()
+            .and_then(|provider| provider.visual_kind(inline_ix))
+            .or_else(|| {
+                self.file_diff_inline_cache
+                    .get(inline_ix)
+                    .map(|row| row.kind)
+            })
+            .unwrap_or(gitcomet_core::domain::DiffLineKind::Context)
+    }
+
     pub(in crate::view) fn file_diff_split_modify_pair_texts(
         &self,
         row_ix: usize,
-    ) -> Option<(&str, &str)> {
+    ) -> Option<(
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::file_diff::FileDiffLineText,
+    )> {
         self.file_diff_row_provider
             .as_ref()
             .and_then(|provider| provider.modify_pair_texts(row_ix))
@@ -186,21 +356,14 @@ impl MainPaneView {
     pub(in crate::view) fn file_diff_inline_modify_pair_texts(
         &self,
         inline_ix: usize,
-    ) -> Option<(&str, &str, gitcomet_core::domain::DiffLineKind)> {
+    ) -> Option<(
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::file_diff::FileDiffLineText,
+        gitcomet_core::domain::DiffLineKind,
+    )> {
         self.file_diff_inline_row_provider
             .as_ref()
             .and_then(|provider| provider.modify_pair_texts(inline_ix))
-    }
-
-    pub(in crate::view) fn ensure_file_diff_inline_text_materialized(&mut self) {
-        if !self.file_diff_inline_text.is_empty() || self.file_diff_inline_row_len() == 0 {
-            return;
-        }
-        if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
-            self.file_diff_inline_text = provider.build_full_text();
-        } else {
-            self.file_diff_inline_text = build_inline_text(self.file_diff_inline_cache.as_slice());
-        }
     }
 
     pub(in crate::view) fn patch_diff_row_len(&self) -> usize {
@@ -215,6 +378,73 @@ impl MainPaneView {
             provider.row(src_ix)
         } else {
             self.diff_cache.get(src_ix).cloned()
+        }
+    }
+
+    pub(in crate::view) fn patch_visual_line_kind(
+        &self,
+        src_ix: usize,
+    ) -> gitcomet_core::domain::DiffLineKind {
+        self.diff_visual_line_kind_for_src_ix
+            .get(src_ix)
+            .copied()
+            .or_else(|| self.diff_line_kind_for_src_ix.get(src_ix).copied())
+            .or_else(|| self.patch_diff_row(src_ix).map(|line| line.kind))
+            .unwrap_or(gitcomet_core::domain::DiffLineKind::Context)
+    }
+
+    pub(in crate::view) fn patch_split_visual_row_kind(
+        &self,
+        row: &PatchSplitRow,
+    ) -> gitcomet_core::file_diff::FileDiffRowKind {
+        use gitcomet_core::domain::DiffLineKind as DK;
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let PatchSplitRow::Aligned {
+            row,
+            old_src_ix,
+            new_src_ix,
+        } = row
+        else {
+            return RK::Context;
+        };
+
+        let old_changed = old_src_ix
+            .is_some_and(|src_ix| matches!(self.patch_visual_line_kind(src_ix), DK::Remove));
+        let new_changed =
+            new_src_ix.is_some_and(|src_ix| matches!(self.patch_visual_line_kind(src_ix), DK::Add));
+
+        match (old_changed, new_changed) {
+            (true, true) => RK::Modify,
+            (true, false) => RK::Remove,
+            (false, true) => RK::Add,
+            (false, false) => {
+                if matches!(row.kind, RK::Add | RK::Remove | RK::Modify) {
+                    RK::Context
+                } else {
+                    row.kind
+                }
+            }
+        }
+    }
+
+    fn rebuild_patch_visual_line_kinds_from_ready_diff(
+        &mut self,
+        diff: &gitcomet_core::domain::Diff,
+    ) {
+        self.diff_visual_line_kind_for_src_ix =
+            visual_line_kinds_for_patch_diff(diff, self.diff_whitespace_mode);
+    }
+
+    pub(in crate::view) fn rebuild_patch_visual_line_kinds_from_current_diff(&mut self) {
+        let ready_diff = match self.rendered_patch_diff_loadable() {
+            Some(Loadable::Ready(diff)) => Some(Arc::clone(diff)),
+            _ => None,
+        };
+        if let Some(diff) = ready_diff {
+            self.rebuild_patch_visual_line_kinds_from_ready_diff(diff.as_ref());
+        } else {
+            self.diff_visual_line_kind_for_src_ix = self.diff_line_kind_for_src_ix.clone();
         }
     }
 
@@ -253,6 +483,7 @@ impl MainPaneView {
     fn patch_split_visible_meta_from_source(&self) -> PatchSplitVisibleMeta {
         build_patch_split_visible_meta_from_src(
             self.diff_line_kind_for_src_ix.as_slice(),
+            self.diff_visual_line_kind_for_src_ix.as_slice(),
             self.diff_click_kinds.as_slice(),
             self.diff_hide_unified_header_for_src_ix.as_slice(),
         )
@@ -277,10 +508,10 @@ impl MainPaneView {
             return;
         }
 
-        let Some(line) = self.patch_diff_row(src_ix) else {
+        if self.patch_diff_row(src_ix).is_none() {
             return;
-        };
-        if !matches!(line.kind, DK::Add | DK::Remove) {
+        }
+        if !matches!(self.patch_visual_line_kind(src_ix), DK::Add | DK::Remove) {
             return;
         }
 
@@ -327,17 +558,18 @@ impl MainPaneView {
             let (new_ix, new_line) = &added[i];
             let (old_ranges, new_ranges) =
                 capped_word_diff_ranges(diff_content_text(old_line), diff_content_text(new_line));
-            if !old_ranges.is_empty() {
+            if matches!(self.patch_visual_line_kind(*old_ix), DK::Remove) && !old_ranges.is_empty()
+            {
                 self.diff_word_highlights[*old_ix] = Some(old_ranges);
             }
-            if !new_ranges.is_empty() {
+            if matches!(self.patch_visual_line_kind(*new_ix), DK::Add) && !new_ranges.is_empty() {
                 self.diff_word_highlights[*new_ix] = Some(new_ranges);
             }
         }
 
         for (old_ix, old_line) in removed.into_iter().skip(pairs) {
             let text = diff_content_text(&old_line);
-            if !text.is_empty() {
+            if matches!(self.patch_visual_line_kind(old_ix), DK::Remove) && !text.is_empty() {
                 self.diff_word_highlights[old_ix] = Some(vec![Range {
                     start: 0,
                     end: text.len(),
@@ -346,13 +578,776 @@ impl MainPaneView {
         }
         for (new_ix, new_line) in added.into_iter().skip(pairs) {
             let text = diff_content_text(&new_line);
-            if !text.is_empty() {
+            if matches!(self.patch_visual_line_kind(new_ix), DK::Add) && !text.is_empty() {
                 self.diff_word_highlights[new_ix] = Some(vec![Range {
                     start: 0,
                     end: text.len(),
                 }]);
             }
         }
+    }
+
+    fn current_file_diff_line_to_row_maps(&self) -> (&[Option<usize>], &[Option<usize>], usize) {
+        match self.diff_view {
+            DiffViewMode::Inline => (
+                self.file_diff_old_line_to_inline_row.as_ref(),
+                self.file_diff_new_line_to_inline_row.as_ref(),
+                self.file_diff_inline_row_len(),
+            ),
+            DiffViewMode::Split => (
+                self.file_diff_old_line_to_row.as_ref(),
+                self.file_diff_new_line_to_row.as_ref(),
+                self.file_diff_split_row_len(),
+            ),
+        }
+    }
+
+    fn collapsed_hunk_row_range_for_parsed(
+        &self,
+        parsed: &crate::view::diff_utils::ParsedHunkHeader,
+    ) -> Option<(usize, usize)> {
+        let (old_line_to_row, new_line_to_row, _row_count) =
+            self.current_file_diff_line_to_row_maps();
+
+        let map_range_start = |line_to_row: &[Option<usize>], start_line: u32, line_count: u32| {
+            (line_count > 0)
+                .then_some(start_line)
+                .filter(|line| *line > 0)
+                .and_then(|line| usize::try_from(line.saturating_sub(1)).ok())
+                .and_then(|line_ix| line_to_row.get(line_ix).copied().flatten())
+        };
+        let map_range_end = |line_to_row: &[Option<usize>], start_line: u32, line_count: u32| {
+            (line_count > 0)
+                .then_some(start_line.saturating_add(line_count).saturating_sub(1))
+                .filter(|line| *line > 0)
+                .and_then(|line| usize::try_from(line.saturating_sub(1)).ok())
+                .and_then(|line_ix| line_to_row.get(line_ix).copied().flatten())
+                .map(|row_ix| row_ix.saturating_add(1))
+        };
+
+        let start = [
+            map_range_start(
+                old_line_to_row,
+                parsed.old_start_line,
+                parsed.old_line_count,
+            ),
+            map_range_start(
+                new_line_to_row,
+                parsed.new_start_line,
+                parsed.new_line_count,
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .min()?;
+
+        let end = [
+            map_range_end(
+                old_line_to_row,
+                parsed.old_start_line,
+                parsed.old_line_count,
+            ),
+            map_range_end(
+                new_line_to_row,
+                parsed.new_start_line,
+                parsed.new_line_count,
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .max()?;
+
+        (start < end).then_some((start, end))
+    }
+
+    pub(in crate::view) fn collapsed_hunk_change_summary(&self, src_ix: usize) -> (bool, bool) {
+        let mut has_additions = false;
+        let mut has_removals = false;
+
+        for candidate_ix in src_ix.saturating_add(1)..self.patch_diff_row_len() {
+            let click_kind = self
+                .diff_click_kinds
+                .get(candidate_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+            if click_kind != DiffClickKind::Line {
+                break;
+            }
+
+            match self.patch_visual_line_kind(candidate_ix) {
+                gitcomet_core::domain::DiffLineKind::Add => has_additions = true,
+                gitcomet_core::domain::DiffLineKind::Remove => has_removals = true,
+                gitcomet_core::domain::DiffLineKind::Context
+                | gitcomet_core::domain::DiffLineKind::Header
+                | gitcomet_core::domain::DiffLineKind::Hunk => {}
+            }
+
+            if has_additions && has_removals {
+                break;
+            }
+        }
+
+        (has_additions, has_removals)
+    }
+
+    fn reindex_collapsed_diff_hunks(&mut self) {
+        self.collapsed_diff_hunk_ix_by_src_ix.clear();
+        for (hunk_ix, hunk) in self.collapsed_diff_hunks.iter().enumerate() {
+            let previous = self
+                .collapsed_diff_hunk_ix_by_src_ix
+                .insert(hunk.src_ix, hunk_ix);
+            debug_assert!(previous.is_none());
+        }
+    }
+
+    fn ensure_collapsed_diff_hunk_index(&mut self) {
+        if self.collapsed_diff_hunk_ix_by_src_ix.len() != self.collapsed_diff_hunks.len() {
+            self.reindex_collapsed_diff_hunks();
+        }
+    }
+
+    fn ensure_collapsed_diff_hunks_initialized(&mut self) {
+        if !self.collapsed_diff_hunks.is_empty() {
+            self.ensure_collapsed_diff_hunk_index();
+            return;
+        }
+
+        for src_ix in 0..self.patch_diff_row_len() {
+            let click_kind = self
+                .diff_click_kinds
+                .get(src_ix)
+                .copied()
+                .unwrap_or(DiffClickKind::Line);
+            if click_kind != DiffClickKind::HunkHeader {
+                continue;
+            }
+
+            let Some(line) = self.patch_diff_row(src_ix) else {
+                continue;
+            };
+            let Some(parsed) =
+                crate::view::diff_utils::parse_unified_hunk_header_for_display(line.text.as_ref())
+            else {
+                continue;
+            };
+            let Some((base_row_start, base_row_end_exclusive)) =
+                self.collapsed_hunk_row_range_for_parsed(&parsed)
+            else {
+                continue;
+            };
+            let (has_additions, has_removals) = self.collapsed_hunk_change_summary(src_ix);
+            let reveal = self
+                .collapsed_diff_reveals
+                .get(&src_ix)
+                .copied()
+                .unwrap_or_default();
+            self.collapsed_diff_hunks.push(CollapsedDiffHunk {
+                src_ix,
+                base_row_start,
+                base_row_end_exclusive,
+                has_additions,
+                has_removals,
+                reveal_up_lines: reveal.up_lines,
+                reveal_down_lines: reveal.down_lines,
+            });
+        }
+        self.reindex_collapsed_diff_hunks();
+    }
+
+    fn persist_collapsed_diff_hunk_reveal(&mut self, hunk_ix: usize) {
+        let Some(hunk) = self.collapsed_diff_hunks.get(hunk_ix).copied() else {
+            return;
+        };
+        let reveal = CollapsedDiffReveal {
+            up_lines: hunk.reveal_up_lines,
+            down_lines: hunk.reveal_down_lines,
+        };
+        if reveal == CollapsedDiffReveal::default() {
+            self.collapsed_diff_reveals.remove(&hunk.src_ix);
+        } else {
+            self.collapsed_diff_reveals.insert(hunk.src_ix, reveal);
+        }
+    }
+
+    fn collapsed_diff_expansion_kind(
+        &self,
+        hunk_ix: usize,
+    ) -> crate::view::panes::main::CollapsedDiffExpansionKind {
+        use crate::view::panes::main::CollapsedDiffExpansionKind;
+
+        let Some(hunk) = self.collapsed_diff_hunks.get(hunk_ix).copied() else {
+            return CollapsedDiffExpansionKind::None;
+        };
+
+        let hidden_up = self.collapsed_diff_hidden_up_rows(hunk.src_ix);
+        if hunk_ix == 0 {
+            if hidden_up > 0 {
+                CollapsedDiffExpansionKind::Up
+            } else {
+                CollapsedDiffExpansionKind::None
+            }
+        } else if hidden_up == 0 {
+            CollapsedDiffExpansionKind::None
+        } else if hidden_up <= COLLAPSED_DIFF_REVEAL_STEP {
+            CollapsedDiffExpansionKind::Short
+        } else {
+            CollapsedDiffExpansionKind::Both
+        }
+    }
+
+    fn collapsed_diff_hidden_rows_for_expansion_kind(
+        &self,
+        src_ix: usize,
+        expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind,
+    ) -> usize {
+        match expansion_kind {
+            crate::view::panes::main::CollapsedDiffExpansionKind::Down => {
+                self.collapsed_diff_hidden_down_rows(src_ix)
+            }
+            crate::view::panes::main::CollapsedDiffExpansionKind::Up
+            | crate::view::panes::main::CollapsedDiffExpansionKind::Both
+            | crate::view::panes::main::CollapsedDiffExpansionKind::Short => {
+                self.collapsed_diff_hidden_up_rows(src_ix)
+            }
+            crate::view::panes::main::CollapsedDiffExpansionKind::None => 0,
+        }
+    }
+
+    fn merge_collapsed_diff_hunks_up(&mut self, hunk_ix: usize) {
+        if hunk_ix == 0 || hunk_ix >= self.collapsed_diff_hunks.len() {
+            return;
+        }
+
+        let previous = self.collapsed_diff_hunks[hunk_ix - 1];
+        let current = self.collapsed_diff_hunks[hunk_ix];
+        self.collapsed_diff_hunks[hunk_ix - 1] = CollapsedDiffHunk {
+            src_ix: previous.src_ix,
+            base_row_start: previous.base_row_start,
+            base_row_end_exclusive: current.base_row_end_exclusive,
+            has_additions: previous.has_additions || current.has_additions,
+            has_removals: previous.has_removals || current.has_removals,
+            reveal_up_lines: previous.reveal_up_lines,
+            reveal_down_lines: current.reveal_down_lines,
+        };
+        self.collapsed_diff_hunks.remove(hunk_ix);
+        self.reindex_collapsed_diff_hunks();
+        self.collapsed_diff_header_display_cache.clear();
+    }
+
+    fn merge_collapsed_diff_hunks_down(&mut self, hunk_ix: usize) {
+        if hunk_ix + 1 >= self.collapsed_diff_hunks.len() {
+            return;
+        }
+
+        let current = self.collapsed_diff_hunks[hunk_ix];
+        let next = self.collapsed_diff_hunks[hunk_ix + 1];
+        self.collapsed_diff_hunks[hunk_ix] = CollapsedDiffHunk {
+            src_ix: current.src_ix,
+            base_row_start: current.base_row_start,
+            base_row_end_exclusive: next.base_row_end_exclusive,
+            has_additions: current.has_additions || next.has_additions,
+            has_removals: current.has_removals || next.has_removals,
+            reveal_up_lines: current.reveal_up_lines,
+            reveal_down_lines: next.reveal_down_lines,
+        };
+        self.collapsed_diff_hunks.remove(hunk_ix + 1);
+        self.reindex_collapsed_diff_hunks();
+        self.collapsed_diff_header_display_cache.clear();
+    }
+
+    fn collapsed_diff_gap_fully_revealed_after_rebuild(&self, hunk_ix: usize) -> bool {
+        let Some(current) = self.collapsed_diff_hunks.get(hunk_ix).copied() else {
+            return false;
+        };
+        let Some(next) = self.collapsed_diff_hunks.get(hunk_ix + 1).copied() else {
+            return false;
+        };
+
+        let gap_len = next
+            .base_row_start
+            .saturating_sub(current.base_row_end_exclusive);
+        if gap_len == 0 {
+            return false;
+        }
+
+        current
+            .reveal_down_lines
+            .min(gap_len)
+            .saturating_add(next.reveal_up_lines.min(gap_len))
+            >= gap_len
+    }
+
+    fn normalize_collapsed_diff_hunks_after_rebuild(&mut self) {
+        let mut hunk_ix = 0;
+        while hunk_ix + 1 < self.collapsed_diff_hunks.len() {
+            if self.collapsed_diff_gap_fully_revealed_after_rebuild(hunk_ix) {
+                self.merge_collapsed_diff_hunks_down(hunk_ix);
+            } else {
+                hunk_ix += 1;
+            }
+        }
+    }
+
+    fn rebuild_collapsed_diff_header_display_cache(&mut self) {
+        self.collapsed_diff_header_display_cache.clear();
+        let src_ixs = self
+            .collapsed_diff_hunks
+            .iter()
+            .map(|hunk| hunk.src_ix)
+            .collect::<Vec<_>>();
+        for src_ix in src_ixs {
+            if let Some(display) = self.collapsed_diff_dynamic_hunk_range_display(src_ix) {
+                self.collapsed_diff_header_display_cache
+                    .insert(src_ix, display);
+            }
+        }
+    }
+
+    fn rebuild_collapsed_diff_projection(&mut self) {
+        self.collapsed_diff_visible_rows.clear();
+        self.collapsed_diff_hunk_visible_indices.clear();
+        self.collapsed_diff_header_display_cache.clear();
+
+        if !self.is_collapsed_diff_projection_active() {
+            return;
+        }
+
+        let next_identity = self.current_collapsed_diff_projection_identity();
+        if self.collapsed_diff_projection_identity != next_identity {
+            self.collapsed_diff_hunks.clear();
+            self.collapsed_diff_hunk_ix_by_src_ix.clear();
+            self.collapsed_diff_reveals.clear();
+        }
+        self.collapsed_diff_projection_identity = next_identity;
+        if self.collapsed_diff_projection_identity.is_none() {
+            return;
+        }
+
+        let (_, _, total_rows) = self.current_file_diff_line_to_row_maps();
+        if total_rows == 0 {
+            return;
+        }
+
+        self.ensure_collapsed_diff_hunks_initialized();
+        self.normalize_collapsed_diff_hunks_after_rebuild();
+        self.reindex_collapsed_diff_hunks();
+
+        if self.collapsed_diff_hunks.is_empty() {
+            return;
+        }
+
+        for hunk_ix in 0..self.collapsed_diff_hunks.len() {
+            let hunk = self.collapsed_diff_hunks[hunk_ix];
+            let expansion_kind = self.collapsed_diff_expansion_kind(hunk_ix);
+            let has_expansion_header =
+                expansion_kind != crate::view::panes::main::CollapsedDiffExpansionKind::None;
+
+            let up_revealed_rows = if hunk_ix == 0 {
+                let leading_start = hunk
+                    .base_row_start
+                    .saturating_sub(hunk.reveal_up_lines.min(hunk.base_row_start));
+                leading_start..hunk.base_row_start
+            } else {
+                let previous = self.collapsed_diff_hunks[hunk_ix - 1];
+                let gap_start = previous.base_row_end_exclusive;
+                let gap_end = hunk.base_row_start.max(gap_start);
+                let gap_len = gap_end.saturating_sub(gap_start);
+                let top_end = gap_start.saturating_add(previous.reveal_down_lines.min(gap_len));
+                let bottom_start = gap_end.saturating_sub(hunk.reveal_up_lines.min(gap_len));
+
+                for row_ix in gap_start..top_end {
+                    self.collapsed_diff_visible_rows
+                        .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                }
+                bottom_start.max(top_end)..gap_end
+            };
+
+            if !has_expansion_header {
+                for row_ix in up_revealed_rows.clone() {
+                    self.collapsed_diff_visible_rows
+                        .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                }
+            }
+
+            self.collapsed_diff_hunk_visible_indices
+                .push(self.collapsed_diff_visible_rows.len());
+            if has_expansion_header {
+                let hidden_rows =
+                    self.collapsed_diff_hidden_rows_for_expansion_kind(hunk.src_ix, expansion_kind);
+                self.collapsed_diff_visible_rows
+                    .push(CollapsedDiffVisibleRow::HunkHeader {
+                        src_ix: hunk.src_ix,
+                        expansion_kind,
+                        display_src_ix: Some(hunk.src_ix),
+                        hidden_rows,
+                    });
+                for row_ix in up_revealed_rows {
+                    self.collapsed_diff_visible_rows
+                        .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+                }
+            }
+            for row_ix in hunk.base_row_start..hunk.base_row_end_exclusive {
+                self.collapsed_diff_visible_rows
+                    .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+            }
+        }
+
+        if let Some(last_hunk) = self.collapsed_diff_hunks.last().copied() {
+            let trailing_end = last_hunk
+                .base_row_end_exclusive
+                .saturating_add(
+                    last_hunk
+                        .reveal_down_lines
+                        .min(total_rows.saturating_sub(last_hunk.base_row_end_exclusive)),
+                )
+                .min(total_rows);
+            for row_ix in last_hunk.base_row_end_exclusive..trailing_end {
+                self.collapsed_diff_visible_rows
+                    .push(CollapsedDiffVisibleRow::FileRow { row_ix });
+            }
+
+            let hidden_rows = self.collapsed_diff_hidden_down_rows(last_hunk.src_ix);
+            if hidden_rows > 0 {
+                self.collapsed_diff_visible_rows
+                    .push(CollapsedDiffVisibleRow::HunkHeader {
+                        src_ix: last_hunk.src_ix,
+                        expansion_kind: crate::view::panes::main::CollapsedDiffExpansionKind::Down,
+                        display_src_ix: None,
+                        hidden_rows,
+                    });
+            }
+        }
+        self.rebuild_collapsed_diff_header_display_cache();
+    }
+
+    fn collapsed_diff_hunk_index_for_src_ix(&self, src_ix: usize) -> Option<usize> {
+        self.collapsed_diff_hunk_ix_by_src_ix.get(&src_ix).copied()
+    }
+
+    pub(in crate::view) fn collapsed_diff_hunk_for_src_ix(
+        &self,
+        src_ix: usize,
+    ) -> Option<CollapsedDiffHunk> {
+        self.collapsed_diff_hunk_index_for_src_ix(src_ix)
+            .and_then(|hunk_ix| self.collapsed_diff_hunks.get(hunk_ix).copied())
+    }
+
+    pub(in crate::view) fn collapsed_diff_hidden_up_rows(&self, src_ix: usize) -> usize {
+        let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
+            return 0;
+        };
+        let hunk = self.collapsed_diff_hunks[hunk_ix];
+        if hunk_ix == 0 {
+            return hunk
+                .base_row_start
+                .saturating_sub(hunk.reveal_up_lines.min(hunk.base_row_start));
+        }
+
+        let prev = self.collapsed_diff_hunks[hunk_ix - 1];
+        let gap_len = hunk
+            .base_row_start
+            .saturating_sub(prev.base_row_end_exclusive);
+        let visible = prev
+            .reveal_down_lines
+            .min(gap_len)
+            .saturating_add(hunk.reveal_up_lines.min(gap_len));
+        gap_len.saturating_sub(visible.min(gap_len))
+    }
+
+    pub(in crate::view) fn collapsed_diff_hidden_down_rows(&self, src_ix: usize) -> usize {
+        let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
+            return 0;
+        };
+        let hunk = self.collapsed_diff_hunks[hunk_ix];
+        let (_, _, total_rows) = self.current_file_diff_line_to_row_maps();
+        if hunk_ix + 1 >= self.collapsed_diff_hunks.len() {
+            return total_rows
+                .saturating_sub(hunk.base_row_end_exclusive)
+                .saturating_sub(
+                    hunk.reveal_down_lines
+                        .min(total_rows.saturating_sub(hunk.base_row_end_exclusive)),
+                );
+        }
+
+        let next = self.collapsed_diff_hunks[hunk_ix + 1];
+        let gap_len = next
+            .base_row_start
+            .saturating_sub(hunk.base_row_end_exclusive);
+        let visible = hunk
+            .reveal_down_lines
+            .min(gap_len)
+            .saturating_add(next.reveal_up_lines.min(gap_len));
+        gap_len.saturating_sub(visible.min(gap_len))
+    }
+
+    fn collapsed_diff_file_row_line_numbers(
+        &self,
+        row_ix: usize,
+    ) -> Option<(Option<u32>, Option<u32>)> {
+        match self.diff_view {
+            DiffViewMode::Inline => self
+                .file_diff_inline_render_data(row_ix)
+                .map(|row| (row.old_line, row.new_line)),
+            DiffViewMode::Split => self
+                .file_diff_split_row(row_ix)
+                .map(|row| (row.old_line, row.new_line)),
+        }
+    }
+
+    fn collapsed_diff_dynamic_hunk_range_display(&self, src_ix: usize) -> Option<SharedString> {
+        fn update_bounds(min: &mut Option<u32>, max: &mut Option<u32>, line: Option<u32>) {
+            let Some(line) = line else {
+                return;
+            };
+            *min = Some(min.map_or(line, |current| current.min(line)));
+            *max = Some(max.map_or(line, |current| current.max(line)));
+        }
+
+        fn format_range(
+            prefix: char,
+            fallback_start: u32,
+            min: Option<u32>,
+            max: Option<u32>,
+        ) -> String {
+            let (start, count) = match (min, max) {
+                (Some(min), Some(max)) if max >= min => (min, max.saturating_sub(min) + 1),
+                _ => (fallback_start, 0),
+            };
+            if count == 1 {
+                format!("{prefix}{start}")
+            } else {
+                format!("{prefix}{start},{count}")
+            }
+        }
+
+        let (_, _, total_rows) = self.current_file_diff_line_to_row_maps();
+        let hunk_ix = self.collapsed_diff_hunk_index_for_src_ix(src_ix)?;
+        let hunk = self.collapsed_diff_hunks[hunk_ix];
+        let has_revealed_above = if hunk_ix == 0 {
+            hunk.reveal_up_lines.min(hunk.base_row_start) > 0
+        } else {
+            let previous = self.collapsed_diff_hunks[hunk_ix - 1];
+            let gap_len = hunk
+                .base_row_start
+                .saturating_sub(previous.base_row_end_exclusive);
+            previous.reveal_down_lines.min(gap_len) > 0 || hunk.reveal_up_lines.min(gap_len) > 0
+        };
+        let has_revealed_below = if hunk_ix + 1 < self.collapsed_diff_hunks.len() {
+            let next = self.collapsed_diff_hunks[hunk_ix + 1];
+            let gap_len = next
+                .base_row_start
+                .saturating_sub(hunk.base_row_end_exclusive);
+            hunk.reveal_down_lines.min(gap_len) > 0
+        } else {
+            hunk.reveal_down_lines
+                .min(total_rows.saturating_sub(hunk.base_row_end_exclusive))
+                > 0
+        };
+        if !has_revealed_above && !has_revealed_below {
+            return None;
+        }
+
+        let parsed = self.patch_diff_row(src_ix).and_then(|line| {
+            crate::view::diff_utils::parse_unified_hunk_header_for_display(line.text.as_ref())
+        })?;
+        let mut old_min = None;
+        let mut old_max = None;
+        let mut new_min = None;
+        let mut new_max = None;
+        let mut has_revealed_context = false;
+
+        let mut visit_rows = |range: std::ops::Range<usize>,
+                              revealed_context: bool,
+                              this: &Self| {
+            if range.is_empty() {
+                return;
+            }
+            has_revealed_context |= revealed_context;
+            for row_ix in range {
+                let Some((old_line, new_line)) = this.collapsed_diff_file_row_line_numbers(row_ix)
+                else {
+                    continue;
+                };
+                update_bounds(&mut old_min, &mut old_max, old_line);
+                update_bounds(&mut new_min, &mut new_max, new_line);
+            }
+        };
+
+        if hunk_ix == 0 {
+            let leading_start = hunk
+                .base_row_start
+                .saturating_sub(hunk.reveal_up_lines.min(hunk.base_row_start));
+            visit_rows(leading_start..hunk.base_row_start, true, self);
+        } else {
+            let previous = self.collapsed_diff_hunks[hunk_ix - 1];
+            let gap_start = previous.base_row_end_exclusive;
+            let gap_end = hunk.base_row_start.max(gap_start);
+            let gap_len = gap_end.saturating_sub(gap_start);
+            let top_end = gap_start.saturating_add(previous.reveal_down_lines.min(gap_len));
+            let bottom_start = gap_end.saturating_sub(hunk.reveal_up_lines.min(gap_len));
+
+            visit_rows(gap_start..top_end, true, self);
+            visit_rows(bottom_start.max(top_end)..gap_end, true, self);
+        }
+
+        visit_rows(
+            hunk.base_row_start..hunk.base_row_end_exclusive,
+            false,
+            self,
+        );
+
+        let trailing_end = if hunk_ix + 1 < self.collapsed_diff_hunks.len() {
+            let next = self.collapsed_diff_hunks[hunk_ix + 1];
+            let gap_len = next
+                .base_row_start
+                .saturating_sub(hunk.base_row_end_exclusive);
+            hunk.base_row_end_exclusive
+                .saturating_add(hunk.reveal_down_lines.min(gap_len))
+        } else {
+            hunk.base_row_end_exclusive
+                .saturating_add(
+                    hunk.reveal_down_lines
+                        .min(total_rows.saturating_sub(hunk.base_row_end_exclusive)),
+                )
+                .min(total_rows)
+        };
+        visit_rows(hunk.base_row_end_exclusive..trailing_end, true, self);
+
+        has_revealed_context.then(|| {
+            format!(
+                "{} {}",
+                format_range('-', parsed.old_start_line, old_min, old_max),
+                format_range('+', parsed.new_start_line, new_min, new_max)
+            )
+            .into()
+        })
+    }
+
+    pub(in crate::view) fn collapsed_diff_hunk_header_display(
+        &self,
+        src_ix: usize,
+    ) -> Option<SharedString> {
+        self.collapsed_diff_header_display_cache
+            .get(&src_ix)
+            .cloned()
+            .or_else(|| self.diff_header_display_cache.get(&src_ix).cloned())
+            .or_else(|| {
+                self.patch_diff_row(src_ix)
+                    .map(|line| SharedString::from(line.text.as_ref().to_owned()))
+            })
+    }
+
+    pub(in crate::view) fn collapsed_diff_reveal_hunk_up(
+        &mut self,
+        src_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
+            return;
+        };
+        let delta = self
+            .collapsed_diff_hidden_up_rows(src_ix)
+            .min(COLLAPSED_DIFF_REVEAL_STEP);
+        if delta == 0 {
+            return;
+        }
+        self.collapsed_diff_hunks[hunk_ix].reveal_up_lines = self.collapsed_diff_hunks[hunk_ix]
+            .reveal_up_lines
+            .saturating_add(delta);
+        self.persist_collapsed_diff_hunk_reveal(hunk_ix);
+        if self.collapsed_diff_hidden_up_rows(src_ix) == 0 && hunk_ix > 0 {
+            self.merge_collapsed_diff_hunks_up(hunk_ix);
+        }
+        self.invalidate_collapsed_diff_visible_projection();
+        self.ensure_diff_visible_indices();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn collapsed_diff_reveal_hunk_down(
+        &mut self,
+        src_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
+            return;
+        };
+        let delta = self
+            .collapsed_diff_hidden_down_rows(src_ix)
+            .min(COLLAPSED_DIFF_REVEAL_STEP);
+        if delta == 0 {
+            return;
+        }
+        self.collapsed_diff_hunks[hunk_ix].reveal_down_lines = self.collapsed_diff_hunks[hunk_ix]
+            .reveal_down_lines
+            .saturating_add(delta);
+        self.persist_collapsed_diff_hunk_reveal(hunk_ix);
+        if hunk_ix + 1 < self.collapsed_diff_hunks.len()
+            && self.collapsed_diff_hidden_down_rows(src_ix) == 0
+        {
+            self.merge_collapsed_diff_hunks_down(hunk_ix);
+        }
+        self.invalidate_collapsed_diff_visible_projection();
+        self.ensure_diff_visible_indices();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn collapsed_diff_reveal_hunk_down_before(
+        &mut self,
+        src_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
+            return;
+        };
+        if hunk_ix == 0 {
+            return;
+        }
+        let previous_hunk_ix = hunk_ix - 1;
+        let previous_src_ix = self.collapsed_diff_hunks[previous_hunk_ix].src_ix;
+        let delta = self
+            .collapsed_diff_hidden_down_rows(previous_src_ix)
+            .min(COLLAPSED_DIFF_REVEAL_STEP);
+        if delta == 0 {
+            return;
+        }
+        self.collapsed_diff_hunks[previous_hunk_ix].reveal_down_lines = self.collapsed_diff_hunks
+            [previous_hunk_ix]
+            .reveal_down_lines
+            .saturating_add(delta);
+        self.persist_collapsed_diff_hunk_reveal(previous_hunk_ix);
+        if previous_hunk_ix + 1 < self.collapsed_diff_hunks.len()
+            && self.collapsed_diff_hidden_down_rows(previous_src_ix) == 0
+        {
+            self.merge_collapsed_diff_hunks_down(previous_hunk_ix);
+        }
+        self.invalidate_collapsed_diff_visible_projection();
+        self.ensure_diff_visible_indices();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn collapsed_diff_reveal_hunk_short(
+        &mut self,
+        src_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(hunk_ix) = self.collapsed_diff_hunk_index_for_src_ix(src_ix) else {
+            return;
+        };
+        if hunk_ix == 0 {
+            return;
+        }
+        let delta = self.collapsed_diff_hidden_up_rows(src_ix);
+        if delta == 0 {
+            return;
+        }
+        self.collapsed_diff_hunks[hunk_ix].reveal_up_lines = self.collapsed_diff_hunks[hunk_ix]
+            .reveal_up_lines
+            .saturating_add(delta);
+        self.persist_collapsed_diff_hunk_reveal(hunk_ix);
+        self.merge_collapsed_diff_hunks_up(hunk_ix);
+        self.invalidate_collapsed_diff_visible_projection();
+        self.ensure_diff_visible_indices();
+        cx.notify();
     }
 
     fn prepared_syntax_document(
@@ -721,6 +1716,26 @@ impl MainPaneView {
         );
     }
 
+    pub(in crate::view) fn set_worktree_preview_ready_materialized_source(
+        &mut self,
+        display_path: std::path::PathBuf,
+        source_path: std::path::PathBuf,
+        source_text: SharedString,
+        line_starts: Arc<[usize]>,
+        line_flags: Arc<[u8]>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_worktree_preview_ready_state(
+            display_path,
+            source_path,
+            source_text.len(),
+            source_text,
+            line_starts,
+            line_flags,
+            cx,
+        );
+    }
+
     pub(in crate::view) fn set_worktree_preview_ready_indexed_source(
         &mut self,
         display_path: std::path::PathBuf,
@@ -899,6 +1914,10 @@ impl MainPaneView {
         split_left_edit_hint: Option<rows::DiffSyntaxEdit>,
         split_right_edit_hint: Option<rows::DiffSyntaxEdit>,
     ) {
+        if self.file_diff_old_text.is_empty() && self.file_diff_new_text.is_empty() {
+            return;
+        }
+
         let Some(language) = self.file_diff_cache_language else {
             return;
         };
@@ -1066,9 +2085,11 @@ impl MainPaneView {
 
     /// Resets file-diff data fields (syntax, rows, text, highlights) without
     /// touching the identity fields (repo_id, target, rev).
-    fn reset_file_diff_cache_data(&mut self) {
+    pub(in crate::view) fn reset_file_diff_cache_data(&mut self) {
+        self.reset_collapsed_diff_projection(false);
         self.file_diff_cache_content_signature = None;
         self.file_diff_cache_inflight = None;
+        self.file_diff_cache_error = None;
         self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
         self.file_diff_style_cache_epochs.bump_both();
         self.file_diff_cache_path = None;
@@ -1077,36 +2098,58 @@ impl MainPaneView {
         self.file_diff_row_provider = None;
         self.file_diff_old_text = SharedString::default();
         self.file_diff_old_line_starts = Arc::default();
+        self.file_diff_old_line_to_row = Arc::default();
+        self.file_diff_old_line_to_inline_row = Arc::default();
         self.file_diff_new_text = SharedString::default();
         self.file_diff_new_line_starts = Arc::default();
+        self.file_diff_new_line_to_row = Arc::default();
+        self.file_diff_new_line_to_inline_row = Arc::default();
         self.file_diff_inline_cache.clear();
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
-        self.file_diff_inline_word_highlights.clear();
-        self.file_diff_split_word_highlights_old.clear();
-        self.file_diff_split_word_highlights_new.clear();
+        self.file_diff_inline_word_highlights =
+            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
+        self.file_diff_split_word_highlights =
+            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
     }
 
     pub(in super::super::super) fn ensure_file_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some((repo_id, diff_file_rev, diff_target, workdir, file)) = (|| {
-            let repo = self.active_repo()?;
-            if !Self::is_file_diff_target(repo.diff_state.diff_target.as_ref()) {
-                return None;
-            }
-
-            let file = match &repo.diff_state.diff_file {
-                Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
+        let Some((
+            repo_id,
+            diff_file_rev,
+            diff_target,
+            workdir,
+            expected_abs_path,
+            file,
+            patch_diff,
+            patch_diff_loading,
+        )) = (|| {
+            let (repo_id, diff_file_rev, diff_target, workdir, expected_abs_path) =
+                self.rendered_file_diff_identity()?;
+            let file: Option<Arc<gitcomet_core::domain::FileDiffText>> =
+                match self.rendered_file_diff_loadable()? {
+                    Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
+                    _ => None,
+                };
+            let patch_diff_loadable = self.rendered_patch_diff_loadable()?;
+            let patch_diff: Option<Arc<gitcomet_core::domain::Diff>> = match patch_diff_loadable {
+                Loadable::Ready(diff) => Some(Arc::clone(diff)),
                 _ => None,
             };
+            let patch_diff_loading = matches!(patch_diff_loadable, Loadable::Loading);
 
             Some((
-                repo.id,
-                repo.diff_state.diff_file_rev,
-                repo.diff_state.diff_target.clone(),
-                repo.spec.workdir.clone(),
+                repo_id,
+                diff_file_rev,
+                diff_target,
+                workdir,
+                expected_abs_path,
                 file,
+                patch_diff,
+                patch_diff_loading,
             ))
-        })() else {
+        })()
+        else {
             self.file_diff_cache_repo_id = None;
             self.file_diff_cache_target = None;
             self.file_diff_cache_rev = 0;
@@ -1115,11 +2158,18 @@ impl MainPaneView {
         };
 
         let diff_target_for_task = diff_target.clone();
-        let file_content_signature = file
-            .as_ref()
-            .map(|file| file_diff_text_signature(file.as_ref()));
+        let file_content_signature = file.as_ref().map(|file| {
+            let mut signature = file_diff_text_signature(file.as_ref());
+            if let Some(patch_diff) = patch_diff.as_ref() {
+                signature ^= patch_diff_content_signature(patch_diff.as_ref()).rotate_left(1);
+            }
+            signature ^= (self.diff_whitespace_mode.key().len() as u64).rotate_left(7);
+            signature
+        });
         let same_repo_and_target = self.file_diff_cache_repo_id == Some(repo_id)
-            && self.file_diff_cache_target == diff_target;
+            && self.file_diff_cache_target == Some(diff_target.clone())
+            && self.file_diff_cache_whitespace_mode == self.diff_whitespace_mode
+            && self.file_diff_cache_path.as_ref() == Some(&expected_abs_path);
         let previous_split_left_reparse_seed = same_repo_and_target
             .then(|| self.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitLeft))
             .flatten();
@@ -1129,8 +2179,47 @@ impl MainPaneView {
         let previous_old_text = same_repo_and_target.then(|| self.file_diff_old_text.clone());
         let previous_new_text = same_repo_and_target.then(|| self.file_diff_new_text.clone());
 
-        if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
+        if patch_diff_loading
+            && patch_diff.is_none()
+            && file
+                .as_ref()
+                .is_some_and(|file| file_diff_text_is_source_backed(file.as_ref()))
+        {
+            if same_repo_and_target {
+                self.file_diff_cache_inflight = None;
+                self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
+                self.file_diff_cache_rev = diff_file_rev;
+            } else {
+                self.file_diff_cache_repo_id = Some(repo_id);
+                self.file_diff_cache_rev = diff_file_rev;
+                self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
+                self.file_diff_cache_target = Some(diff_target);
+                self.reset_file_diff_cache_data();
+                self.clear_diff_text_style_caches();
+            }
             return;
+        }
+
+        if same_repo_and_target
+            && file.is_none()
+            && self.file_diff_cache_content_signature.is_some()
+        {
+            // Keep the current same-target rows visible while a refresh is pending.
+            // Dropping them would create a zero-width frame, and GPUI would clamp
+            // any horizontal offset back to the start before the ready payload returns.
+            self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
+            self.file_diff_cache_rev = diff_file_rev;
+            return;
+        }
+
+        if same_repo_and_target && self.file_diff_cache_rev == diff_file_rev {
+            // Reselecting the same file enters Loading with an unchanged file rev; keep the
+            // current cache until a ready file payload proves the effective content changed.
+            let content_changed_without_rev_bump = file_content_signature
+                .is_some_and(|signature| self.file_diff_cache_content_signature != Some(signature));
+            if !content_changed_without_rev_bump {
+                return;
+            }
         }
 
         if same_repo_and_target
@@ -1139,18 +2228,19 @@ impl MainPaneView {
         {
             // Store-side refreshes can bump diff_file_rev with identical file payloads.
             // Keep the row cache and prepared syntax documents alive across rev-only refreshes.
-            // If syntax was still missing, kick the syntax refresh path for the new active key.
-            if self.file_diff_cache_inflight.is_none() {
-                self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
-                self.file_diff_cache_rev = diff_file_rev;
-                self.refresh_file_diff_syntax_documents(cx, None, None, None, None);
-            }
+            // Any older row rebuild is now redundant because the current rows already match
+            // the active content signature.
+            self.file_diff_cache_inflight = None;
+            self.rekey_file_diff_prepared_syntax_documents_for_rev(diff_file_rev);
+            self.file_diff_cache_rev = diff_file_rev;
+            self.refresh_file_diff_syntax_documents(cx, None, None, None, None);
             return;
         }
 
         self.file_diff_cache_repo_id = Some(repo_id);
         self.file_diff_cache_rev = diff_file_rev;
-        self.file_diff_cache_target = diff_target;
+        self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
+        self.file_diff_cache_target = Some(diff_target);
         self.reset_file_diff_cache_data();
 
         // Reset the segment cache to avoid mixing patch/file indices.
@@ -1166,11 +2256,19 @@ impl MainPaneView {
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
         self.file_diff_syntax_generation = seq;
+        let whitespace_mode = self.diff_whitespace_mode;
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let rebuild_cache = move || build_file_diff_cache_rebuild(file.as_ref(), &workdir);
-                let rebuild = if crate::ui_runtime::current().uses_background_compute() {
+                let rebuild_cache = move || {
+                    build_file_diff_cache_rebuild_with_patch(
+                        file.as_ref(),
+                        &workdir,
+                        patch_diff.as_deref(),
+                        whitespace_mode,
+                    )
+                };
+                let rebuild_result = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(rebuild_cache).await
                 } else {
                     rebuild_cache()
@@ -1182,19 +2280,40 @@ impl MainPaneView {
                     }
                     if this.file_diff_cache_repo_id != Some(repo_id)
                         || this.file_diff_cache_rev != diff_file_rev
-                        || this.file_diff_cache_target != diff_target_for_task
+                        || this.file_diff_cache_whitespace_mode != whitespace_mode
+                        || this.file_diff_cache_target != Some(diff_target_for_task.clone())
                     {
                         return;
                     }
 
                     this.file_diff_cache_inflight = None;
+                    let rebuild = match rebuild_result {
+                        Ok(rebuild) => rebuild,
+                        Err(error) => {
+                            this.reset_file_diff_cache_data();
+                            this.file_diff_cache_repo_id = Some(repo_id);
+                            this.file_diff_cache_rev = diff_file_rev;
+                            this.file_diff_cache_whitespace_mode = whitespace_mode;
+                            this.file_diff_cache_target = Some(diff_target_for_task.clone());
+                            this.file_diff_cache_path = Some(expected_abs_path.clone());
+                            this.file_diff_cache_content_signature = Some(content_signature);
+                            this.file_diff_cache_error = Some(error);
+                            cx.notify();
+                            return;
+                        }
+                    };
+                    this.file_diff_cache_error = None;
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_row_provider = Some(rebuild.row_provider);
                     this.file_diff_old_text = rebuild.old_text;
                     this.file_diff_old_line_starts = rebuild.old_line_starts;
+                    this.file_diff_old_line_to_row = rebuild.old_line_to_row;
+                    this.file_diff_old_line_to_inline_row = rebuild.old_line_to_inline_row;
                     this.file_diff_new_text = rebuild.new_text;
                     this.file_diff_new_line_starts = rebuild.new_line_starts;
+                    this.file_diff_new_line_to_row = rebuild.new_line_to_row;
+                    this.file_diff_new_line_to_inline_row = rebuild.new_line_to_inline_row;
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
@@ -1245,23 +2364,16 @@ impl MainPaneView {
             this.file_markdown_preview_inflight = None;
         };
 
-        let Some((repo_id, diff_file_rev, diff_target, file)) = (|| {
-            let repo = self.active_repo()?;
-            if !Self::is_file_diff_target(repo.diff_state.diff_target.as_ref()) {
-                return None;
-            }
+        let Some((repo_id, diff_file_rev, diff_target, expected_abs_path, file)) = (|| {
+            let (repo_id, diff_file_rev, diff_target, _workdir, expected_abs_path) =
+                self.rendered_file_diff_identity()?;
+            let file: Option<Arc<gitcomet_core::domain::FileDiffText>> =
+                match self.rendered_file_diff_loadable()? {
+                    Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
+                    _ => None,
+                };
 
-            let file = match &repo.diff_state.diff_file {
-                Loadable::Ready(Some(file)) => Some(Arc::clone(file)),
-                _ => None,
-            };
-
-            Some((
-                repo.id,
-                repo.diff_state.diff_file_rev,
-                repo.diff_state.diff_target.clone(),
-                file,
-            ))
+            Some((repo_id, diff_file_rev, diff_target, expected_abs_path, file))
         })() else {
             clear_cache(self);
             return;
@@ -1272,7 +2384,8 @@ impl MainPaneView {
             .as_ref()
             .map(|file| file_diff_text_signature(file.as_ref()));
         let same_repo_and_target = self.file_markdown_preview_cache_repo_id == Some(repo_id)
-            && self.file_markdown_preview_cache_target == diff_target;
+            && self.file_markdown_preview_cache_target == Some(diff_target.clone())
+            && self.file_diff_cache_path.as_ref() == Some(&expected_abs_path);
 
         if same_repo_and_target && self.file_markdown_preview_cache_rev == diff_file_rev {
             return;
@@ -1291,7 +2404,7 @@ impl MainPaneView {
         self.file_markdown_preview_cache_repo_id = Some(repo_id);
         self.file_markdown_preview_cache_rev = diff_file_rev;
         self.file_markdown_preview_cache_content_signature = None;
-        self.file_markdown_preview_cache_target = diff_target;
+        self.file_markdown_preview_cache_target = Some(diff_target);
         self.file_markdown_preview = Loadable::NotLoaded;
         self.file_markdown_preview_inflight = None;
 
@@ -1300,10 +2413,14 @@ impl MainPaneView {
         };
         // `file` was `Some` when `file_content_signature` was computed, so unwrap is safe.
         let content_signature = file_content_signature.unwrap();
-        let old_source = file.old.clone().unwrap_or_default();
-        let new_source = file.new.clone().unwrap_or_default();
+        let old_source = file.old_source.clone();
+        let new_source = file.new_source.clone();
+        let old_legacy_text = file.old.clone();
+        let new_legacy_text = file.new.clone();
 
-        let combined_len = old_source.len() + new_source.len();
+        let combined_len =
+            file_diff_markdown_source_len(old_source.as_ref(), old_legacy_text.as_ref())
+                + file_diff_markdown_source_len(new_source.as_ref(), new_legacy_text.as_ref());
         if combined_len > markdown_preview::MAX_DIFF_PREVIEW_SOURCE_BYTES {
             self.file_markdown_preview = Loadable::Error(
                 markdown_preview::diff_preview_unavailable_reason(combined_len).to_string(),
@@ -1321,6 +2438,14 @@ impl MainPaneView {
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
                 let build_preview = move || {
                     let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                    let old_source = read_file_diff_markdown_source(
+                        old_source.as_ref(),
+                        old_legacy_text.as_ref(),
+                    )?;
+                    let new_source = read_file_diff_markdown_source(
+                        new_source.as_ref(),
+                        new_legacy_text.as_ref(),
+                    )?;
                     markdown_preview::build_markdown_diff_preview(
                         old_source.as_ref(),
                         new_source.as_ref(),
@@ -1345,7 +2470,8 @@ impl MainPaneView {
                     }
                     if this.file_markdown_preview_cache_repo_id != Some(repo_id)
                         || this.file_markdown_preview_cache_rev != diff_file_rev
-                        || this.file_markdown_preview_cache_target != diff_target_for_task
+                        || this.file_markdown_preview_cache_target
+                            != Some(diff_target_for_task.clone())
                     {
                         return;
                     }
@@ -1363,18 +2489,95 @@ impl MainPaneView {
         .detach();
     }
 
+    pub(in super::super::super) fn ensure_rendered_patch_diff_cache(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ready_diff = match self.rendered_patch_diff_loadable() {
+            Some(Loadable::Ready(diff)) => Some(Arc::clone(diff)),
+            _ => None,
+        };
+        let metadata_current = self.diff_cache_repo_id == self.active_repo_id()
+            && self.diff_cache_rev == self.rendered_patch_diff_rev()
+            && self.diff_cache_target == self.rendered_diff_target().cloned();
+        let ready_content_changed = metadata_current
+            && ready_diff.as_ref().is_some_and(|diff| {
+                self.patch_diff_row_len() != diff.lines.len()
+                    || self.diff_cache_content_signature
+                        != Some(patch_diff_content_signature(diff.as_ref()))
+            });
+        let should_rebuild = !metadata_current || ready_content_changed;
+        if should_rebuild {
+            self.rebuild_diff_cache(cx);
+        }
+    }
+
     pub(in super::super::super) fn rebuild_diff_cache(&mut self, cx: &mut gpui::Context<Self>) {
+        let next_cache_state = self.active_repo().map(|repo| {
+            let workdir: Option<std::path::PathBuf> = self
+                .rendered_diff_workdir()
+                .map(std::path::Path::to_path_buf);
+            let diff = match self.rendered_patch_diff_loadable() {
+                Some(Loadable::Ready(diff)) => Some(Arc::clone(diff)),
+                _ => None,
+            };
+            (
+                repo.id,
+                self.rendered_patch_diff_rev(),
+                self.rendered_diff_target().cloned(),
+                workdir,
+                diff,
+            )
+        });
+        let next_content_signature = next_cache_state
+            .as_ref()
+            .and_then(|(_, _, _, _, diff)| diff.as_ref())
+            .map(|diff| patch_diff_content_signature(diff.as_ref()));
+        if let Some((repo_id, diff_rev, diff_target, _, diff)) = next_cache_state.as_ref() {
+            let same_repo_and_target = self.diff_cache_repo_id == Some(*repo_id)
+                && self.diff_cache_target.as_ref() == diff_target.as_ref();
+            if same_repo_and_target {
+                if diff.is_none() && self.diff_cache_content_signature.is_some() {
+                    // Preserve the last ready same-target patch rows through transient Loading.
+                    self.diff_cache_rev = *diff_rev;
+                    return;
+                }
+
+                if diff.is_some()
+                    && next_content_signature.is_some()
+                    && self.diff_cache_content_signature == next_content_signature
+                {
+                    // Store-side refreshes can bump diff_rev without changing the rendered patch.
+                    // Keep visible rows and horizontal width hints intact across those rev-only
+                    // redraws.
+                    self.diff_cache_rev = *diff_rev;
+                    return;
+                }
+            }
+        }
+        let clear_reveals = match next_cache_state.as_ref() {
+            Some((repo_id, _, diff_target, _, Some(_))) if diff_target.is_some() => {
+                self.diff_cache_repo_id != Some(*repo_id)
+                    || self.diff_cache_target.as_ref() != diff_target.as_ref()
+                    || self.diff_cache_content_signature != next_content_signature
+            }
+            _ => true,
+        };
+
+        self.reset_collapsed_diff_projection(clear_reveals);
         self.diff_cache.clear();
         self.diff_row_provider = None;
         self.diff_split_row_provider = None;
         self.diff_cache_repo_id = None;
         self.diff_cache_rev = 0;
+        self.diff_cache_content_signature = None;
         self.diff_cache_target = None;
         self.diff_file_for_src_ix.clear();
         self.diff_language_for_src_ix.clear();
         self.diff_yaml_block_scalar_for_src_ix.clear();
         self.diff_click_kinds.clear();
         self.diff_line_kind_for_src_ix.clear();
+        self.diff_visual_line_kind_for_src_ix.clear();
         self.diff_hide_unified_header_for_src_ix.clear();
         self.diff_header_display_cache.clear();
         self.diff_split_cache.clear();
@@ -1392,29 +2595,19 @@ impl MainPaneView {
         self.diff_selection_range = None;
         self.diff_preview_is_new_file = false;
 
-        let (repo_id, diff_rev, diff_target, workdir, diff) = {
-            let Some(repo) = self.active_repo() else {
-                return;
-            };
-            let workdir = repo.spec.workdir.clone();
-            let diff = match &repo.diff_state.diff {
-                Loadable::Ready(diff) => Some(Arc::clone(diff)),
-                _ => None,
-            };
-            (
-                repo.id,
-                repo.diff_state.diff_rev,
-                repo.diff_state.diff_target.clone(),
-                workdir,
-                diff,
-            )
+        let Some((repo_id, diff_rev, diff_target, workdir, diff)) = next_cache_state else {
+            return;
         };
 
         self.diff_cache_repo_id = Some(repo_id);
         self.diff_cache_rev = diff_rev;
+        self.diff_cache_content_signature = next_content_signature;
         self.diff_cache_target = diff_target;
 
         let Some(diff) = diff else {
+            return;
+        };
+        let Some(workdir) = workdir else {
             return;
         };
 
@@ -1446,6 +2639,7 @@ impl MainPaneView {
                 line.kind
             })
             .collect();
+        self.rebuild_patch_visual_line_kinds_from_ready_diff(diff.as_ref());
         split_row_count += pending_split_removes.max(pending_split_adds);
         self.diff_split_row_provider = Some(Arc::new(PagedPatchSplitRows::new_with_len_hint(
             Arc::clone(self.diff_row_provider.as_ref().expect("set just above")),
@@ -1573,10 +2767,7 @@ impl MainPaneView {
                     let Some(src_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
                     };
-                    let Some(line) = self.patch_diff_row(src_ix) else {
-                        return 0;
-                    };
-                    match line.kind {
+                    match self.patch_visual_line_kind(src_ix) {
                         gitcomet_core::domain::DiffLineKind::Add => 1,
                         gitcomet_core::domain::DiffLineKind::Remove => 2,
                         _ => 0,
@@ -1584,7 +2775,7 @@ impl MainPaneView {
                 })
             }
             DiffViewMode::Split => {
-                if self.diff_split_row_provider.is_some() {
+                if self.diff_split_row_provider.is_some() && !self.diff_word_wrap {
                     let meta = self.patch_split_visible_meta_from_source();
                     debug_assert_eq!(meta.visible_indices.as_slice(), self.diff_visible_indices);
                     return scrollbar_markers_from_visible_flags(meta.visible_flags.as_slice());
@@ -1597,12 +2788,14 @@ impl MainPaneView {
                         return 0;
                     };
                     match &row {
-                        PatchSplitRow::Aligned { row, .. } => match row.kind {
-                            gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
-                            gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
-                            gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
-                            gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
-                        },
+                        PatchSplitRow::Aligned { .. } => {
+                            match self.patch_split_visual_row_kind(&row) {
+                                gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
+                                gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
+                                gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
+                                gitcomet_core::file_diff::FileDiffRowKind::Context => 0,
+                            }
+                        }
                         PatchSplitRow::Raw { .. } => 0,
                     }
                 })
@@ -1610,24 +2803,92 @@ impl MainPaneView {
         }
     }
 
-    fn compute_diff_scrollbar_markers(&self) -> Vec<components::ScrollbarMarker> {
+    fn collapsed_diff_hunk_marker_flag(hunk: CollapsedDiffHunk) -> u8 {
+        match (hunk.has_additions, hunk.has_removals) {
+            (true, true) => 3,
+            (true, false) => 1,
+            (false, true) => 2,
+            (false, false) => 0,
+        }
+    }
+
+    fn collapsed_diff_hunk_visible_file_bounds(
+        &self,
+        hunk_ix: usize,
+        hunk: CollapsedDiffHunk,
+    ) -> Option<(usize, usize)> {
+        let mut visible_ix = *self.collapsed_diff_hunk_visible_indices.get(hunk_ix)?;
+        while let Some(row) = self.collapsed_diff_visible_rows.get(visible_ix).copied() {
+            match row {
+                CollapsedDiffVisibleRow::HunkHeader { .. } => visible_ix += 1,
+                CollapsedDiffVisibleRow::FileRow { row_ix } if row_ix < hunk.base_row_start => {
+                    visible_ix += 1;
+                }
+                CollapsedDiffVisibleRow::FileRow { row_ix } if row_ix == hunk.base_row_start => {
+                    let end_ix = visible_ix
+                        .saturating_add(
+                            hunk.base_row_end_exclusive
+                                .saturating_sub(hunk.base_row_start),
+                        )
+                        .min(self.collapsed_diff_visible_rows.len());
+                    return (visible_ix < end_ix).then_some((visible_ix, end_ix));
+                }
+                CollapsedDiffVisibleRow::FileRow { .. } => return None,
+            }
+        }
+        None
+    }
+
+    fn diff_scrollbar_markers_collapsed(&self) -> Vec<components::ScrollbarMarker> {
+        let ranges = self
+            .collapsed_diff_hunks
+            .iter()
+            .enumerate()
+            .filter_map(|(hunk_ix, hunk)| {
+                let flag = Self::collapsed_diff_hunk_marker_flag(*hunk);
+                let (start, end) = self.collapsed_diff_hunk_visible_file_bounds(hunk_ix, *hunk)?;
+                Some((start, end, flag))
+            })
+            .collect::<Vec<_>>();
+        if self.diff_word_wrap {
+            return scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
+                let source_visible_ix = self
+                    .diff_source_visible_ix_for_visible_ix(visible_ix)
+                    .unwrap_or(visible_ix);
+                ranges
+                    .iter()
+                    .find_map(|(start, end, flag)| {
+                        (source_visible_ix >= *start && source_visible_ix < *end).then_some(*flag)
+                    })
+                    .unwrap_or(0)
+            });
+        }
+        scrollbar_markers_from_visible_ranges(self.diff_visible_len(), ranges)
+    }
+
+    pub(in crate::view) fn compute_diff_scrollbar_markers(
+        &self,
+    ) -> Vec<components::ScrollbarMarker> {
+        if self.is_collapsed_diff_projection_active() {
+            return self.diff_scrollbar_markers_collapsed();
+        }
+
         if !self.is_file_diff_view_active() {
             return self.diff_scrollbar_markers_patch();
         }
 
         match self.diff_view {
             DiffViewMode::Inline => {
-                if let Some(provider) = self.file_diff_inline_row_provider.as_ref() {
+                if let Some(provider) = self.file_diff_inline_row_provider.as_ref()
+                    && !self.diff_word_wrap
+                {
                     return provider.scrollbar_markers();
                 }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
                     let Some(inline_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
                     };
-                    let Some(line) = self.file_diff_inline_cache.get(inline_ix) else {
-                        return 0;
-                    };
-                    match line.kind {
+                    match self.file_diff_inline_visual_kind(inline_ix) {
                         gitcomet_core::domain::DiffLineKind::Add => 1,
                         gitcomet_core::domain::DiffLineKind::Remove => 2,
                         _ => 0,
@@ -1635,17 +2896,16 @@ impl MainPaneView {
                 })
             }
             DiffViewMode::Split => {
-                if let Some(provider) = self.file_diff_row_provider.as_ref() {
+                if let Some(provider) = self.file_diff_row_provider.as_ref()
+                    && !self.diff_word_wrap
+                {
                     return provider.scrollbar_markers();
                 }
                 scrollbar_markers_from_flags(self.diff_visible_len(), |visible_ix| {
                     let Some(row_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
                         return 0;
                     };
-                    let Some(row) = self.file_diff_cache_rows.get(row_ix) else {
-                        return 0;
-                    };
-                    match row.kind {
+                    match self.file_diff_split_visual_kind(row_ix) {
                         gitcomet_core::file_diff::FileDiffRowKind::Add => 1,
                         gitcomet_core::file_diff::FileDiffRowKind::Remove => 2,
                         gitcomet_core::file_diff::FileDiffRowKind::Modify => 3,
@@ -1658,7 +2918,23 @@ impl MainPaneView {
 
     pub(in super::super::super) fn ensure_diff_visible_indices(&mut self) {
         let is_file_view = self.is_file_diff_view_active();
-        let current_len = if is_file_view {
+        let collapsed_projection_active = self.is_collapsed_diff_projection_active();
+        let projection_rev = if collapsed_projection_active {
+            self.diff_visible_projection_rev
+        } else {
+            0
+        };
+        let needs_collapsed_rebuild = collapsed_projection_active
+            && (self.diff_visible_cache_projection_rev != projection_rev
+                || self.diff_visible_view != self.diff_view
+                || self.diff_visible_is_file_view != is_file_view);
+        if needs_collapsed_rebuild {
+            self.rebuild_collapsed_diff_projection();
+        }
+
+        let current_len = if collapsed_projection_active {
+            self.collapsed_diff_visible_rows.len()
+        } else if is_file_view {
             match self.diff_view {
                 DiffViewMode::Inline => self.file_diff_inline_row_len(),
                 DiffViewMode::Split => self.file_diff_split_row_len(),
@@ -1673,22 +2949,42 @@ impl MainPaneView {
         if self.diff_visible_cache_len == current_len
             && self.diff_visible_view == self.diff_view
             && self.diff_visible_is_file_view == is_file_view
+            && self.diff_visible_cache_projection_rev == projection_rev
         {
             return;
         }
 
+        let preserve_horizontal_width = collapsed_projection_active
+            && self.diff_visible_cache_projection_rev != u64::MAX
+            && self.diff_visible_view == self.diff_view
+            && self.diff_visible_is_file_view == is_file_view;
+
         self.diff_visible_cache_len = current_len;
         self.diff_visible_view = self.diff_view;
         self.diff_visible_is_file_view = is_file_view;
-        self.diff_horizontal_min_width = px(0.0);
+        self.diff_visible_cache_projection_rev = projection_rev;
+        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_cache_key = None;
+        if !preserve_horizontal_width {
+            self.reset_diff_horizontal_scroll_state();
+        }
         self.diff_visible_inline_map = None;
         self.diff_search_inline_patch_trigram_index = None;
+
+        if collapsed_projection_active {
+            self.diff_visible_indices.clear();
+            self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
+            if self.diff_search_has_query() {
+                self.diff_search_recompute_matches_for_current_view_preserving_current();
+            }
+            return;
+        }
 
         if is_file_view {
             self.diff_visible_indices = (0..current_len).collect();
             self.diff_scrollbar_markers_cache = self.compute_diff_scrollbar_markers();
-            if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-                self.diff_search_recompute_matches_for_current_view();
+            if self.diff_search_has_query() {
+                self.diff_search_recompute_matches_for_current_view_preserving_current();
             }
             return;
         }
@@ -1742,8 +3038,8 @@ impl MainPaneView {
             .map(|flags| scrollbar_markers_from_visible_flags(flags.as_slice()))
             .unwrap_or_else(|| self.compute_diff_scrollbar_markers());
 
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
-            self.diff_search_recompute_matches_for_current_view();
+        if self.diff_search_has_query() {
+            self.diff_search_recompute_matches_for_current_view_preserving_current();
         }
     }
 }
@@ -1751,9 +3047,129 @@ impl MainPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::domain::{DiffArea, DiffTarget};
+    use gitcomet_core::domain::{DiffArea, DiffLine, DiffLineKind, DiffTarget};
     use std::path::Path;
     use std::path::PathBuf;
+
+    fn patch_diff_for_visual_tests(
+        lines: Vec<(DiffLineKind, &str)>,
+    ) -> gitcomet_core::domain::Diff {
+        gitcomet_core::domain::Diff {
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("demo.txt"),
+                area: DiffArea::Unstaged,
+            },
+            lines: lines
+                .into_iter()
+                .map(|(kind, text)| DiffLine {
+                    kind,
+                    text: text.into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_whitespace_only_groups() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-let\tvalue = 1;"),
+            (DiffLineKind::Add, "+let value=1;"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_line_break_only_groups() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1,2 +1 @@"),
+            (DiffLineKind::Remove, "-foo"),
+            (DiffLineKind::Remove, "-bar"),
+            (DiffLineKind::Add, "+foobar"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_eof_marker_between_equal_lines() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-foo"),
+            (DiffLineKind::Context, "\\ No newline at end of file"),
+            (DiffLineKind::Add, "+foo"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_ignore_eof_marker_after_equal_lines() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-foo"),
+            (DiffLineKind::Add, "+foo"),
+            (DiffLineKind::Context, "\\ No newline at end of file"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![
+                DiffLineKind::Hunk,
+                DiffLineKind::Context,
+                DiffLineKind::Context,
+                DiffLineKind::Context
+            ]
+        );
+    }
+
+    #[test]
+    fn patch_visual_line_kinds_keep_real_content_changes() {
+        let diff = patch_diff_for_visual_tests(vec![
+            (DiffLineKind::Hunk, "@@ -1 +1 @@"),
+            (DiffLineKind::Remove, "-let value = 1;"),
+            (DiffLineKind::Add, "+let result = 1;"),
+        ]);
+
+        let visual = visual_line_kinds_for_patch_diff(&diff, DiffWhitespaceMode::Ignore);
+
+        assert_eq!(
+            visual,
+            vec![DiffLineKind::Hunk, DiffLineKind::Remove, DiffLineKind::Add]
+        );
+    }
 
     #[test]
     fn preview_source_text_from_lines_preserves_missing_trailing_newline() {
