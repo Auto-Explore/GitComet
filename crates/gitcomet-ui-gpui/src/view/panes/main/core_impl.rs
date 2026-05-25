@@ -18,7 +18,10 @@ fn diff_wrap_columns_for_width(width: Pixels, char_width: Pixels) -> usize {
     ((f32::from(width.max(px(0.0))) / char_width).floor() as usize).max(1)
 }
 
-fn diff_wrap_byte_ranges_for_text(text: &str, columns: usize) -> Vec<rows::DiffWrapByteRange> {
+fn diff_wrap_byte_ranges_for_source_text(
+    text: &str,
+    columns: usize,
+) -> Vec<rows::DiffWrapByteRange> {
     let mut ranges = rows::diff_wrap_ranges_for_text(text, columns)
         .into_iter()
         .map(rows::DiffWrapByteRange::from_range)
@@ -29,6 +32,49 @@ fn diff_wrap_byte_ranges_for_text(text: &str, columns: usize) -> Vec<rows::DiffW
     ranges
 }
 
+fn diff_wrap_byte_ranges_for_revealed_text(
+    source_text: &str,
+    raw_text: Option<&str>,
+    columns: usize,
+) -> Vec<rows::DiffWrapByteRange> {
+    let marker_text = raw_text
+        .filter(|raw| crate::view::diff_utils::diff_text_display_len(raw) == source_text.len())
+        .unwrap_or(source_text);
+    let offset_map = rows::whitespace_visible_diff_offset_map(marker_text, true);
+    let mut ranges = rows::diff_wrap_ranges_for_text(
+        rows::whitespace_visible_line_text(marker_text).as_ref(),
+        columns,
+    )
+    .into_iter()
+    .map(|display_range| {
+        let start = offset_map.source_offset_for_display(display_range.start);
+        let end = if display_range.end >= offset_map.display_len() {
+            offset_map.source_len()
+        } else {
+            offset_map.source_offset_for_display(display_range.end)
+        };
+        rows::DiffWrapByteRange { start, end }
+    })
+    .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        ranges.push(rows::DiffWrapByteRange::default());
+    }
+    ranges
+}
+
+fn diff_wrap_byte_ranges_for_text(
+    source_text: &str,
+    raw_text: Option<&str>,
+    columns: usize,
+    reveal_whitespace_chars: bool,
+) -> Vec<rows::DiffWrapByteRange> {
+    if reveal_whitespace_chars {
+        diff_wrap_byte_ranges_for_revealed_text(source_text, raw_text, columns)
+    } else {
+        diff_wrap_byte_ranges_for_source_text(source_text, columns)
+    }
+}
+
 fn diff_wrap_empty_byte_ranges() -> Vec<rows::DiffWrapByteRange> {
     vec![rows::DiffWrapByteRange::default()]
 }
@@ -36,16 +82,23 @@ fn diff_wrap_empty_byte_ranges() -> Vec<rows::DiffWrapByteRange> {
 fn diff_wrap_byte_ranges_for_file_diff_text(
     text: &gitcomet_core::file_diff::FileDiffLineText,
     columns: usize,
+    reveal_whitespace_chars: bool,
 ) -> Vec<rows::DiffWrapByteRange> {
     let display = crate::view::file_diff_display::file_diff_display_text(text);
-    diff_wrap_byte_ranges_for_text(display.as_ref(), columns)
+    diff_wrap_byte_ranges_for_text(
+        display.as_ref(),
+        Some(text.as_ref()),
+        columns,
+        reveal_whitespace_chars,
+    )
 }
 
 fn diff_wrap_byte_ranges_for_optional_file_diff_text(
     text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
     columns: usize,
+    reveal_whitespace_chars: bool,
 ) -> Vec<rows::DiffWrapByteRange> {
-    text.map(|text| diff_wrap_byte_ranges_for_file_diff_text(text, columns))
+    text.map(|text| diff_wrap_byte_ranges_for_file_diff_text(text, columns, reveal_whitespace_chars))
         .unwrap_or_else(diff_wrap_empty_byte_ranges)
 }
 
@@ -2773,7 +2826,7 @@ impl MainPaneView {
             self.reset_file_diff_cache_data();
             self.ensure_file_diff_cache(cx);
         }
-        if self.diff_search_active && !self.diff_search_query.as_ref().trim().is_empty() {
+        if self.diff_search_active && !self.diff_search_query.is_empty() {
             self.diff_search_recompute_matches_preserving_current();
         }
         cx.notify();
@@ -2793,6 +2846,8 @@ impl MainPaneView {
         self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
         self.conflict_resolved_preview_segments_cache.clear();
+        self.diff_wrap_visible_cache_key = None;
+        self.diff_wrap_visible_rows.clear();
         cx.notify();
     }
 
@@ -3965,6 +4020,7 @@ impl MainPaneView {
             file_diff_cache_seq: self.file_diff_cache_seq,
             inline_columns,
             split_columns,
+            reveal_whitespace_chars: self.reveal_whitespace_chars,
         };
         if self.diff_wrap_visible_cache_key == Some(key) {
             return;
@@ -4045,7 +4101,11 @@ impl MainPaneView {
                             return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                         };
                         (
-                            diff_wrap_byte_ranges_for_file_diff_text(&row.text, inline_columns),
+                            diff_wrap_byte_ranges_for_file_diff_text(
+                                &row.text,
+                                inline_columns,
+                                self.reveal_whitespace_chars,
+                            ),
                             diff_wrap_empty_byte_ranges(),
                         )
                     }
@@ -4057,10 +4117,12 @@ impl MainPaneView {
                             diff_wrap_byte_ranges_for_optional_file_diff_text(
                                 row.old.as_ref(),
                                 split_columns,
+                                self.reveal_whitespace_chars,
                             ),
                             diff_wrap_byte_ranges_for_optional_file_diff_text(
                                 row.new.as_ref(),
                                 split_columns,
+                                self.reveal_whitespace_chars,
                             ),
                         )
                     }
@@ -4076,16 +4138,26 @@ impl MainPaneView {
                 DiffViewMode::Inline => {
                     if let Some(row) = self.file_diff_inline_render_data(mapped_ix) {
                         return (
-                            diff_wrap_byte_ranges_for_file_diff_text(&row.text, inline_columns),
+                            diff_wrap_byte_ranges_for_file_diff_text(
+                                &row.text,
+                                inline_columns,
+                                self.reveal_whitespace_chars,
+                            ),
                             diff_wrap_empty_byte_ranges(),
                         );
                     }
                     let Some(line) = self.file_diff_inline_row(mapped_ix) else {
                         return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                     };
-                    let text = crate::view::diff_utils::diff_content_text(&line);
+                    let text =
+                        self.diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
                     (
-                        diff_wrap_byte_ranges_for_text(text, inline_columns),
+                        diff_wrap_byte_ranges_for_text(
+                            text.as_ref(),
+                            Some(crate::view::diff_utils::diff_content_text(&line)),
+                            inline_columns,
+                            self.reveal_whitespace_chars,
+                        ),
                         diff_wrap_empty_byte_ranges(),
                     )
                 }
@@ -4097,10 +4169,12 @@ impl MainPaneView {
                         diff_wrap_byte_ranges_for_optional_file_diff_text(
                             row.old.as_ref(),
                             split_columns,
+                            self.reveal_whitespace_chars,
                         ),
                         diff_wrap_byte_ranges_for_optional_file_diff_text(
                             row.new.as_ref(),
                             split_columns,
+                            self.reveal_whitespace_chars,
                         ),
                     )
                 }
@@ -4117,18 +4191,23 @@ impl MainPaneView {
                 if click_kind != DiffClickKind::Line {
                     return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                 }
-                if self.patch_diff_row(mapped_ix).is_none() {
+                let Some(line) = self.patch_diff_row(mapped_ix) else {
                     return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
-                }
+                };
                 let text =
                     self.diff_text_full_line_for_region(source_visible_ix, DiffTextRegion::Inline);
                 (
-                    diff_wrap_byte_ranges_for_text(text.as_ref(), inline_columns),
+                    diff_wrap_byte_ranges_for_text(
+                        text.as_ref(),
+                        Some(line.text.as_ref()),
+                        inline_columns,
+                        self.reveal_whitespace_chars,
+                    ),
                     diff_wrap_empty_byte_ranges(),
                 )
             }
             DiffViewMode::Split => match self.patch_diff_split_row(mapped_ix) {
-                Some(PatchSplitRow::Aligned { .. }) => {
+                Some(PatchSplitRow::Aligned { row, .. }) => {
                     let left = self.diff_text_full_line_for_region(
                         source_visible_ix,
                         DiffTextRegion::SplitLeft,
@@ -4138,17 +4217,27 @@ impl MainPaneView {
                         DiffTextRegion::SplitRight,
                     );
                     (
-                        diff_wrap_byte_ranges_for_text(left.as_ref(), split_columns),
-                        diff_wrap_byte_ranges_for_text(right.as_ref(), split_columns),
+                        diff_wrap_byte_ranges_for_text(
+                            left.as_ref(),
+                            row.old.as_ref().map(|text| text.as_ref()),
+                            split_columns,
+                            self.reveal_whitespace_chars,
+                        ),
+                        diff_wrap_byte_ranges_for_text(
+                            right.as_ref(),
+                            row.new.as_ref().map(|text| text.as_ref()),
+                            split_columns,
+                            self.reveal_whitespace_chars,
+                        ),
                     )
                 }
                 Some(PatchSplitRow::Raw { src_ix, click_kind }) => {
                     if click_kind != DiffClickKind::Line {
                         return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
                     }
-                    if self.patch_diff_row(src_ix).is_none() {
+                    let Some(line) = self.patch_diff_row(src_ix) else {
                         return (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges());
-                    }
+                    };
                     let left = self.diff_text_full_line_for_region(
                         source_visible_ix,
                         DiffTextRegion::SplitLeft,
@@ -4158,8 +4247,18 @@ impl MainPaneView {
                         DiffTextRegion::SplitRight,
                     );
                     (
-                        diff_wrap_byte_ranges_for_text(left.as_ref(), split_columns),
-                        diff_wrap_byte_ranges_for_text(right.as_ref(), split_columns),
+                        diff_wrap_byte_ranges_for_text(
+                            left.as_ref(),
+                            (!left.is_empty()).then_some(line.text.as_ref()),
+                            split_columns,
+                            self.reveal_whitespace_chars,
+                        ),
+                        diff_wrap_byte_ranges_for_text(
+                            right.as_ref(),
+                            (!right.is_empty()).then_some(line.text.as_ref()),
+                            split_columns,
+                            self.reveal_whitespace_chars,
+                        ),
                     )
                 }
                 None => (diff_wrap_empty_byte_ranges(), diff_wrap_empty_byte_ranges()),
@@ -4548,5 +4647,20 @@ mod tests {
         );
 
         assert_eq!(targets, [px(-100.0), px(-100.0), px(-100.0), px(-320.0)]);
+    }
+
+    #[test]
+    fn revealed_whitespace_wrap_ranges_follow_rendered_tab_markers() {
+        let hidden = diff_wrap_byte_ranges_for_text("a    b", Some("a\tb"), 4, false)
+            .into_iter()
+            .map(rows::DiffWrapByteRange::range)
+            .collect::<Vec<_>>();
+        assert_eq!(hidden, vec![0..4, 4..6]);
+
+        let revealed = diff_wrap_byte_ranges_for_text("a    b", Some("a\tb"), 4, true)
+            .into_iter()
+            .map(rows::DiffWrapByteRange::range)
+            .collect::<Vec<_>>();
+        assert_eq!(revealed, vec![0..6]);
     }
 }

@@ -45,7 +45,6 @@ criterion = "0.8.2"
 fontdb = "0.23.0"
 futures = "0.3.32"
 gix = { version = "0.83.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-# Load gpui-ce directly from GitHub at commit a95a721341989fb391f56c4e4e5521b8b5196cfa.
 gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "a95a721341989fb391f56c4e4e5521b8b5196cfa" }
 http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"

@@ -2273,6 +2273,7 @@ pub(in crate::view) struct DiffWrapVisibleCacheKey {
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) inline_columns: usize,
     pub(in crate::view) split_columns: usize,
+    pub(in crate::view) reveal_whitespace_chars: bool,
 }
 
 impl DiffHorizontalScrollColumn {

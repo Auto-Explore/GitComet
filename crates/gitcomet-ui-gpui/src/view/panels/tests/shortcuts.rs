@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::panes::main::{DiffWrapVisibleCacheKey, DiffWrapVisualRow};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{CommitDetails, CommitFileChange};
 use gpui::{ScrollDelta, ScrollWheelEvent};
@@ -2604,6 +2605,43 @@ fn diff_search_close_clears_query_and_input(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn whitespace_only_diff_search_query_recomputes_on_whitespace_mode_change(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = " ".into();
+                pane.diff_search_matches = vec![7];
+                pane.diff_search_match_ix = Some(0);
+                pane.set_diff_whitespace_mode(DiffWhitespaceMode::Ignore, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "expected whitespace-only queries to refresh instead of leaving stale matches behind"
+        );
+        assert_eq!(
+            pane.diff_search_match_ix,
+            None,
+            "expected recomputing an empty result set to clear the active diff search match"
+        );
+    });
+}
+
+#[gpui::test]
 fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2759,6 +2797,55 @@ fn diff_search_overlay_does_not_reflow_action_bar_or_content(cx: &mut gpui::Test
         cx.debug_bounds("diff_search_overlay").is_none(),
         "expected search close button to remove diff search overlay"
     );
+}
+
+#[gpui::test]
+fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_word_wrap = true;
+                pane.diff_wrap_visible_cache_key = Some(DiffWrapVisibleCacheKey {
+                    source_len: 1,
+                    diff_view: DiffViewMode::Inline,
+                    is_file_view: false,
+                    collapsed_projection_active: false,
+                    projection_rev: 0,
+                    diff_cache_rev: 0,
+                    file_diff_cache_seq: 0,
+                    inline_columns: 8,
+                    split_columns: 8,
+                    reveal_whitespace_chars: false,
+                });
+                pane.diff_wrap_visible_rows = vec![DiffWrapVisualRow {
+                    source_visible_ix: 0,
+                    wrap_ix: 0,
+                    primary_range: rows::DiffWrapByteRange { start: 0, end: 4 },
+                    secondary_range: rows::DiffWrapByteRange::default(),
+                }];
+                pane.set_diff_reveal_whitespace_chars(true, cx);
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_wrap_visible_cache_key, None,
+            "expected reveal-whitespace changes to invalidate wrapped-row cache keys"
+        );
+        assert!(
+            pane.diff_wrap_visible_rows.is_empty(),
+            "expected reveal-whitespace changes to drop cached wrapped rows"
+        );
+    });
 }
 
 #[gpui::test]

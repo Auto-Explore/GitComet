@@ -153,12 +153,7 @@ impl MainPaneView {
                     div()
                         .debug_selector(move || debug_selector.to_string())
                         .flex_none()
-                        .px_2()
-                        .py(px(1.0))
-                        .rounded(px(2.0))
                         .bg(theme.colors.surface_bg)
-                        .border_1()
-                        .border_color(theme.colors.border)
                         .text_color(color)
                         .child(format!("{prefix}{count}")),
                 )

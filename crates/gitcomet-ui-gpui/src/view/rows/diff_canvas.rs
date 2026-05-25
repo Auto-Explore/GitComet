@@ -424,7 +424,10 @@ fn diff_display_source_len_for_char(ch: char) -> usize {
     }
 }
 
-fn whitespace_visible_diff_offset_map(text: &str, append_eol_marker: bool) -> DiffTextOffsetMap {
+pub(in crate::view) fn whitespace_visible_diff_offset_map(
+    text: &str,
+    append_eol_marker: bool,
+) -> DiffTextOffsetMap {
     let source_len = crate::view::diff_utils::diff_text_display_len(text);
     let mut display_len = text.chars().map(whitespace_marker_len).sum::<usize>();
     let append_synthetic_eol = append_eol_marker && !text.ends_with('\n');
