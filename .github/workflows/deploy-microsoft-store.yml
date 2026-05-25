@@ -299,6 +299,46 @@ jobs:
             done
           done
 
+      - name: Install Microsoft Store CLI Linux dependencies
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y dbus-x11 gnome-keyring libsecret-1-0
+
+      - name: Start Microsoft Store CLI secret service
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        run: |
+          set -euo pipefail
+
+          runtime_dir="${RUNNER_TEMP}/xdg-runtime"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          export XDG_RUNTIME_DIR="$runtime_dir"
+
+          eval "$(dbus-launch --sh-syntax)"
+
+          keyring_password="gitcomet-ci-keyring"
+          keyring_env="$(printf '%s' "$keyring_password" | gnome-keyring-daemon --unlock)"
+          if [ -n "$keyring_env" ]; then
+            eval "$keyring_env"
+          fi
+
+          keyring_env="$(gnome-keyring-daemon --start --components=secrets)"
+          if [ -n "$keyring_env" ]; then
+            eval "$keyring_env"
+          fi
+
+          {
+            echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
+            echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS"
+            echo "DBUS_SESSION_BUS_PID=$DBUS_SESSION_BUS_PID"
+            if [ -n "${GNOME_KEYRING_CONTROL:-}" ]; then
+              echo "GNOME_KEYRING_CONTROL=$GNOME_KEYRING_CONTROL"
+            fi
+          } >> "$GITHUB_ENV"
+
       - name: Install Microsoft Store CLI
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
         uses: microsoft/microsoft-store-apppublisher@v1.3
