@@ -381,7 +381,8 @@ fn picker_item_label<V: 'static>(
 
         let mut text = TruncatedText::new(part.text.clone())
             .id(("picker_prompt_label_part_text", ix))
-            .profile(part.profile);
+            .profile(part.profile)
+            .text_color(theme.colors.text);
         if let Some(highlight_range) = highlight_range.clone() {
             text = text
                 .focus_range(Some(highlight_range.clone()))
