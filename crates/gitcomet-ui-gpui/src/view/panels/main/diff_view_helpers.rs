@@ -153,7 +153,6 @@ impl MainPaneView {
                     div()
                         .debug_selector(move || debug_selector.to_string())
                         .flex_none()
-                        .bg(theme.colors.surface_bg)
                         .text_color(color)
                         .child(format!("{prefix}{count}")),
                 )
