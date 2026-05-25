@@ -82,6 +82,7 @@ pub(super) fn msg_name(msg: &Msg) -> &'static str {
         Msg::OpenRepo(_) => "OpenRepo",
         Msg::RestoreSession { .. } => "RestoreSession",
         Msg::CloseRepo { .. } => "CloseRepo",
+        Msg::CloseRepos { .. } => "CloseRepos",
         Msg::SetActiveRepo { .. } => "SetActiveRepo",
         Msg::ReorderRepoTabs { .. } => "ReorderRepoTabs",
         Msg::ReloadRepo { .. } => "ReloadRepo",

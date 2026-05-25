@@ -264,6 +264,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::PushPicker
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
+            | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
@@ -352,6 +353,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
@@ -441,6 +443,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -2332,6 +2335,9 @@ impl PopoverHost {
             }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::PreviousCommitMessagesMenu { repo_id }, cx)
+            }
+            PopoverKind::RepoTabMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::RepoTabMenu { repo_id }, cx)
             }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)

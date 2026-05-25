@@ -538,6 +538,7 @@ impl GitCometView {
         let sidebar_pane = self.sidebar_pane.clone();
         let main_pane = self.main_pane.clone();
         let details_pane = self.details_pane.clone();
+        let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
         let bottom_status_bar = self.bottom_status_bar.clone();
 
@@ -550,6 +551,9 @@ impl GitCometView {
             });
             details_pane.update(cx, |pane, cx| {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            repo_tabs_bar.update(cx, |bar, cx| {
+                bar.set_active_context_menu_invoker(next.clone(), cx);
             });
             action_bar.update(cx, |bar, cx| {
                 bar.set_active_context_menu_invoker(next.clone(), cx);

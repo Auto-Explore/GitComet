@@ -2499,6 +2499,9 @@ pub(super) enum PopoverKind {
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
+    RepoTabMenu {
+        repo_id: RepoId,
+    },
     AppMenu,
     DiffActionMenu,
     DiffHunkMenu {
