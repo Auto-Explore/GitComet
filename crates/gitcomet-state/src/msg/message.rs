@@ -105,6 +105,10 @@ pub enum Msg {
     CloseRepo {
         repo_id: RepoId,
     },
+    CloseRepos {
+        repo_ids: Vec<RepoId>,
+        activate_after: Option<RepoId>,
+    },
     ShowBannerError {
         repo_id: Option<RepoId>,
         message: String,

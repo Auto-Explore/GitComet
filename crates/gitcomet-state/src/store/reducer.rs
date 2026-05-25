@@ -640,6 +640,10 @@ pub(super) fn reduce(
             active_repo,
         } => repo_management::restore_session(repos, id_alloc, state, open_repos, active_repo),
         Msg::CloseRepo { repo_id } => repo_management::close_repo(repos, state, repo_id),
+        Msg::CloseRepos {
+            repo_ids,
+            activate_after,
+        } => repo_management::close_repos(repos, state, repo_ids, activate_after),
         Msg::ShowBannerError { repo_id, message } => {
             if !message.trim().is_empty() {
                 state.banner_error = Some(BannerErrorState { repo_id, message });

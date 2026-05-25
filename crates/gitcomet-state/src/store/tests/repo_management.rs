@@ -148,6 +148,53 @@ fn worker_command_prioritizes_close_repo_over_queued_open_error() {
 }
 
 #[test]
+fn worker_command_prioritizes_close_repos_over_queued_background_result() {
+    let repo_id = RepoId(7);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        },
+    ))))
+    .expect("send background result");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepos {
+        repo_ids: vec![repo_id],
+        activate_after: None,
+    })))
+    .expect("send close repos");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::CloseRepos {
+                    repo_ids,
+                    activate_after: None,
+                } if repo_ids == vec![repo_id]
+            ));
+        }
+        _ => panic!("expected close repos command first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("deferred tags result");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+                    repo_id: got,
+                    ..
+                }) if got == repo_id
+            ));
+        }
+        _ => panic!("expected deferred tags result"),
+    }
+}
+
+#[test]
 fn worker_command_prioritizes_tab_switch_over_queued_background_result() {
     let repo_id = RepoId(7);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -1231,6 +1278,209 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
     );
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(21)));
+}
+
+#[test]
+fn close_repos_ignores_unknown_ids_and_persists_once() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo3")),
+    );
+    let old_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == RepoId(1))
+        .expect("repo 1 exists")
+        .load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(999), RepoId(1), RepoId(1)],
+            activate_after: None,
+        },
+    );
+
+    assert!(has_cancel_repo_loads_effect(&effects, RepoId(1), old_epoch));
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![RepoId(2), RepoId(3)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(3)));
+}
+
+#[test]
+fn close_repos_selects_left_neighbor_when_active_repo_is_closed() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=3 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: RepoId(2) },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(2)],
+            activate_after: None,
+        },
+    );
+
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![RepoId(1), RepoId(3)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+}
+
+#[test]
+fn close_repos_uses_requested_active_repo_after_batch_close() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=3 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: RepoId(1) },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(1), RepoId(3)],
+            activate_after: Some(RepoId(2)),
+        },
+    );
+
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![RepoId(2)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+}
+
+#[test]
+fn close_repos_noops_when_no_existing_repos_match() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=2 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    let original_repo_ids = state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>();
+    let original_active = state.active_repo;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(999)],
+            activate_after: Some(RepoId(1)),
+        },
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        original_repo_ids
+    );
+    assert_eq!(state.active_repo, original_active);
+}
+
+#[test]
+fn close_repos_closing_all_repos_clears_active_and_persists_once() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=2 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(1), RepoId(2)],
+            activate_after: Some(RepoId(1)),
+        },
+    );
+
+    assert!(state.repos.is_empty());
+    assert_eq!(state.active_repo, None);
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .count(),
+        1
+    );
 }
 
 #[test]
