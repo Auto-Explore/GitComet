@@ -28,6 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 const HOT_REPO_SWITCH_SECONDARY_REFRESH_WINDOW: Duration = Duration::from_secs(5);
+const REACTIVATED_FILE_HISTORY_LIMIT: usize = 200;
 pub(crate) const SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY: usize = 32;
 pub(crate) type SetActiveRepoEffects = SmallVec<[Effect; SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY]>;
 pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
@@ -253,6 +254,69 @@ fn append_open_repo_effect_if_not_loaded(
             repo_id: repo_state.id,
             path: repo_state.spec.workdir.clone(),
         }));
+    }
+}
+
+enum SelectedHistoryReload {
+    FileHistory(PathBuf),
+    Blame { path: PathBuf, rev: Option<String> },
+    CommitDetails(gitcomet_core::domain::CommitId),
+}
+
+fn selected_history_reloads_for_activation(
+    repo_state: &RepoState,
+) -> SmallVec<[SelectedHistoryReload; 3]> {
+    let mut reloads = SmallVec::new();
+
+    if matches!(repo_state.history_state.file_history, Loadable::NotLoaded)
+        && let Some(path) = repo_state.history_state.file_history_path.clone()
+    {
+        reloads.push(SelectedHistoryReload::FileHistory(path));
+    }
+
+    if matches!(repo_state.history_state.blame, Loadable::NotLoaded)
+        && let Some(path) = repo_state.history_state.blame_path.clone()
+    {
+        reloads.push(SelectedHistoryReload::Blame {
+            path,
+            rev: repo_state.history_state.blame_rev.clone(),
+        });
+    }
+
+    if matches!(repo_state.history_state.commit_details, Loadable::NotLoaded)
+        && let Some(commit_id) = repo_state.history_state.selected_commit.clone()
+    {
+        reloads.push(SelectedHistoryReload::CommitDetails(commit_id));
+    }
+
+    reloads
+}
+
+fn append_selected_history_reload_effects(
+    repo_id: RepoId,
+    repo_state: &mut RepoState,
+    reloads: SmallVec<[SelectedHistoryReload; 3]>,
+    effects: &mut SetActiveRepoEffects,
+) {
+    for reload in reloads {
+        match reload {
+            SelectedHistoryReload::FileHistory(path) => {
+                repo_state.history_state.file_history = Loadable::Loading;
+                effects.push(Effect::LoadFileHistory {
+                    repo_id,
+                    path,
+                    limit: REACTIVATED_FILE_HISTORY_LIMIT,
+                });
+            }
+            SelectedHistoryReload::Blame { path, rev } => {
+                repo_state.history_state.blame = Loadable::Loading;
+                effects.push(Effect::LoadBlame { repo_id, path, rev });
+            }
+            SelectedHistoryReload::CommitDetails(commit_id) => {
+                repo_state.set_commit_details(Loadable::Loading);
+                effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
+            }
+        }
     }
 }
 
@@ -553,12 +617,16 @@ fn fill_set_active_repo_inline_impl(
     } else {
         None
     };
+    let selected_history_reloads = changed
+        .then(|| selected_history_reloads_for_activation(repo_state))
+        .unwrap_or_default();
 
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that
     // keeps the UI correct and responsive.
     let extra_effect_capacity = background_metadata_effect_capacity()
         + usize::from(selected_diff_reload.is_some())
+        + selected_history_reloads.len()
         + usize::from(persist_effect.is_some())
         + usize::from(changed)
         + usize::from(changed && !use_full_refresh)
@@ -614,6 +682,7 @@ fn fill_set_active_repo_inline_impl(
             }
         }
     }
+    append_selected_history_reload_effects(repo_id, repo_state, selected_history_reloads, effects);
     if let Some(effect) = persist_effect {
         effects.push(effect);
     }

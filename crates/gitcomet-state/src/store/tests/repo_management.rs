@@ -2683,6 +2683,143 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 }
 
 #[test]
+fn set_active_repo_reloads_cancelled_history_panes_for_existing_selection() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    let history_path = PathBuf::from("src/lib.rs");
+    let blame_path = PathBuf::from("src/main.rs");
+    let selected_commit = CommitId("deadbeef".into());
+
+    mark_repo_switch_secondary_metadata_ready(
+        state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo1)
+            .expect("repo1 exists"),
+    );
+    mark_repo_switch_secondary_metadata_ready(
+        state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo2)
+            .expect("repo2 exists"),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    {
+        let repo1_state = state
+            .repos
+            .iter_mut()
+            .find(|repo| repo.id == repo1)
+            .expect("repo1 exists");
+        repo1_state.history_state.file_history_path = Some(history_path.clone());
+        repo1_state.history_state.file_history = Loadable::Loading;
+        repo1_state.history_state.blame_path = Some(blame_path.clone());
+        repo1_state.history_state.blame_rev = Some("HEAD~1".to_string());
+        repo1_state.history_state.blame = Loadable::Loading;
+        repo1_state.set_selected_commit(Some(selected_commit.clone()));
+        repo1_state.set_commit_details(Loadable::Loading);
+    }
+    let repo1_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists")
+        .load_epoch;
+
+    let deactivate_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo2 },
+    );
+    assert!(
+        has_cancel_repo_loads_effect(&deactivate_effects, repo1, repo1_epoch),
+        "expected repo switch to cancel in-flight repo1 loads"
+    );
+    {
+        let repo1_state = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo1)
+            .expect("repo1 exists");
+        assert!(matches!(
+            repo1_state.history_state.file_history,
+            Loadable::NotLoaded
+        ));
+        assert!(matches!(
+            repo1_state.history_state.blame,
+            Loadable::NotLoaded
+        ));
+        assert!(matches!(
+            repo1_state.history_state.commit_details,
+            Loadable::NotLoaded
+        ));
+        assert_eq!(
+            repo1_state.history_state.file_history_path.as_ref(),
+            Some(&history_path)
+        );
+        assert_eq!(
+            repo1_state.history_state.blame_path.as_ref(),
+            Some(&blame_path)
+        );
+        assert_eq!(
+            repo1_state.history_state.selected_commit.as_ref(),
+            Some(&selected_commit)
+        );
+    }
+
+    let reactivate_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(reactivate_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadFileHistory {
+            repo_id,
+            path,
+            limit: 200,
+        } if *repo_id == repo1 && path == &history_path
+    )));
+    assert!(reactivate_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadBlame { repo_id, path, rev }
+            if *repo_id == repo1
+                && path == &blame_path
+                && rev.as_deref() == Some("HEAD~1")
+    )));
+    assert!(reactivate_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadCommitDetails { repo_id, commit_id }
+            if *repo_id == repo1 && commit_id == &selected_commit
+    )));
+
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(repo1_state.history_state.file_history.is_loading());
+    assert!(repo1_state.history_state.blame.is_loading());
+    assert!(repo1_state.history_state.commit_details.is_loading());
+}
+
+#[test]
 fn set_active_repo_reloads_selected_image_diff_via_image_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

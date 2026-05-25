@@ -13,6 +13,7 @@ const FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES: usize = 32 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_WINDOW_BYTES: usize = 256 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES: usize = 64 * 1024;
 const DIFF_SEARCH_QUERY_DEBOUNCE_MS: u64 = 150;
+const MAX_UTF8_CHAR_BYTES: usize = 4;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(in crate::view) struct DiffSearchOptions {
@@ -224,20 +225,20 @@ impl DiffSearchMatcher {
             return true;
         }
 
-        let bytes = haystack.as_bytes();
-        let before = range
-            .start
-            .checked_sub(1)
-            .and_then(|ix| bytes.get(ix))
-            .copied();
-        let after = bytes.get(range.end).copied();
-        !before.is_some_and(is_ascii_word_byte) && !after.is_some_and(is_ascii_word_byte)
+        !haystack[..range.start]
+            .chars()
+            .next_back()
+            .is_some_and(is_word_char)
+            && !haystack[range.end..]
+                .chars()
+                .next()
+                .is_some_and(is_word_char)
     }
 }
 
 #[inline]
-fn is_ascii_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 fn next_char_boundary_after(s: &str, ix: usize) -> Option<usize> {
@@ -729,6 +730,7 @@ struct LiteralFileDiffLineTextStreamSearch {
     stream_abs: usize,
     recent_bytes: VecDeque<u8>,
     pending_whole_word_start: Option<usize>,
+    pending_whole_word_after: Vec<u8>,
     row_starts: Vec<(usize, usize)>,
     last_reported_visible_ix: Option<usize>,
 }
@@ -755,8 +757,11 @@ impl LiteralFileDiffLineTextStreamSearch {
             whole_word: matcher.options.whole_word,
             matched: 0,
             stream_abs: 0,
-            recent_bytes: VecDeque::with_capacity(matcher.query.len().saturating_add(1)),
+            recent_bytes: VecDeque::with_capacity(
+                matcher.query.len().saturating_add(MAX_UTF8_CHAR_BYTES),
+            ),
             pending_whole_word_start: None,
+            pending_whole_word_after: Vec::with_capacity(MAX_UTF8_CHAR_BYTES),
             row_starts: Vec::new(),
             last_reported_visible_ix: None,
         })
@@ -786,17 +791,32 @@ impl LiteralFileDiffLineTextStreamSearch {
         self.last_reported_visible_ix = Some(visible_ix);
     }
 
-    fn finish_pending_whole_word(&mut self, after: Option<u8>, out: &mut Vec<usize>) {
-        let Some(match_start) = self.pending_whole_word_start.take() else {
+    fn finish_pending_whole_word(&mut self, out: &mut Vec<usize>) {
+        let Some(match_start) = self.pending_whole_word_start else {
             return;
         };
-        if !after.is_some_and(is_ascii_word_byte) {
-            self.report_match_start(match_start, out);
+        match decode_first_utf8_char(self.pending_whole_word_after.as_slice()) {
+            Utf8CharDecode::Complete(ch) => {
+                self.pending_whole_word_start = None;
+                self.pending_whole_word_after.clear();
+                if !is_word_char(ch) {
+                    self.report_match_start(match_start, out);
+                }
+            }
+            Utf8CharDecode::Invalid => {
+                self.pending_whole_word_start = None;
+                self.pending_whole_word_after.clear();
+                self.report_match_start(match_start, out);
+            }
+            Utf8CharDecode::Incomplete => {}
         }
     }
 
     fn push_byte(&mut self, byte: u8, out: &mut Vec<usize>) {
-        self.finish_pending_whole_word(Some(byte), out);
+        if self.pending_whole_word_start.is_some() {
+            self.pending_whole_word_after.push(byte);
+            self.finish_pending_whole_word(out);
+        }
 
         let folded = folded_search_byte(byte, self.match_case);
         while self.matched > 0 && folded != self.needle[self.matched] {
@@ -807,28 +827,25 @@ impl LiteralFileDiffLineTextStreamSearch {
         }
 
         self.recent_bytes.push_back(byte);
-        while self.recent_bytes.len() > self.needle.len().saturating_add(1) {
+        while self.recent_bytes.len() > self.needle.len().saturating_add(MAX_UTF8_CHAR_BYTES) {
             self.recent_bytes.pop_front();
         }
 
         if self.matched == self.needle.len() {
             let match_end = self.stream_abs.saturating_add(1);
             let match_start = match_end.saturating_sub(self.needle.len());
-            let before = if match_start == 0 {
-                None
+            let before_is_word = if match_start == 0 {
+                false
             } else {
-                self.recent_bytes
-                    .get(
-                        self.recent_bytes
-                            .len()
-                            .saturating_sub(self.needle.len() + 1),
-                    )
-                    .copied()
+                let recent_bytes = self.recent_bytes.make_contiguous();
+                let before_end = recent_bytes.len().saturating_sub(self.needle.len());
+                trailing_utf8_char_is_word(&recent_bytes[..before_end])
             };
 
-            if !self.whole_word || !before.is_some_and(is_ascii_word_byte) {
+            if !self.whole_word || !before_is_word {
                 if self.whole_word {
                     self.pending_whole_word_start = Some(match_start);
+                    self.pending_whole_word_after.clear();
                 } else {
                     self.report_match_start(match_start, out);
                 }
@@ -850,12 +867,68 @@ impl LiteralFileDiffLineTextStreamSearch {
         self.stream_abs = self.stream_abs.saturating_add(byte_count);
         self.matched = 0;
         self.pending_whole_word_start = None;
+        self.pending_whole_word_after.clear();
         self.recent_bytes.clear();
     }
 
     fn finish(&mut self, out: &mut Vec<usize>) {
-        self.finish_pending_whole_word(None, out);
+        if let Some(match_start) = self.pending_whole_word_start.take() {
+            self.pending_whole_word_after.clear();
+            self.report_match_start(match_start, out);
+        }
     }
+}
+
+enum Utf8CharDecode {
+    Complete(char),
+    Incomplete,
+    Invalid,
+}
+
+fn decode_first_utf8_char(bytes: &[u8]) -> Utf8CharDecode {
+    let Some(&first) = bytes.first() else {
+        return Utf8CharDecode::Incomplete;
+    };
+
+    if first.is_ascii() {
+        return Utf8CharDecode::Complete(char::from(first));
+    }
+
+    let expected_len = match first {
+        0xC2..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF4 => 4,
+        _ => return Utf8CharDecode::Invalid,
+    };
+    if bytes.len() < expected_len {
+        return Utf8CharDecode::Incomplete;
+    }
+
+    match std::str::from_utf8(&bytes[..expected_len]) {
+        Ok(text) => match text.chars().next() {
+            Some(ch) if ch.len_utf8() == expected_len => Utf8CharDecode::Complete(ch),
+            _ => Utf8CharDecode::Invalid,
+        },
+        Err(_) => Utf8CharDecode::Invalid,
+    }
+}
+
+fn trailing_utf8_char_is_word(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+
+    let start = bytes.len().saturating_sub(MAX_UTF8_CHAR_BYTES);
+    let tail = &bytes[start..];
+    for offset in 0..tail.len() {
+        if let Utf8CharDecode::Complete(ch) = decode_first_utf8_char(&tail[offset..])
+            && ch.len_utf8() == tail.len() - offset
+        {
+            return is_word_char(ch);
+        }
+    }
+
+    false
 }
 
 fn collect_file_diff_line_text_literal_stream_match_visible_rows(
@@ -2789,6 +2862,30 @@ mod tests {
     }
 
     #[test]
+    fn diff_search_matcher_whole_word_uses_unicode_boundaries() {
+        let literal = DiffSearchMatcher::new(
+            "β",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(!literal.is_match("αβγ"));
+        assert!(literal.is_match("β value"));
+
+        let regex = DiffSearchMatcher::new(
+            "β",
+            DiffSearchOptions {
+                whole_word: true,
+                regex: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        assert!(!regex.is_match("αβγ"));
+        assert!(regex.is_match("β value"));
+    }
+
+    #[test]
     fn diff_search_matcher_handles_regex_and_invalid_regex() {
         let regex = DiffSearchMatcher::new(
             r"render\d+",
@@ -2995,6 +3092,46 @@ mod tests {
         );
 
         assert_eq!(regex_matches, vec![78]);
+    }
+
+    #[test]
+    fn diff_search_file_slice_literal_stream_respects_unicode_whole_word_boundaries() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        let row1 = "αβγ";
+        let row2 = "β delta";
+        let text = format!("{row1}\n{row2}\n");
+        file.write_all(text.as_bytes()).expect("write temp file");
+        let path = Arc::new(file.path().to_path_buf());
+
+        let matcher = DiffSearchMatcher::new(
+            "β",
+            DiffSearchOptions {
+                whole_word: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let mut matches = Vec::new();
+        let row1_slice = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..row1.len(),
+            false,
+            false,
+        );
+        let row2_start = row1.len() + 1;
+        let row2_slice = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            row2_start..(row2_start + row2.len()),
+            false,
+            false,
+        );
+
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(10, row1_slice), (11, row2_slice)],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![11]);
     }
 
     #[test]
