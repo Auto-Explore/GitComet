@@ -14,6 +14,7 @@ const FILE_PREVIEW_REGEX_SEARCH_WINDOW_BYTES: usize = 256 * 1024;
 const FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES: usize = 64 * 1024;
 const DIFF_SEARCH_QUERY_DEBOUNCE_MS: u64 = 150;
 const MAX_UTF8_CHAR_BYTES: usize = 4;
+const DIFF_SEARCH_TRIGRAM_MIN_QUERY_BYTES: usize = 3;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(in crate::view) struct DiffSearchOptions {
@@ -399,6 +400,12 @@ impl DiffSearchVisibleTrigramIndex {
     }
 }
 
+fn diff_search_inline_patch_query_uses_trigram_index(
+    query: AsciiCaseInsensitiveNeedle<'_>,
+) -> bool {
+    query.as_bytes().len() >= DIFF_SEARCH_TRIGRAM_MIN_QUERY_BYTES
+}
+
 #[inline]
 fn diff_search_displayed_text_matches_query(
     query: AsciiCaseInsensitiveNeedle<'_>,
@@ -574,6 +581,33 @@ fn inline_patch_diff_visible_ix_matches_query(
     };
     inline_patch_diff_search_text(diff, diff_click_kinds, diff_header_display_cache, src_ix)
         .is_some_and(|text| query.is_match(text.as_ref()))
+}
+
+fn collect_inline_patch_diff_visible_matches_with_needle(
+    diff: &Diff,
+    diff_click_kinds: &[DiffClickKind],
+    diff_header_display_cache: &HashMap<usize, SharedString>,
+    diff_visible_inline_map: Option<&super::diff_cache::PatchInlineVisibleMap>,
+    diff_visible_indices: &[usize],
+    query: AsciiCaseInsensitiveNeedle<'_>,
+    out: &mut Vec<usize>,
+) {
+    let total = diff_visible_inline_map
+        .map(super::diff_cache::PatchInlineVisibleMap::visible_len)
+        .unwrap_or(diff_visible_indices.len());
+    for visible_ix in 0..total {
+        if inline_patch_diff_visible_ix_matches_query(
+            diff,
+            diff_click_kinds,
+            diff_header_display_cache,
+            diff_visible_inline_map,
+            diff_visible_indices,
+            query,
+            visible_ix,
+        ) {
+            out.push(visible_ix);
+        }
+    }
 }
 
 fn resolved_output_line_ix_matches_query(
@@ -1798,14 +1832,14 @@ impl MainPaneView {
             return;
         }
         if self.diff_view == DiffViewMode::Inline && self.is_file_diff_view_active() {
-            let rows: Vec<_> = (0..total)
-                .filter_map(|visible_ix| {
-                    self.diff_mapped_ix_for_visible_ix(visible_ix)
-                        .and_then(|mapped_ix| self.file_diff_inline_render_data(mapped_ix))
-                        .map(|row| (visible_ix, Cow::Owned(row.text.as_ref().to_string())))
-                })
-                .collect();
-            collect_stream_match_visible_rows(rows, matcher, &mut self.diff_search_matches);
+            let rows = (0..total).filter_map(|visible_ix| {
+                self.diff_mapped_ix_for_visible_ix(visible_ix)
+                    .and_then(|mapped_ix| self.file_diff_inline_render_data(mapped_ix))
+                    .map(|row| (visible_ix, row.text))
+            });
+            let mut matches = Vec::new();
+            collect_file_diff_line_text_stream_match_visible_rows(rows, matcher, &mut matches);
+            self.diff_search_matches = matches;
             self.diff_search_matches.sort_unstable();
             self.diff_search_matches.dedup();
             return;
@@ -1884,6 +1918,25 @@ impl MainPaneView {
             _ => return false,
         };
 
+        let diff_click_kinds = &self.diff_click_kinds;
+        let diff_header_display_cache = &self.diff_header_display_cache;
+        let diff_visible_inline_map = self.diff_visible_inline_map.as_ref();
+        let diff_visible_indices = &self.diff_visible_indices;
+        let matches = &mut self.diff_search_matches;
+
+        if !diff_search_inline_patch_query_uses_trigram_index(query) {
+            collect_inline_patch_diff_visible_matches_with_needle(
+                diff.as_ref(),
+                diff_click_kinds,
+                diff_header_display_cache,
+                diff_visible_inline_map,
+                diff_visible_indices,
+                query,
+                matches,
+            );
+            return true;
+        }
+
         if self.diff_search_inline_patch_trigram_index.is_none() {
             let mut index = DiffSearchVisibleTrigramIndex::default();
             let mut trigrams = SmallVec::<[u32; 64]>::new();
@@ -1917,31 +1970,19 @@ impl MainPaneView {
             .diff_search_inline_patch_trigram_index
             .as_ref()
             .expect("inline patch diff trigram index initialized");
-        let diff_click_kinds = &self.diff_click_kinds;
-        let diff_header_display_cache = &self.diff_header_display_cache;
-        let diff_visible_inline_map = self.diff_visible_inline_map.as_ref();
-        let diff_visible_indices = &self.diff_visible_indices;
-        let matches = &mut self.diff_search_matches;
 
         match index.candidates(query.bytes) {
             DiffSearchVisibleCandidates::None => {}
             DiffSearchVisibleCandidates::All => {
-                let total = diff_visible_inline_map
-                    .map(super::diff_cache::PatchInlineVisibleMap::visible_len)
-                    .unwrap_or(diff_visible_indices.len());
-                for visible_ix in 0..total {
-                    if inline_patch_diff_visible_ix_matches_query(
-                        diff.as_ref(),
-                        diff_click_kinds,
-                        diff_header_display_cache,
-                        diff_visible_inline_map,
-                        diff_visible_indices,
-                        query,
-                        visible_ix,
-                    ) {
-                        matches.push(visible_ix);
-                    }
-                }
+                collect_inline_patch_diff_visible_matches_with_needle(
+                    diff.as_ref(),
+                    diff_click_kinds,
+                    diff_header_display_cache,
+                    diff_visible_inline_map,
+                    diff_visible_indices,
+                    query,
+                    matches,
+                );
             }
             DiffSearchVisibleCandidates::Indexed(candidate_visible_rows) => {
                 for &visible_ix in candidate_visible_rows {
@@ -2752,9 +2793,9 @@ mod tests {
         collect_split_stream_match_visible_rows, collect_stream_match_visible_rows,
         collect_stream_match_visible_rows_with_mode, conflict_resolver_visible_match_indices,
         conflict_resolver_visible_match_indices_with_matcher, contains_ascii_case_insensitive,
-        diff_search_query_reuse, diff_search_resume_match_ix,
-        diff_search_split_row_texts_match_query, empty_conflict_resolver_search_two_way_rows,
-        three_way_visible_item_matches_query,
+        diff_search_inline_patch_query_uses_trigram_index, diff_search_query_reuse,
+        diff_search_resume_match_ix, diff_search_split_row_texts_match_query,
+        empty_conflict_resolver_search_two_way_rows, three_way_visible_item_matches_query,
     };
     use crate::view::conflict_resolver;
     use crate::view::conflict_resolver::{
@@ -2828,6 +2869,19 @@ mod tests {
             diff_search_query_reuse("render_cache", "cache_render"),
             DiffSearchQueryReuse::None
         );
+    }
+
+    #[test]
+    fn diff_search_inline_patch_short_queries_skip_trigram_index() {
+        assert!(!diff_search_inline_patch_query_uses_trigram_index(
+            AsciiCaseInsensitiveNeedle::new("a").expect("needle")
+        ));
+        assert!(!diff_search_inline_patch_query_uses_trigram_index(
+            AsciiCaseInsensitiveNeedle::new("ab").expect("needle")
+        ));
+        assert!(diff_search_inline_patch_query_uses_trigram_index(
+            AsciiCaseInsensitiveNeedle::new("abc").expect("needle")
+        ));
     }
 
     #[test]
@@ -3092,6 +3146,52 @@ mod tests {
         );
 
         assert_eq!(regex_matches, vec![78]);
+    }
+
+    #[test]
+    fn diff_search_file_slice_case_sensitive_collector_does_not_materialize_large_rows() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        let payload_bytes = FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES * 128;
+        let mut source = Vec::with_capacity(payload_bytes);
+        source.extend_from_slice(b"Needle ");
+        source.extend(std::iter::repeat(b'x').take(FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES));
+        source.push(0xff);
+        source.resize(payload_bytes, b'x');
+        file.write_all(source.as_slice()).expect("write temp file");
+        let path = Arc::new(file.path().to_path_buf());
+
+        let materialized = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        assert!(
+            materialized.as_ref().is_empty(),
+            "invalid UTF-8 sentinel should make full-row materialization unusable"
+        );
+
+        let matcher = DiffSearchMatcher::new(
+            "Needle",
+            DiffSearchOptions {
+                match_case: true,
+                ..DiffSearchOptions::default()
+            },
+        );
+        let streamed = gitcomet_core::file_diff::FileDiffLineText::file_slice(
+            Arc::clone(&path),
+            0..source.len(),
+            false,
+            false,
+        );
+        let mut matches = Vec::new();
+        collect_file_diff_line_text_stream_match_visible_rows(
+            [(77, streamed)],
+            &matcher,
+            &mut matches,
+        );
+
+        assert_eq!(matches, vec![77]);
     }
 
     #[test]

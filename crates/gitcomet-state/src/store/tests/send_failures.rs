@@ -232,6 +232,29 @@ impl GitBackend for SelectiveBlockingOpenBackend {
         }
         Ok(Arc::new(ReadyOpenRepo::new(workdir)))
     }
+
+    fn open_cancellable(
+        &self,
+        path: &Path,
+        cancellation: &CancellationToken,
+    ) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+        cancellation.check_cancelled()?;
+        let workdir = path.to_path_buf();
+        let _ = self.started_tx.send(workdir.clone());
+        if Self::should_block(&workdir) {
+            let (lock, condvar) = &*self.release;
+            let mut released = lock.lock().unwrap_or_else(|e| e.into_inner());
+            while !*released {
+                cancellation.check_cancelled()?;
+                let (next_released, _) = condvar
+                    .wait_timeout(released, Duration::from_millis(10))
+                    .unwrap_or_else(|e| e.into_inner());
+                released = next_released;
+            }
+        }
+        cancellation.check_cancelled()?;
+        Ok(Arc::new(ReadyOpenRepo::new(workdir)))
+    }
 }
 
 struct BlockingTagsBackend {

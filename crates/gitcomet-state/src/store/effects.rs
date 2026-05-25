@@ -1209,6 +1209,7 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 open_repo::schedule_open_repo(
+                    repo_load_executor,
                     Arc::clone(backend),
                     msg_tx,
                     repo_id,

@@ -4210,6 +4210,103 @@ fn open_repo_effect_suppresses_result_after_cancellation() {
 }
 
 #[test]
+fn open_repo_effects_are_bounded_by_repo_load_executor() {
+    struct Backend {
+        started_tx: std::sync::mpsc::Sender<PathBuf>,
+        release: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    impl GitBackend for Backend {
+        fn open(&self, path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            let workdir = path.to_path_buf();
+            let _ = self.started_tx.send(workdir);
+            wait_for_release_signal(&self.release);
+            Err(Error::new(ErrorKind::Backend(
+                "open released by test".to_string(),
+            )))
+        }
+    }
+
+    let repo_a = RepoId(45);
+    let repo_b = RepoId(46);
+    let workdir_a = unique_temp_path("gitcomet-open-repo-bounded-a");
+    let workdir_b = unique_temp_path("gitcomet-open-repo-bounded-b");
+    let (started_tx, started_rx) = std::sync::mpsc::channel::<PathBuf>();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let _release_guard = BlockingReleaseGuard {
+        release: Arc::clone(&release),
+    };
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend {
+        started_tx,
+        release: Arc::clone(&release),
+    });
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let repo_load_executor = super::executor::TaskExecutor::new(1);
+    let metadata_executor = super::executor::TaskExecutor::new(1);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let msg_tx = super::worker_channel::StoreWorkerSender::for_test_msg_sender(msg_tx);
+    let thread_state = Arc::new(std::sync::RwLock::new(Arc::new(AppState::default())));
+    let mut repo_task_tokens = HashMap::default();
+    let executors = super::effects::EffectExecutors {
+        executor: &executor,
+        repo_load_executor: &repo_load_executor,
+        session_persist_executor: &executor,
+        metadata_executor: &metadata_executor,
+    };
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx.clone(),
+        Effect::OpenRepo {
+            repo_id: repo_a,
+            path: workdir_a.clone(),
+        },
+    );
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("first open did not start"),
+        workdir_a
+    );
+
+    super::effects::schedule_effect(
+        executors,
+        &thread_state,
+        &backend,
+        &repos,
+        &mut repo_task_tokens,
+        msg_tx,
+        Effect::OpenRepo {
+            repo_id: repo_b,
+            path: workdir_b.clone(),
+        },
+    );
+    assert!(
+        started_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "second open should wait for the single repo-load worker"
+    );
+
+    {
+        let (lock, condvar) = &*release;
+        let mut released = lock.lock().expect("release mutex");
+        *released = true;
+        condvar.notify_all();
+    }
+    assert_eq!(
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second open did not start after worker was released"),
+        workdir_b
+    );
+}
+
+#[test]
 fn worktree_and_submodule_effects_report_missing_repo_handle() {
     struct Backend;
     impl GitBackend for Backend {
