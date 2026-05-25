@@ -570,6 +570,8 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
 
       - name: Determine macOS signing mode
         id: macos_signing_mode
@@ -647,7 +649,21 @@ jobs:
           echo "api_key_path=$api_key_path" >> "$GITHUB_OUTPUT"
           echo "default_keychain=$default_keychain" >> "$GITHUB_OUTPUT"
 
+      - name: Show macOS disk usage before packaging
+        run: |
+          set -euo pipefail
+          df -h || true
+          for path in target "$HOME/.cargo/registry" "$HOME/.cargo/git" dist "$RUNNER_TEMP"; do
+            if [ -e "$path" ]; then
+              du -sh "$path" || true
+            else
+              echo "missing: $path"
+            fi
+          done
+
       - name: Package macOS release assets
+        env:
+          GITCOMET_MACOS_PACKAGE_CLEAN_TARGET: "1"
         run: |
           set -euo pipefail
           package_args=(

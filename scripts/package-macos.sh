@@ -15,6 +15,9 @@ Defaults:
 Environment:
   GITCOMET_MACOS_X86_RELEASE_LTO=thin|fat|false|off|inherit
     Overrides release LTO for Intel macOS builds. Default: thin.
+  GITCOMET_MACOS_PACKAGE_CLEAN_TARGET=1
+    Deletes Cargo release build intermediates after staging artifacts. Intended
+    for disk-constrained CI runners.
 USAGE
 }
 
@@ -143,6 +146,54 @@ else
   out_abs="$(cd "${repo_root}/${out_dir}" && pwd)"
 fi
 
+show_disk_usage() {
+  local label="$1"
+  local cargo_home="${CARGO_HOME:-${HOME:-}/.cargo}"
+
+  echo "macOS packaging disk usage ($label):"
+  df -h || true
+  for path in \
+    "${repo_root}/target" \
+    "${cargo_home}/registry" \
+    "${cargo_home}/git" \
+    "$out_abs" \
+    "${RUNNER_TEMP:-}"
+  do
+    if [[ -z "$path" ]]; then
+      continue
+    fi
+    if [[ -e "$path" ]]; then
+      du -sh "$path" || true
+    else
+      echo "missing: $path"
+    fi
+  done
+}
+
+clean_target_intermediates_for_ci() {
+  if [[ "${GITCOMET_MACOS_PACKAGE_CLEAN_TARGET:-0}" != "1" ]]; then
+    return
+  fi
+
+  local target_dir="${repo_root}/target/${mode}"
+  if [[ ! -d "$target_dir" ]]; then
+    return
+  fi
+
+  echo "Cleaning Cargo ${mode} build intermediates before creating macOS archives."
+  for path in \
+    "${target_dir}/.fingerprint" \
+    "${target_dir}/build" \
+    "${target_dir}/deps" \
+    "${target_dir}/examples" \
+    "${target_dir}/incremental"
+  do
+    if [[ -e "$path" ]]; then
+      rm -rf "$path"
+    fi
+  done
+}
+
 stage_root="${out_abs}/stage"
 release_root="gitcomet-v${version}-macos-${arch}"
 release_dir="${stage_root}/${release_root}"
@@ -224,6 +275,12 @@ if [[ -n "$codesign_identity" ]]; then
 
   codesign --verify --strict --verbose=2 "${release_dir}/gitcomet"
   codesign --verify --strict --verbose=2 "$app_bundle"
+fi
+
+if [[ "${GITCOMET_MACOS_PACKAGE_CLEAN_TARGET:-0}" == "1" ]]; then
+  show_disk_usage "before target cleanup"
+  clean_target_intermediates_for_ci
+  show_disk_usage "after target cleanup"
 fi
 
 # Create a deterministic tarball root directory per version/arch.
