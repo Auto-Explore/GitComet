@@ -3548,6 +3548,109 @@ mod tests {
     }
 
     #[gpui::test]
+    fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_move(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commits = vec![
+            commit("c1", &["c0"], "commit 1"),
+            commit("c0", &[], "commit 0"),
+        ];
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-click-close"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c1")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history rows with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some() && cx.debug_bounds("history_row_1").is_some()
+        });
+
+        let hover_row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(hover_row.left() + px(24.0), hover_row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let other_row = cx
+            .debug_bounds("history_row_1")
+            .expect("second history row should be rendered");
+        let click_point = point(other_row.right() - px(8.0), other_row.center().y);
+        cx.simulate_mouse_down(
+            click_point,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            click_point,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when another commit is clicked without a mouse move"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+    }
+
+    #[gpui::test]
     fn history_refs_hover_closes_when_history_scrolls_programmatically(
         cx: &mut gpui::TestAppContext,
     ) {

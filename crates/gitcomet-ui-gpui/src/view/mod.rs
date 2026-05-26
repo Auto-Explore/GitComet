@@ -2816,6 +2816,10 @@ impl Render for GitCometView {
                 cx.notify();
             }
         }));
+        root = root.on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+            this.history_refs_hover_host
+                .update(cx, |host, cx| host.close(cx));
+        }));
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,
