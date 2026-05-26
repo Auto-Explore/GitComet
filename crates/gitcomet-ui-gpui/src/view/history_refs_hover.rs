@@ -110,11 +110,11 @@ impl HistoryRefsHoverHost {
             return;
         }
 
-        if let Some(pending) = self.pending_show.as_mut() {
-            if same_history_refs_hover_state(pending, &next) {
-                pending.source_pointer_x = pointer.x;
-                return;
-            }
+        if let Some(pending) = self.pending_show.as_mut()
+            && same_history_refs_hover_state(pending, &next)
+        {
+            pending.source_pointer_x = pointer.x;
+            return;
         }
 
         self.pending_show = Some(next);

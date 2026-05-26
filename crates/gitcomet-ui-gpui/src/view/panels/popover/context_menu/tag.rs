@@ -62,9 +62,7 @@ pub(super) fn model_for_tag(
     )
 }
 
-fn remote_tag_context<'a>(
-    repo: Option<&'a RepoState>,
-) -> (Vec<String>, HashSet<(&'a str, &'a str)>) {
+fn remote_tag_context(repo: Option<&RepoState>) -> (Vec<String>, HashSet<(&str, &str)>) {
     let mut remote_names = repo
         .and_then(|r| match &r.remotes {
             Loadable::Ready(remotes) => Some(

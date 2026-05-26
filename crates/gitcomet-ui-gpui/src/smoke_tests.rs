@@ -13,6 +13,7 @@ use gpui::{
     ClipboardItem, Decorations, KeyBinding, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
     Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Tiling, div, px,
 };
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1655,6 +1656,12 @@ fn restore_session_and_draw(
     view: gpui::Entity<crate::view::GitCometView>,
     repos: Vec<PathBuf>,
 ) -> Vec<RepoId> {
+    for repo in repos.iter() {
+        fs::create_dir_all(repo).unwrap_or_else(|error| {
+            panic!("failed to create test repo dir {}: {error}", repo.display())
+        });
+    }
+
     store.dispatch(Msg::RestoreSession {
         open_repos: repos.clone(),
         active_repo: repos.first().cloned(),

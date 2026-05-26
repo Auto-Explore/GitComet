@@ -317,6 +317,9 @@ pub(in crate::view) enum HistoryRefListItemKind {
     DetachedHead,
 }
 
+type HistoryRefItems = Arc<[HistoryRefListItem]>;
+type HistoryRefItemsByTarget<'a> = HashMap<&'a str, HistoryRefItems>;
+
 #[inline]
 pub(in crate::view) fn history_commit_is_probable_stash_tip(commit: &Commit) -> bool {
     if !(2..=3).contains(&commit.parent_ids.len()) {
@@ -825,10 +828,7 @@ pub(in crate::view) fn build_history_branch_ref_items_by_target<'a>(
     remote_branches: &'a [RemoteBranch],
     head_branch: Option<&str>,
     head_target: Option<&str>,
-) -> (
-    HashMap<&'a str, Arc<[HistoryRefListItem]>>,
-    Option<Arc<[HistoryRefListItem]>>,
-) {
+) -> (HistoryRefItemsByTarget<'a>, Option<HistoryRefItems>) {
     let branch_names_by_target = build_history_branch_ref_names_by_target(
         branches,
         remote_branches,
@@ -844,7 +844,7 @@ pub(in crate::view) fn build_history_branch_ref_items_by_target<'a>(
         history_branch_ref_items_with_extra_head(names, head_branch.unwrap_or_default())
     });
 
-    let mut ref_items_by_target: HashMap<&str, Arc<[HistoryRefListItem]>> =
+    let mut ref_items_by_target: HistoryRefItemsByTarget<'_> =
         HashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
     for (target, names) in branch_names_by_target {
         if names.is_empty() {

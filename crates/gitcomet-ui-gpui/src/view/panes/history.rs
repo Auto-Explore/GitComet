@@ -3572,7 +3572,15 @@ mod tests {
             },
         );
         repo.history_state.history_scope = LogScope::AllBranches;
-        repo.history_state.selected_commit = Some(selected_commit);
+        repo.history_state.selected_commit = Some(selected_commit.clone());
+        repo.history_state.commit_details =
+            Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                id: selected_commit.clone(),
+                message: "commit 50".into(),
+                committed_at: "2026-05-26 12:00:00 +0300".into(),
+                parent_ids: vec![],
+                files: vec![],
+            }));
         repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
         repo.branches_rev = 1;
         repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -3639,7 +3647,7 @@ mod tests {
             let main_pane = view.read(app).main_pane.clone();
             let history_view = main_pane.read(app).history_view.clone();
             history_view.update(app, |history, cx| {
-                assert!(history.history_select_adjacent_commit(1, cx));
+                history.request_reveal_commit(repo_id, selected_commit.clone(), None, cx);
             });
             window.refresh();
             let _ = window.draw(app);
