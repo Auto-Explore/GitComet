@@ -1,7 +1,6 @@
 use super::super::path_display;
 use super::super::*;
 use crate::kit::text_truncation::path_alignment_visible_signature;
-use gitcomet_core::domain::LogScope;
 use gitcomet_state::model::{AuthRetryOperation, CommandLogEntry};
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -12,14 +11,6 @@ struct PendingCommitAmend {
     last_command_log_entry: Option<CommandLogEntry>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(in super::super) struct CommitDetailsMessageContext {
-    pub(in super::super) repo_id: RepoId,
-    pub(in super::super) selected_commit: CommitId,
-    pub(in super::super) details_id: Option<CommitId>,
-    pub(in super::super) commit_details_rev: u64,
-}
-
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -28,7 +19,6 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) ui_scale_percent: u32,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
-    _commit_details_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: u64,
@@ -52,10 +42,11 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
+    pub(in super::super) commit_details_message_sha_menu: Entity<components::CommitShaHoverMenu>,
     pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_message_context: Option<CommitDetailsMessageContext>,
+    pub(in super::super) commit_details_parent_sha_menu: Entity<components::CommitShaHoverMenu>,
     pub(in super::super) commit_message_drafts: HashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
@@ -205,35 +196,6 @@ impl DetailsPaneView {
         hasher.finish()
     }
 
-    fn commit_details_message_context(state: &AppState) -> Option<CommitDetailsMessageContext> {
-        let repo_id = state.active_repo?;
-        let repo = state.repos.iter().find(|r| r.id == repo_id)?;
-        let selected_commit = repo.history_state.selected_commit.clone()?;
-        let details_id = match &repo.history_state.commit_details {
-            Loadable::Ready(details) => Some(details.id.clone()),
-            _ => None,
-        };
-
-        Some(CommitDetailsMessageContext {
-            repo_id,
-            selected_commit,
-            details_id,
-            commit_details_rev: repo.history_state.commit_details_rev,
-        })
-    }
-
-    fn current_commit_details_message_context(&self) -> Option<CommitDetailsMessageContext> {
-        Self::commit_details_message_context(&self.state)
-    }
-
-    fn clear_commit_details_message_activation(&mut self, cx: &mut gpui::Context<Self>) {
-        self.commit_details_message_context = None;
-        self.commit_details_message_input.update(cx, |input, cx| {
-            input.set_activation_ranges(Vec::new(), cx);
-            let _ = input.take_activated_text();
-        });
-    }
-
     pub(in super::super) fn new(
         store: Arc<AppStore>,
         ui_model: Entity<AppUiModel>,
@@ -296,6 +258,18 @@ impl DetailsPaneView {
                 cx,
             )
         });
+        let commit_details_message_sha_menu = cx.new(|cx| {
+            components::CommitShaHoverMenu::new(
+                commit_details_message_input.clone(),
+                RepoId(0),
+                Arc::<[components::CommitShaLink]>::from([]),
+                theme,
+                crate::ui_scale::UiScale::current(cx),
+                "commit_details_message_sha_hover_menu",
+                root_view.clone(),
+                cx,
+            )
+        });
 
         let commit_details_sha_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
@@ -342,6 +316,18 @@ impl DetailsPaneView {
             input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
             input
         });
+        let commit_details_parent_sha_menu = cx.new(|cx| {
+            components::CommitShaHoverMenu::new(
+                commit_details_parent_input.clone(),
+                RepoId(0),
+                Arc::<[components::CommitShaLink]>::from([]),
+                theme,
+                crate::ui_scale::UiScale::current(cx),
+                "commit_details_parent_sha_hover_menu",
+                root_view.clone(),
+                cx,
+            )
+        });
 
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
             let next: SharedString = input.read(cx).text().to_string().into();
@@ -356,33 +342,6 @@ impl DetailsPaneView {
                 this.commit_message_user_edited = true;
             }
         });
-        let commit_details_message_subscription =
-            cx.observe(&commit_details_message_input, |this, input, cx| {
-                let Some(target) = input.update(cx, |input, _cx| input.take_activated_text())
-                else {
-                    return;
-                };
-                let Some(rendered_context) = this.commit_details_message_context.clone() else {
-                    return;
-                };
-                if this.current_commit_details_message_context() != Some(rendered_context.clone()) {
-                    return;
-                }
-
-                let repo_id = rendered_context.repo_id;
-                let commit_id = CommitId(target.as_ref().to_ascii_lowercase().into());
-                let _ = this.root_view.update(cx, move |root, cx| {
-                    root.main_pane.update(cx, |main, cx| {
-                        main.reveal_history_commit(
-                            repo_id,
-                            commit_id,
-                            Some(LogScope::AllBranches),
-                            cx,
-                        );
-                    });
-                });
-            });
-
         let mut pane = Self {
             store,
             state,
@@ -391,7 +350,6 @@ impl DetailsPaneView {
             ui_scale_percent,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
-            _commit_details_message_input_subscription: commit_details_message_subscription,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -416,10 +374,11 @@ impl DetailsPaneView {
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
             commit_details_message_input,
+            commit_details_message_sha_menu,
             commit_details_sha_input,
             commit_details_date_input,
             commit_details_parent_input,
-            commit_details_message_context: None,
+            commit_details_parent_sha_menu,
             commit_message_drafts: HashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
@@ -784,7 +743,6 @@ impl DetailsPaneView {
 
     fn apply_state_snapshot(&mut self, next: Arc<AppState>, cx: &mut gpui::Context<Self>) {
         let prev_active_repo_id = self.state.active_repo;
-        let prev_commit_details_message_context = Self::commit_details_message_context(&self.state);
         let prev_selected_commit = prev_active_repo_id.and_then(|repo_id| {
             self.state
                 .repos
@@ -804,7 +762,6 @@ impl DetailsPaneView {
         });
 
         let next_repo_id = next.active_repo;
-        let next_commit_details_message_context = Self::commit_details_message_context(&next);
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
         let next_selected_commit = next_repo.and_then(|r| r.history_state.selected_commit.clone());
         let next_merge_message = next_repo.and_then(|r| match &r.merge_commit_message {
@@ -813,9 +770,6 @@ impl DetailsPaneView {
         });
 
         self.state = next;
-        if prev_commit_details_message_context != next_commit_details_message_context {
-            self.clear_commit_details_message_activation(cx);
-        }
         self.commit_message_drafts
             .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
 

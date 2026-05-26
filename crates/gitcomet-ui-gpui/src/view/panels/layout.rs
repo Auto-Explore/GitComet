@@ -1,5 +1,5 @@
 use super::*;
-use gpui::Div;
+use gpui::{AnyElement, Div};
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
@@ -11,11 +11,7 @@ fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
 
-fn commit_details_selectable_row(
-    theme: AppTheme,
-    key: &'static str,
-    input: Entity<components::TextInput>,
-) -> Div {
+fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
     div()
         .flex()
         .flex_col()
@@ -26,14 +22,18 @@ fn commit_details_selectable_row(
                 .text_color(theme.colors.text_muted)
                 .child(key),
         )
-        .child(
-            div()
-                .w_full()
-                .min_w(px(0.0))
-                .text_sm()
-                .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-                .child(input),
-        )
+        .child(div().w_full().min_w(px(0.0)).text_sm().child(value))
+}
+
+fn commit_details_monospace_value(input: Entity<components::TextInput>) -> AnyElement {
+    commit_details_monospace_element(input.into_any_element())
+}
+
+fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
+    div()
+        .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+        .child(value)
+        .into_any_element()
 }
 
 fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
@@ -53,7 +53,7 @@ fn commit_message_sha_highlights(
     theme: AppTheme,
 ) -> (
     Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
-    Vec<crate::kit::TextActivationRange>,
+    Arc<[components::CommitShaLink]>,
 ) {
     let style = commit_sha_link_style(theme);
     let ranges = crate::text_selection::commit_sha_ranges(message);
@@ -62,15 +62,26 @@ fn commit_message_sha_highlights(
         .cloned()
         .map(|range| (range, style))
         .collect::<Vec<_>>();
-    let activations = ranges
+    let links = ranges
         .into_iter()
-        .map(|range| crate::kit::TextActivationRange {
-            value: message[range.clone()].to_ascii_lowercase().into(),
+        .map(|range| components::CommitShaLink {
+            commit_id: CommitId(message[range.clone()].to_ascii_lowercase().into()),
             range,
         })
         .collect::<Vec<_>>();
 
-    (highlights, activations)
+    (highlights, Arc::from(links))
+}
+
+fn commit_sha_field_highlights(
+    value: &str,
+    theme: AppTheme,
+) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+    if value.is_empty() || value == "—" {
+        Vec::new()
+    } else {
+        vec![(0..value.len(), commit_sha_link_style(theme))]
+    }
 }
 
 fn min_change_tracking_stack_height(split_change_tracking: bool, handle_h: Pixels) -> Pixels {
@@ -544,17 +555,59 @@ impl DetailsPaneView {
         &mut self,
         message: &str,
         theme: AppTheme,
-        context: CommitDetailsMessageContext,
+        repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (highlights, activations) = commit_message_sha_highlights(message, theme);
-        self.commit_details_message_context = Some(context);
+        let (highlights, links) = commit_message_sha_highlights(message, theme);
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
             input.set_highlights(highlights, cx);
-            input.set_activation_ranges(activations, cx);
+        });
+        self.commit_details_message_sha_menu.update(cx, |menu, cx| {
+            menu.sync(
+                self.commit_details_message_input.clone(),
+                repo_id,
+                links,
+                theme,
+                self.ui_scale(),
+                "commit_details_message_sha_hover_menu",
+                cx,
+            );
+        });
+    }
+
+    fn sync_commit_details_parent_input(
+        &mut self,
+        parent: &str,
+        repo_id: RepoId,
+        interactive: bool,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        Self::sync_commit_details_input_value(&self.commit_details_parent_input, parent, cx);
+        self.commit_details_parent_input.update(cx, |input, cx| {
+            input.set_highlights(commit_sha_field_highlights(parent, theme), cx);
+        });
+        let parent_links: Arc<[components::CommitShaLink]> = if interactive {
+            Arc::from([components::CommitShaLink {
+                range: 0..parent.len(),
+                commit_id: CommitId(parent.to_string().into()),
+            }])
+        } else {
+            Arc::<[components::CommitShaLink]>::from([])
+        };
+        self.commit_details_parent_sha_menu.update(cx, |menu, cx| {
+            menu.sync(
+                self.commit_details_parent_input.clone(),
+                repo_id,
+                parent_links,
+                theme,
+                self.ui_scale(),
+                "commit_details_parent_sha_hover_menu",
+                cx,
+            );
         });
     }
 
@@ -563,13 +616,22 @@ impl DetailsPaneView {
         message: &str,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.commit_details_message_context = None;
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
             input.set_highlights(Vec::new(), cx);
-            input.set_activation_ranges(Vec::new(), cx);
+        });
+        self.commit_details_message_sha_menu.update(cx, |menu, cx| {
+            menu.sync(
+                self.commit_details_message_input.clone(),
+                RepoId(0),
+                Arc::<[components::CommitShaLink]>::from([]),
+                self.theme,
+                self.ui_scale(),
+                "commit_details_message_sha_hover_menu",
+                cx,
+            );
         });
     }
 
@@ -733,9 +795,11 @@ impl DetailsPaneView {
                                 details.committed_at.as_str(),
                                 cx,
                             );
-                            Self::sync_commit_details_input_value(
-                                &self.commit_details_parent_input,
+                            self.sync_commit_details_parent_input(
                                 parent.as_str(),
+                                RepoId(0),
+                                false,
+                                theme,
                                 cx,
                             );
 
@@ -760,7 +824,7 @@ impl DetailsPaneView {
                                         ))
                                         .overflow_y_scroll()
                                         .track_scroll(&self.commit_scroll)
-                                        .child(self.commit_details_message_input.clone()),
+                                        .child(self.commit_details_message_sha_menu.clone()),
                                 )
                                 .child(
                                     components::Scrollbar::new(
@@ -788,17 +852,23 @@ impl DetailsPaneView {
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Commit SHA",
-                                            self.commit_details_sha_input.clone(),
+                                            commit_details_monospace_value(
+                                                self.commit_details_sha_input.clone(),
+                                            ),
                                         ))
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Commit date",
-                                            self.commit_details_date_input.clone(),
+                                            commit_details_monospace_value(
+                                                self.commit_details_date_input.clone(),
+                                            ),
                                         ))
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Parent commit SHA",
-                                            self.commit_details_parent_input.clone(),
+                                            commit_details_monospace_value(
+                                                self.commit_details_parent_input.clone(),
+                                            ),
                                         )),
                                 )
                                 .child(
@@ -877,19 +947,10 @@ impl DetailsPaneView {
                                 .into_any_element()
                         };
 
-                        let commit_details_rev = active_commit_details
-                            .as_ref()
-                            .map(|(_, rev)| *rev)
-                            .unwrap_or_default();
                         self.sync_commit_details_message_input(
                             details.message.as_str(),
                             theme,
-                            CommitDetailsMessageContext {
-                                repo_id,
-                                selected_commit: selected_id.clone(),
-                                details_id: Some(details.id.clone()),
-                                commit_details_rev,
-                            },
+                            repo_id,
                             cx,
                         );
                         Self::sync_commit_details_input_value(
@@ -902,9 +963,11 @@ impl DetailsPaneView {
                             details.committed_at.as_str(),
                             cx,
                         );
-                        Self::sync_commit_details_input_value(
-                            &self.commit_details_parent_input,
+                        self.sync_commit_details_parent_input(
                             parent.as_str(),
+                            repo_id,
+                            parent != "—",
+                            theme,
                             cx,
                         );
 
@@ -929,7 +992,7 @@ impl DetailsPaneView {
                                     ))
                                     .overflow_y_scroll()
                                     .track_scroll(&self.commit_scroll)
-                                    .child(self.commit_details_message_input.clone()),
+                                    .child(self.commit_details_message_sha_menu.clone()),
                             )
                             .child(
                                 components::Scrollbar::new(
@@ -957,17 +1020,25 @@ impl DetailsPaneView {
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",
-                                        self.commit_details_sha_input.clone(),
+                                        commit_details_monospace_value(
+                                            self.commit_details_sha_input.clone(),
+                                        ),
                                     ))
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit date",
-                                        self.commit_details_date_input.clone(),
+                                        commit_details_monospace_value(
+                                            self.commit_details_date_input.clone(),
+                                        ),
                                     ))
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Parent commit SHA",
-                                        self.commit_details_parent_input.clone(),
+                                        commit_details_monospace_element(
+                                            self.commit_details_parent_sha_menu
+                                                .clone()
+                                                .into_any_element(),
+                                        ),
                                     )),
                             )
                             .child(
