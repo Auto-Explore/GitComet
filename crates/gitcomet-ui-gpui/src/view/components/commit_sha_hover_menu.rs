@@ -234,11 +234,7 @@ impl CommitShaHoverMenu {
         self.open_link_ix.and_then(|ix| self.links.get(ix))
     }
 
-    fn active_link_has_input_focus(
-        &self,
-        window: &Window,
-        cx: &gpui::App,
-    ) -> bool {
+    fn active_link_has_input_focus(&self, window: &Window, cx: &gpui::App) -> bool {
         let Some(link) = self.active_link() else {
             return false;
         };

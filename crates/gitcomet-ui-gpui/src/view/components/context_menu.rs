@@ -267,8 +267,10 @@ fn context_menu_icon_color(
     }
 
     // Semantic-ish mapping for common actions.
-    if matches!(icon_path, Some("icons/trash.svg"))
-        || label.contains("Delete")
+    if matches!(
+        icon_path,
+        Some("icons/trash.svg") | Some("icons/repo_tab_close.svg")
+    ) || label.contains("Delete")
         || label.contains("Drop")
         || label.contains("Remove")
     {
@@ -314,6 +316,7 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/stash.svg" => Some("icons/stash.svg"),
         "icons/tag.svg" => Some("icons/tag.svg"),
         "icons/trash.svg" => Some("icons/trash.svg"),
+        "icons/repo_tab_close.svg" => Some("icons/repo_tab_close.svg"),
         "icons/refresh.svg" => Some("icons/refresh.svg"),
         "icons/open_external.svg" => Some("icons/open_external.svg"),
         "icons/file.svg" => Some("icons/file.svg"),
@@ -426,6 +429,7 @@ mod tests {
             "icons/stash.svg",
             "icons/tag.svg",
             "icons/trash.svg",
+            "icons/repo_tab_close.svg",
             "icons/refresh.svg",
             "icons/open_external.svg",
             "icons/file.svg",
@@ -484,6 +488,10 @@ mod tests {
             theme.colors.danger
         );
         assert_eq!(
+            context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg")),
+            theme.colors.danger
+        );
+        assert_eq!(
             context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),
             theme.colors.warning
         );
@@ -501,6 +509,7 @@ mod tests {
             "icons/stash.svg",
             "icons/tag.svg",
             "icons/trash.svg",
+            "icons/repo_tab_close.svg",
             "icons/refresh.svg",
             "icons/open_external.svg",
             "icons/file.svg",

@@ -4952,6 +4952,112 @@ fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn history_horizontal_wheel_does_not_scroll_vertically(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(709);
+    let commit_id = CommitId("8877665544332211".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_horizontal_wheel",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    let commits = (0..160)
+        .map(|ix| gitcomet_core::domain::Commit {
+            id: CommitId(format!("{ix:040x}").into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: format!("Commit {ix:03}").into(),
+            author: "Alice".into(),
+            time: std::time::SystemTime::UNIX_EPOCH
+                + Duration::from_secs(ix.try_into().unwrap_or(0)),
+        })
+        .collect();
+    repo.log = Loadable::Ready(
+        gitcomet_core::domain::LogPage {
+            commits,
+            next_cursor: None,
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    let (history_bounds, max_offset_y) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app).history_view.read(app);
+        let handle = pane.history_scroll.0.borrow().base_handle.clone();
+        (handle.bounds(), handle.max_offset().y)
+    });
+    let position = history_bounds.center();
+    assert!(
+        max_offset_y > px(0.0),
+        "expected history list to be vertically scrollable"
+    );
+
+    let offset_before = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(-120.0), px(0.0))),
+        ..Default::default()
+    });
+    draw_and_drain_test_window(cx);
+    let offset_after_horizontal = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    assert_eq!(
+        offset_after_horizontal.y, offset_before.y,
+        "expected horizontal-only wheel scroll not to move history vertically"
+    );
+
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        ..Default::default()
+    });
+    draw_and_drain_test_window(cx);
+    let offset_after_vertical = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    assert!(
+        offset_after_vertical.y < offset_before.y - px(0.5),
+        "expected vertical wheel scroll to continue moving history vertically"
+    );
+}
+
+#[gpui::test]
 fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

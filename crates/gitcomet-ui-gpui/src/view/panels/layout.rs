@@ -3,6 +3,11 @@ use gpui::{AnyElement, Div};
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
+type TextHighlight = (std::ops::Range<usize>, gpui::HighlightStyle);
+type TextHighlights = Vec<TextHighlight>;
+type CommitShaLinks = Arc<[components::CommitShaLink]>;
+type CommitMessageShaHighlights = (TextHighlights, CommitShaLinks);
+
 fn merge_active(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
 }
@@ -48,13 +53,7 @@ fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
     }
 }
 
-fn commit_message_sha_highlights(
-    message: &str,
-    theme: AppTheme,
-) -> (
-    Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
-    Arc<[components::CommitShaLink]>,
-) {
+fn commit_message_sha_highlights(message: &str, theme: AppTheme) -> CommitMessageShaHighlights {
     let style = commit_sha_link_style(theme);
     let ranges = crate::text_selection::commit_sha_ranges(message);
     let highlights = ranges
@@ -73,10 +72,7 @@ fn commit_message_sha_highlights(
     (highlights, Arc::from(links))
 }
 
-fn commit_sha_field_highlights(
-    value: &str,
-    theme: AppTheme,
-) -> Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> {
+fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
     if value.is_empty() || value == "—" {
         Vec::new()
     } else {
@@ -747,6 +743,7 @@ impl DetailsPaneView {
                                 .h_full()
                                 .min_h(px(0.0))
                                 .track_scroll(&self.commit_files_scroll);
+                                let list = restrict_scroll_to_vertical_axis(list);
                                 let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
                                     self.commit_files_scroll.clone(),
                                     components::ScrollbarAxis::Vertical,
@@ -808,7 +805,7 @@ impl DetailsPaneView {
                                 .relative()
                                 .w_full()
                                 .min_w(px(0.0))
-                                .child(
+                                .child(restrict_scroll_to_vertical_axis(
                                     div()
                                         .id(("commit_details_message_scroll_surface", repo_id.0))
                                         .debug_selector(|| {
@@ -825,7 +822,7 @@ impl DetailsPaneView {
                                         .overflow_y_scroll()
                                         .track_scroll(&self.commit_scroll)
                                         .child(self.commit_details_message_sha_menu.clone()),
-                                )
+                                ))
                                 .child(
                                     components::Scrollbar::new(
                                         ("commit_details_message_scrollbar", repo_id.0),
@@ -913,6 +910,7 @@ impl DetailsPaneView {
                             .h_full()
                             .min_h(px(0.0))
                             .track_scroll(&self.commit_files_scroll);
+                            let list = restrict_scroll_to_vertical_axis(list);
                             let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
                                 self.commit_files_scroll.clone(),
                                 components::ScrollbarAxis::Vertical,
@@ -976,7 +974,7 @@ impl DetailsPaneView {
                             .relative()
                             .w_full()
                             .min_w(px(0.0))
-                            .child(
+                            .child(restrict_scroll_to_vertical_axis(
                                 div()
                                     .id(("commit_details_message_scroll_surface", repo_id.0))
                                     .debug_selector(|| {
@@ -993,7 +991,7 @@ impl DetailsPaneView {
                                     .overflow_y_scroll()
                                     .track_scroll(&self.commit_scroll)
                                     .child(self.commit_details_message_sha_menu.clone()),
-                            )
+                            ))
                             .child(
                                 components::Scrollbar::new(
                                     ("commit_details_message_scrollbar", repo_id.0),
@@ -1948,6 +1946,7 @@ impl DetailsPaneView {
                         .h_full()
                         .min_h(px(0.0))
                         .track_scroll(&self.unstaged_scroll);
+                let list = restrict_scroll_to_vertical_axis(list);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -1985,6 +1984,7 @@ impl DetailsPaneView {
                 .h_full()
                 .min_h(px(0.0))
                 .track_scroll(&self.untracked_scroll);
+                let list = restrict_scroll_to_vertical_axis(list);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -2022,6 +2022,7 @@ impl DetailsPaneView {
                 .h_full()
                 .min_h(px(0.0))
                 .track_scroll(&self.unstaged_scroll);
+                let list = restrict_scroll_to_vertical_axis(list);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -2055,6 +2056,7 @@ impl DetailsPaneView {
                     .h_full()
                     .min_h(px(0.0))
                     .track_scroll(&self.staged_scroll);
+                let list = restrict_scroll_to_vertical_axis(list);
                 let list = div()
                     .flex_1()
                     .h_full()
@@ -2141,19 +2143,21 @@ impl DetailsPaneView {
             .w_full()
             .min_w(px(0.0))
             .child(
-                div()
-                    .id(("commit_message_scroll_surface", repo_key))
-                    .relative()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .max_h(px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX))
-                    .pr(components::Scrollbar::visible_gutter(
-                        self.commit_message_scroll.clone(),
-                        components::ScrollbarAxis::Vertical,
-                    ))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.commit_message_scroll)
-                    .child(self.commit_message_input.clone()),
+                restrict_scroll_to_vertical_axis(
+                    div()
+                        .id(("commit_message_scroll_surface", repo_key))
+                        .relative()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .max_h(px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX))
+                        .pr(components::Scrollbar::visible_gutter(
+                            self.commit_message_scroll.clone(),
+                            components::ScrollbarAxis::Vertical,
+                        ))
+                        .overflow_y_scroll()
+                        .track_scroll(&self.commit_message_scroll),
+                )
+                .child(self.commit_message_input.clone()),
             )
             .child(
                 components::Scrollbar::new(

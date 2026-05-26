@@ -25,9 +25,9 @@ use gpui::{
     Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
-    ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, TextRun, Tiling,
-    UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div, fill,
-    point, px, relative, size, uniform_list,
+    ScrollWheelEvent, ShapedLine, SharedString, Size, Style, StyleRefinement, Styled, TextRun,
+    Tiling, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div,
+    fill, point, px, relative, size, uniform_list,
 };
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 #[cfg(test)]
@@ -243,6 +243,11 @@ const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
+
+pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
+    element.style().restrict_scroll_to_axis = Some(true);
+    element
+}
 
 // Only use these wrappers for views that remain mounted while their parent is mounted.
 // Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
@@ -538,6 +543,7 @@ impl GitCometView {
         let sidebar_pane = self.sidebar_pane.clone();
         let main_pane = self.main_pane.clone();
         let details_pane = self.details_pane.clone();
+        let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
         let bottom_status_bar = self.bottom_status_bar.clone();
 
@@ -550,6 +556,9 @@ impl GitCometView {
             });
             details_pane.update(cx, |pane, cx| {
                 pane.set_active_context_menu_invoker(next.clone(), cx);
+            });
+            repo_tabs_bar.update(cx, |bar, cx| {
+                bar.set_active_context_menu_invoker(next.clone(), cx);
             });
             action_bar.update(cx, |bar, cx| {
                 bar.set_active_context_menu_invoker(next.clone(), cx);
@@ -2518,16 +2527,18 @@ impl Render for GitCometView {
                 })
                 .when(!prompt.reason.trim().is_empty(), |this| {
                     this.child(
-                        div()
-                            .id("auth_prompt_reason_scroll")
-                            .max_h(px(96.0))
-                            .overflow_y_scroll()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(prompt.reason.clone()),
-                            ),
+                        restrict_scroll_to_vertical_axis(
+                            div()
+                                .id("auth_prompt_reason_scroll")
+                                .max_h(px(96.0))
+                                .overflow_y_scroll(),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(prompt.reason.clone()),
+                        ),
                     )
                 })
                 .child(
@@ -2612,20 +2623,22 @@ impl Render for GitCometView {
                     .border_color(with_alpha(theme.colors.danger, 0.3))
                     .rounded(px(theme.radii.panel))
                     .child(
-                        div()
-                            .id("repo_error_banner_scroll")
-                            .max_h(px(140.0))
-                            .overflow_y_scroll()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .when_some(command_block, |this, command_block| {
-                                        this.child(command_block)
-                                    })
-                                    .child(self.error_banner_input.clone()),
-                            ),
+                        restrict_scroll_to_vertical_axis(
+                            div()
+                                .id("repo_error_banner_scroll")
+                                .max_h(px(140.0))
+                                .overflow_y_scroll(),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .when_some(command_block, |this, command_block| {
+                                    this.child(command_block)
+                                })
+                                .child(self.error_banner_input.clone()),
+                        ),
                     )
                     .when(show_overflow_hint, |this| {
                         this.child(

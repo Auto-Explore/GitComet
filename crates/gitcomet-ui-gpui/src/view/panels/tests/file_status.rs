@@ -2024,11 +2024,7 @@ fn commit_details_message_sha_keeps_hover_menu_open_while_link_is_focused(
         .expect("expected commit details message bounds");
     let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
 
-    show_commit_sha_hover_menu(
-        cx,
-        click,
-        "commit_details_message_sha_hover_menu_menu",
-    );
+    show_commit_sha_hover_menu(cx, click, "commit_details_message_sha_hover_menu_menu");
     simulate_counted_click(cx, click, 1);
     cx.run_until_parked();
     cx.update(|window, app| {

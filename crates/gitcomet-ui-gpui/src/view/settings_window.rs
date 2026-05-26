@@ -314,12 +314,7 @@ fn settings_window_frame(
 }
 
 fn uniform_list_vertical_wheel_delta(event: &gpui::ScrollWheelEvent, window: &Window) -> Pixels {
-    let pixel_delta = event.delta.pixel_delta(window.line_height());
-    if !pixel_delta.y.is_zero() {
-        pixel_delta.y
-    } else {
-        pixel_delta.x
-    }
+    event.delta.pixel_delta(window.line_height()).y
 }
 
 fn normalize_scroll_offset(raw_offset: Pixels, max_offset: Pixels) -> Pixels {
@@ -470,7 +465,7 @@ fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
 }
 
 fn git_executable_scope_note() -> &'static str {
-    "Applies only to the main GitComet browser window. Git-invoked command modes keep using git from System PATH."
+    "Applies to the main GitComet browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git."
 }
 
 impl SettingsWindowView {
@@ -2609,8 +2604,8 @@ impl Render for SettingsWindowView {
                                     cx.stop_propagation();
                                 }
                             }
-                        })
-                        .into_any_element();
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
                         general_card = general_card.child(self.dropdown_list_container(
                             "settings_window_theme_list_container",
                             "settings_window_theme_scrollbar",
@@ -2693,7 +2688,7 @@ impl Render for SettingsWindowView {
                         let list = if self.ui_font_options.is_empty() {
                             self.empty_dropdown_list("No fonts available.", theme)
                         } else {
-                            uniform_list(
+                            restrict_scroll_to_vertical_axis(uniform_list(
                                 "settings_window_ui_font_list",
                                 self.ui_font_options.len(),
                                 cx.processor(Self::render_ui_font_option_rows),
@@ -2713,6 +2708,7 @@ impl Render for SettingsWindowView {
                                     }
                                 }
                             })
+                            )
                             .into_any_element()
                         };
                         general_card = general_card
@@ -2741,7 +2737,7 @@ impl Render for SettingsWindowView {
                         let list = if self.editor_font_options.is_empty() {
                             self.empty_dropdown_list("No fonts available.", theme)
                         } else {
-                            uniform_list(
+                            restrict_scroll_to_vertical_axis(uniform_list(
                                 "settings_window_editor_font_list",
                                 self.editor_font_options.len(),
                                 cx.processor(Self::render_editor_font_option_rows),
@@ -2761,6 +2757,7 @@ impl Render for SettingsWindowView {
                                     }
                                 }
                             })
+                            )
                             .into_any_element()
                         };
                         general_card = general_card
@@ -2809,8 +2806,8 @@ impl Render for SettingsWindowView {
                                     cx.stop_propagation();
                                 }
                             }
-                        })
-                        .into_any_element();
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
                         general_card = general_card.child(self.dropdown_list_container(
                             "settings_window_date_format_list_container",
                             "settings_window_date_format_scrollbar",
@@ -2844,8 +2841,8 @@ impl Render for SettingsWindowView {
                                     cx.stop_propagation();
                                 }
                             }
-                        })
-                        .into_any_element();
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
                         general_card = general_card.child(self.dropdown_list_container(
                             "settings_window_timezone_list_container",
                             "settings_window_timezone_scrollbar",
@@ -2888,8 +2885,8 @@ impl Render for SettingsWindowView {
                                     cx.stop_propagation();
                                 }
                             }
-                        })
-                        .into_any_element();
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
                         change_tracking_card =
                             change_tracking_card.child(self.dropdown_list_container(
                                 "settings_window_change_tracking_list_container",
@@ -2927,8 +2924,8 @@ impl Render for SettingsWindowView {
                                     cx.stop_propagation();
                                 }
                             }
-                        })
-                        .into_any_element();
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
                         diff_card = diff_card.child(self.dropdown_list_container(
                             "settings_window_diff_content_mode_list_container",
                             "settings_window_diff_content_mode_scrollbar",
@@ -2969,8 +2966,8 @@ impl Render for SettingsWindowView {
                                     cx.stop_propagation();
                                 }
                             }
-                        })
-                        .into_any_element();
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
                         diff_card = diff_card.child(self.dropdown_list_container(
                             "settings_window_diff_scroll_sync_list_container",
                             "settings_window_diff_scroll_sync_scrollbar",
@@ -3209,7 +3206,7 @@ impl Render for SettingsWindowView {
                         "settings_window_git_executable_custom",
                         "Custom executable",
                         Some(
-                            "Use a specific Git binary, such as a newer standalone installation."
+                            "Use a specific Git binary and add its directory when Git resolves helper tools."
                                 .into(),
                         ),
                         self.git_executable_mode == GitExecutableMode::Custom,
@@ -3412,26 +3409,28 @@ impl Render for SettingsWindowView {
                             )),
                         );
 
-                    let scroll_surface = div()
-                        .id("settings_window_scroll")
-                        .debug_selector(|| "settings_window_scroll".to_string())
-                        .w_full()
-                        .h_full()
-                        .min_w(px(0.0))
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .track_scroll(&self.settings_window_scroll)
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .p_3()
-                        .child(general_card)
-                        .child(change_tracking_card)
-                        .child(diff_card)
-                        .child(git_log_card)
-                        .child(git_executable_card)
-                        .child(environment_card)
-                        .child(links_card);
+                    let scroll_surface = restrict_scroll_to_vertical_axis(
+                        div()
+                            .id("settings_window_scroll")
+                            .debug_selector(|| "settings_window_scroll".to_string())
+                            .w_full()
+                            .h_full()
+                            .min_w(px(0.0))
+                            .min_h(px(0.0))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.settings_window_scroll),
+                    )
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_3()
+                    .child(general_card)
+                    .child(change_tracking_card)
+                    .child(diff_card)
+                    .child(git_log_card)
+                    .child(git_executable_card)
+                    .child(environment_card)
+                    .child(links_card);
 
                     div()
                         .id("settings_window_root_view")
@@ -3520,7 +3519,7 @@ impl Render for SettingsWindowView {
                             .child("No dependency licenses found.")
                             .into_any_element()
                     } else {
-                        uniform_list(
+                        restrict_scroll_to_vertical_axis(uniform_list(
                             "settings_window_open_source_licenses_list",
                             rows.len(),
                             cx.processor(Self::render_open_source_license_rows),
@@ -3529,7 +3528,7 @@ impl Render for SettingsWindowView {
                         .min_w(px(0.0))
                         .h_full()
                         .min_h(px(0.0))
-                        .track_scroll(&self.open_source_licenses_scroll)
+                        .track_scroll(&self.open_source_licenses_scroll))
                         .into_any_element()
                     };
 
@@ -5739,6 +5738,35 @@ mod tests {
         assert!(
             inner_max > px(0.0),
             "expected the UI font list to be scrollable during the test"
+        );
+
+        settings_cx.simulate_mouse_move(list_bounds.center(), None, Modifiers::default());
+        settings_cx.simulate_event(ScrollWheelEvent {
+            position: list_bounds.center(),
+            delta: ScrollDelta::Pixels(point(px(-120.0), px(0.0))),
+            ..Default::default()
+        });
+        settings_cx.run_until_parked();
+
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let (outer_after_horizontal_scroll, inner_after_horizontal_scroll) = settings_window
+            .update(&mut settings_cx, |settings, _window, _cx| {
+                (
+                    absolute_scroll_y(&settings.settings_window_scroll),
+                    uniform_list_vertical_scroll_metrics(&settings.ui_font_scroll).1,
+                )
+            })
+            .expect("settings window should remain readable");
+
+        assert!(
+            (inner_after_horizontal_scroll - inner_before).abs() <= px(0.5),
+            "expected horizontal-only wheel scroll not to move the UI font list vertically"
+        );
+        assert!(
+            (outer_after_horizontal_scroll - outer_before).abs() <= px(0.5),
+            "expected horizontal-only wheel scroll not to move the outer settings page vertically"
         );
 
         settings_cx.simulate_mouse_move(list_bounds.center(), None, Modifiers::default());

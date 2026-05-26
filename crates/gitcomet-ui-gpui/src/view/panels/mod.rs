@@ -24,6 +24,16 @@ pub(in crate::view) enum ContextMenuAction {
     OpenRepo {
         path: std::path::PathBuf,
     },
+    ActivateRepo {
+        repo_id: RepoId,
+    },
+    CloseRepo {
+        repo_id: RepoId,
+    },
+    CloseRepos {
+        repo_ids: Vec<RepoId>,
+        activate_after: Option<RepoId>,
+    },
     OpenSubmoduleDiffInTab {
         path: std::path::PathBuf,
         target: DiffTarget,

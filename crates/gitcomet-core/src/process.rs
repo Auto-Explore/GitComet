@@ -1,4 +1,3 @@
-use crate::path_utils::canonicalize_or_original;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -162,18 +161,35 @@ pub fn normalize_git_executable_path(path: PathBuf) -> PathBuf {
     if path.as_os_str().is_empty() {
         return path;
     }
-    let path = if path.is_absolute() {
+    if path.is_absolute() {
         path
     } else {
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(path)
-    };
-    canonicalize_or_original(path)
+    }
 }
 
 fn git_command_for_preference(preference: &GitExecutablePreference) -> Command {
-    background_command(preference.command_program())
+    let mut command = background_command(preference.command_program());
+    if let GitExecutablePreference::Custom(path) = preference
+        && let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        prepend_command_path(&mut command, parent);
+    }
+    command
+}
+
+fn prepend_command_path(command: &mut Command, path: &Path) {
+    let mut paths = Vec::new();
+    paths.push(path.to_path_buf());
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        command.env("PATH", joined);
+    }
 }
 
 fn probe_git_runtime(preference: GitExecutablePreference) -> GitRuntimeState {
@@ -398,6 +414,21 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn normalize_git_executable_path_preserves_absolute_symlink() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let target = dir.path().join("store-git");
+        let link = dir.path().join("profile-git");
+        fs::write(&target, b"git").expect("write target");
+        std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+        let normalized = normalize_git_executable_path(link.clone());
+
+        assert_eq!(normalized, link);
+        assert_ne!(normalized, target);
+    }
+
     #[test]
     fn git_executable_preference_from_optional_path_covers_all_variants() {
         let relative = PathBuf::from("test-git");
@@ -592,6 +623,54 @@ mod tests {
             git_runtime_probe_count(&probe_log),
             2,
             "running the returned command should invoke the configured executable"
+        );
+    }
+
+    #[test]
+    fn git_command_prepends_custom_git_parent_to_path() {
+        let _lock = lock_git_runtime_test();
+        let (_dir, script) = create_git_probe_script("git version 5.5.5-test", "", 0, None);
+        let _restore = GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(
+            script.clone(),
+        ));
+
+        let command = git_command();
+        let path_env = command
+            .get_envs()
+            .find(|(name, _)| *name == OsStr::new("PATH"))
+            .and_then(|(_, value)| value.map(ToOwned::to_owned))
+            .expect("custom git command should set PATH");
+        let paths: Vec<_> = std::env::split_paths(&path_env).collect();
+
+        assert_eq!(
+            paths.first().map(PathBuf::as_path),
+            script.parent(),
+            "custom git parent should be first in PATH"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn custom_git_can_resolve_sibling_helper_from_path() {
+        let _lock = lock_git_runtime_test();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let git = dir.path().join("git");
+        let gpg = dir.path().join("gpg");
+
+        fs::write(&git, "#!/bin/sh\ngpg --version\n").expect("write git script");
+        fs::write(&gpg, "#!/bin/sh\nprintf 'sibling gpg 1.0\\n'\n").expect("write gpg script");
+        for path in [&git, &gpg] {
+            let mut permissions = fs::metadata(path).expect("script metadata").permissions();
+            permissions.set_mode(0o700);
+            fs::set_permissions(path, permissions).expect("set script permissions");
+        }
+
+        let _restore =
+            GitRuntimePreferenceResetGuard::install(GitExecutablePreference::Custom(git));
+
+        assert_eq!(
+            current_git_runtime().version_output(),
+            Some("sibling gpg 1.0")
         );
     }
 
