@@ -4047,7 +4047,11 @@ mod tests {
         let selected_commit = CommitId("c0".into());
         let hovered_commit = CommitId("c1".into());
         let commits = vec![
-            commit(hovered_commit.as_ref(), &[selected_commit.as_ref()], "commit 1"),
+            commit(
+                hovered_commit.as_ref(),
+                &[selected_commit.as_ref()],
+                "commit 1",
+            ),
             commit(selected_commit.as_ref(), &[], "commit 0"),
         ];
         let page = Arc::new(log_page(commits, None));
