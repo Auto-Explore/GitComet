@@ -5,6 +5,7 @@ This file documents the keyboard shortcuts currently wired in the GPUI applicati
 Source of truth:
 - `crates/gitcomet-ui-gpui/src/app.rs`
 - `crates/gitcomet-ui-gpui/src/focused_diff.rs`
+- `crates/gitcomet-ui-gpui/src/view/terminal_panel.rs`
 - `crates/gitcomet-ui-gpui/src/view/panels/main/diff_view.rs`
 - `crates/gitcomet-ui-gpui/src/view/conflict_resolver.rs`
 
@@ -79,6 +80,26 @@ Compatibility note:
 | Action | macOS | Windows / Linux | Notes |
 | --- | --- | --- | --- |
 | Commit staged changes | `Cmd-Enter` | `Ctrl-Enter` | Commit message input only, and only when the Commit action is enabled. |
+
+## Embedded terminal shortcuts
+
+These shortcuts apply when the embedded terminal has focus.
+
+| Action | macOS | Windows / Linux | Notes |
+| --- | --- | --- | --- |
+| Copy terminal selection | `Cmd-C` | `Ctrl-Shift-C` | Disabled/no-op without a terminal selection. |
+| Paste clipboard text | `Cmd-V` | `Ctrl-Shift-V` | Clipboard CRLF/CR line endings are normalized to LF. Bracketed paste is used when the shell enables it. |
+| Select all terminal buffer | `Cmd-A` | `Ctrl-Shift-A` | Selects the scrollback buffer plus the visible terminal grid. |
+| Scroll terminal history | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | `Shift-PageUp`, `Shift-PageDown`, `Shift-Home`, `Shift-End` | Only in the normal screen buffer. |
+
+Shell-input note:
+- Plain `Ctrl-C`, `Ctrl-V`, and `Ctrl-A` keep going to the shell instead of GitComet clipboard handling.
+
+Mouse and menu behavior:
+- Left-drag selects visible terminal text.
+- Right-click focuses the terminal and opens a menu without clearing the current selection.
+- The terminal menu includes Copy, Paste, Select All, Clear, and Open in External Terminal.
+- Clear sends `Ctrl-L` to the shell and is disabled when the embedded terminal is disconnected.
 
 ## Diff view shortcuts
 

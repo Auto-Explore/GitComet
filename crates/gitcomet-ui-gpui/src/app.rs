@@ -6,9 +6,10 @@ use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, MainPaneView, OpenActiveViewSearch,
     PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
-    StartupCrashReport, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
-    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, is_diff_shortcut_candidate,
+    StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit,
+    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
+    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
+    is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -388,6 +389,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
             }
         }
         bind_text_input_keys(cx);
+        bind_terminal_keys(cx);
 
         open_gitcomet_window(cx, Arc::clone(&backend), &launch);
 
@@ -1383,6 +1385,23 @@ fn bind_text_input_keys(cx: &mut App) {
     ]);
 }
 
+fn bind_terminal_keys(cx: &mut App) {
+    cx.bind_keys([
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-v", TerminalPaste, Some("Terminal")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-a", TerminalSelectAll, Some("Terminal")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-c", TerminalCopy, Some("Terminal")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-v", TerminalPaste, Some("Terminal")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-a", TerminalSelectAll, Some("Terminal")),
+    ]);
+}
+
 #[cfg(test)]
 pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
     bind_text_input_keys(cx);
@@ -1391,6 +1410,11 @@ pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
 #[cfg(test)]
 pub(crate) fn bind_app_keys_for_test(cx: &mut App) {
     bind_app_keys(cx);
+}
+
+#[cfg(test)]
+pub(crate) fn bind_terminal_keys_for_test(cx: &mut App) {
+    bind_terminal_keys(cx);
 }
 
 #[cfg(test)]
@@ -1575,6 +1599,9 @@ mod tests {
                 .on_action(record_action_listener!(CloseWindow))
                 .on_action(record_action_listener!(PreviousRepository))
                 .on_action(record_action_listener!(NextRepository))
+                .on_action(record_action_listener!(TerminalCopy))
+                .on_action(record_action_listener!(TerminalPaste))
+                .on_action(record_action_listener!(TerminalSelectAll))
                 .on_action(record_action_listener!(MinimizeWindow))
                 .on_action(record_action_listener!(ZoomWindow))
                 .on_action(record_action_listener!(ToggleFullScreen))
@@ -1796,6 +1823,70 @@ mod tests {
                 actual_actions,
                 vec![expected_action.to_string()],
                 "expected `{keystroke}` to resolve only to the TextInput-scoped diff action"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            KeyBindingProbe::new(Some("Terminal"), Arc::clone(&observed_actions), cx)
+        });
+
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_terminal_keys_for_test(app);
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+
+        #[cfg(target_os = "macos")]
+        let cases = [
+            ("cmd-c", TerminalCopy.name()),
+            ("cmd-v", TerminalPaste.name()),
+            ("cmd-a", TerminalSelectAll.name()),
+        ];
+
+        #[cfg(not(target_os = "macos"))]
+        let cases = [
+            ("ctrl-shift-c", TerminalCopy.name()),
+            ("ctrl-shift-v", TerminalPaste.name()),
+            ("ctrl-shift-a", TerminalSelectAll.name()),
+        ];
+
+        for (keystroke, expected_action) in cases {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_action = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .last()
+                .cloned();
+            assert_eq!(
+                actual_action.as_deref(),
+                Some(expected_action),
+                "expected `{keystroke}` to resolve to `{expected_action}`"
+            );
+        }
+
+        for keystroke in ["ctrl-c", "ctrl-v", "ctrl-a"] {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_actions = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            assert!(
+                actual_actions.is_empty(),
+                "expected `{keystroke}` to remain shell input, got {actual_actions:?}"
             );
         }
     }

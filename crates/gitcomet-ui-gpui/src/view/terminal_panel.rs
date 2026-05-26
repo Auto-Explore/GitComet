@@ -16,6 +16,7 @@ const TERMINAL_READ_BATCH_DELAY_MS: u64 = 1;
 const TERMINAL_READ_BATCH_MAX_BYTES: usize = TERMINAL_READ_CHUNK_BYTES * 8;
 const TERMINAL_WRITE_BATCH_MAX_BYTES: usize = TERMINAL_READ_CHUNK_BYTES * 8;
 const TERMINAL_FONT_SCALE: f32 = 0.92;
+const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.0;
 const TERMINAL_CELL_WIDTH_SAMPLE: &str = "0000000000";
 const TERMINAL_CARET_WIDTH_RATIO: f32 = 0.12;
 const TERMINAL_CARET_MIN_WIDTH_PX: f32 = 2.0;
@@ -24,8 +25,12 @@ const TERMINAL_CARET_VERTICAL_INSET_PX: f32 = 1.0;
 const TERMINAL_CARET_RADIUS_PX: f32 = 0.0;
 const TERMINAL_CARET_BLINK_INTERVAL_MS: u64 = 530;
 const TERMINAL_CARET_RESUME_DELAY_MS: u64 = 700;
+const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
+const TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS: usize = 24;
 const TERMINAL_DEFAULT_BG_HEX: u32 = 0x000000;
 const TERMINAL_DEFAULT_FG_HEX: u32 = 0xffffff;
+const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
+const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 struct SpawnedTerminalSession {
     io: Arc<Mutex<TerminalIo>>,
@@ -44,6 +49,7 @@ struct TerminalCellStyle {
 
 #[derive(Default)]
 struct TerminalCanvasPaintState {
+    selection_rects: Vec<Bounds<Pixels>>,
     lines: Vec<(ShapedLine, Point<Pixels>, Pixels)>,
     cursor: Option<Bounds<Pixels>>,
 }
@@ -65,6 +71,13 @@ enum TerminalReadBatchAction {
     None,
     ScheduleFlush,
     FlushNow,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalShortcutAction {
+    Copy,
+    Paste,
+    SelectAll,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -225,33 +238,7 @@ impl TerminalViewportView {
         }
 
         let base_style = terminal_text_style(self.theme, window, cx);
-        let font_size = base_style.font_size.to_pixels(window.rem_size()) * TERMINAL_FONT_SCALE;
-        let line_height = base_style
-            .line_height
-            .to_pixels(font_size.into(), window.rem_size())
-            .max(px(1.0));
-        let sample = window.text_system().shape_line(
-            TERMINAL_CELL_WIDTH_SAMPLE.into(),
-            font_size,
-            &[base_style.to_run(TERMINAL_CELL_WIDTH_SAMPLE.len())],
-            None,
-        );
-        let cell_width = if TERMINAL_CELL_WIDTH_SAMPLE.is_empty() {
-            px(8.0)
-        } else {
-            (sample.width / TERMINAL_CELL_WIDTH_SAMPLE.len() as f32).max(px(1.0))
-        };
-        let metrics = TerminalTextMetrics {
-            font_size,
-            line_height,
-            cell_width,
-        };
-        let cache = TerminalLayoutCache {
-            rem_size,
-            key: terminal_layout_key(metrics),
-            base_style,
-            metrics,
-        };
+        let cache = terminal_layout_cache(base_style, window);
         self.layout_cache = Some(cache.clone());
         cache
     }
@@ -460,35 +447,36 @@ impl TerminalViewportView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self
-            .session
-            .state
-            .lock()
-            .ok()
-            .is_some_and(|state| state.parser.screen().alternate_screen())
-        {
-            return;
-        }
-
         let metrics = self.terminal_layout_snapshot(window, cx).metrics;
-        let pixel_delta = event.delta.pixel_delta(metrics.line_height);
-        let delta_y = if !pixel_delta.y.is_zero() {
-            pixel_delta.y
-        } else {
-            pixel_delta.x
+        let Some((delta_y, step_rows)) = terminal_scroll_wheel_delta(event, metrics.line_height)
+        else {
+            return;
         };
-        if delta_y.is_zero() {
+        cx.stop_propagation();
+
+        let alternate_screen = self.session.state.lock().ok().map(|state| {
+            (
+                state.parser.screen().alternate_screen(),
+                state.parser.screen().application_cursor(),
+            )
+        });
+        let Some((alternate_screen, application_cursor)) = alternate_screen else {
+            return;
+        };
+
+        if alternate_screen {
+            let bytes =
+                terminal_alternate_screen_scroll_bytes(delta_y, step_rows, application_cursor);
+            let _ = self.queue_input(bytes, cx);
             return;
         }
 
-        let step_rows = (((delta_y.abs()) / metrics.line_height).ceil() as isize).max(1);
         let changed = if delta_y > px(0.0) {
-            adjust_terminal_scrollback(&self.session.state, step_rows)
+            adjust_terminal_scrollback(&self.session.state, step_rows as isize)
         } else {
-            adjust_terminal_scrollback(&self.session.state, -step_rows)
+            adjust_terminal_scrollback(&self.session.state, -(step_rows as isize))
         };
         if changed {
-            cx.stop_propagation();
             cx.notify();
         }
     }
@@ -557,6 +545,7 @@ impl TerminalViewportView {
         }
 
         let mut paint_state = TerminalCanvasPaintState {
+            selection_rects: Vec::new(),
             lines: Vec::with_capacity(usize::from(rows)),
             cursor: cursor_bounds,
         };
@@ -631,33 +620,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> TerminalLayoutCache {
         let base_style = terminal_text_style(theme, window, cx);
-        let font_size = base_style.font_size.to_pixels(window.rem_size()) * TERMINAL_FONT_SCALE;
-        let line_height = base_style
-            .line_height
-            .to_pixels(font_size.into(), window.rem_size())
-            .max(px(1.0));
-        let sample = window.text_system().shape_line(
-            TERMINAL_CELL_WIDTH_SAMPLE.into(),
-            font_size,
-            &[base_style.to_run(TERMINAL_CELL_WIDTH_SAMPLE.len())],
-            None,
-        );
-        let cell_width = if TERMINAL_CELL_WIDTH_SAMPLE.is_empty() {
-            px(8.0)
-        } else {
-            (sample.width / TERMINAL_CELL_WIDTH_SAMPLE.len() as f32).max(px(1.0))
-        };
-        let metrics = TerminalTextMetrics {
-            font_size,
-            line_height,
-            cell_width,
-        };
-        TerminalLayoutCache {
-            rem_size: window.rem_size(),
-            key: terminal_layout_key(metrics),
-            base_style,
-            metrics,
-        }
+        terminal_layout_cache(base_style, window)
     }
 
     fn deactivate_terminal_cursor_blink(&mut self) {
@@ -945,6 +908,9 @@ impl GitCometView {
                 exit_status: None,
                 terminal,
                 viewport,
+                selection: None,
+                selection_drag_anchor: None,
+                viewport_bounds: None,
             },
         );
         let writer = self
@@ -1204,6 +1170,9 @@ impl GitCometView {
             if has_bytes {
                 session.parser.process(&batch.bytes);
                 session.content_epoch = session.content_epoch.wrapping_add(1);
+                if terminal_clear_normal_selection(&mut session.selection) {
+                    session.selection_drag_anchor = None;
+                }
             }
 
             if let Some(completion) = batch.completion {
@@ -1288,6 +1257,9 @@ impl GitCometView {
                 .screen_mut()
                 .set_size(next_size.rows, next_size.cols);
             session.content_epoch = session.content_epoch.wrapping_add(1);
+            if terminal_clear_normal_selection(&mut session.selection) {
+                session.selection_drag_anchor = None;
+            }
             size_changed = true;
         }
 
@@ -1313,8 +1285,25 @@ impl GitCometView {
         &mut self,
         repo_id: RepoId,
         event: &gpui::KeyDownEvent,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if let Some(action) = terminal_clipboard_shortcut_action(&event.keystroke) {
+            match action {
+                TerminalShortcutAction::Copy => {
+                    let _ = self.copy_terminal_selection_for_repo(repo_id, window, cx);
+                }
+                TerminalShortcutAction::Paste => {
+                    let _ = self.paste_terminal_clipboard_for_repo(repo_id, window, cx);
+                }
+                TerminalShortcutAction::SelectAll => {
+                    self.select_all_terminal_for_repo(repo_id, window, cx);
+                }
+            }
+            cx.stop_propagation();
+            return;
+        }
+
         if self.handle_terminal_scrollback_key(repo_id, event, cx) {
             cx.stop_propagation();
             return;
@@ -1373,34 +1362,39 @@ impl GitCometView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let Some(session) = self.terminal_sessions.get(&repo_id) else {
-            return;
-        };
-        if session.parser.screen().alternate_screen() {
-            return;
-        }
-
         let metrics = self
             .terminal_layout_snapshot(self.theme, window, cx)
             .metrics;
-        let pixel_delta = event.delta.pixel_delta(metrics.line_height);
-        let delta_y = if !pixel_delta.y.is_zero() {
-            pixel_delta.y
-        } else {
-            pixel_delta.x
+        let Some((delta_y, step_rows)) = terminal_scroll_wheel_delta(event, metrics.line_height)
+        else {
+            return;
         };
-        if delta_y.is_zero() {
+        cx.stop_propagation();
+
+        let Some((alternate_screen, application_cursor)) =
+            self.terminal_sessions.get(&repo_id).map(|session| {
+                (
+                    session.parser.screen().alternate_screen(),
+                    session.parser.screen().application_cursor(),
+                )
+            })
+        else {
+            return;
+        };
+
+        if alternate_screen {
+            let bytes =
+                terminal_alternate_screen_scroll_bytes(delta_y, step_rows, application_cursor);
+            let _ = self.send_terminal_bytes_for_repo(repo_id, &bytes, cx);
             return;
         }
 
-        let step_rows = (((delta_y.abs()) / metrics.line_height).ceil() as isize).max(1);
         let changed = if delta_y > px(0.0) {
-            self.adjust_terminal_scrollback(repo_id, step_rows)
+            self.adjust_terminal_scrollback(repo_id, step_rows as isize)
         } else {
-            self.adjust_terminal_scrollback(repo_id, -step_rows)
+            self.adjust_terminal_scrollback(repo_id, -(step_rows as isize))
         };
         if changed {
-            cx.stop_propagation();
             cx.notify();
         }
     }
@@ -1416,7 +1410,11 @@ impl GitCometView {
             current.saturating_sub(delta_rows.unsigned_abs())
         };
         session.parser.screen_mut().set_scrollback(candidate);
-        session.parser.screen().scrollback() != current
+        let changed = session.parser.screen().scrollback() != current;
+        if changed && terminal_clear_normal_selection(&mut session.selection) {
+            session.selection_drag_anchor = None;
+        }
+        changed
     }
 
     fn scroll_terminal_to_scrollback(&mut self, repo_id: RepoId, scrollback: usize) -> bool {
@@ -1425,7 +1423,11 @@ impl GitCometView {
         };
         let current = session.parser.screen().scrollback();
         session.parser.screen_mut().set_scrollback(scrollback);
-        session.parser.screen().scrollback() != current
+        let changed = session.parser.screen().scrollback() != current;
+        if changed && terminal_clear_normal_selection(&mut session.selection) {
+            session.selection_drag_anchor = None;
+        }
+        changed
     }
 
     fn send_terminal_bytes_for_repo(
@@ -1434,7 +1436,7 @@ impl GitCometView {
         bytes: &[u8],
         cx: &mut gpui::Context<Self>,
     ) -> Result<(), String> {
-        let (result, reset_scrollback) = {
+        let (result, state_changed) = {
             let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
                 return Err("Repository terminal is no longer available.".to_string());
             };
@@ -1442,6 +1444,10 @@ impl GitCometView {
             let reset_scrollback = session.parser.screen().scrollback() != 0;
             if reset_scrollback {
                 session.parser.screen_mut().set_scrollback(0);
+            }
+            let selection_changed = terminal_clear_selection(&mut session.selection);
+            if selection_changed {
+                session.selection_drag_anchor = None;
             }
             if let Ok(mut state) = session.terminal.state.lock() {
                 let _ = reset_terminal_scrollback(&mut state);
@@ -1477,13 +1483,13 @@ impl GitCometView {
                 }
             }
 
-            (result, reset_scrollback)
+            (result, reset_scrollback || selection_changed)
         };
 
         match result {
             Ok(()) => {
                 self.reset_terminal_cursor_blink(cx);
-                if reset_scrollback {
+                if state_changed {
                     cx.notify();
                 }
                 Ok(())
@@ -1516,6 +1522,229 @@ impl GitCometView {
                 err
             },
         )
+    }
+
+    pub(in crate::view) fn terminal_session_exists(&self, repo_id: RepoId) -> bool {
+        self.terminal_sessions.contains_key(&repo_id)
+    }
+
+    pub(in crate::view) fn terminal_is_connected(&self, repo_id: RepoId) -> bool {
+        self.terminal_sessions
+            .get(&repo_id)
+            .is_some_and(|session| session.connected)
+    }
+
+    pub(in crate::view) fn terminal_has_copyable_selection(&self, repo_id: RepoId) -> bool {
+        self.terminal_sessions
+            .get(&repo_id)
+            .and_then(|session| {
+                session
+                    .selection
+                    .map(|selection| terminal_selection_text(session.parser.screen(), selection))
+            })
+            .is_some_and(|text| !text.is_empty())
+    }
+
+    pub(in crate::view) fn copy_terminal_selection_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.focus_terminal_view(repo_id, window, cx);
+        let Some(text) = self.terminal_sessions.get(&repo_id).and_then(|session| {
+            session
+                .selection
+                .map(|selection| terminal_selection_text(session.parser.screen(), selection))
+        }) else {
+            return false;
+        };
+        if text.is_empty() {
+            return false;
+        }
+
+        crate::clipboard::write_text(cx, text);
+        true
+    }
+
+    pub(in crate::view) fn paste_terminal_clipboard_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.focus_terminal_view(repo_id, window, cx);
+        let Some(session) = self.terminal_sessions.get(&repo_id) else {
+            return false;
+        };
+        if !session.connected {
+            return false;
+        }
+
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return false;
+        };
+        if text.is_empty() {
+            return false;
+        }
+
+        let bracketed_paste = session.parser.screen().bracketed_paste();
+        let bytes = terminal_paste_bytes(&text, bracketed_paste);
+        self.send_terminal_bytes_for_repo(repo_id, &bytes, cx)
+            .is_ok()
+    }
+
+    pub(in crate::view) fn select_all_terminal_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.focus_terminal_view(repo_id, window, cx);
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        session.selection = Some(TerminalSelection::AllBuffer);
+        session.selection_drag_anchor = None;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn clear_terminal_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.focus_terminal_view(repo_id, window, cx);
+        if !self.terminal_is_connected(repo_id) {
+            return false;
+        }
+        self.send_terminal_bytes_for_repo(repo_id, b"\x0c", cx)
+            .is_ok()
+    }
+
+    pub(in crate::view) fn open_external_terminal_from_menu(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Result<(), String> {
+        self.focus_terminal_view(repo_id, window, cx);
+        self.open_external_terminal_for_repo(repo_id, cx)
+    }
+
+    fn terminal_grid_point_at_position(
+        &mut self,
+        repo_id: RepoId,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<TerminalGridPoint> {
+        let layout = self.terminal_layout_snapshot(self.theme, window, cx);
+        let session = self.terminal_sessions.get(&repo_id)?;
+        let bounds = session.viewport_bounds?;
+        let (rows, cols) = session.parser.screen().size();
+        Some(terminal_grid_point_for_position(
+            bounds,
+            layout.metrics,
+            position,
+            rows,
+            cols,
+        ))
+    }
+
+    fn handle_terminal_selection_mouse_down(
+        &mut self,
+        repo_id: RepoId,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.focus_terminal_view(repo_id, window, cx);
+        let Some(point) = self.terminal_grid_point_at_position(repo_id, position, window, cx)
+        else {
+            return;
+        };
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        session.selection_drag_anchor = Some(point);
+        session.selection = Some(TerminalSelection::visible(point, point));
+        cx.notify();
+    }
+
+    fn handle_terminal_selection_mouse_move(
+        &mut self,
+        repo_id: RepoId,
+        position: Point<Pixels>,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self
+            .terminal_sessions
+            .get(&repo_id)
+            .is_some_and(|session| session.selection_drag_anchor.is_some())
+        {
+            return;
+        }
+        let Some(point) = self.terminal_grid_point_at_position(repo_id, position, window, cx)
+        else {
+            return;
+        };
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        let Some(anchor) = session.selection_drag_anchor else {
+            return;
+        };
+        let selection = TerminalSelection::visible(anchor, point);
+        if session.selection != Some(selection) {
+            session.selection = Some(selection);
+            cx.notify();
+        }
+    }
+
+    fn handle_terminal_selection_mouse_up(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        let mut changed = session.selection_drag_anchor.take().is_some();
+        if session.selection.is_some_and(TerminalSelection::is_empty) {
+            session.selection = None;
+            changed = true;
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn open_terminal_context_menu(
+        &mut self,
+        repo_id: RepoId,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.focus_terminal_view(repo_id, window, cx);
+        let context = TerminalMenuContext {
+            has_session: self.terminal_session_exists(repo_id),
+            has_selection: self.terminal_has_copyable_selection(repo_id),
+            connected: self.terminal_is_connected(repo_id),
+        };
+        self.set_active_context_menu_invoker(
+            Some(format!("terminal_menu_{}", repo_id.0).into()),
+            cx,
+        );
+        self.open_popover_at(
+            PopoverKind::TerminalMenu { repo_id, context },
+            position,
+            window,
+            cx,
+        );
     }
 
     pub(in crate::view) fn render_terminal_panel(
@@ -1561,7 +1790,7 @@ impl GitCometView {
             .style(components::ButtonStyle::Transparent)
             .disabled(!connected)
             .on_click(theme, cx, move |this, _e, _w, cx| {
-                let _ = this.send_terminal_bytes_for_repo(repo_id, b"\x0c", cx);
+                let _ = this.clear_terminal_for_repo(repo_id, _w, cx);
             })
             .on_hover(cx.listener({
                 let clear_tooltip = clear_tooltip.clone();
@@ -1633,26 +1862,71 @@ impl GitCometView {
                         ),
                 )
                 .child(
-                    div().flex_1().min_h(px(0.0)).px_2().pt_1().pb_2().child(
+                    div().flex_1().min_h(px(0.0)).child(
                         div()
                             .id("terminal_viewport")
                             .track_focus(&focus_handle)
+                            .key_context("Terminal")
                             .w_full()
                             .h_full()
-                            .rounded(px(theme.radii.panel))
-                            .border_1()
-                            .border_color(theme.colors.border)
                             .bg(terminal_viewport_background(theme))
                             .overflow_hidden()
+                            .on_action(cx.listener(move |this, _: &TerminalCopy, window, cx| {
+                                cx.stop_propagation();
+                                let _ = this.copy_terminal_selection_for_repo(repo_id, window, cx);
+                            }))
+                            .on_action(cx.listener(move |this, _: &TerminalPaste, window, cx| {
+                                cx.stop_propagation();
+                                let _ = this.paste_terminal_clipboard_for_repo(repo_id, window, cx);
+                            }))
+                            .on_action(cx.listener(
+                                move |this, _: &TerminalSelectAll, window, cx| {
+                                    cx.stop_propagation();
+                                    this.select_all_terminal_for_repo(repo_id, window, cx);
+                                },
+                            ))
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                                    this.focus_terminal_view(repo_id, window, cx);
+                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.handle_terminal_selection_mouse_down(
+                                        repo_id, e.position, window, cx,
+                                    );
+                                }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.open_terminal_context_menu(
+                                        repo_id, e.position, window, cx,
+                                    );
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(
+                                move |this, e: &MouseMoveEvent, window, cx| {
+                                    this.handle_terminal_selection_mouse_move(
+                                        repo_id, e.position, window, cx,
+                                    );
+                                },
+                            ))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |this, _e: &MouseUpEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.handle_terminal_selection_mouse_up(repo_id, cx);
+                                }),
+                            )
+                            .on_mouse_up_out(
+                                MouseButton::Left,
+                                cx.listener(move |this, _e: &MouseUpEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.handle_terminal_selection_mouse_up(repo_id, cx);
                                 }),
                             )
                             .on_key_down(cx.listener(
-                                move |this, e: &gpui::KeyDownEvent, _window, cx| {
-                                    this.handle_terminal_key_down(repo_id, e, cx);
+                                move |this, e: &gpui::KeyDownEvent, window, cx| {
+                                    this.handle_terminal_key_down(repo_id, e, window, cx);
                                 },
                             ))
                             .on_scroll_wheel(cx.listener(
@@ -1660,7 +1934,7 @@ impl GitCometView {
                                     this.handle_terminal_scroll_wheel(repo_id, e, window, cx);
                                 },
                             ))
-                            .child(div().w_full().h_full().px_2().py_1().child(terminal_view)),
+                            .child(terminal_view),
                     ),
                 )
                 .into_any_element(),
@@ -1718,6 +1992,8 @@ impl GitCometView {
             return TerminalCanvasPaintState::default();
         }
 
+        session.viewport_bounds = Some(bounds);
+        let selection = session.selection;
         let focus_is_focused = session.focus_handle.is_focused(window);
         let content_epoch = session.content_epoch;
         let parser = &session.parser;
@@ -1768,6 +2044,11 @@ impl GitCometView {
         }
 
         let mut paint_state = TerminalCanvasPaintState {
+            selection_rects: selection
+                .map(|selection| {
+                    terminal_selection_rects(selection, rows, cols, bounds, layout.metrics)
+                })
+                .unwrap_or_default(),
             lines: Vec::with_capacity(usize::from(rows)),
             cursor: None,
         };
@@ -2032,13 +2313,320 @@ fn initial_terminal_session_state() -> TerminalSessionState {
         exit_status: None,
         row_fingerprints: Vec::new(),
         dirty_rows: Vec::new(),
+        selection: None,
+        selection_drag_anchor: None,
     }
 }
 
 fn reset_terminal_scrollback(state: &mut TerminalSessionState) -> bool {
     let current = state.parser.screen().scrollback();
     state.parser.screen_mut().set_scrollback(0);
-    state.parser.screen().scrollback() != current
+    let scrollback_changed = state.parser.screen().scrollback() != current;
+    let selection_changed = terminal_clear_selection(&mut state.selection);
+    if selection_changed {
+        state.selection_drag_anchor = None;
+    }
+    scrollback_changed || selection_changed
+}
+
+fn terminal_clear_selection(selection: &mut Option<TerminalSelection>) -> bool {
+    if selection.is_some() {
+        *selection = None;
+        true
+    } else {
+        false
+    }
+}
+
+fn terminal_clear_normal_selection(selection: &mut Option<TerminalSelection>) -> bool {
+    if matches!(selection, Some(TerminalSelection::Visible { .. })) {
+        *selection = None;
+        true
+    } else {
+        false
+    }
+}
+
+fn terminal_selection_text(screen: &vt100::Screen, selection: TerminalSelection) -> String {
+    match selection {
+        TerminalSelection::Visible { start, end } => {
+            terminal_visible_selection_text(screen, start, end)
+        }
+        TerminalSelection::AllBuffer => terminal_full_buffer_text(screen),
+    }
+}
+
+fn terminal_visible_selection_text(
+    screen: &vt100::Screen,
+    start: TerminalGridPoint,
+    end: TerminalGridPoint,
+) -> String {
+    let (rows, cols) = screen.size();
+    if rows == 0 || cols == 0 {
+        return String::new();
+    }
+
+    let Some((mut start, mut end)) = TerminalSelection::visible(start, end).normalized_visible()
+    else {
+        return String::new();
+    };
+    let max_row = rows.saturating_sub(1);
+    start.row = start.row.min(max_row);
+    end.row = end.row.min(max_row);
+    start.col = start.col.min(cols);
+    end.col = end.col.min(cols);
+    if start == end {
+        return String::new();
+    }
+
+    screen.contents_between(start.row, start.col, end.row, end.col)
+}
+
+fn terminal_full_buffer_text(screen: &vt100::Screen) -> String {
+    let (rows, cols) = screen.size();
+    if rows == 0 || cols == 0 {
+        return String::new();
+    }
+
+    let visible_rows = usize::from(rows);
+    let mut probe = screen.clone();
+    probe.set_scrollback(usize::MAX);
+    let max_scrollback = probe.scrollback();
+    let total_rows = max_scrollback + visible_rows;
+    let mut contents = String::new();
+    let mut absolute_row = 0;
+
+    // vt100 exposes text through the visible window, so walk the buffer in
+    // screen-height chunks while reusing one probe screen.
+    while absolute_row < max_scrollback {
+        probe.set_scrollback(max_scrollback - absolute_row);
+        let row_count = visible_rows.min(total_rows - absolute_row);
+        terminal_append_visible_rows_text(&probe, 0, row_count, cols, &mut contents);
+        absolute_row += row_count;
+    }
+
+    if absolute_row < total_rows {
+        probe.set_scrollback(0);
+        let start_row = absolute_row.saturating_sub(max_scrollback);
+        terminal_append_visible_rows_text(
+            &probe,
+            start_row,
+            total_rows - absolute_row,
+            cols,
+            &mut contents,
+        );
+    }
+
+    while contents.ends_with('\n') {
+        contents.pop();
+    }
+    contents
+}
+
+fn terminal_append_visible_rows_text(
+    screen: &vt100::Screen,
+    start_row: usize,
+    row_count: usize,
+    cols: u16,
+    contents: &mut String,
+) {
+    for (row, text) in screen
+        .rows(0, cols)
+        .enumerate()
+        .skip(start_row)
+        .take(row_count)
+    {
+        contents.push_str(&text);
+        if !screen.row_wrapped(row as u16) {
+            contents.push('\n');
+        }
+    }
+}
+
+fn terminal_paste_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
+    let mut normalized = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\r' {
+            if chars.peek() == Some(&'\n') {
+                let _ = chars.next();
+            }
+            normalized.push('\n');
+        } else {
+            normalized.push(ch);
+        }
+    }
+
+    if !bracketed_paste {
+        return normalized.into_bytes();
+    }
+
+    let sanitized = terminal_sanitize_bracketed_paste_payload(&normalized);
+    let mut bytes = Vec::with_capacity(
+        BRACKETED_PASTE_START.len() + sanitized.len() + BRACKETED_PASTE_END.len(),
+    );
+    bytes.extend_from_slice(BRACKETED_PASTE_START);
+    bytes.extend_from_slice(sanitized.as_bytes());
+    bytes.extend_from_slice(BRACKETED_PASTE_END);
+    bytes
+}
+
+fn terminal_sanitize_bracketed_paste_payload(text: &str) -> String {
+    text.chars()
+        .filter(|ch| *ch == '\n' || *ch == '\t' || !ch.is_control())
+        .collect()
+}
+
+fn terminal_grid_point_for_position(
+    bounds: Bounds<Pixels>,
+    metrics: TerminalTextMetrics,
+    position: Point<Pixels>,
+    rows: u16,
+    cols: u16,
+) -> TerminalGridPoint {
+    let row_count = rows.max(1);
+    let rel_x = if position.x <= bounds.left() {
+        px(0.0)
+    } else {
+        position.x - bounds.left()
+    };
+    let rel_y = if position.y <= bounds.top() {
+        px(0.0)
+    } else {
+        position.y - bounds.top()
+    };
+    let col = ((rel_x / metrics.cell_width).floor() as u16).min(cols);
+    let row = ((rel_y / metrics.line_height).floor() as u16).min(row_count.saturating_sub(1));
+    TerminalGridPoint::new(row, col)
+}
+
+fn terminal_selection_rects(
+    selection: TerminalSelection,
+    rows: u16,
+    cols: u16,
+    bounds: Bounds<Pixels>,
+    metrics: TerminalTextMetrics,
+) -> Vec<Bounds<Pixels>> {
+    if rows == 0 || cols == 0 {
+        return Vec::new();
+    }
+
+    match selection {
+        TerminalSelection::AllBuffer => (0..rows)
+            .map(|row| {
+                Bounds::new(
+                    point(
+                        bounds.left(),
+                        bounds.top() + metrics.line_height * f32::from(row),
+                    ),
+                    size(metrics.cell_width * f32::from(cols), metrics.line_height),
+                )
+            })
+            .collect(),
+        TerminalSelection::Visible { start, end } => {
+            let Some((mut start, mut end)) =
+                TerminalSelection::visible(start, end).normalized_visible()
+            else {
+                return Vec::new();
+            };
+            let max_row = rows.saturating_sub(1);
+            start.row = start.row.min(max_row);
+            end.row = end.row.min(max_row);
+            start.col = start.col.min(cols);
+            end.col = end.col.min(cols);
+            if start == end {
+                return Vec::new();
+            }
+
+            let mut rects = Vec::new();
+            for row in start.row..=end.row {
+                let start_col = if row == start.row { start.col } else { 0 };
+                let end_col = if row == end.row { end.col } else { cols };
+                if end_col <= start_col {
+                    continue;
+                }
+                rects.push(Bounds::new(
+                    point(
+                        bounds.left() + metrics.cell_width * f32::from(start_col),
+                        bounds.top() + metrics.line_height * f32::from(row),
+                    ),
+                    size(
+                        metrics.cell_width * f32::from(end_col - start_col),
+                        metrics.line_height,
+                    ),
+                ));
+            }
+            rects
+        }
+    }
+}
+
+fn terminal_scroll_wheel_delta(
+    event: &gpui::ScrollWheelEvent,
+    line_height: Pixels,
+) -> Option<(Pixels, usize)> {
+    let pixel_delta = event.delta.pixel_delta(line_height);
+    let delta_y = if !pixel_delta.y.is_zero() {
+        pixel_delta.y
+    } else {
+        pixel_delta.x
+    };
+    if delta_y.is_zero() {
+        return None;
+    }
+
+    let step_rows = (((delta_y.abs()) / line_height).ceil() as usize).max(1);
+    Some((delta_y, step_rows))
+}
+
+fn terminal_alternate_screen_scroll_bytes(
+    delta_y: Pixels,
+    step_rows: usize,
+    application_cursor: bool,
+) -> Vec<u8> {
+    let sequence = if delta_y > px(0.0) {
+        if application_cursor {
+            b"\x1bOA".as_slice()
+        } else {
+            b"\x1b[A".as_slice()
+        }
+    } else if application_cursor {
+        b"\x1bOB".as_slice()
+    } else {
+        b"\x1b[B".as_slice()
+    };
+    let repeats = step_rows
+        .max(1)
+        .min(TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS);
+    let mut bytes = Vec::with_capacity(sequence.len() * repeats);
+    for _ in 0..repeats {
+        bytes.extend_from_slice(sequence);
+    }
+    bytes
+}
+
+fn terminal_clipboard_shortcut_action(
+    keystroke: &gpui::Keystroke,
+) -> Option<TerminalShortcutAction> {
+    let action = match keystroke.key.as_str() {
+        "c" => TerminalShortcutAction::Copy,
+        "v" => TerminalShortcutAction::Paste,
+        "a" => TerminalShortcutAction::SelectAll,
+        _ => return None,
+    };
+    let mods = keystroke.modifiers;
+
+    if cfg!(target_os = "macos") {
+        if mods.platform && !mods.control && !mods.alt && !mods.function && !mods.shift {
+            Some(action)
+        } else {
+            None
+        }
+    } else if mods.control && mods.shift && !mods.platform && !mods.alt && !mods.function {
+        Some(action)
+    } else {
+        None
+    }
 }
 
 fn mark_terminal_disconnected(
@@ -2064,7 +2652,11 @@ fn adjust_terminal_scrollback(state: &Arc<Mutex<TerminalSessionState>>, delta_ro
         current.saturating_sub(delta_rows.unsigned_abs())
     };
     state.parser.screen_mut().set_scrollback(candidate);
-    state.parser.screen().scrollback() != current
+    let changed = state.parser.screen().scrollback() != current;
+    if changed && terminal_clear_normal_selection(&mut state.selection) {
+        state.selection_drag_anchor = None;
+    }
+    changed
 }
 
 fn scroll_terminal_to_scrollback(
@@ -2076,7 +2668,11 @@ fn scroll_terminal_to_scrollback(
     };
     let current = state.parser.screen().scrollback();
     state.parser.screen_mut().set_scrollback(scrollback);
-    state.parser.screen().scrollback() != current
+    let changed = state.parser.screen().scrollback() != current;
+    if changed && terminal_clear_normal_selection(&mut state.selection) {
+        state.selection_drag_anchor = None;
+    }
+    changed
 }
 
 fn sync_terminal_grid_size_state(
@@ -2095,6 +2691,9 @@ fn sync_terminal_grid_size_state(
                 .set_size(next_size.rows, next_size.cols);
             state.row_fingerprints.clear();
             state.dirty_rows = (0..next_size.rows).collect();
+            if terminal_clear_normal_selection(&mut state.selection) {
+                state.selection_drag_anchor = None;
+            }
         }
         state.grid_size = next_size;
     } else {
@@ -2210,6 +2809,40 @@ fn terminal_layout_key(metrics: TerminalTextMetrics) -> TerminalLayoutKey {
     }
 }
 
+fn terminal_layout_cache(mut base_style: gpui::TextStyle, window: &Window) -> TerminalLayoutCache {
+    let rem_size = window.rem_size();
+    let font_size = base_style.font_size.to_pixels(rem_size) * TERMINAL_FONT_SCALE;
+    let line_height = terminal_line_height(font_size);
+    base_style.line_height = line_height.into();
+    let sample = window.text_system().shape_line(
+        TERMINAL_CELL_WIDTH_SAMPLE.into(),
+        font_size,
+        &[base_style.to_run(TERMINAL_CELL_WIDTH_SAMPLE.len())],
+        None,
+    );
+    let cell_width = if TERMINAL_CELL_WIDTH_SAMPLE.is_empty() {
+        px(8.0)
+    } else {
+        (sample.width / TERMINAL_CELL_WIDTH_SAMPLE.len() as f32).max(px(1.0))
+    };
+    let metrics = TerminalTextMetrics {
+        font_size,
+        line_height,
+        cell_width,
+    };
+    TerminalLayoutCache {
+        rem_size,
+        key: terminal_layout_key(metrics),
+        base_style,
+        metrics,
+    }
+}
+
+fn terminal_line_height(font_size: Pixels) -> Pixels {
+    let font_size_px: f32 = font_size.into();
+    px((font_size_px * TERMINAL_LINE_HEIGHT_SCALE).ceil().max(1.0))
+}
+
 fn pixels_bits(value: Pixels) -> u32 {
     let raw: f32 = value.into();
     raw.to_bits()
@@ -2272,6 +2905,10 @@ fn paint_terminal_canvas_state(
     window: &mut Window,
     cx: &mut App,
 ) {
+    for rect in paint_state.selection_rects {
+        window.paint_quad(fill(rect, terminal_selection_color(theme)));
+    }
+
     for (line, origin, line_height) in paint_state.lines {
         let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
     }
@@ -2303,6 +2940,10 @@ fn terminal_caret_bounds(cell_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
 fn terminal_caret_color(theme: AppTheme) -> gpui::Rgba {
     let _ = theme;
     terminal_default_foreground()
+}
+
+fn terminal_selection_color(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.accent, TERMINAL_SELECTION_ALPHA)
 }
 
 fn terminal_default_background() -> gpui::Rgba {
@@ -2671,7 +3312,7 @@ impl GitCometView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::lock_visual_test;
+    use crate::test_support::{lock_clipboard_test, lock_visual_test};
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_core::error::{Error, ErrorKind};
     use gitcomet_core::services::{GitBackend, GitRepository, Result as GitResult};
@@ -2990,6 +3631,9 @@ mod tests {
             exit_status: None,
             terminal,
             viewport,
+            selection: None,
+            selection_drag_anchor: None,
+            viewport_bounds: None,
         }
     }
 
@@ -3103,6 +3747,162 @@ mod tests {
                 pixel_height: 18,
             }
         );
+    }
+
+    #[test]
+    fn terminal_line_height_tracks_font_size_without_extra_leading() {
+        assert_eq!(terminal_line_height(px(12.0)), px(12.0));
+        assert_eq!(terminal_line_height(px(12.1)), px(13.0));
+    }
+
+    #[test]
+    fn terminal_grid_point_for_position_clamps_to_visible_grid() {
+        let bounds = Bounds::new(point(px(10.0), px(20.0)), size(px(80.0), px(30.0)));
+        let metrics = super::TerminalTextMetrics {
+            font_size: px(10.0),
+            line_height: px(10.0),
+            cell_width: px(10.0),
+        };
+
+        assert_eq!(
+            terminal_grid_point_for_position(bounds, metrics, point(px(0.0), px(0.0)), 3, 8),
+            TerminalGridPoint::new(0, 0)
+        );
+        assert_eq!(
+            terminal_grid_point_for_position(bounds, metrics, point(px(99.0), px(99.0)), 3, 8),
+            TerminalGridPoint::new(2, 8)
+        );
+    }
+
+    #[test]
+    fn terminal_selection_normalizes_and_extracts_visible_text() {
+        let mut parser = vt100::Parser::new(3, 20, 10);
+        parser.process(b"alpha\r\nbeta\r\ngamma");
+
+        let selection =
+            TerminalSelection::visible(TerminalGridPoint::new(1, 2), TerminalGridPoint::new(0, 1));
+
+        assert_eq!(
+            terminal_selection_text(parser.screen(), selection),
+            "lpha\nbe"
+        );
+    }
+
+    #[test]
+    fn terminal_full_buffer_text_includes_scrollback() {
+        let mut parser = vt100::Parser::new(2, 20, 10);
+        parser.process(b"one\r\ntwo\r\nthree\r\nfour");
+
+        assert_eq!(
+            terminal_selection_text(parser.screen(), TerminalSelection::AllBuffer),
+            "one\ntwo\nthree\nfour"
+        );
+        parser.screen_mut().set_scrollback(1);
+        assert_eq!(
+            terminal_selection_text(parser.screen(), TerminalSelection::AllBuffer),
+            "one\ntwo\nthree\nfour"
+        );
+    }
+
+    #[test]
+    fn terminal_full_buffer_text_preserves_soft_wraps() {
+        let mut parser = vt100::Parser::new(2, 4, 10);
+        parser.process(b"abcdef\r\nxy");
+
+        assert_eq!(
+            terminal_selection_text(parser.screen(), TerminalSelection::AllBuffer),
+            "abcdef\nxy"
+        );
+        parser.screen_mut().set_scrollback(1);
+        assert!(parser.screen().scrollback() > 0);
+        assert_eq!(
+            terminal_selection_text(parser.screen(), TerminalSelection::AllBuffer),
+            "abcdef\nxy"
+        );
+    }
+
+    #[test]
+    fn terminal_paste_bytes_normalizes_newlines_and_wraps_bracketed_paste() {
+        assert_eq!(
+            terminal_paste_bytes("alpha\r\nbeta\rgamma", false),
+            b"alpha\nbeta\ngamma"
+        );
+        assert_eq!(
+            terminal_paste_bytes("alpha\r\n", true),
+            b"\x1b[200~alpha\n\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn terminal_paste_bytes_sanitizes_bracketed_payload_controls() {
+        let bytes = terminal_paste_bytes("alpha\x1b[201~\nrm\x07\u{009b}31m\x7fbeta", true);
+
+        assert_eq!(bytes, b"\x1b[200~alpha[201~\nrm31mbeta\x1b[201~");
+        assert!(
+            bytes[BRACKETED_PASTE_START.len()..bytes.len() - BRACKETED_PASTE_END.len()]
+                .iter()
+                .all(|byte| *byte != b'\x1b')
+        );
+    }
+
+    #[test]
+    fn terminal_alternate_screen_scroll_bytes_repeat_cursor_keys() {
+        assert_eq!(
+            terminal_alternate_screen_scroll_bytes(px(120.0), 3, false),
+            b"\x1b[A\x1b[A\x1b[A"
+        );
+        assert_eq!(
+            terminal_alternate_screen_scroll_bytes(px(-120.0), 2, true),
+            b"\x1bOB\x1bOB"
+        );
+        assert_eq!(
+            terminal_alternate_screen_scroll_bytes(px(120.0), 0, false),
+            b"\x1b[A"
+        );
+    }
+
+    #[test]
+    fn terminal_clipboard_shortcut_preserves_plain_control_keys() {
+        let keystroke = |key: &str, modifiers: Modifiers| Keystroke {
+            modifiers,
+            key: key.to_string(),
+            key_char: None,
+        };
+
+        let mut plain_control = Modifiers::default();
+        plain_control.control = true;
+        assert_eq!(
+            terminal_clipboard_shortcut_action(&keystroke("c", plain_control)),
+            None
+        );
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut command = Modifiers::default();
+            command.platform = true;
+            assert_eq!(
+                terminal_clipboard_shortcut_action(&keystroke("c", command)),
+                Some(TerminalShortcutAction::Copy)
+            );
+
+            let mut command_shift = command;
+            command_shift.shift = true;
+            assert_eq!(
+                terminal_clipboard_shortcut_action(&keystroke("c", command_shift)),
+                None
+            );
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut terminal_copy = Modifiers::default();
+            terminal_copy.control = true;
+            terminal_copy.shift = true;
+            assert_eq!(
+                terminal_clipboard_shortcut_action(&keystroke("c", terminal_copy)),
+                Some(TerminalShortcutAction::Copy)
+            );
+        }
     }
 
     #[test]
@@ -3933,7 +4733,353 @@ mod tests {
     }
 
     #[gpui::test]
-    fn send_terminal_bytes_for_repo_writes_bytes_and_resets_scrollback(
+    fn terminal_mouse_drag_selection_copies_visible_text(cx: &mut gpui::TestAppContext) {
+        let _clipboard_guard = lock_clipboard_test();
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/terminal-mouse-selection");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let (io, _master_state, _writer_state, _killer_state) = fake_session_io(PtySize {
+            rows: 3,
+            cols: 20,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                push_test_state(this, state, cx);
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
+                session.parser.screen_mut().set_size(3, 20);
+                session.parser.process(b"alpha\r\nbeta");
+                session.viewport_bounds = Some(Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    size(px(600.0), px(200.0)),
+                ));
+                this.terminal_sessions.insert(repo_id, session);
+
+                let layout = this.terminal_layout_snapshot(test_theme(), window, cx);
+                let start = point(
+                    layout.metrics.cell_width * 0.1,
+                    layout.metrics.line_height * 0.5,
+                );
+                let end = point(
+                    layout.metrics.cell_width * 5.2,
+                    layout.metrics.line_height * 0.5,
+                );
+                this.handle_terminal_selection_mouse_down(repo_id, start, window, cx);
+                this.handle_terminal_selection_mouse_move(repo_id, end, window, cx);
+                this.handle_terminal_selection_mouse_up(repo_id, cx);
+                assert!(this.copy_terminal_selection_for_repo(repo_id, window, cx));
+            });
+        });
+
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("alpha".into())
+        );
+    }
+
+    #[gpui::test]
+    fn terminal_output_clears_visible_selection_before_copy(cx: &mut gpui::TestAppContext) {
+        let _clipboard_guard = lock_clipboard_test();
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/terminal-output-clears-selection");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let (io, _master_state, _writer_state, _killer_state) = fake_session_io(PtySize {
+            rows: 3,
+            cols: 20,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+        let batch_state = Arc::new(Mutex::new(TerminalReadBatchState::default()));
+        {
+            let mut batch = batch_state.lock().unwrap();
+            batch.bytes = b"\romega".to_vec();
+        }
+
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("unchanged".to_string()));
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                push_test_state(this, state, cx);
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
+                session.parser.screen_mut().set_size(3, 20);
+                session.parser.process(b"alpha");
+                session.selection = Some(TerminalSelection::visible(
+                    TerminalGridPoint::new(0, 0),
+                    TerminalGridPoint::new(0, 5),
+                ));
+                session.selection_drag_anchor = Some(TerminalGridPoint::new(0, 0));
+                this.terminal_sessions.insert(repo_id, session);
+
+                this.flush_terminal_read_batch(repo_id, 1, &batch_state, cx);
+
+                let session = this
+                    .terminal_sessions
+                    .get(&repo_id)
+                    .expect("session should remain available");
+                assert_eq!(
+                    session.parser.screen().contents_between(0, 0, 0, 5),
+                    "omega"
+                );
+                assert_eq!(session.selection, None);
+                assert_eq!(session.selection_drag_anchor, None);
+                assert!(!this.terminal_has_copyable_selection(repo_id));
+                assert!(!this.copy_terminal_selection_for_repo(repo_id, window, cx));
+            });
+        });
+
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("unchanged".into())
+        );
+    }
+
+    #[gpui::test]
+    fn terminal_context_menu_opens_from_root_update(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/terminal-context-menu");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let (io, _master_state, _writer_state, _killer_state) = fake_session_io(PtySize {
+            rows: 3,
+            cols: 20,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                push_test_state(this, state, cx);
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
+                session.parser.screen_mut().set_size(3, 20);
+                session.parser.process(b"alpha\r\nbeta");
+                session.selection = Some(TerminalSelection::AllBuffer);
+                this.terminal_sessions.insert(repo_id, session);
+
+                this.open_terminal_context_menu(repo_id, point(px(12.0), px(24.0)), window, cx);
+            });
+        });
+
+        let popover = cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        });
+        assert_eq!(
+            popover,
+            Some(PopoverKind::TerminalMenu {
+                repo_id,
+                context: TerminalMenuContext {
+                    has_session: true,
+                    has_selection: true,
+                    connected: true,
+                },
+            })
+        );
+    }
+
+    #[gpui::test]
+    fn terminal_wheel_scroll_over_panel_moves_scrollback(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/terminal-wheel-scroll");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let (io, _master_state, _writer_state, _killer_state) = fake_session_io(PtySize {
+            rows: 6,
+            cols: 20,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                this.terminal_panel_height = px(160.0);
+                push_test_state(this, state, cx);
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
+                session.parser.screen_mut().set_size(6, 20);
+                for ix in 0..80 {
+                    session
+                        .parser
+                        .process(format!("line {ix:02}\r\n").as_bytes());
+                }
+                this.terminal_sessions.insert(repo_id, session);
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let panel_bounds = cx
+            .debug_bounds("terminal_panel")
+            .expect("expected terminal panel to be rendered");
+        let position = panel_bounds.center();
+        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(120.0))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+
+        let scrollback = cx.update(|_window, app| {
+            view.read(app)
+                .terminal_sessions
+                .get(&repo_id)
+                .map(|session| session.parser.screen().scrollback())
+                .unwrap_or_default()
+        });
+        assert!(
+            scrollback > 0,
+            "expected wheel-up over terminal panel to move into scrollback"
+        );
+    }
+
+    #[gpui::test]
+    fn terminal_wheel_scroll_in_alternate_screen_sends_scroll_input(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/terminal-wheel-alt-screen");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let (io, _master_state, writer_state, _killer_state) = fake_session_io(PtySize {
+            rows: 6,
+            cols: 20,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                this.terminal_panel_height = px(160.0);
+                push_test_state(this, state, cx);
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
+                session.parser.screen_mut().set_size(6, 20);
+                session.parser.process(b"\x1b[?1049h");
+                assert!(session.parser.screen().alternate_screen());
+                this.terminal_sessions.insert(repo_id, session);
+            });
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let panel_bounds = cx
+            .debug_bounds("terminal_panel")
+            .expect("expected terminal panel to be rendered");
+        let position = panel_bounds.center();
+        cx.simulate_mouse_move(position, None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(120.0))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+
+        let bytes = writer_state.bytes.lock().unwrap().clone();
+        assert!(
+            bytes.starts_with(b"\x1b[A"),
+            "expected alternate-screen wheel-up to send cursor-up input, got {bytes:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn terminal_menu_actions_paste_clear_and_select_all(cx: &mut gpui::TestAppContext) {
+        let _clipboard_guard = lock_clipboard_test();
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let workdir = PathBuf::from("/tmp/terminal-menu-actions");
+        let state = app_state_with_repos(
+            vec![test_repo_state(repo_id, workdir.clone())],
+            Some(repo_id),
+        );
+        let (io, _master_state, writer_state, _killer_state) = fake_session_io(PtySize {
+            rows: 3,
+            cols: 20,
+            pixel_width: 0,
+            pixel_height: 0,
+        });
+
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("one\r\ntwo".to_string()));
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.disable_poller_for_tests();
+                push_test_state(this, state, cx);
+                let focus = cx.focus_handle().tab_index(0).tab_stop(false);
+                let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
+                session.parser.screen_mut().set_size(3, 20);
+                session.parser.process(b"alpha\r\nbeta");
+                this.terminal_sessions.insert(repo_id, session);
+
+                assert!(this.paste_terminal_clipboard_for_repo(repo_id, window, cx));
+                assert!(this.clear_terminal_for_repo(repo_id, window, cx));
+                this.select_all_terminal_for_repo(repo_id, window, cx);
+                assert!(this.copy_terminal_selection_for_repo(repo_id, window, cx));
+            });
+        });
+
+        assert_eq!(
+            writer_state.bytes.lock().unwrap().as_slice(),
+            b"one\ntwo\x0c"
+        );
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("alpha\nbeta".into())
+        );
+    }
+
+    #[gpui::test]
+    fn send_terminal_bytes_for_repo_writes_bytes_and_resets_scrollback_and_selection(
         cx: &mut gpui::TestAppContext,
     ) {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -3960,6 +5106,12 @@ mod tests {
                 let focus = cx.focus_handle().tab_index(0).tab_stop(false);
                 let mut session = make_test_terminal_session(workdir.clone(), focus, io, 1, cx);
                 session.parser.screen_mut().set_scrollback(12);
+                session.selection = Some(TerminalSelection::AllBuffer);
+                {
+                    let mut state = session.terminal.state.lock().unwrap();
+                    state.parser.screen_mut().set_scrollback(12);
+                    state.selection = Some(TerminalSelection::AllBuffer);
+                }
                 this.terminal_sessions.insert(repo_id, session);
                 this.send_terminal_bytes_for_repo(repo_id, b"ls\r", cx)
                     .expect("expected terminal bytes to be written");
@@ -3974,6 +5126,10 @@ mod tests {
                 .get(&repo_id)
                 .expect("session should remain available");
             assert_eq!(session.parser.screen().scrollback(), 0);
+            assert_eq!(session.selection, None);
+            let state = session.terminal.state.lock().unwrap();
+            assert_eq!(state.parser.screen().scrollback(), 0);
+            assert_eq!(state.selection, None);
             assert!(session.connected);
             assert_eq!(session.exit_status, None);
         });

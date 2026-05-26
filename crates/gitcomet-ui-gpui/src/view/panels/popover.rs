@@ -269,6 +269,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
+            | PopoverKind::TerminalMenu { .. }
             | PopoverKind::DiffHunkMenu { .. }
             | PopoverKind::DiffEditorMenu { .. }
             | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -356,6 +357,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::TerminalMenu { .. }
         | PopoverKind::UiScalePicker => Corner::TopRight,
         _ => Corner::TopLeft,
     }
@@ -436,6 +438,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
+        PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -2315,6 +2318,9 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
+            PopoverKind::TerminalMenu { repo_id, context } => {
+                self.context_menu_view(PopoverKind::TerminalMenu { repo_id, context }, cx)
+            }
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }

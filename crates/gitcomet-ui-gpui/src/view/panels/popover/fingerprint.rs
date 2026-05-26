@@ -162,6 +162,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
+        | PopoverKind::TerminalMenu { repo_id, .. }
         | PopoverKind::HistoryBranchFilter { repo_id } => Some(*repo_id),
     }?;
 
@@ -296,6 +297,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
+        | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo => {}
@@ -557,6 +559,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::HistoryBranchFilter { repo_id } => {
             48u8.hash(hasher);
             repo_id.hash(hasher);
+        }
+        PopoverKind::TerminalMenu { repo_id, context } => {
+            72u8.hash(hasher);
+            repo_id.hash(hasher);
+            context.hash(hasher);
         }
         PopoverKind::MergeAbortConfirm { repo_id } => {
             51u8.hash(hasher);

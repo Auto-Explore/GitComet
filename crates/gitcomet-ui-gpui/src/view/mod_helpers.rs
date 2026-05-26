@@ -2415,6 +2415,13 @@ pub(super) enum ResolverPickTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct TerminalMenuContext {
+    pub(super) has_session: bool,
+    pub(super) has_selection: bool,
+    pub(super) connected: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
@@ -2501,6 +2508,10 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     AppMenu,
+    TerminalMenu {
+        repo_id: RepoId,
+        context: TerminalMenuContext,
+    },
     DiffActionMenu,
     DiffHunkMenu {
         repo_id: RepoId,
@@ -2957,6 +2968,8 @@ pub(super) struct TerminalSessionState {
     pub(super) exit_status: Option<String>,
     pub(super) row_fingerprints: Vec<u64>,
     pub(super) dirty_rows: Vec<u16>,
+    pub(super) selection: Option<TerminalSelection>,
+    pub(super) selection_drag_anchor: Option<TerminalGridPoint>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2993,12 +3006,57 @@ pub(super) struct RepoTerminalSession {
     pub(super) terminal: TerminalSessionHandle,
     pub(super) viewport: Entity<TerminalViewportView>,
     pub(super) session_seq: u64,
+    pub(super) selection: Option<TerminalSelection>,
+    pub(super) selection_drag_anchor: Option<TerminalGridPoint>,
+    pub(super) viewport_bounds: Option<Bounds<Pixels>>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TerminalPanelResizeState {
     pub(super) start_y: Pixels,
     pub(super) start_height: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) struct TerminalGridPoint {
+    pub(super) row: u16,
+    pub(super) col: u16,
+}
+
+impl TerminalGridPoint {
+    pub(super) fn new(row: u16, col: u16) -> Self {
+        Self { row, col }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum TerminalSelection {
+    Visible {
+        start: TerminalGridPoint,
+        end: TerminalGridPoint,
+    },
+    AllBuffer,
+}
+
+impl TerminalSelection {
+    pub(super) fn visible(start: TerminalGridPoint, end: TerminalGridPoint) -> Self {
+        Self::Visible { start, end }
+    }
+
+    pub(super) fn normalized_visible(self) -> Option<(TerminalGridPoint, TerminalGridPoint)> {
+        match self {
+            Self::Visible { start, end } if start <= end => Some((start, end)),
+            Self::Visible { start, end } => Some((end, start)),
+            Self::AllBuffer => None,
+        }
+    }
+
+    pub(super) fn is_empty(self) -> bool {
+        matches!(
+            self,
+            Self::Visible { start, end } if start == end
+        )
+    }
 }
 
 pub(super) fn focused_mergetool_bootstrap_action(

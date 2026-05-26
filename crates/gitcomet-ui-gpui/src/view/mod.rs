@@ -58,6 +58,9 @@ actions!(
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
+        TerminalCopy,
+        TerminalPaste,
+        TerminalSelectAll,
     ]
 );
 
