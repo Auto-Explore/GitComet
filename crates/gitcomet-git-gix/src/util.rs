@@ -485,10 +485,7 @@ fn add_git_failure_hint(mut detail: String) -> String {
 
 fn git_failure_looks_like_missing_gpg(detail: &str) -> bool {
     let lower = detail.to_ascii_lowercase();
-    lower.contains("cannot run gpg")
-        || (lower.contains("cannot run")
-            && lower.contains("gpg")
-            && lower.contains("no such file or directory"))
+    lower.contains("cannot run") && lower.contains("gpg")
 }
 
 fn run_command_with_timeout(
@@ -1255,6 +1252,20 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn failing_command_with_missing_gpg_program_path() -> Command {
+        shell_command(
+            "printf 'error: cannot run /opt/homebrew/bin/gpg: Datei oder Verzeichnis nicht gefunden\nerror: gpg failed to sign the data:\nfatal: failed to write commit object\n' >&2; exit 128",
+        )
+    }
+
+    #[cfg(windows)]
+    fn failing_command_with_missing_gpg_program_path() -> Command {
+        shell_command(
+            "[Console]::Error.Write(\"error: cannot run C:/Program Files/Git/usr/bin/gpg.exe: Het systeem kan het opgegeven bestand niet vinden.`nerror: gpg failed to sign the data:`nfatal: failed to write commit object`n\"); exit 128",
+        )
+    }
+
+    #[cfg(unix)]
     fn sleep_command(seconds: u64) -> Command {
         shell_command(&format!("sleep {seconds}"))
     }
@@ -1329,6 +1340,23 @@ mod tests {
                 assert!(detail.contains("gpg failed to sign the data"));
                 assert!(!detail.contains("GUI app PATH"));
                 assert!(!detail.contains("git config --global gpg.program /path/to/gpg"));
+            }
+            other => panic!("expected structured git failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_failure_adds_gpg_signing_hint_for_missing_gpg_program_path() {
+        let err = run_git_with_output(failing_command_with_missing_gpg_program_path(), "git commit")
+            .expect_err("expected failing command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                let detail = failure.detail().expect("expected failure detail");
+                assert!(detail.contains("cannot run"));
+                assert!(detail.contains("gpg"));
+                assert!(detail.contains("GUI app PATH"));
+                assert!(detail.contains("git config --global gpg.program /path/to/gpg"));
             }
             other => panic!("expected structured git failure, got {other:?}"),
         }
