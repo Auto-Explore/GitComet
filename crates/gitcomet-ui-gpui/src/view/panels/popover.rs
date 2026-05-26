@@ -277,6 +277,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ConflictResolverOutputMenu { .. }
             | PopoverKind::CommitMenu { .. }
             | PopoverKind::TagMenu { .. }
+            | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::BranchMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
@@ -446,6 +447,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
+        | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
@@ -1145,6 +1147,12 @@ impl PopoverHost {
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_history_refs_hover_item_menu_open(false, cx);
+            });
+        });
         cx.notify();
     }
 
@@ -1311,6 +1319,12 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.clear_active_context_menu_invoker(cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_history_refs_hover_item_menu_open(false, cx);
+            });
+        });
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
         cx.notify();
@@ -1522,7 +1536,9 @@ impl PopoverHost {
 
     fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
         let repo_id = match kind {
-            PopoverKind::TagMenu { repo_id, .. } => Some(*repo_id),
+            PopoverKind::TagMenu { repo_id, .. } | PopoverKind::TagRefMenu { repo_id, .. } => {
+                Some(*repo_id)
+            }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
             _ => None,
         };
@@ -2345,6 +2361,18 @@ impl PopoverHost {
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
             }
+            PopoverKind::TagRefMenu {
+                repo_id,
+                commit_id,
+                name,
+            } => self.context_menu_view(
+                PopoverKind::TagRefMenu {
+                    repo_id,
+                    commit_id,
+                    name,
+                },
+                cx,
+            ),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 self.context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
             }

@@ -3013,4 +3013,141 @@ mod tests {
                 && repo.history_state.selected_commit.as_ref() == Some(&target)
         });
     }
+
+    #[gpui::test]
+    fn branch_reveal_closes_open_history_refs_hover_without_reentrant_root_update(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let sync_view_from_store = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                view.update(app, |this, cx| {
+                    crate::view::test_support::sync_store_snapshot(this, cx)
+                });
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        };
+
+        let repo_id = RepoId(1);
+        let target = commit_id("main-tip");
+        let initial_scope = LogScope::default();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        wait_until(cx, "opened repo placeholder", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot.active_repo == Some(repo_id)
+                && snapshot.repos.iter().any(|repo| repo.id == repo_id)
+        });
+        sync_view_from_store(cx);
+
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
+            repo_id,
+            result: Ok("main".to_string()),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "main".to_string(),
+                target: target.clone(),
+                upstream: None,
+                divergence: None,
+            }]),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
+            repo_id,
+            scope: initial_scope,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("main-tip")],
+                next_cursor: None,
+            }),
+        }));
+        wait_until(cx, "sidebar repo data", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            matches!(repo.head_branch, Loadable::Ready(ref head) if head == "main")
+                && matches!(repo.branches, Loadable::Ready(_))
+                && matches!(repo.log, Loadable::Ready(_))
+        });
+        sync_view_from_store(cx);
+
+        wait_until(cx, "history row rendered", |cx| {
+            sync_view_for_tests(cx, &view);
+            cx.debug_bounds("history_row_0").is_some()
+        });
+
+        let history_row_bounds = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_items: Arc<[HistoryRefListItem]> = vec![HistoryRefListItem {
+            text: HistoryTextVm::new("main".into()),
+            kind: HistoryRefListItemKind::LocalBranch {
+                name: "main".to_string(),
+            },
+        }]
+        .into();
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.show_history_refs_hover(
+                    repo_id,
+                    target.clone(),
+                    history_row_bounds,
+                    hover_items.clone(),
+                    history_row_bounds.center(),
+                    window,
+                    cx,
+                );
+            });
+            let _ = window.draw(app);
+        });
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+        cx.update(|window, app| {
+            sidebar_pane.update(app, |pane, cx| {
+                pane.reveal_branch_commit_in_history(
+                    repo_id,
+                    BranchSection::Local,
+                    "main",
+                    target.clone(),
+                    None,
+                    cx,
+                );
+            });
+            let _ = window.draw(app);
+        });
+
+        wait_until(cx, "branch reveal store state and hover closure", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            repo.history_state.history_scope == initial_scope
+                && repo.history_state.selected_commit.as_ref() == Some(&target)
+                && _cx.update(|_window, app| {
+                    !crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+                })
+        });
+    }
 }
