@@ -538,6 +538,88 @@ pub(super) fn close_repo(
     effects
 }
 
+pub(super) fn close_repos(
+    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_ids: Vec<RepoId>,
+    activate_after: Option<RepoId>,
+) -> Vec<Effect> {
+    let mut close_ids = HashSet::default();
+    for repo_id in repo_ids {
+        if state.repos.iter().any(|repo| repo.id == repo_id) {
+            close_ids.insert(repo_id);
+        }
+    }
+    if close_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let original_order: Vec<RepoId> = state.repos.iter().map(|repo| repo.id).collect();
+    let original_active = state.active_repo;
+    let original_active_ix =
+        original_active.and_then(|repo_id| original_order.iter().position(|id| *id == repo_id));
+
+    let mut effects =
+        Vec::with_capacity(close_ids.len() + 2 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
+    for repo_id in close_ids.iter().copied().collect::<Vec<_>>() {
+        clear_banner_error_for_repo(state, repo_id);
+        append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
+        repos.remove(&repo_id);
+    }
+
+    state.repos.retain(|repo| !close_ids.contains(&repo.id));
+
+    let repo_still_open =
+        |repo_id: RepoId, state: &AppState| state.repos.iter().any(|repo| repo.id == repo_id);
+    let requested_active = activate_after.filter(|repo_id| repo_still_open(*repo_id, state));
+    let active_was_closed = original_active.is_some_and(|repo_id| close_ids.contains(&repo_id));
+    let next_active_repo = if state.repos.is_empty() {
+        None
+    } else if let Some(repo_id) = requested_active {
+        Some(repo_id)
+    } else if active_was_closed {
+        original_active_ix
+            .and_then(|ix| {
+                original_order[..ix]
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|repo_id| !close_ids.contains(repo_id))
+                    .or_else(|| {
+                        original_order[ix + 1..]
+                            .iter()
+                            .copied()
+                            .find(|repo_id| !close_ids.contains(repo_id))
+                    })
+            })
+            .or_else(|| state.repos.first().map(|repo| repo.id))
+    } else {
+        state
+            .active_repo
+            .filter(|repo_id| repo_still_open(*repo_id, state))
+            .or_else(|| state.repos.first().map(|repo| repo.id))
+    };
+
+    if let Some(active_repo_id) = next_active_repo {
+        if state.active_repo != Some(active_repo_id) {
+            let mut activation_effects = SetActiveRepoEffects::new();
+            fill_set_active_repo_inline_impl(state, active_repo_id, &mut activation_effects, false);
+            effects.extend(activation_effects);
+        } else {
+            state.active_repo = Some(active_repo_id);
+        }
+    } else {
+        state.active_repo = None;
+    }
+
+    effects.push(persist_session_effect(
+        state,
+        state.active_repo,
+        "closing repositories",
+    ));
+    effects
+}
+
 pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let mut effects = SetActiveRepoEffects::new();
     fill_set_active_repo_inline(state, repo_id, &mut effects);

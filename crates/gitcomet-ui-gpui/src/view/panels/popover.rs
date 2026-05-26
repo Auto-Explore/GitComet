@@ -264,6 +264,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::PushPicker
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
+            | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
@@ -353,6 +354,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
@@ -442,6 +444,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::TagRefMenu { .. }
@@ -2349,6 +2352,9 @@ impl PopoverHost {
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::PreviousCommitMessagesMenu { repo_id }, cx)
             }
+            PopoverKind::RepoTabMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::RepoTabMenu { repo_id }, cx)
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
@@ -2565,13 +2571,15 @@ impl PopoverHost {
         };
 
         let panel = if let Some(max_panel_h) = context_menu_max_panel_h {
-            div()
-                .id("context_menu_scroll")
-                .min_h(px(0.0))
-                .max_h(max_panel_h)
-                .overflow_y_scroll()
-                .child(panel)
-                .into_any_element()
+            restrict_scroll_to_vertical_axis(
+                div()
+                    .id("context_menu_scroll")
+                    .min_h(px(0.0))
+                    .max_h(max_panel_h)
+                    .overflow_y_scroll(),
+            )
+            .child(panel)
+            .into_any_element()
         } else {
             panel.into_any_element()
         };

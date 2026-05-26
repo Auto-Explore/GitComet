@@ -18,6 +18,7 @@ mod previous_commit_messages;
 mod pull;
 mod push;
 mod remote;
+mod repo_tab;
 mod stash;
 mod status_file;
 mod submodule;
@@ -233,6 +234,7 @@ impl PopoverHost {
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 Some(previous_commit_messages::model(self, *repo_id))
             }
+            PopoverKind::RepoTabMenu { repo_id } => Some(repo_tab::model(self, *repo_id)),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 Some(commit::model(self, *repo_id, commit_id))
             }
@@ -450,6 +452,21 @@ impl PopoverHost {
             }
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
+            }
+            ContextMenuAction::ActivateRepo { repo_id } => {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+            ContextMenuAction::CloseRepo { repo_id } => {
+                self.store.dispatch(Msg::CloseRepo { repo_id });
+            }
+            ContextMenuAction::CloseRepos {
+                repo_ids,
+                activate_after,
+            } => {
+                self.store.dispatch(Msg::CloseRepos {
+                    repo_ids,
+                    activate_after,
+                });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
                 self.main_pane.update(cx, |pane, cx| {
