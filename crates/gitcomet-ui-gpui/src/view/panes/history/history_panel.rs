@@ -12,6 +12,17 @@ impl Render for HistoryView {
 }
 
 impl HistoryView {
+    pub(super) fn dismiss_history_refs_hover(&self, cx: &mut gpui::Context<Self>) {
+        let root_view = self.root_view.clone();
+        // History reveal completion can run while GitCometView is already inside a root update.
+        // Defer hover dismissal so GPUI does not attempt to lease the root view twice.
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.dismiss_history_refs_menus(cx);
+            });
+        });
+    }
+
     fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
@@ -44,13 +55,19 @@ impl HistoryView {
                 }
             }
         } else {
+            let root_view_for_scroll = self.root_view.clone();
             let list = uniform_list(
                 "history_main",
                 count,
                 cx.processor(Self::render_history_table_rows),
             )
             .h_full()
-            .track_scroll(&self.history_scroll);
+            .track_scroll(&self.history_scroll)
+            .on_scroll_wheel(move |_event, _window, cx| {
+                let _ = root_view_for_scroll.update(cx, |root, cx| {
+                    root.close_history_refs_hover(cx);
+                });
+            });
             let list = restrict_scroll_to_vertical_axis(list);
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
@@ -243,6 +260,7 @@ impl HistoryView {
                 None,
                 0,
             );
+            self.dismiss_history_refs_hover(_cx);
             self.history_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
             return true;
@@ -270,6 +288,7 @@ impl HistoryView {
             Some(commit.id.clone()),
             next_list_ix,
         );
+        self.dismiss_history_refs_hover(_cx);
         self.history_scroll
             .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
         true

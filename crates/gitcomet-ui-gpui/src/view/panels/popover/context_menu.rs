@@ -241,6 +241,11 @@ impl PopoverHost {
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 Some(tag::model(self, *repo_id, commit_id))
             }
+            PopoverKind::TagRefMenu {
+                repo_id,
+                commit_id,
+                name,
+            } => Some(tag::model_for_tag(self, *repo_id, commit_id, name)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,

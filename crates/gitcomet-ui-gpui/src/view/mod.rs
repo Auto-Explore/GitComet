@@ -120,6 +120,7 @@ mod file_diff_display;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;
+mod history_refs_hover;
 mod icons;
 #[cfg(any(test, target_os = "linux", target_os = "freebsd"))]
 mod linux_desktop_integration;
@@ -153,8 +154,8 @@ use branch_sidebar::{BranchSection, BranchSidebarRow};
 use caches::{
     HistoryBaseCache, HistoryBaseCacheRequest, HistoryBaseRowVm, HistoryCache,
     HistoryCacheBuildRequest, HistoryDecorationCache, HistoryDecorationCacheRequest,
-    HistoryDecorationRowVm, HistoryDisplayKey, HistoryStashIdsCache, HistoryTextVm,
-    HistoryWorktreeSummaryCache,
+    HistoryDecorationRowVm, HistoryDisplayKey, HistoryRefListItem, HistoryRefListItemKind,
+    HistoryStashIdsCache, HistoryTextVm, HistoryWorktreeSummaryCache,
 };
 use chrome::{TitleBarView, cursor_style_for_resize_edge, resize_edge};
 use conflict_resolver::{ConflictPickSide, ConflictResolverViewMode};
@@ -184,6 +185,7 @@ use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
+use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
@@ -513,6 +515,8 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.history_refs_hover_host
+            .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
             host.open_popover_at(kind, anchor, window, cx)
         });
@@ -525,9 +529,65 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.history_refs_hover_host
+            .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
             host.open_popover_for_bounds(kind, anchor_bounds, window, cx)
         });
+    }
+
+    pub(in crate::view) fn show_history_refs_hover(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        source_bounds: Bounds<Pixels>,
+        items: Arc<[HistoryRefListItem]>,
+        pointer: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_refs_hover_host.update(cx, |host, cx| {
+            host.show(
+                repo_id,
+                commit_id,
+                source_bounds,
+                items,
+                pointer,
+                window,
+                cx,
+            )
+        });
+    }
+
+    pub(in crate::view) fn close_history_refs_hover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.history_refs_hover_host
+            .update(cx, |host, cx| host.close(cx));
+    }
+
+    pub(in crate::view) fn dismiss_history_refs_menus(&mut self, cx: &mut gpui::Context<Self>) {
+        self.close_history_refs_hover(cx);
+
+        let history_refs_menu_open =
+            self.active_context_menu_invoker
+                .as_ref()
+                .is_some_and(|invoker| {
+                    invoker
+                        .as_ref()
+                        .starts_with(HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX)
+                });
+        if history_refs_menu_open {
+            self.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        }
+    }
+
+    pub(in crate::view) fn set_history_refs_hover_item_menu_open(
+        &mut self,
+        open: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_refs_hover_host
+            .update(cx, |host, cx| host.set_item_menu_open(open, cx));
     }
 
     pub(in crate::view) fn set_active_context_menu_invoker(
@@ -783,6 +843,8 @@ impl GitCometView {
         });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
+        let history_refs_hover_host =
+            cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),
@@ -1022,6 +1084,7 @@ impl GitCometView {
             bottom_status_bar,
             tooltip_host,
             toast_host,
+            history_refs_hover_host,
             popover_host,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
@@ -1121,6 +1184,8 @@ impl GitCometView {
         self.tooltip_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.toast_host
+            .update(cx, |host, cx| host.set_theme(theme, cx));
+        self.history_refs_hover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
@@ -2743,6 +2808,8 @@ impl Render for GitCometView {
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             this.last_mouse_pos = e.position;
+            this.history_refs_hover_host
+                .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
             this.tooltip_host
                 .update(cx, |tooltip, cx| tooltip.on_mouse_moved(e.position, cx));
 
@@ -2765,6 +2832,10 @@ impl Render for GitCometView {
                 this.hover_resize_edge = next;
                 cx.notify();
             }
+        }));
+        root = root.on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+            this.history_refs_hover_host
+                .update(cx, |host, cx| host.close(cx));
         }));
         if tiling.is_some() {
             root = root.on_mouse_down(
@@ -2801,6 +2872,8 @@ impl Render for GitCometView {
         ));
 
         root = root.child(stable_overlay_view(self.toast_host.clone()));
+
+        root = root.child(stable_overlay_view(self.history_refs_hover_host.clone()));
 
         root = root.child(stable_overlay_view(self.popover_host.clone()));
 
