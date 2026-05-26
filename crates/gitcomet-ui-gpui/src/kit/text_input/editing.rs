@@ -1568,6 +1568,37 @@ impl TextInput {
         self.index_for_position(position)
     }
 
+    pub fn hotspot_range_index_at_position(
+        &self,
+        position: Point<Pixels>,
+        hotspot_ranges: &[Range<usize>],
+    ) -> Option<usize> {
+        let offset = self.index_for_mouse_position(position);
+        hotspot_ranges.iter().enumerate().find_map(|(ix, range)| {
+            (self.valid_hotspot_range(range)
+                && self.position_inside_hotspot(range, position, offset))
+            .then_some(ix)
+        })
+    }
+
+    pub fn hotspot_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
+        if !self.valid_hotspot_range(range) {
+            return None;
+        }
+
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+        let start = self.hotspot_position(range.start)?;
+        let end = self.hotspot_position(range.end)?;
+        Some(Bounds::from_corners(
+            start,
+            point(end.x, end.y + line_height),
+        ))
+    }
+
     pub(super) fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
         let offset = self.clamp_to_char_boundary(offset);
         self.selection.range = offset..offset;
@@ -1744,6 +1775,188 @@ impl TextInput {
         crate::text_selection::token_range_for_offset(self.content.as_ref(), offset)
     }
 
+    fn valid_hotspot_range(&self, range: &Range<usize>) -> bool {
+        range.start < range.end && range.end <= self.content.len()
+    }
+
+    fn offset_inside_hotspot(range: &Range<usize>, offset: usize) -> bool {
+        offset >= range.start && offset < range.end
+    }
+
+    fn wrapped_line_for_offset(
+        starts: &[usize],
+        lines: &[WrappedLine],
+        offset: usize,
+    ) -> (usize, usize) {
+        let mut ix = starts.partition_point(|&s| s <= offset);
+        if ix == 0 {
+            ix = 1;
+        }
+        let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+        let start = starts.get(line_ix).copied().unwrap_or(0);
+        let local = offset.saturating_sub(start).min(lines[line_ix].len());
+        (line_ix, local)
+    }
+
+    fn position_inside_hotspot(
+        &self,
+        range: &Range<usize>,
+        position: Point<Pixels>,
+        offset: usize,
+    ) -> bool {
+        if !self
+            .layout
+            .bounds
+            .as_ref()
+            .is_some_and(|bounds| bounds.contains(&position))
+        {
+            return false;
+        }
+
+        if Self::offset_inside_hotspot(range, offset) {
+            return true;
+        }
+
+        offset == range.end && self.position_inside_hotspot_final_glyph(range, position)
+    }
+
+    fn position_inside_hotspot_final_glyph(
+        &self,
+        range: &Range<usize>,
+        position: Point<Pixels>,
+    ) -> bool {
+        let (Some(bounds), Some(layout), Some(starts)) = (
+            self.layout.bounds.as_ref(),
+            self.layout.last.as_ref(),
+            self.layout.line_starts.as_ref(),
+        ) else {
+            return false;
+        };
+        if !bounds.contains(&position) {
+            return false;
+        }
+
+        let final_glyph_start = self.previous_boundary(range.end);
+        if final_glyph_start < range.start {
+            return false;
+        }
+
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (start_line_ix, start_local_ix) =
+                    line_for_offset(starts.as_ref(), lines, final_glyph_start);
+                let (end_line_ix, end_local_ix) =
+                    line_for_offset(starts.as_ref(), lines, range.end);
+                if start_line_ix != end_line_ix {
+                    return false;
+                }
+
+                let row_top = bounds.top() + line_height * end_line_ix as f32;
+                if position.y < row_top || position.y > row_top + line_height {
+                    return false;
+                }
+
+                let Some(line) = lines.get(end_line_ix) else {
+                    return false;
+                };
+                let x0 = bounds.left() + line.x_for_index(start_local_ix) - self.layout.scroll_x;
+                let x1 = bounds.left() + line.x_for_index(end_local_ix) - self.layout.scroll_x;
+                position.x >= x0.min(x1) && position.x <= x0.max(x1)
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                let row_bottom = bounds.top() + line_height;
+                if position.y < bounds.top() || position.y > row_bottom {
+                    return false;
+                }
+
+                let x0 =
+                    bounds.left() + truncated_line_x_for_source_offset(line, final_glyph_start);
+                let x1 = bounds.left() + truncated_line_x_for_source_offset(line, range.end);
+                position.x >= x0.min(x1) && position.x <= x0.max(x1)
+            }
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let (start_line_ix, start_local_ix) =
+                    Self::wrapped_line_for_offset(starts.as_ref(), lines, final_glyph_start);
+                let (end_line_ix, end_local_ix) =
+                    Self::wrapped_line_for_offset(starts.as_ref(), lines, range.end);
+                if start_line_ix != end_line_ix {
+                    return false;
+                }
+
+                let Some(line) = lines.get(end_line_ix) else {
+                    return false;
+                };
+                let Some(start_pos) = line.position_for_index(start_local_ix, line_height) else {
+                    return false;
+                };
+                let Some(end_pos) = line.position_for_index(end_local_ix, line_height) else {
+                    return false;
+                };
+                if start_pos.y != end_pos.y {
+                    return false;
+                }
+
+                let row_top = bounds.top()
+                    + y_offsets.get(end_line_ix).copied().unwrap_or(Pixels::ZERO)
+                    + end_pos.y;
+                if position.y < row_top || position.y > row_top + line_height {
+                    return false;
+                }
+
+                let x0 = bounds.left() + start_pos.x;
+                let x1 = bounds.left() + end_pos.x;
+                position.x >= x0.min(x1) && position.x <= x0.max(x1)
+            }
+        }
+    }
+
+    fn hotspot_position(&self, offset: usize) -> Option<Point<Pixels>> {
+        let bounds = self.layout.bounds?;
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        let offset = self.clamp_to_char_boundary(offset.min(self.content.len()));
+        let line_height = if self.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            self.layout.line_height
+        };
+
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts.as_ref(), lines, offset);
+                let line = lines.get(line_ix)?;
+                Some(point(
+                    bounds.left() + line.x_for_index(local_ix) - self.layout.scroll_x,
+                    bounds.top() + line_height * line_ix as f32,
+                ))
+            }
+            TextInputLayout::TruncatedSingleLine(line) => Some(point(
+                bounds.left() + truncated_line_x_for_source_offset(line, offset),
+                bounds.top(),
+            )),
+            TextInputLayout::Wrapped {
+                lines, y_offsets, ..
+            } => {
+                let (line_ix, local_ix) =
+                    Self::wrapped_line_for_offset(starts.as_ref(), lines, offset);
+                let line = lines.get(line_ix)?;
+                let pos = line.position_for_index(local_ix, line_height)?;
+                Some(point(
+                    bounds.left() + pos.x,
+                    bounds.top() + y_offsets.get(line_ix).copied().unwrap_or(Pixels::ZERO) + pos.y,
+                ))
+            }
+        }
+    }
+
     pub(super) fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -1783,9 +1996,9 @@ impl TextInput {
 
     pub(super) fn on_mouse_up(
         &mut self,
-        _: &MouseUpEvent,
+        _event: &MouseUpEvent,
         _window: &mut Window,
-        _: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
         self.interaction.is_selecting = false;
     }
@@ -1797,7 +2010,8 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         if self.interaction.is_selecting {
-            self.select_to(self.index_for_mouse_position(event.position), cx);
+            let index = self.index_for_mouse_position(event.position);
+            self.select_to(index, cx);
         }
     }
 
