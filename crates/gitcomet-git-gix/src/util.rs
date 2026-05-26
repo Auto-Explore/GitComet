@@ -1347,8 +1347,11 @@ mod tests {
 
     #[test]
     fn run_git_failure_adds_gpg_signing_hint_for_missing_gpg_program_path() {
-        let err = run_git_with_output(failing_command_with_missing_gpg_program_path(), "git commit")
-            .expect_err("expected failing command");
+        let err = run_git_with_output(
+            failing_command_with_missing_gpg_program_path(),
+            "git commit",
+        )
+        .expect_err("expected failing command");
 
         match err.kind() {
             ErrorKind::Git(failure) => {
