@@ -12,6 +12,12 @@ impl Render for HistoryView {
 }
 
 impl HistoryView {
+    pub(super) fn dismiss_history_refs_hover(&self, cx: &mut gpui::Context<Self>) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.close_history_refs_hover(cx);
+        });
+    }
+
     fn history_view_inner(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
@@ -44,13 +50,19 @@ impl HistoryView {
                 }
             }
         } else {
+            let root_view_for_scroll = self.root_view.clone();
             let list = uniform_list(
                 "history_main",
                 count,
                 cx.processor(Self::render_history_table_rows),
             )
             .h_full()
-            .track_scroll(&self.history_scroll);
+            .track_scroll(&self.history_scroll)
+            .on_scroll_wheel(move |_event, _window, cx| {
+                let _ = root_view_for_scroll.update(cx, |root, cx| {
+                    root.close_history_refs_hover(cx);
+                });
+            });
             let should_load_more = {
                 let state = self.history_scroll.0.borrow();
                 let scroll_handle = state.base_handle.clone();
@@ -242,6 +254,7 @@ impl HistoryView {
                 None,
                 0,
             );
+            self.dismiss_history_refs_hover(_cx);
             self.history_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
             return true;
@@ -269,6 +282,7 @@ impl HistoryView {
             Some(commit.id.clone()),
             next_list_ix,
         );
+        self.dismiss_history_refs_hover(_cx);
         self.history_scroll
             .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
         true

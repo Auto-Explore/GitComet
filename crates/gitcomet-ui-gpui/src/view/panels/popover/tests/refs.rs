@@ -246,6 +246,161 @@ fn tag_menu_lists_remote_push_and_delete_entries(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
+fn tag_ref_menu_scopes_actions_to_clicked_tag(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(21);
+    let commit_id = CommitId("0123456789abcdef".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_tag_ref_menu",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.tags = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::Tag {
+                    name: "release".to_string(),
+                    target: commit_id.clone(),
+                },
+                gitcomet_core::domain::Tag {
+                    name: "v1.0.0".to_string(),
+                    target: commit_id.clone(),
+                },
+            ]));
+            repo.remotes = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::Remote {
+                    name: "origin".to_string(),
+                    url: None,
+                },
+                gitcomet_core::domain::Remote {
+                    name: "upstream".to_string(),
+                    url: None,
+                },
+            ]));
+            repo.remote_tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteTag {
+                remote: "origin".to_string(),
+                name: "release".to_string(),
+                target: commit_id.clone(),
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::TagRefMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                            name: "release".to_string(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected single tag context menu model");
+
+        let labels = model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry { label, .. } => Some(label.as_ref().to_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert!(labels.contains(&"Delete tag release".to_string()));
+        assert!(labels.contains(&"Push tag release to origin".to_string()));
+        assert!(labels.contains(&"Push tag release to upstream".to_string()));
+        assert!(labels.contains(&"Delete tag release from origin".to_string()));
+        assert!(
+            labels.iter().all(|label| !label.contains("v1.0.0")),
+            "single tag menu should exclude sibling tags on the same commit"
+        );
+    });
+}
+
+#[gpui::test]
+fn tag_ref_menu_requests_remote_tags_when_not_loaded(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+
+    let repo_id = RepoId(22);
+    let commit_id = CommitId("fedcba9876543210".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_tag_ref_lazy_remote_tags",
+        std::process::id()
+    ));
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: workdir.clone(),
+        },
+    );
+    repo.open = Loadable::Ready(());
+    repo.tags = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Tag {
+        name: "release".to_string(),
+        target: commit_id.clone(),
+    }]));
+    repo.remote_tags = Loadable::NotLoaded;
+
+    store.replace_snapshot_for_test(Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    }));
+
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::TagRefMenu {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                        name: "release".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+
+    wait_until("TagRefMenu to request remote tags", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| !matches!(repo.remote_tags, Loadable::NotLoaded))
+    });
+}
+
+#[gpui::test]
 fn create_tag_prompt_escape_cancels(cx: &mut gpui::TestAppContext) {
     let (store, events, repo, _workdir) = create_tracking_store("create-tag-escape");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");

@@ -1,8 +1,9 @@
 use super::super::*;
 use crate::view::caches::{
     HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm, analyze_history_stashes,
-    build_history_branch_text_by_target, build_history_tag_names_by_target,
-    build_history_visible_indices, next_history_stash_tip_for_commit_ix,
+    build_history_branch_ref_items_by_target, build_history_branch_text_by_target,
+    build_history_tag_names_by_target, build_history_visible_indices,
+    history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
 };
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -977,6 +978,29 @@ impl HistoryView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
+    pub(in crate::view) fn show_history_refs_hover(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        source_bounds: Bounds<Pixels>,
+        items: Arc<[HistoryRefListItem]>,
+        pointer: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.show_history_refs_hover(
+                repo_id,
+                commit_id,
+                source_bounds,
+                items,
+                pointer,
+                window,
+                cx,
+            );
+        });
+    }
+
     pub(in crate::view) fn display_log_page_for_repo(repo: &RepoState) -> Option<Arc<LogPage>> {
         match &repo.log {
             Loadable::Ready(page) => Some(Arc::clone(page)),
@@ -1501,6 +1525,7 @@ impl HistoryView {
                     list_ix,
                 );
             }
+            self.dismiss_history_refs_hover(cx);
             self.history_scroll
                 .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
         } else if decision.load_more {
@@ -2032,6 +2057,13 @@ fn build_history_decoration_cache(
     );
     let (mut branch_text_by_target, head_branches_text) =
         build_history_branch_text_by_target(branches, remote_branches, head_branch, head_target);
+    let (mut branch_ref_items_by_target, head_branch_ref_items) =
+        build_history_branch_ref_items_by_target(
+            branches,
+            remote_branches,
+            head_branch,
+            head_target,
+        );
     let mut tag_names_by_target = build_history_tag_names_by_target(tags);
     let mut row_vms = Vec::with_capacity(base.visible_indices.len());
     for (commit_ix, base_row) in base.visible_indices.iter().zip(base.row_vms.iter()) {
@@ -2046,9 +2078,19 @@ fn build_history_decoration_cache(
                 .remove(commit_id)
                 .unwrap_or_else(HistoryTextVm::default)
         };
+        let branch_items = if base_row.is_head {
+            head_branch_ref_items.clone().unwrap_or_default()
+        } else {
+            branch_ref_items_by_target
+                .remove(commit_id)
+                .unwrap_or_default()
+        };
+        let tag_names = tag_names_by_target.remove(commit_id).unwrap_or_default();
+        let ref_items = history_ref_items_from_displayed_refs(&tag_names, branch_items);
         row_vms.push(HistoryDecorationRowVm {
             branches_text,
-            tag_names: tag_names_by_target.remove(commit_id).unwrap_or_default(),
+            tag_names,
+            ref_items,
         });
     }
 
@@ -2942,6 +2984,681 @@ mod tests {
             )
         );
         assert_ne!(after_when_text, before_when_text);
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commit_id = CommitId("tip".into());
+        let base_commit_id = CommitId("base".into());
+        let page = Arc::new(log_page(
+            vec![
+                commit("tip", &[base_commit_id.as_ref()], "tip"),
+                commit(base_commit_id.as_ref(), &[], "base"),
+            ],
+            None,
+        ));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", "tip"),
+            branch("feature", "tip"),
+        ]));
+        repo.branches_rev = 1;
+        repo.remote_branches =
+            Loadable::Ready(Arc::new(vec![remote_branch("origin", "main", "tip")]));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::Tag {
+                name: "release".to_string(),
+                target: commit_id.clone(),
+            },
+            gitcomet_core::domain::Tag {
+                name: "old-release".to_string(),
+                target: base_commit_id.clone(),
+            },
+        ]));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+        wait_until(cx, "history second row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_1").is_some()
+        });
+
+        let redraw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+        };
+
+        let refs_column_point = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+            let selector = match row_ix {
+                0 => "history_row_0",
+                1 => "history_row_1",
+                _ => panic!("unsupported row index {row_ix}"),
+            };
+            let row = cx
+                .debug_bounds(selector)
+                .expect("history row should be rendered");
+            point(row.left() + px(24.0), row.center().y)
+        };
+
+        let away_from_refs_column_point = |cx: &mut gpui::VisualTestContext| {
+            let row = cx
+                .debug_bounds("history_row_0")
+                .expect("history row should be rendered");
+            point(row.right() - px(8.0), row.center().y)
+        };
+
+        let move_to_refs_column = |cx: &mut gpui::VisualTestContext| {
+            let point = refs_column_point(cx, 0);
+            cx.simulate_mouse_move(point, None, gpui::Modifiers::default());
+            cx.run_until_parked();
+            redraw(cx);
+        };
+
+        let open_refs_hover = |cx: &mut gpui::VisualTestContext| {
+            move_to_refs_column(cx);
+            cx.executor().advance_clock(Duration::from_millis(200));
+            cx.run_until_parked();
+            redraw(cx);
+        };
+
+        move_to_refs_column(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert!(!crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let away = away_from_refs_column_point(cx);
+        cx.simulate_mouse_move(away, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert!(!crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        open_refs_hover(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        let feature_center = cx
+            .debug_bounds("history_refs_hover_item_local_branch_feature")
+            .expect("expected feature ref item in debug bounds")
+            .center();
+        cx.simulate_mouse_move(feature_center, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(150));
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        let click_hover_item = |cx: &mut gpui::VisualTestContext,
+                                selector: &'static str,
+                                button: gpui::MouseButton| {
+            let center = cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
+                .center();
+            cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(center, button, gpui::Modifiers::default());
+            cx.simulate_mouse_up(center, button, gpui::Modifiers::default());
+            cx.run_until_parked();
+            redraw(cx);
+        };
+
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_local_branch_feature",
+            gpui::MouseButton::Left,
+        );
+        let feature_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                feature_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("feature".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        open_refs_hover(cx);
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_local_branch_feature",
+            gpui::MouseButton::Right,
+        );
+        let feature_context_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                feature_context_pinned_ix
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        open_refs_hover(cx);
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_tag_release",
+            gpui::MouseButton::Left,
+        );
+        let release_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::TagRefMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                    name: "release".to_string()
+                })
+            );
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                release_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("release".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        open_refs_hover(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        let source_bounds = cx
+            .update(|_window, app| {
+                crate::view::test_support::history_refs_hover_source_bounds(view.read(app), app)
+            })
+            .expect("history refs hover should expose source bounds");
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_local_branch_feature",
+            gpui::MouseButton::Right,
+        );
+        let frozen_feature_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        let frozen_source_bounds = cx
+            .update(|_window, app| {
+                assert_eq!(
+                    crate::view::test_support::popover_kind(view.read(app), app),
+                    Some(PopoverKind::BranchMenu {
+                        repo_id,
+                        section: BranchSection::Local,
+                        name: "feature".to_string()
+                    })
+                );
+                assert_eq!(
+                    crate::view::test_support::history_refs_hover_pinned_item_ix(
+                        view.read(app),
+                        app
+                    ),
+                    frozen_feature_pinned_ix
+                );
+                assert_eq!(
+                    crate::view::test_support::history_refs_hover_pinned_item_text(
+                        view.read(app),
+                        app
+                    ),
+                    Some("feature".into())
+                );
+                crate::view::test_support::history_refs_hover_source_bounds(view.read(app), app)
+            })
+            .expect("history refs hover should remain open while menu is open");
+
+        let other_commit_ref_point = refs_column_point(cx, 1);
+        cx.simulate_mouse_move(other_commit_ref_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(250));
+        cx.run_until_parked();
+        redraw(cx);
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_source_bounds(view.read(app), app),
+                Some(frozen_source_bounds)
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                frozen_feature_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("feature".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        redraw(cx);
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                None
+            );
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let away_x = if source_bounds.right() + px(8.0) < row.right() {
+            source_bounds.right() + px(8.0)
+        } else {
+            source_bounds.left() - px(8.0)
+        };
+        let away = point(away_x, source_bounds.center().y);
+        assert!(!source_bounds.contains(&away));
+        cx.simulate_mouse_move(away, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(150));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(!hover_open, "history refs hover host should be closed");
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert!(!crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commits = (0..80)
+            .map(|ix| {
+                let id = format!("c{ix:02}");
+                commit(&id, &[], &format!("commit {ix:02}"))
+            })
+            .collect::<Vec<_>>();
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-scroll"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(row.left() + px(24.0), row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let scroll_y = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_scroll.0.borrow().base_handle.offset().y
+            })
+        };
+        let before_scroll_y = scroll_y(cx);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: hover_point,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-240.0))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        wait_until(cx, "history list to scroll", |cx| {
+            scroll_y(cx) != before_scroll_y
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when history scrolls without a mouse move"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_closes_when_history_scrolls_programmatically(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let selected_commit = CommitId("c50".into());
+        let commits = (0..80)
+            .map(|ix| {
+                let id = format!("c{ix:02}");
+                commit(&id, &[], &format!("commit {ix:02}"))
+            })
+            .collect::<Vec<_>>();
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-programmatic-scroll"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.history_state.selected_commit = Some(selected_commit);
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(row.left() + px(24.0), row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let scroll_y = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_scroll.0.borrow().base_handle.offset().y
+            })
+        };
+        let before_scroll_y = scroll_y(cx);
+
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                assert!(history.history_select_adjacent_commit(1, cx));
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        wait_until(cx, "history list to scroll programmatically", |cx| {
+            scroll_y(cx) != before_scroll_y
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when history scrolls programmatically"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
     }
 
     #[gpui::test]

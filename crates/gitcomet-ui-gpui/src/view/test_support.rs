@@ -31,6 +31,37 @@ pub(crate) fn popover_is_open(view: &GitCometView, app: &App) -> bool {
     popover_kind(view, app).is_some()
 }
 
+pub(in crate::view) fn history_refs_hover_is_open(view: &GitCometView, app: &App) -> bool {
+    view.history_refs_hover_host.read(app).is_open_for_tests()
+}
+
+pub(in crate::view) fn history_refs_hover_source_bounds(
+    view: &GitCometView,
+    app: &App,
+) -> Option<Bounds<Pixels>> {
+    view.history_refs_hover_host
+        .read(app)
+        .source_bounds_for_tests()
+}
+
+pub(in crate::view) fn history_refs_hover_pinned_item_ix(
+    view: &GitCometView,
+    app: &App,
+) -> Option<usize> {
+    view.history_refs_hover_host
+        .read(app)
+        .pinned_item_ix_for_tests()
+}
+
+pub(in crate::view) fn history_refs_hover_pinned_item_text(
+    view: &GitCometView,
+    app: &App,
+) -> Option<SharedString> {
+    view.history_refs_hover_host
+        .read(app)
+        .pinned_item_text_for_tests()
+}
+
 pub(in crate::view) fn popover_kind(view: &GitCometView, app: &App) -> Option<PopoverKind> {
     view.popover_host.read(app).popover_kind_for_tests()
 }

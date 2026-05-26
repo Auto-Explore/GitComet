@@ -2566,9 +2566,15 @@ pub(super) enum PopoverKind {
         submodule_repo_path: std::path::PathBuf,
         target: DiffTarget,
     },
+    #[allow(dead_code)]
     TagMenu {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    TagRefMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        name: String,
     },
     HistoryBranchFilter {
         repo_id: RepoId,
@@ -3237,6 +3243,7 @@ pub struct GitCometView {
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
+    pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,

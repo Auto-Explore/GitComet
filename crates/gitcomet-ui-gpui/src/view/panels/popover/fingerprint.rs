@@ -162,6 +162,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
+        | PopoverKind::TagRefMenu { repo_id, .. }
         | PopoverKind::HistoryBranchFilter { repo_id } => Some(*repo_id),
     }?;
 
@@ -271,7 +272,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
         }
 
-        PopoverKind::TagMenu { .. } => {
+        PopoverKind::TagMenu { .. } | PopoverKind::TagRefMenu { .. } => {
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_tags_rev.hash(hasher);
@@ -553,6 +554,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             47u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+        }
+        PopoverKind::TagRefMenu {
+            repo_id,
+            commit_id,
+            name,
+        } => {
+            72u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+            name.hash(hasher);
         }
         PopoverKind::HistoryBranchFilter { repo_id } => {
             48u8.hash(hasher);

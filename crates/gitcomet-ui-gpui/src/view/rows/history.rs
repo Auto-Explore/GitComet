@@ -1786,6 +1786,7 @@ impl HistoryView {
                     connect_from_top_col,
                     Arc::clone(&decoration_row_vm.tag_names),
                     decoration_row_vm.branches_text.clone(),
+                    Arc::clone(&decoration_row_vm.ref_items),
                     selected_branch_entry_text,
                     base_row_vm.author.clone(),
                     base_row_vm.summary.clone(),
@@ -1887,6 +1888,7 @@ fn history_table_row(
     connect_from_top_col: Option<usize>,
     tag_names: Arc<[HistoryTextVm]>,
     branches_text: HistoryTextVm,
+    ref_items: Arc<[HistoryRefListItem]>,
     selected_branch_entry_text: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
@@ -1928,6 +1930,7 @@ fn history_table_row(
         graph_row_ix,
         tag_names,
         branches_text,
+        ref_items,
         branch_highlights,
         author,
         summary,
@@ -1939,6 +1942,7 @@ fn history_table_row(
     let row_height = history_row_height(ui_scale);
     let mut row = div()
         .id(ix)
+        .debug_selector(move || format!("history_row_{ix}"))
         .relative()
         .h(row_height)
         .w_full()
