@@ -543,6 +543,20 @@ impl PopoverHost {
         });
     }
 
+    fn history_refs_menu_active(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.root_view
+            .update(cx, |root, _cx| {
+                root.active_context_menu_invoker
+                    .as_ref()
+                    .is_some_and(|invoker| {
+                        invoker.as_ref().starts_with(
+                            crate::view::history_refs_hover::HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX,
+                        )
+                    })
+            })
+            .unwrap_or(false)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
@@ -2118,31 +2132,32 @@ impl Render for PopoverHost {
             return div().into_any_element();
         };
 
+        let history_refs_menu_active = self.history_refs_menu_active(cx);
         let close = cx.listener(|this, _e: &MouseDownEvent, window, cx| {
             this.close_popover_and_restore_focus(window, cx);
         });
-        let scrim = div()
-            .id("popover_scrim")
-            .debug_selector(|| "repo_popover_close".to_string())
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(gpui::rgba(0x00000000))
-            .occlude()
-            .on_any_mouse_down(close);
 
         let popover = self.popover_view(kind, window, cx).into_any_element();
-
-        div()
+        let mut layer = div()
             .id("popover_layer")
             .absolute()
             .top_0()
             .left_0()
-            .size_full()
-            .child(scrim)
-            .child(popover)
-            .into_any_element()
+            .size_full();
+        if !history_refs_menu_active {
+            let scrim = div()
+                .id("popover_scrim")
+                .debug_selector(|| "repo_popover_close".to_string())
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .bg(gpui::rgba(0x00000000))
+                .occlude()
+                .on_any_mouse_down(close);
+            layer = layer.child(scrim);
+        }
+        layer.child(popover).into_any_element()
     }
 }
 impl PopoverHost {

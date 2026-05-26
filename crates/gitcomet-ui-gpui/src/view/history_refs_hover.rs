@@ -394,8 +394,6 @@ impl HistoryRefsHoverHost {
         self.set_item_menu_open(true, cx);
         let root_view = self.root_view.clone();
         let _ = root_view.update(cx, |root, cx| {
-            root.store
-                .dispatch(Msg::SelectCommit { repo_id, commit_id });
             root.set_active_context_menu_invoker(Some(invoker), cx);
             root.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(kind, position, window, cx)
@@ -551,9 +549,6 @@ impl Render for HistoryRefsHoverHost {
                         let item_for_left = item.clone();
                         move |this, e: &MouseUpEvent, window, cx| {
                             cx.stop_propagation();
-                            if this.item_menu_open {
-                                return;
-                            }
                             if actionable {
                                 this.open_item_menu(
                                     state.repo_id,
@@ -565,6 +560,9 @@ impl Render for HistoryRefsHoverHost {
                                     cx,
                                 );
                             } else {
+                                if this.item_menu_open {
+                                    return;
+                                }
                                 this.select_commit(state.repo_id, commit_id.clone(), cx);
                                 this.close(cx);
                             }
@@ -572,15 +570,12 @@ impl Render for HistoryRefsHoverHost {
                     }),
                 )
                 .when(actionable, |row| {
-                    row.on_mouse_down(
+                    row.on_mouse_up(
                         MouseButton::Right,
                         cx.listener({
                             let commit_id = state.commit_id.clone();
-                            move |this, e: &MouseDownEvent, window, cx| {
+                            move |this, e: &MouseUpEvent, window, cx| {
                                 cx.stop_propagation();
-                                if this.item_menu_open {
-                                    return;
-                                }
                                 this.open_item_menu(
                                     state.repo_id,
                                     commit_id.clone(),

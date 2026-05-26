@@ -1956,13 +1956,16 @@ fn history_table_row(
         })
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
-        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
-            this.store.dispatch(Msg::SelectCommit {
-                repo_id,
-                commit_id: commit_id.clone(),
-            });
-            cx.notify();
-        }));
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |this, _e: &MouseUpEvent, _w, cx| {
+                this.store.dispatch(Msg::SelectCommit {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                });
+                cx.notify();
+            }),
+        );
 
     if selected {
         row = row.bg(with_alpha(theme.colors.accent, 0.15));
