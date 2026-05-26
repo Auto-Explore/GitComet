@@ -146,6 +146,7 @@ impl GitCometView {
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             git_executable_path: None,
+                            external_code_editor: None,
                         };
 
                         Some(settings)

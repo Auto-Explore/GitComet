@@ -21,6 +21,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    OpenInCodeEditor {
+        repo_id: Option<RepoId>,
+        path: std::path::PathBuf,
+    },
     OpenRepo {
         path: std::path::PathBuf,
     },

@@ -2099,6 +2099,53 @@ impl GitCometView {
         });
     }
 
+    fn active_repo_workdir(&self) -> Option<std::path::PathBuf> {
+        let repo_id = self.active_repo_id()?;
+        self.state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| repo.spec.workdir.clone())
+    }
+
+    pub(crate) fn open_active_repo_in_external_code_editor(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(workdir) = self.active_repo_workdir() else {
+            self.push_toast(
+                components::ToastKind::Error,
+                "No active repository to open in code editor.".to_string(),
+                cx,
+            );
+            return;
+        };
+        self.open_path_in_external_code_editor(workdir, cx);
+    }
+
+    pub(in crate::view) fn open_path_in_external_code_editor(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !path.exists() {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Path not found: {}", path.display()),
+                cx,
+            );
+            return;
+        }
+
+        if let Err(err) = crate::external_editor::launch_configured_editor(&path) {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Failed to open in code editor: {err}"),
+                cx,
+            );
+        }
+    }
+
     fn open_external_url(&mut self, url: &str) -> Result<(), std::io::Error> {
         platform_open::open_url(url)
     }

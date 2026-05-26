@@ -443,6 +443,35 @@ impl PopoverHost {
                     );
                 }
             }
+            ContextMenuAction::OpenInCodeEditor { repo_id, path } => {
+                let full_path = match repo_id {
+                    Some(repo_id) => match self.resolve_workdir_path(repo_id, &path) {
+                        Ok(path) => path,
+                        Err(err) => {
+                            self.push_toast(components::ToastKind::Error, err, cx);
+                            self.close_popover(cx);
+                            return;
+                        }
+                    },
+                    None => path,
+                };
+
+                if !full_path.exists() {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Path not found: {}", full_path.display()),
+                        cx,
+                    );
+                } else if let Err(err) =
+                    crate::external_editor::launch_configured_editor(&full_path)
+                {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open in code editor: {err}"),
+                        cx,
+                    );
+                }
+            }
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
             }

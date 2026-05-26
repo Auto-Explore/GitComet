@@ -16,12 +16,13 @@ use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 #[cfg(target_os = "windows")]
 use gpui::WindowsPlatform;
-#[cfg(target_os = "macos")]
-use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
-    App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, Size, TitlebarOptions,
-    Window, WindowBounds, WindowDecorations, WindowOptions, actions, point, px, size,
+    Action, App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, Size,
+    TitlebarOptions, Unbind, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
+    point, px, size,
 };
+#[cfg(target_os = "macos")]
+use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
 #[cfg(target_os = "windows")]
 use raw_window_handle::RawWindowHandle;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -49,6 +50,7 @@ actions!(
     [
         NewWindow,
         OpenSettings,
+        OpenInCodeEditor,
         OpenRepository,
         OpenRecentPicker,
         ApplyPatch,
@@ -513,6 +515,14 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
         });
     });
 
+    cx.on_action(|_: &OpenInCodeEditor, cx| {
+        cx.defer(|cx| {
+            let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
+                view.open_active_repo_in_external_code_editor(cx);
+            });
+        });
+    });
+
     let repo_backend = Arc::clone(&backend);
     cx.on_action(move |_: &OpenRepository, cx| {
         let backend = Arc::clone(&repo_backend);
@@ -717,10 +727,45 @@ fn bind_app_keys(cx: &mut App) {
         #[cfg(target_os = "macos")]
         KeyBinding::new("alt-cmd-h", HideOthers, None),
     ]);
+    refresh_external_editor_key_binding(cx);
+}
+
+fn refresh_external_editor_key_binding(cx: &mut App) {
+    refresh_external_editor_key_binding_for_configured(
+        cx,
+        crate::external_editor::configured_setting().is_some(),
+    );
+}
+
+fn refresh_external_editor_key_binding_for_configured(cx: &mut App, configured: bool) {
+    if configured {
+        cx.bind_keys([KeyBinding::new("secondary-shift-e", OpenInCodeEditor, None)]);
+    } else {
+        cx.bind_keys([KeyBinding::new(
+            "secondary-shift-e",
+            Unbind(OpenInCodeEditor.name().into()),
+            None,
+        )]);
+    }
+}
+
+pub(crate) fn refresh_external_editor_app_surfaces_for_setting(
+    setting: Option<&session::ExternalCodeEditorSetting>,
+    cx: &mut App,
+) {
+    let configured = setting.is_some_and(crate::external_editor::setting_is_configured);
+    refresh_external_editor_key_binding_for_configured(cx, configured);
+    #[cfg(target_os = "macos")]
+    refresh_macos_app_menus_for_external_editor(cx, configured);
 }
 
 #[cfg(target_os = "macos")]
 fn macos_app_menus() -> Vec<Menu> {
+    macos_app_menus_with_external_editor(crate::external_editor::configured_setting().is_some())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec<Menu> {
     let mut file_items = vec![
         MenuItem::action("New Window", NewWindow),
         MenuItem::separator(),
@@ -735,6 +780,12 @@ fn macos_app_menus() -> Vec<Menu> {
             items: recent_repo_items,
             disabled: false,
         }));
+    }
+    if external_editor_configured {
+        file_items.extend([
+            MenuItem::separator(),
+            MenuItem::action("Open in code editor", OpenInCodeEditor),
+        ]);
     }
 
     file_items.extend([
@@ -802,6 +853,11 @@ fn macos_app_menus() -> Vec<Menu> {
 #[cfg(target_os = "macos")]
 pub(crate) fn refresh_macos_app_menus(cx: &mut App) {
     cx.set_menus(macos_app_menus());
+}
+
+#[cfg(target_os = "macos")]
+fn refresh_macos_app_menus_for_external_editor(cx: &mut App, configured: bool) {
+    cx.set_menus(macos_app_menus_with_external_editor(configured));
 }
 
 #[cfg(target_os = "macos")]
@@ -1569,6 +1625,7 @@ mod tests {
                 .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
+                .on_action(record_action_listener!(OpenInCodeEditor))
                 .on_action(record_action_listener!(OpenRepository))
                 .on_action(record_action_listener!(OpenRecentPicker))
                 .on_action(record_action_listener!(Close))
@@ -1948,6 +2005,8 @@ mod tests {
 
     #[gpui::test]
     fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
+        let _external_editor_guard =
+            crate::external_editor::configured_setting_override_test_guard();
         let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let (view, cx) = cx.add_window_view(|_window, cx| {
             KeyBindingProbe::new(None, Arc::clone(&observed_actions), cx)
@@ -2020,6 +2079,74 @@ mod tests {
                 "expected `{keystroke}` to resolve to `{expected_action}`"
             );
         }
+
+        observed_actions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        cx.simulate_keystrokes("secondary-shift-e");
+        assert!(
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
+            "expected external editor shortcut to be unbound by default"
+        );
+    }
+
+    #[gpui::test]
+    fn external_editor_shortcut_respects_configured_setting_override(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _external_editor_guard =
+            crate::external_editor::configured_setting_override_test_guard();
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            KeyBindingProbe::new(None, Arc::clone(&observed_actions), cx)
+        });
+
+        cx.update(|window, app| {
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+
+        crate::external_editor::set_configured_setting_override(Some(
+            session::ExternalCodeEditorSetting::Custom {
+                executable: PathBuf::from("/usr/bin/editor"),
+                arguments: None,
+            },
+        ));
+        cx.update(|_window, app| {
+            app.clear_key_bindings();
+            bind_app_keys(app);
+        });
+
+        cx.simulate_keystrokes("secondary-shift-e");
+        let actual_action = observed_actions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .last()
+            .cloned();
+        assert_eq!(actual_action.as_deref(), Some(OpenInCodeEditor.name()));
+
+        crate::external_editor::set_configured_setting_override(None);
+        observed_actions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        cx.update(|_window, app| {
+            bind_app_keys(app);
+        });
+
+        cx.simulate_keystrokes("secondary-shift-e");
+        assert!(
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty(),
+            "expected external editor shortcut to be unbound after the configured override is cleared"
+        );
     }
 
     #[gpui::test]

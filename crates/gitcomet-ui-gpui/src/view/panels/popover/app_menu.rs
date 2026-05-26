@@ -7,6 +7,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
 
     let active_repo_id = this.active_repo().map(|r| r.id);
+    let active_repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
+    let external_editor_configured = crate::external_editor::configured_setting().is_some();
 
     let separator = || {
         div()
@@ -95,6 +97,26 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 },
             )),
         )
+        .when(external_editor_configured, |menu| {
+            menu.child(
+                entry(
+                    "app_menu_open_in_code_editor",
+                    "Open in code editor".into(),
+                    active_repo_workdir.is_none(),
+                )
+                .on_click(cx.listener(
+                    move |this, _e: &ClickEvent, _window, cx| {
+                        let Some(path) = active_repo_workdir.clone() else {
+                            return;
+                        };
+                        let _ = this.root_view.update(cx, |root, cx| {
+                            root.open_path_in_external_code_editor(path, cx);
+                        });
+                        this.close_popover(cx);
+                    },
+                )),
+            )
+        })
         .child(separator())
         .child(section_label("app_menu_patches_section", "Patches"))
         .child(
