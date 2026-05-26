@@ -191,7 +191,9 @@ pub use mod_helpers::{
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 pub(crate) use panes::MainPaneView;
-use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
+use panes::{
+    CommitDetailsMessageContext, DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView,
+};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;

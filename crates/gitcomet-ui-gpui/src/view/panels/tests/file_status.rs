@@ -1559,6 +1559,442 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
 }
 
 #[gpui::test]
+fn commit_details_message_sha_click_reveals_referenced_commit(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(34);
+    let current_sha = "0123456789abcdef0123456789abcdef01234567";
+    let target_sha = "89abcdef0123456789abcdef0123456789abcdef";
+    let target_sha_upper = target_sha.to_ascii_uppercase();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-sha"));
+            repo.open = Loadable::Ready(());
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                commits: vec![
+                    gitcomet_core::domain::Commit {
+                        id: gitcomet_core::domain::CommitId(current_sha.into()),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                        summary: "current".into(),
+                        author: "Alice".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    },
+                    gitcomet_core::domain::Commit {
+                        id: gitcomet_core::domain::CommitId(target_sha.into()),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                        summary: "target".into(),
+                        author: "Alice".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    },
+                ],
+                next_cursor: None,
+            }));
+            repo.log_rev = 1;
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(current_sha.into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(current_sha.into()),
+                    message: format!("{target_sha_upper} fixes the regression"),
+                    committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    parent_ids: vec![],
+                    files: vec![],
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("expected commit details message bounds");
+    let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
+
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let target = gitcomet_core::domain::CommitId(target_sha.into());
+            let mut next_state = this.store.snapshot().as_ref().clone();
+            let repo = next_state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .expect("expected repo in store snapshot");
+            assert_eq!(repo.history_state.selected_commit.as_ref(), Some(&target));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: target,
+                    message: "target details loaded".into(),
+                    committed_at: "2026-03-08 12:35:56 +0200".into(),
+                    parent_ids: vec![],
+                    files: vec![],
+                },
+            ));
+            repo.history_state.commit_details_rev =
+                repo.history_state.commit_details_rev.wrapping_add(1);
+            let next_state = Arc::new(next_state);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let selected = view
+            .read(app)
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.history_state.selected_commit.as_ref());
+        let expected = gitcomet_core::domain::CommitId(target_sha.into());
+        assert_eq!(selected, Some(&expected));
+    });
+}
+
+#[gpui::test]
+fn commit_details_message_sha_delayed_click_is_ignored_after_switching_repos(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let first_repo_id = gitcomet_state::model::RepoId(36);
+    let second_repo_id = gitcomet_state::model::RepoId(37);
+    let first_current_sha = "0123456789abcdef0123456789abcdef01234567";
+    let delayed_target_sha = "89abcdef0123456789abcdef0123456789abcdef";
+    let second_current_sha = "fedcba9876543210fedcba9876543210fedcba98";
+
+    let make_commit = |id: &str, summary: &str| gitcomet_core::domain::Commit {
+        id: gitcomet_core::domain::CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: summary.into(),
+        author: "Alice".into(),
+        time: std::time::SystemTime::UNIX_EPOCH,
+    };
+    let make_state = |active_repo_id: gitcomet_state::model::RepoId| {
+        let mut first_repo =
+            opening_repo_state(first_repo_id, Path::new("/tmp/repo-delayed-sha-first"));
+        first_repo.open = Loadable::Ready(());
+        first_repo.head_branch = Loadable::Ready("main".into());
+        first_repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+        first_repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            commits: vec![
+                make_commit(first_current_sha, "first current"),
+                make_commit(delayed_target_sha, "first target"),
+            ],
+            next_cursor: None,
+        }));
+        first_repo.log_rev = 1;
+        first_repo.history_state.selected_commit =
+            Some(gitcomet_core::domain::CommitId(first_current_sha.into()));
+        first_repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+            gitcomet_core::domain::CommitDetails {
+                id: gitcomet_core::domain::CommitId(first_current_sha.into()),
+                message: format!("{delayed_target_sha} fixes the regression"),
+                committed_at: "2026-03-08 12:34:56 +0200".into(),
+                parent_ids: vec![],
+                files: vec![],
+            },
+        ));
+
+        let mut second_repo =
+            opening_repo_state(second_repo_id, Path::new("/tmp/repo-delayed-sha-second"));
+        second_repo.open = Loadable::Ready(());
+        second_repo.head_branch = Loadable::Ready("main".into());
+        second_repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+        second_repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+            commits: vec![
+                make_commit(second_current_sha, "second current"),
+                make_commit(delayed_target_sha, "wrong stale target"),
+            ],
+            next_cursor: None,
+        }));
+        second_repo.log_rev = 1;
+        second_repo.history_state.selected_commit =
+            Some(gitcomet_core::domain::CommitId(second_current_sha.into()));
+        second_repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(
+            Arc::new(gitcomet_core::domain::CommitDetails {
+                id: gitcomet_core::domain::CommitId(second_current_sha.into()),
+                message: "second repo commit details".into(),
+                committed_at: "2026-03-08 12:34:56 +0200".into(),
+                parent_ids: vec![],
+                files: vec![],
+            }),
+        );
+
+        Arc::new(AppState {
+            repos: vec![first_repo, second_repo],
+            active_repo: Some(active_repo_id),
+            ..Default::default()
+        })
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let next_state = make_state(first_repo_id);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("expected commit details message bounds");
+    let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
+
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let next_state = make_state(second_repo_id);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let state = &view.read(app).state;
+        assert_eq!(state.active_repo, Some(second_repo_id));
+        let selected = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == second_repo_id)
+            .and_then(|repo| repo.history_state.selected_commit.as_ref());
+        let expected = gitcomet_core::domain::CommitId(second_current_sha.into());
+        assert_eq!(selected, Some(&expected));
+    });
+}
+
+#[gpui::test]
+fn commit_details_message_sha_retained_details_are_inert_after_selection_changes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(38);
+    let retained_sha = "0123456789abcdef0123456789abcdef01234567";
+    let selected_sha = "fedcba9876543210fedcba9876543210fedcba98";
+    let target_sha = "89abcdef0123456789abcdef0123456789abcdef";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo =
+                opening_repo_state(repo_id, Path::new("/tmp/repo-retained-commit-details-sha"));
+            repo.open = Loadable::Ready(());
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                commits: vec![
+                    gitcomet_core::domain::Commit {
+                        id: gitcomet_core::domain::CommitId(retained_sha.into()),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                        summary: "retained".into(),
+                        author: "Alice".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    },
+                    gitcomet_core::domain::Commit {
+                        id: gitcomet_core::domain::CommitId(selected_sha.into()),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                        summary: "selected".into(),
+                        author: "Alice".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    },
+                    gitcomet_core::domain::Commit {
+                        id: gitcomet_core::domain::CommitId(target_sha.into()),
+                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                        summary: "target".into(),
+                        author: "Alice".into(),
+                        time: std::time::SystemTime::UNIX_EPOCH,
+                    },
+                ],
+                next_cursor: None,
+            }));
+            repo.log_rev = 1;
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(selected_sha.into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(retained_sha.into()),
+                    message: format!("{target_sha} should not reveal from retained details"),
+                    committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    parent_ids: vec![],
+                    files: vec![],
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("expected retained commit details message bounds");
+    let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
+
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let selected = view
+            .read(app)
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.history_state.selected_commit.as_ref());
+        let expected = gitcomet_core::domain::CommitId(selected_sha.into());
+        assert_eq!(selected, Some(&expected));
+    });
+}
+
+#[gpui::test]
+fn commit_details_message_sha_double_click_selects_text_without_revealing(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(35);
+    let current_sha = "0123456789abcdef0123456789abcdef01234567";
+    let target_sha = "89abcdef0123456789abcdef0123456789abcdef";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo =
+                opening_repo_state(repo_id, Path::new("/tmp/repo-commit-message-sha-select"));
+            repo.open = Loadable::Ready(());
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                commits: vec![gitcomet_core::domain::Commit {
+                    id: gitcomet_core::domain::CommitId(current_sha.into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "current".into(),
+                    author: "Alice".into(),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                }],
+                next_cursor: None,
+            }));
+            repo.log_rev = 1;
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(current_sha.into()));
+            repo.history_state.commit_details = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(current_sha.into()),
+                    message: format!("{target_sha} fixes the regression"),
+                    committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    parent_ids: vec![],
+                    files: vec![],
+                },
+            ));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("expected commit details message bounds");
+    let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
+
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    simulate_counted_click(cx, click, 2);
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.commit_details_message_input
+                .read(app)
+                .selected_text()
+                .as_deref(),
+            Some(target_sha)
+        );
+        let selected = view
+            .read(app)
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.history_state.selected_commit.as_ref());
+        let expected = gitcomet_core::domain::CommitId(current_sha.into());
+        assert_eq!(selected, Some(&expected));
+    });
+}
+
+#[gpui::test]
 fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
     cx: &mut gpui::TestAppContext,
 ) {

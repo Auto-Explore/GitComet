@@ -36,6 +36,43 @@ fn commit_details_selectable_row(
         )
 }
 
+fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        color: Some(theme.colors.accent.into()),
+        underline: Some(gpui::UnderlineStyle {
+            thickness: px(1.0),
+            color: Some(theme.colors.accent.into()),
+            wavy: false,
+        }),
+        ..gpui::HighlightStyle::default()
+    }
+}
+
+fn commit_message_sha_highlights(
+    message: &str,
+    theme: AppTheme,
+) -> (
+    Vec<(std::ops::Range<usize>, gpui::HighlightStyle)>,
+    Vec<crate::kit::TextActivationRange>,
+) {
+    let style = commit_sha_link_style(theme);
+    let ranges = crate::text_selection::commit_sha_ranges(message);
+    let highlights = ranges
+        .iter()
+        .cloned()
+        .map(|range| (range, style))
+        .collect::<Vec<_>>();
+    let activations = ranges
+        .into_iter()
+        .map(|range| crate::kit::TextActivationRange {
+            value: message[range.clone()].to_ascii_lowercase().into(),
+            range,
+        })
+        .collect::<Vec<_>>();
+
+    (highlights, activations)
+}
+
 fn min_change_tracking_stack_height(split_change_tracking: bool, handle_h: Pixels) -> Pixels {
     let section_min_h = px(STATUS_SECTION_MIN_HEIGHT_PX);
     if split_change_tracking {
@@ -503,6 +540,39 @@ impl DetailsPaneView {
         }
     }
 
+    fn sync_commit_details_message_input(
+        &mut self,
+        message: &str,
+        theme: AppTheme,
+        context: CommitDetailsMessageContext,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let (highlights, activations) = commit_message_sha_highlights(message, theme);
+        self.commit_details_message_context = Some(context);
+        self.commit_details_message_input.update(cx, |input, cx| {
+            if input.text() != message {
+                input.set_text(message.to_string(), cx);
+            }
+            input.set_highlights(highlights, cx);
+            input.set_activation_ranges(activations, cx);
+        });
+    }
+
+    fn sync_retained_commit_details_message_input(
+        &mut self,
+        message: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.commit_details_message_context = None;
+        self.commit_details_message_input.update(cx, |input, cx| {
+            if input.text() != message {
+                input.set_text(message.to_string(), cx);
+            }
+            input.set_highlights(Vec::new(), cx);
+            input.set_activation_ranges(Vec::new(), cx);
+        });
+    }
+
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -559,7 +629,13 @@ impl DetailsPaneView {
                         .gitcomet_tooltip(theme, "Close commit details".into()),
                 );
 
-            let body: AnyElement = match self.active_repo().map(|r| &r.history_state.commit_details)
+            let active_commit_details = self.active_repo().map(|repo| {
+                (
+                    repo.history_state.commit_details.clone(),
+                    repo.history_state.commit_details_rev,
+                )
+            });
+            let body: AnyElement = match active_commit_details.as_ref().map(|(details, _)| details)
             {
                 None => {
                     components::empty_state(theme, "Commit", "No repository.").into_any_element()
@@ -643,13 +719,10 @@ impl DetailsPaneView {
                                     .into_any_element()
                             };
 
-                            let needs_update = self.commit_details_message_input.read(cx).text()
-                                != details.message.as_str();
-                            if needs_update {
-                                self.commit_details_message_input.update(cx, |input, cx| {
-                                    input.set_text(details.message.clone(), cx);
-                                });
-                            }
+                            self.sync_retained_commit_details_message_input(
+                                details.message.as_str(),
+                                cx,
+                            );
                             Self::sync_commit_details_input_value(
                                 &self.commit_details_sha_input,
                                 details.id.as_ref(),
@@ -674,6 +747,9 @@ impl DetailsPaneView {
                                 .child(
                                     div()
                                         .id(("commit_details_message_scroll_surface", repo_id.0))
+                                        .debug_selector(|| {
+                                            "commit_details_message_scroll_surface".to_string()
+                                        })
                                         .relative()
                                         .w_full()
                                         .min_w(px(0.0))
@@ -801,13 +877,21 @@ impl DetailsPaneView {
                                 .into_any_element()
                         };
 
-                        let needs_update = self.commit_details_message_input.read(cx).text()
-                            != details.message.as_str();
-                        if needs_update {
-                            self.commit_details_message_input.update(cx, |input, cx| {
-                                input.set_text(details.message.clone(), cx);
-                            });
-                        }
+                        let commit_details_rev = active_commit_details
+                            .as_ref()
+                            .map(|(_, rev)| *rev)
+                            .unwrap_or_default();
+                        self.sync_commit_details_message_input(
+                            details.message.as_str(),
+                            theme,
+                            CommitDetailsMessageContext {
+                                repo_id,
+                                selected_commit: selected_id.clone(),
+                                details_id: Some(details.id.clone()),
+                                commit_details_rev,
+                            },
+                            cx,
+                        );
                         Self::sync_commit_details_input_value(
                             &self.commit_details_sha_input,
                             details.id.as_ref(),
@@ -832,6 +916,9 @@ impl DetailsPaneView {
                             .child(
                                 div()
                                     .id(("commit_details_message_scroll_surface", repo_id.0))
+                                    .debug_selector(|| {
+                                        "commit_details_message_scroll_surface".to_string()
+                                    })
                                     .relative()
                                     .w_full()
                                     .min_w(px(0.0))
