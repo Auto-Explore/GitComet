@@ -13,8 +13,13 @@ impl Render for HistoryView {
 
 impl HistoryView {
     pub(super) fn dismiss_history_refs_hover(&self, cx: &mut gpui::Context<Self>) {
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.close_history_refs_hover(cx);
+        let root_view = self.root_view.clone();
+        // History reveal completion can run while GitCometView is already inside a root update.
+        // Defer hover dismissal so GPUI does not attempt to lease the root view twice.
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.dismiss_history_refs_menus(cx);
+            });
         });
     }
 

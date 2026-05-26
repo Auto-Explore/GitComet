@@ -185,7 +185,7 @@ use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
-use history_refs_hover::HistoryRefsHoverHost;
+use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
@@ -562,6 +562,23 @@ impl GitCometView {
     pub(in crate::view) fn close_history_refs_hover(&mut self, cx: &mut gpui::Context<Self>) {
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
+    }
+
+    pub(in crate::view) fn dismiss_history_refs_menus(&mut self, cx: &mut gpui::Context<Self>) {
+        self.close_history_refs_hover(cx);
+
+        let history_refs_menu_open =
+            self.active_context_menu_invoker
+                .as_ref()
+                .is_some_and(|invoker| {
+                    invoker
+                        .as_ref()
+                        .starts_with(HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX)
+                });
+        if history_refs_menu_open {
+            self.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        }
     }
 
     pub(in crate::view) fn set_history_refs_hover_item_menu_open(

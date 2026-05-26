@@ -7,6 +7,7 @@ const HISTORY_REFS_HOVER_OPEN_DELAY_MS: u64 = 160;
 const HISTORY_REFS_HOVER_WIDTH_PX: f32 = 220.0;
 const HISTORY_REFS_HOVER_MAX_HEIGHT_PX: f32 = 260.0;
 const HISTORY_REFS_HOVER_POINTER_INSET_PX: f32 = 16.0;
+pub(in crate::view) const HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX: &str = "history_refs_hover_menu_";
 
 #[derive(Clone, Debug)]
 struct HistoryRefsHoverState {
@@ -382,7 +383,8 @@ impl HistoryRefsHoverHost {
             return;
         };
         let invoker: SharedString = format!(
-            "history_refs_hover_menu_{}_{}_{}",
+            "{}{}_{}_{}",
+            HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX,
             repo_id.0,
             commit_id.as_ref(),
             item.text.as_ref()
