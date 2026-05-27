@@ -1437,9 +1437,9 @@ dependencies = [
 
 [[package]]
 name = "displaydoc"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
+checksum = "1ac70aa55017e108007fbaf5aa0f54b021c98f92ff8af59d42eda9da96e3dd4f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3159,7 +3159,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce"
 version = "0.3.3"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=6d8a02e2e75b629b32ea0491f35fbc99e68b53a2#6d8a02e2e75b629b32ea0491f35fbc99e68b53a2"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=cefcaeca9e95d0a725bee2b7df858af0008519ac#cefcaeca9e95d0a725bee2b7df858af0008519ac"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
@@ -3208,7 +3208,7 @@ dependencies = [
  "lyon",
  "mach2 0.6.0",
  "metal",
- "naga",
+ "naga 29.0.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus",
  "objc",
  "oo7",
@@ -3235,7 +3235,7 @@ dependencies = [
  "slotmap",
  "smallvec",
  "smol",
- "spin 0.10.0",
+ "spin 0.12.0",
  "stacksafe",
  "strum",
  "swash",
@@ -3267,7 +3267,7 @@ dependencies = [
 [[package]]
 name = "gpui-ce-macros"
 version = "0.1.0"
-source = "git+https://github.com/Havunen/gpui-ce.git?rev=6d8a02e2e75b629b32ea0491f35fbc99e68b53a2#6d8a02e2e75b629b32ea0491f35fbc99e68b53a2"
+source = "git+https://github.com/Havunen/gpui-ce.git?rev=cefcaeca9e95d0a725bee2b7df858af0008519ac#cefcaeca9e95d0a725bee2b7df858af0008519ac"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -4249,9 +4249,9 @@ dependencies = [
 
 [[package]]
 name = "memchr"
-version = "2.8.0"
+version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
+checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
 name = "memmap2"
@@ -4332,6 +4332,30 @@ name = "naga"
 version = "29.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0dd91265cc2454558f659b3b4b9640f0ddb8cc6521277f166b8a8c181c898079"
+dependencies = [
+ "arrayvec",
+ "bit-set 0.9.1",
+ "bitflags 2.11.1",
+ "cfg-if",
+ "cfg_aliases",
+ "codespan-reporting",
+ "half",
+ "hashbrown 0.16.1",
+ "hexf-parse",
+ "indexmap",
+ "libm",
+ "log",
+ "num-traits",
+ "once_cell",
+ "rustc-hash 1.1.0",
+ "thiserror 2.0.18",
+ "unicode-ident",
+]
+
+[[package]]
+name = "naga"
+version = "29.0.3"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "arrayvec",
  "bit-set 0.9.1",
@@ -5969,9 +5993,9 @@ dependencies = [
 
 [[package]]
 name = "spin"
-version = "0.10.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
+checksum = "1527984ca054dfca79333baec451042863f485fbee01b7bf6d911de915cac865"
 dependencies = [
  "lock_api",
 ]
@@ -6087,15 +6111,15 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sval"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a05195a68cb8336336413c3f52ea0467c7666f5f652e01ba807319ffcc090f2"
+checksum = "5fb9efbae90f97301f4d25f3be63dfd99d6b7af9d088228a52ec960d649b2e7d"
 
 [[package]]
 name = "sval_buffer"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2887fd5e2454319f2f170860427f615451bb057fc9b3fd7f28b7a99ac2ccf0e4"
+checksum = "ff5c0280ea0af40b3a1fd0b532680b5067482ffb81412ee66ec04b1d9952b49a"
 dependencies = [
  "sval",
  "sval_ref",
@@ -6103,18 +6127,18 @@ dependencies = [
 
 [[package]]
 name = "sval_dynamic"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12ddf3833aa407554ad40be081aea9cc3ea6d6798832ec83dd35022b45373896"
+checksum = "59b9067f2e68f58e110cf8019a268057e3791cf74b0fdb1b3c7c6e49104f44e6"
 dependencies = [
  "sval",
 ]
 
 [[package]]
 name = "sval_fmt"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94398bdd2ee99eee108e0b7b0df9081700a96cdefac3add5c09ad3e6f2376bcb"
+checksum = "96ebdbf0e4b175884aa587fcf551c16dabe245ea04235abdd8cbbd160b27ed5a"
 dependencies = [
  "itoa",
  "ryu",
@@ -6123,9 +6147,9 @@ dependencies = [
 
 [[package]]
 name = "sval_json"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f51ae40f37b541fdf81531e51d5071e8edc7c5a191cc23d288b654995b9eaba"
+checksum = "1e448d9fa216a6c16670b28d624fbbcf5c04e41eb187bd7c52e01222ffa72a12"
 dependencies = [
  "itoa",
  "ryu",
@@ -6134,9 +6158,9 @@ dependencies = [
 
 [[package]]
 name = "sval_nested"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3abe05be8455348e3f6edc14a85fd2fcf32f801a14f0126ce025e63851b4f13b"
+checksum = "021de5b5c26efd544c694cef9b8a9abe8633481bf3be1ea145a18a740818b291"
 dependencies = [
  "sval",
  "sval_buffer",
@@ -6145,18 +6169,18 @@ dependencies = [
 
 [[package]]
 name = "sval_ref"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a36361fa3c42c9fd129f4c5023a812d5b275742b28a672c758ec70049c61df00"
+checksum = "54ef5ffec8bc52ded04ee424ab8d959e25e64fd40a48a16d21f8991ce824c1bb"
 dependencies = [
  "sval",
 ]
 
 [[package]]
 name = "sval_serde"
-version = "2.19.0"
+version = "2.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb76707179eccecab345902a803aacacab6889f3af675dbe89766bc790b1a6cb"
+checksum = "b983833a8a2390f89ebcf9b9acd06883017014b4ffd72ee28e0c9de6852039f5"
 dependencies = [
  "serde_core",
  "sval",
@@ -7481,8 +7505,7 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 [[package]]
 name = "wgpu"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb3feacc458f7bee8bc1737149b42b6c731aa461039a4264a67bb6681646b250"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "arrayvec",
  "bitflags 2.11.1",
@@ -7493,7 +7516,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "js-sys",
  "log",
- "naga",
+ "naga 29.0.3 (git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88)",
  "parking_lot",
  "portable-atomic",
  "profiling",
@@ -7511,8 +7534,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02da3ad1b568337f25513b317870960ef87073ea0945502e44b864b67a8c77b7"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "arrayvec",
  "bit-set 0.9.1",
@@ -7524,7 +7546,7 @@ dependencies = [
  "hashbrown 0.16.1",
  "indexmap",
  "log",
- "naga",
+ "naga 29.0.3 (git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88)",
  "once_cell",
  "parking_lot",
  "portable-atomic",
@@ -7544,8 +7566,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62e51b5447e144b3dbba4feb01f80f4fa21696fa0cd99afb2c3df1affd6fdb28"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7553,8 +7574,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3487cd6293a963bc5c0c0396f6a2192043c50003c07f4efdccbad3d90ec9d819"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7562,8 +7582,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bfb01076d0aa08b0ba9bd741e178b5cc440f5abe99d9581323a4c8b5d1a1916"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "wgpu-hal",
 ]
@@ -7571,8 +7590,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f8e1a9e7a8512f276f7c62e018c7fa8d60954303fed2e5750114332049193f"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -7593,7 +7611,7 @@ dependencies = [
  "libc",
  "libloading",
  "log",
- "naga",
+ "naga 29.0.3 (git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88)",
  "ndk-sys",
  "objc2",
  "objc2-core-foundation",
@@ -7625,18 +7643,16 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59c654c483f058800972c3645e95388a7eca31bf9fe1933bc20e036588a0be02"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
- "naga",
+ "naga 29.0.3 (git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88)",
  "wgpu-types",
 ]
 
 [[package]]
 name = "wgpu-types"
 version = "29.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9bcc31518a0e9735aefebedb5f7a9ef3ed1c42549c9f4c882fa9060ceaac639"
+source = "git+https://github.com/zed-industries/wgpu.git?rev=357a0c56e0070480ad9daea5d2eaa83150b79e88#357a0c56e0070480ad9daea5d2eaa83150b79e88"
 dependencies = [
  "bitflags 2.11.1",
  "bytemuck",
