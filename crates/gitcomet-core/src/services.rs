@@ -506,6 +506,11 @@ pub trait GitRepository: Send + Sync {
     }
     fn stash_apply(&self, index: usize) -> Result<()>;
     fn stash_drop(&self, index: usize) -> Result<()>;
+    fn create_branch_from_stash(&self, _name: &str, _index: usize) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "create branch from stash is not implemented for this backend",
+        )))
+    }
 
     fn stage(&self, paths: &[&Path]) -> Result<()>;
     fn unstage(&self, paths: &[&Path]) -> Result<()>;

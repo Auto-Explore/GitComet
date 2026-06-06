@@ -110,6 +110,15 @@ fn send_refresh_branches_and_load_worktrees_on_success(
     send_load_worktrees_on_success(msg_tx, repo_id, result);
 }
 
+fn send_refresh_branches_and_load_worktrees(
+    msg_tx: &StoreWorkerSender,
+    repo_id: RepoId,
+    _result: &Result<(), Error>,
+) {
+    send_or_log(msg_tx, Msg::RefreshBranches { repo_id });
+    send_or_log(msg_tx, Msg::LoadWorktrees { repo_id });
+}
+
 fn dedup_paths(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
     paths.sort();
     paths.dedup();
@@ -270,6 +279,25 @@ pub(super) fn schedule_create_branch_and_checkout(
             }),
         );
     });
+}
+
+pub(super) fn schedule_create_branch_from_stash(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    name: String,
+    index: usize,
+) {
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        move |repo| repo.create_branch_from_stash(&name, index),
+        send_refresh_branches_and_load_worktrees,
+        repo_action_finished(RepoActionKind::CreateBranchFromStash),
+    );
 }
 
 pub(super) fn schedule_delete_branch(

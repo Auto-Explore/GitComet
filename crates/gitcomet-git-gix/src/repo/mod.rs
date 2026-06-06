@@ -490,6 +490,10 @@ impl GitRepository for GixRepo {
         self.stash_drop_impl(index)
     }
 
+    fn create_branch_from_stash(&self, name: &str, index: usize) -> Result<()> {
+        self.create_branch_from_stash_impl(name, index)
+    }
+
     fn stage(&self, paths: &[&Path]) -> Result<()> {
         self.stage_impl(paths)
     }

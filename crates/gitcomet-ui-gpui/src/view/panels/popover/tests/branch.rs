@@ -173,6 +173,14 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
+    fn create_branch_from_stash(&self, name: &str, index: usize) -> Result<()> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!("create_from_stash:{name}:{index}"));
+        Ok(())
+    }
+
     fn stage(&self, _paths: &[&Path]) -> Result<()> {
         Ok(())
     }

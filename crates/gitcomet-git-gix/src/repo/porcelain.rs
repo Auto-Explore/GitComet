@@ -204,6 +204,19 @@ fn resolve_stash_commit(repo: &gix::Repository, index: usize) -> Result<gix::Com
         })
 }
 
+fn stash_base_parent_id(stash_commit: &gix::Commit<'_>, index: usize) -> Result<gix::ObjectId> {
+    let stash_spec = stash_spec(index);
+    stash_commit
+        .parent_ids()
+        .next()
+        .map(|id| id.detach())
+        .ok_or_else(|| {
+            Error::new(ErrorKind::Backend(format!(
+                "gix stash base parent {stash_spec}: missing base parent"
+            )))
+        })
+}
+
 fn stash_untracked_parent_id(stash_commit: &gix::Commit<'_>) -> Option<gix::ObjectId> {
     stash_commit.parent_ids().nth(2).map(|id| id.detach())
 }
@@ -591,14 +604,26 @@ impl GixRepo {
     }
 
     pub(super) fn stash_apply_impl(&self, index: usize) -> Result<()> {
+        self.stash_apply_impl_with_index_restore(index, false)
+    }
+
+    fn stash_apply_impl_with_index_restore(&self, index: usize, restore_index: bool) -> Result<()> {
         let preflight = self.stash_apply_preflight(index);
+        let git_command = if restore_index {
+            "git stash apply --index"
+        } else {
+            "git stash apply"
+        };
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("-c")
             .arg("core.quotePath=false")
             .arg("stash")
-            .arg("apply")
-            .arg(stash_spec(index));
-        let output = run_git_raw_output(cmd, "git stash apply")?;
+            .arg("apply");
+        if restore_index {
+            cmd.arg("--index");
+        }
+        cmd.arg(stash_spec(index));
+        let output = run_git_raw_output(cmd, git_command)?;
 
         if output.status.success() {
             return Ok(());
@@ -630,7 +655,7 @@ impl GixRepo {
 
         let detail = stash_apply_failure_detail(&stdout, &stderr);
         Err(Error::new(ErrorKind::Git(GitFailure::new(
-            "git stash apply",
+            git_command,
             failure_id,
             output.status.code(),
             output.stdout,
@@ -643,6 +668,24 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("stash").arg("drop").arg(stash_spec(index));
         run_git_simple(cmd, "git stash drop")
+    }
+
+    pub(super) fn create_branch_from_stash_impl(&self, name: &str, index: usize) -> Result<()> {
+        validate_ref_like_arg(name, "branch name")?;
+
+        let status = self.status_impl()?;
+        if !status.staged.is_empty() || !status.unstaged.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(
+                "cannot create branch from stash with uncommitted changes; commit, stash, or discard current changes first".to_string(),
+            )));
+        }
+
+        let repo = self.reopen_repo()?;
+        let stash_commit = resolve_stash_commit(&repo, index)?;
+        let base_id = stash_base_parent_id(&stash_commit, index)?;
+        self.create_local_branch_reference(name, base_id.to_string().as_str())?;
+        self.checkout_branch_impl(name)?;
+        self.stash_apply_impl_with_index_restore(index, true)
     }
 
     pub(super) fn stage_impl(&self, paths: &[&Path]) -> Result<()> {

@@ -648,3 +648,140 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
         .expect("feature branch present");
     assert_eq!(feature_after.upstream, None);
 }
+
+#[test]
+fn create_branch_from_stash_applies_changes_and_keeps_stash() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("file.txt"), "base\n").unwrap();
+    run_git(repo, &["add", "file.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    let base = run_git_capture(repo, &["rev-parse", "HEAD"]);
+
+    fs::write(repo.join("file.txt"), "from stash\n").unwrap();
+    run_git(repo, &["stash", "push", "-m", "saved work"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.create_branch_from_stash("from-stash", 0).unwrap();
+
+    assert_eq!(
+        run_git_capture(repo, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+        "from-stash"
+    );
+    assert_eq!(
+        run_git_capture(repo, &["rev-parse", "HEAD"]).trim(),
+        base.trim()
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("file.txt")).unwrap(),
+        "from stash\n"
+    );
+    assert!(
+        run_git_capture(repo, &["stash", "list"]).contains("saved work"),
+        "expected original stash entry to remain"
+    );
+}
+
+#[test]
+fn create_branch_from_stash_restores_staged_and_unstaged_split() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    fs::write(repo.join("staged.txt"), "base staged\n").unwrap();
+    fs::write(repo.join("unstaged.txt"), "base unstaged\n").unwrap();
+    run_git(repo, &["add", "staged.txt", "unstaged.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    fs::write(repo.join("staged.txt"), "stashed staged\n").unwrap();
+    run_git(repo, &["add", "staged.txt"]);
+    fs::write(repo.join("unstaged.txt"), "stashed unstaged\n").unwrap();
+    run_git(repo, &["stash", "push", "-m", "saved split"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.create_branch_from_stash("from-stash", 0).unwrap();
+
+    let status = run_git_capture(repo, &["status", "--short"]);
+    let status_lines = status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        status_lines.len(),
+        2,
+        "unexpected status after restore: {status}"
+    );
+    assert!(
+        status_lines.contains(&"M  staged.txt"),
+        "expected staged change to remain staged: {status}"
+    );
+    assert!(
+        status_lines.contains(&" M unstaged.txt"),
+        "expected unstaged change to remain unstaged: {status}"
+    );
+}
+
+#[test]
+fn create_branch_from_stash_requires_clean_worktree() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fs::write(repo.join("file.txt"), "base\n").unwrap();
+    run_git(repo, &["add", "file.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    fs::write(repo.join("file.txt"), "from stash\n").unwrap();
+    run_git(repo, &["stash", "push", "-m", "saved work"]);
+    fs::write(repo.join("dirty.txt"), "dirty\n").unwrap();
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened
+        .create_branch_from_stash("from-stash", 0)
+        .expect_err("dirty worktree should prevent creating branch from stash");
+
+    assert!(
+        err.to_string()
+            .contains("cannot create branch from stash with uncommitted changes"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        run_git_capture(repo, &["branch", "--list", "from-stash"])
+            .trim()
+            .is_empty(),
+        "branch should not be created when worktree is dirty"
+    );
+}

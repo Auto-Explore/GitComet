@@ -2424,6 +2424,11 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         target: String,
     },
+    CreateBranchFromStashPrompt {
+        repo_id: RepoId,
+        index: usize,
+        message: String,
+    },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
         remote: String,
