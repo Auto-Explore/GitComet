@@ -214,60 +214,56 @@ getrandom	0.3.4	MIT OR Apache-2.0
 getrandom	0.4.2	MIT OR Apache-2.0
 gif	0.14.2	MIT OR Apache-2.0
 gimli	0.32.3	MIT OR Apache-2.0
-gix	0.83.0	MIT OR Apache-2.0
-gix-actor	0.41.0	MIT OR Apache-2.0
-gix-archive	0.32.0	MIT OR Apache-2.0
-gix-attributes	0.33.0	MIT OR Apache-2.0
-gix-bitmap	0.3.1	MIT OR Apache-2.0
-gix-blame	0.13.0	MIT OR Apache-2.0
-gix-chunk	0.7.1	MIT OR Apache-2.0
-gix-command	0.9.0	MIT OR Apache-2.0
-gix-commitgraph	0.37.0	MIT OR Apache-2.0
-gix-config	0.56.0	MIT OR Apache-2.0
-gix-config-value	0.18.0	MIT OR Apache-2.0
-gix-date	0.15.3	MIT OR Apache-2.0
-gix-diff	0.63.0	MIT OR Apache-2.0
-gix-dir	0.25.0	MIT OR Apache-2.0
-gix-discover	0.51.0	MIT OR Apache-2.0
-gix-error	0.2.3	MIT OR Apache-2.0
-gix-features	0.48.0	MIT OR Apache-2.0
-gix-filter	0.30.0	MIT OR Apache-2.0
-gix-fs	0.21.1	MIT OR Apache-2.0
-gix-glob	0.26.0	MIT OR Apache-2.0
-gix-hash	0.25.0	MIT OR Apache-2.0
-gix-hashtable	0.15.0	MIT OR Apache-2.0
-gix-ignore	0.21.0	MIT OR Apache-2.0
-gix-imara-diff	0.2.1	Apache-2.0
-gix-index	0.51.0	MIT OR Apache-2.0
-gix-lock	23.0.0	MIT OR Apache-2.0
-gix-merge	0.16.0	MIT OR Apache-2.0
-gix-negotiate	0.31.0	MIT OR Apache-2.0
-gix-object	0.60.0	MIT OR Apache-2.0
-gix-odb	0.80.0	MIT OR Apache-2.0
-gix-pack	0.70.0	MIT OR Apache-2.0
-gix-packetline	0.21.3	MIT OR Apache-2.0
-gix-path	0.12.0	MIT OR Apache-2.0
-gix-pathspec	0.18.0	MIT OR Apache-2.0
-gix-protocol	0.61.0	MIT OR Apache-2.0
-gix-quote	0.7.1	MIT OR Apache-2.0
-gix-ref	0.63.0	MIT OR Apache-2.0
-gix-refspec	0.41.0	MIT OR Apache-2.0
-gix-revision	0.45.0	MIT OR Apache-2.0
-gix-revwalk	0.31.0	MIT OR Apache-2.0
-gix-sec	0.14.0	MIT OR Apache-2.0
-gix-shallow	0.12.0	MIT OR Apache-2.0
-gix-status	0.30.0	MIT OR Apache-2.0
-gix-submodule	0.30.0	MIT OR Apache-2.0
-gix-tempfile	23.0.0	MIT OR Apache-2.0
-gix-trace	0.1.19	MIT OR Apache-2.0
-gix-transport	0.57.0	MIT OR Apache-2.0
-gix-traverse	0.57.0	MIT OR Apache-2.0
-gix-url	0.36.0	MIT OR Apache-2.0
-gix-utils	0.3.2	MIT OR Apache-2.0
-gix-validate	0.11.1	MIT OR Apache-2.0
-gix-worktree	0.52.0	MIT OR Apache-2.0
-gix-worktree-state	0.30.0	MIT OR Apache-2.0
-gix-worktree-stream	0.32.0	MIT OR Apache-2.0
+gix	0.84.0	MIT OR Apache-2.0
+gix-actor	0.41.1	MIT OR Apache-2.0
+gix-attributes	0.33.1	MIT OR Apache-2.0
+gix-bitmap	0.3.2	MIT OR Apache-2.0
+gix-blame	0.14.0	MIT OR Apache-2.0
+gix-chunk	0.7.2	MIT OR Apache-2.0
+gix-command	0.9.1	MIT OR Apache-2.0
+gix-commitgraph	0.37.1	MIT OR Apache-2.0
+gix-config	0.57.0	MIT OR Apache-2.0
+gix-config-value	0.18.1	MIT OR Apache-2.0
+gix-date	0.15.4	MIT OR Apache-2.0
+gix-diff	0.64.0	MIT OR Apache-2.0
+gix-dir	0.26.0	MIT OR Apache-2.0
+gix-discover	0.52.0	MIT OR Apache-2.0
+gix-error	0.2.4	MIT OR Apache-2.0
+gix-features	0.48.1	MIT OR Apache-2.0
+gix-filter	0.31.0	MIT OR Apache-2.0
+gix-fs	0.21.2	MIT OR Apache-2.0
+gix-glob	0.26.1	MIT OR Apache-2.0
+gix-hash	0.25.1	MIT OR Apache-2.0
+gix-hashtable	0.15.1	MIT OR Apache-2.0
+gix-ignore	0.21.1	MIT OR Apache-2.0
+gix-imara-diff	0.2.2	Apache-2.0
+gix-index	0.52.0	MIT OR Apache-2.0
+gix-lock	23.0.1	MIT OR Apache-2.0
+gix-object	0.61.0	MIT OR Apache-2.0
+gix-odb	0.81.0	MIT OR Apache-2.0
+gix-pack	0.71.0	MIT OR Apache-2.0
+gix-packetline	0.21.4	MIT OR Apache-2.0
+gix-path	0.12.1	MIT OR Apache-2.0
+gix-pathspec	0.18.1	MIT OR Apache-2.0
+gix-protocol	0.62.0	MIT OR Apache-2.0
+gix-quote	0.7.2	MIT OR Apache-2.0
+gix-ref	0.64.0	MIT OR Apache-2.0
+gix-refspec	0.42.0	MIT OR Apache-2.0
+gix-revision	0.46.0	MIT OR Apache-2.0
+gix-revwalk	0.32.0	MIT OR Apache-2.0
+gix-sec	0.14.1	MIT OR Apache-2.0
+gix-shallow	0.12.1	MIT OR Apache-2.0
+gix-status	0.31.0	MIT OR Apache-2.0
+gix-submodule	0.31.0	MIT OR Apache-2.0
+gix-tempfile	23.0.1	MIT OR Apache-2.0
+gix-trace	0.1.20	MIT OR Apache-2.0
+gix-transport	0.57.1	MIT OR Apache-2.0
+gix-traverse	0.58.0	MIT OR Apache-2.0
+gix-url	0.36.1	MIT OR Apache-2.0
+gix-utils	0.3.3	MIT OR Apache-2.0
+gix-validate	0.11.2	MIT OR Apache-2.0
+gix-worktree	0.53.0	MIT OR Apache-2.0
+gix-worktree-stream	0.33.0	MIT OR Apache-2.0
 gl_generator	0.14.0	Apache-2.0
 globset	0.4.18	Unlicense OR MIT
 gloo-timers	0.3.0	MIT OR Apache-2.0
@@ -296,7 +292,7 @@ hexf-parse	0.2.1	CC0-1.0
 hkdf	0.12.4	MIT OR Apache-2.0
 hmac	0.12.1	MIT OR Apache-2.0
 home	0.5.12	MIT OR Apache-2.0
-http	1.4.0	MIT OR Apache-2.0
+http	1.4.1	MIT OR Apache-2.0
 http-body	1.0.1	MIT
 http-client-gpui-unofficial	1.2.7	Apache-2.0
 human_format	1.2.1	MIT
@@ -323,7 +319,6 @@ inout	0.1.4	MIT OR Apache-2.0
 instant	0.1.13	BSD-3-Clause
 interpolate_name	0.2.4	MIT
 inventory	0.3.24	MIT OR Apache-2.0
-io-close	0.3.7	MIT OR Apache-2.0
 io-surface	0.16.1	MIT OR Apache-2.0
 is-docker	0.2.0	MIT
 is-wsl	0.4.0	MIT
@@ -331,8 +326,8 @@ is_terminal_polyfill	1.70.2	MIT OR Apache-2.0
 itertools	0.13.0	MIT OR Apache-2.0
 itertools	0.14.0	MIT OR Apache-2.0
 itoa	1.0.18	MIT OR Apache-2.0
-jiff	0.2.25	Unlicense OR MIT
-jiff-static	0.2.25	Unlicense OR MIT
+jiff	0.2.27	Unlicense OR MIT
+jiff-static	0.2.27	Unlicense OR MIT
 jiff-tzdb	0.1.6	Unlicense OR MIT
 jiff-tzdb-platform	0.1.3	Unlicense OR MIT
 jni-sys	0.3.1	MIT OR Apache-2.0

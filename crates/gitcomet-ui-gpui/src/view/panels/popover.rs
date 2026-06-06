@@ -265,6 +265,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::PushPicker
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
+            | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
@@ -277,6 +278,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ConflictResolverOutputMenu { .. }
             | PopoverKind::CommitMenu { .. }
             | PopoverKind::TagMenu { .. }
+            | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
             | PopoverKind::BranchMenu { .. }
             | PopoverKind::BranchSectionMenu { .. }
@@ -354,6 +356,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
@@ -444,8 +447,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
+        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
+        | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
@@ -539,6 +544,20 @@ impl PopoverHost {
                 root.set_active_context_menu_invoker(None, cx);
             });
         });
+    }
+
+    fn history_refs_menu_active(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.root_view
+            .update(cx, |root, _cx| {
+                root.active_context_menu_invoker
+                    .as_ref()
+                    .is_some_and(|invoker| {
+                        invoker.as_ref().starts_with(
+                            crate::view::history_refs_hover::HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX,
+                        )
+                    })
+            })
+            .unwrap_or(false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1146,6 +1165,12 @@ impl PopoverHost {
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_history_refs_hover_item_menu_open(false, cx);
+            });
+        });
         cx.notify();
     }
 
@@ -1314,6 +1339,12 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.clear_active_context_menu_invoker(cx);
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.set_history_refs_hover_item_menu_open(false, cx);
+            });
+        });
         let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
         window.focus(&focus, cx);
         cx.notify();
@@ -1528,7 +1559,9 @@ impl PopoverHost {
 
     fn request_lazy_popover_repo_data(&self, kind: &PopoverKind) {
         let repo_id = match kind {
-            PopoverKind::TagMenu { repo_id, .. } => Some(*repo_id),
+            PopoverKind::TagMenu { repo_id, .. } | PopoverKind::TagRefMenu { repo_id, .. } => {
+                Some(*repo_id)
+            }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
             _ => None,
         };
@@ -2123,31 +2156,32 @@ impl Render for PopoverHost {
             return div().into_any_element();
         };
 
+        let history_refs_menu_active = self.history_refs_menu_active(cx);
         let close = cx.listener(|this, _e: &MouseDownEvent, window, cx| {
             this.close_popover_and_restore_focus(window, cx);
         });
-        let scrim = div()
-            .id("popover_scrim")
-            .debug_selector(|| "repo_popover_close".to_string())
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(gpui::rgba(0x00000000))
-            .occlude()
-            .on_any_mouse_down(close);
 
         let popover = self.popover_view(kind, window, cx).into_any_element();
-
-        div()
+        let mut layer = div()
             .id("popover_layer")
             .absolute()
             .top_0()
             .left_0()
-            .size_full()
-            .child(scrim)
-            .child(popover)
-            .into_any_element()
+            .size_full();
+        if !history_refs_menu_active {
+            let scrim = div()
+                .id("popover_scrim")
+                .debug_selector(|| "repo_popover_close".to_string())
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .bg(gpui::rgba(0x00000000))
+                .occlude()
+                .on_any_mouse_down(close);
+            layer = layer.child(scrim);
+        }
+        layer.child(popover).into_any_element()
     }
 }
 impl PopoverHost {
@@ -2363,12 +2397,27 @@ impl PopoverHost {
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::PreviousCommitMessagesMenu { repo_id }, cx)
             }
+            PopoverKind::RepoTabMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::RepoTabMenu { repo_id }, cx)
+            }
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
             }
+            PopoverKind::TagRefMenu {
+                repo_id,
+                commit_id,
+                name,
+            } => self.context_menu_view(
+                PopoverKind::TagRefMenu {
+                    repo_id,
+                    commit_id,
+                    name,
+                },
+                cx,
+            ),
             PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
                 self.context_menu_view(PopoverKind::DiffHunkMenu { repo_id, src_ix }, cx)
             }

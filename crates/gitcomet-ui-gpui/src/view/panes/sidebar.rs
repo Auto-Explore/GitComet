@@ -356,16 +356,19 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let branch_name = branch_name.to_string();
-        let _ = self.root_view.update(cx, |root, cx| {
-            root.main_pane.update(cx, |pane, cx| {
-                pane.reveal_history_branch_commit(
-                    repo_id,
-                    section,
-                    &branch_name,
-                    commit_id,
-                    fallback_scope,
-                    cx,
-                );
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.main_pane.update(cx, |pane, cx| {
+                    pane.reveal_history_branch_commit(
+                        repo_id,
+                        section,
+                        &branch_name,
+                        commit_id,
+                        fallback_scope,
+                        cx,
+                    );
+                });
             });
         });
     }

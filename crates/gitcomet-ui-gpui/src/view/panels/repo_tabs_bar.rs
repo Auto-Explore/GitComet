@@ -11,6 +11,7 @@ pub(in super::super) struct RepoTabsBarView {
     root_view: WeakEntity<GitCometView>,
 
     hovered_repo_tab: Option<RepoId>,
+    active_context_menu_invoker: Option<SharedString>,
     repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
     repo_tab_spinner_delay_seq: u64,
     notify_fingerprint: u64,
@@ -152,6 +153,7 @@ impl RepoTabsBarView {
             _ui_model_subscription: subscription,
             root_view,
             hovered_repo_tab: None,
+            active_context_menu_invoker: None,
             repo_tab_spinner_delay: None,
             repo_tab_spinner_delay_seq: 0,
             notify_fingerprint,
@@ -162,6 +164,18 @@ impl RepoTabsBarView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_active_context_menu_invoker(
+        &mut self,
+        next: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.active_context_menu_invoker == next {
+            return;
+        }
+        self.active_context_menu_invoker = next;
         cx.notify();
     }
 
@@ -261,6 +275,10 @@ impl Render for RepoTabsBarView {
                     .repo_tab_spinner_delay
                     .as_ref()
                     .is_some_and(|s| s.repo_id == repo_id && s.show_spinner);
+            let context_menu_invoker: SharedString = format!("repo_tab_{}", repo_id.0).into();
+            let context_menu_active =
+                self.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+            let context_menu_invoker_for_right_click = context_menu_invoker.clone();
             let show_close = self.hovered_repo_tab == Some(repo_id);
             let label = path_display::repo_path_name(&repo.spec.workdir);
             let label_for_drag = label.clone();
@@ -304,7 +322,7 @@ impl Render for RepoTabsBarView {
                 .gitcomet_tooltip(theme, close_tooltip.clone());
 
             let mut tab = components::Tab::new(("repo_tab", repo_id.0))
-                .selected(is_active)
+                .selected(is_active || context_menu_active)
                 .position(position);
             if show_close {
                 tab = tab.end_slot(close_button);
@@ -416,6 +434,25 @@ impl Render for RepoTabsBarView {
                     }
                     cx.notify();
                 }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.hovered_repo_tab = Some(repo_id);
+                        let invoker = context_menu_invoker_for_right_click.clone();
+                        let anchor = e.position;
+                        let _ = this.root_view.update(cx, move |root, cx| {
+                            root.set_active_context_menu_invoker(Some(invoker), cx);
+                            root.open_popover_at(
+                                PopoverKind::RepoTabMenu { repo_id },
+                                anchor,
+                                window,
+                                cx,
+                            );
+                        });
+                        cx.notify();
+                    }),
+                )
                 .gitcomet_tooltip(theme, tooltip.clone())
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, _cx| {
                     if let Some(msg) = Self::repo_tab_click_message(this.active_repo_id(), repo_id)

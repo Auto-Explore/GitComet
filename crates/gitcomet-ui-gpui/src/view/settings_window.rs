@@ -465,7 +465,7 @@ fn applied_git_executable_path(runtime: &GitRuntimeState) -> Option<PathBuf> {
 }
 
 fn git_executable_scope_note() -> &'static str {
-    "Applies only to the main GitComet browser window. Git-invoked command modes keep using git from System PATH."
+    "Applies to the main GitComet browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git."
 }
 
 impl SettingsWindowView {
@@ -3206,7 +3206,7 @@ impl Render for SettingsWindowView {
                         "settings_window_git_executable_custom",
                         "Custom executable",
                         Some(
-                            "Use a specific Git binary, such as a newer standalone installation."
+                            "Use a specific Git binary and add its directory when Git resolves helper tools."
                                 .into(),
                         ),
                         self.git_executable_mode == GitExecutableMode::Custom,

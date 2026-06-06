@@ -42,9 +42,11 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
+    pub(in super::super) commit_details_message_sha_menu: Entity<components::CommitShaHoverMenu>,
     pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
+    pub(in super::super) commit_details_parent_sha_menu: Entity<components::CommitShaHoverMenu>,
     pub(in super::super) commit_message_drafts: HashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
@@ -256,6 +258,18 @@ impl DetailsPaneView {
                 cx,
             )
         });
+        let commit_details_message_sha_menu = cx.new(|cx| {
+            components::CommitShaHoverMenu::new(
+                commit_details_message_input.clone(),
+                RepoId(0),
+                Arc::<[components::CommitShaLink]>::from([]),
+                theme,
+                crate::ui_scale::UiScale::current(cx),
+                "commit_details_message_sha_hover_menu",
+                root_view.clone(),
+                cx,
+            )
+        });
 
         let commit_details_sha_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
@@ -302,6 +316,18 @@ impl DetailsPaneView {
             input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
             input
         });
+        let commit_details_parent_sha_menu = cx.new(|cx| {
+            components::CommitShaHoverMenu::new(
+                commit_details_parent_input.clone(),
+                RepoId(0),
+                Arc::<[components::CommitShaLink]>::from([]),
+                theme,
+                crate::ui_scale::UiScale::current(cx),
+                "commit_details_parent_sha_hover_menu",
+                root_view.clone(),
+                cx,
+            )
+        });
 
         let commit_message_subscription = cx.observe(&commit_message_input, |this, input, cx| {
             let next: SharedString = input.read(cx).text().to_string().into();
@@ -316,7 +342,6 @@ impl DetailsPaneView {
                 this.commit_message_user_edited = true;
             }
         });
-
         let mut pane = Self {
             store,
             state,
@@ -349,9 +374,11 @@ impl DetailsPaneView {
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
             commit_details_message_input,
+            commit_details_message_sha_menu,
             commit_details_sha_input,
             commit_details_date_input,
             commit_details_parent_input,
+            commit_details_parent_sha_menu,
             commit_message_drafts: HashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,
@@ -921,7 +948,9 @@ impl DetailsPaneView {
         let selected_id = selected_id.clone();
         cx.spawn(
             async move |view: WeakEntity<DetailsPaneView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(100)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
                 let _ = view.update(cx, |this, cx| {
                     if this.commit_details_delay_seq != seq {
                         return;

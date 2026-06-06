@@ -156,8 +156,8 @@ fn layout_chip_bounds(
     out
 }
 
-fn hit_test_any(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> bool {
-    bounds.iter().any(|b| b.contains(&p))
+fn hit_test_index(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> Option<usize> {
+    bounds.iter().position(|b| b.contains(&p))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -183,6 +183,7 @@ pub(super) fn history_commit_row_canvas(
     graph_row_ix: usize,
     tag_names: Arc<[HistoryTextVm]>,
     branches_text: HistoryTextVm,
+    ref_items: Arc<[HistoryRefListItem]>,
     branch_highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
@@ -620,6 +621,32 @@ pub(super) fn history_commit_row_canvas(
             window.on_mouse_event({
                 let view = view.clone();
                 let commit_id = commit_id.clone();
+                let ref_items = Arc::clone(&ref_items);
+                move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                    if phase != DispatchPhase::Bubble
+                        || ref_items.is_empty()
+                        || !branch_bounds.contains(&event.position)
+                    {
+                        return;
+                    }
+
+                    view.update(cx, |this, cx| {
+                        this.show_history_refs_hover(
+                            repo_id,
+                            commit_id.clone(),
+                            branch_bounds,
+                            Arc::clone(&ref_items),
+                            event.position,
+                            window,
+                            cx,
+                        );
+                    });
+                }
+            });
+
+            window.on_mouse_event({
+                let view = view.clone();
+                let commit_id = commit_id.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble
                         || event.button != MouseButton::Right
@@ -628,7 +655,9 @@ pub(super) fn history_commit_row_canvas(
                         return;
                     }
 
-                    let is_tag = hit_test_any(&tag_chip_bounds, event.position);
+                    let tag_name = hit_test_index(&tag_chip_bounds, event.position)
+                        .and_then(|ix| tag_names.get(ix))
+                        .map(|tag| tag.as_ref().to_string());
                     view.update(cx, |this, cx| {
                         this.store.dispatch(Msg::SelectCommit {
                             repo_id,
@@ -638,10 +667,11 @@ pub(super) fn history_commit_row_canvas(
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();
                         this.activate_context_menu_invoker(context_menu_invoker, cx);
-                        let kind = if is_tag {
-                            PopoverKind::TagMenu {
+                        let kind = if let Some(name) = tag_name {
+                            PopoverKind::TagRefMenu {
                                 repo_id,
                                 commit_id: commit_id.clone(),
+                                name,
                             }
                         } else {
                             PopoverKind::CommitMenu {
@@ -684,13 +714,13 @@ mod tests {
     }
 
     #[test]
-    fn hit_test_any_detects_points_inside_chips() {
+    fn hit_test_index_returns_clicked_chip_index() {
         let chips = vec![
             Bounds::new(point(px(0.0), px(0.0)), size(px(10.0), px(10.0))),
             Bounds::new(point(px(20.0), px(0.0)), size(px(10.0), px(10.0))),
         ];
-        assert!(hit_test_any(&chips, point(px(5.0), px(5.0))));
-        assert!(hit_test_any(&chips, point(px(25.0), px(5.0))));
-        assert!(!hit_test_any(&chips, point(px(15.0), px(5.0))));
+        assert_eq!(hit_test_index(&chips, point(px(5.0), px(5.0))), Some(0));
+        assert_eq!(hit_test_index(&chips, point(px(25.0), px(5.0))), Some(1));
+        assert_eq!(hit_test_index(&chips, point(px(15.0), px(5.0))), None);
     }
 }
