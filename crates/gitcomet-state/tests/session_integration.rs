@@ -304,6 +304,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             change_tracking_view: Some("split_untracked".to_string()),
             diff_scroll_sync: Some("both".to_string()),
             diff_whitespace_mode: Some("ignore".to_string()),
+            diff_view_mode: Some("inline".to_string()),
             diff_reveal_whitespace_chars: Some(true),
             diff_word_wrap: Some(true),
             change_tracking_height: Some(222),
@@ -340,6 +341,7 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     );
     assert_eq!(loaded.diff_scroll_sync.as_deref(), Some("both"));
     assert_eq!(loaded.diff_whitespace_mode.as_deref(), Some("ignore"));
+    assert_eq!(loaded.diff_view_mode.as_deref(), Some("inline"));
     assert_eq!(loaded.diff_reveal_whitespace_chars, Some(true));
     assert_eq!(loaded.diff_word_wrap, Some(true));
     assert_eq!(loaded.change_tracking_height, Some(222));

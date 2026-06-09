@@ -343,14 +343,32 @@ impl MainPaneView {
                         self.diff_view = DiffViewMode::Split;
                         self.clear_diff_text_style_caches();
                         handled = true;
+                        let root_view = self.root_view.clone();
+                        cx.defer(move |cx| {
+                            if let Some(root) = root_view.upgrade() {
+                                root.update(cx, |root, cx| {
+                                    root.set_diff_view_mode(DiffViewMode::Split, cx);
+                                });
+                            }
+                        });
                     } else if !markdown_preview_active && !self.is_file_preview_active() {
-                        self.diff_view = if key == "i" {
+                        let new_mode = if key == "i" {
                             DiffViewMode::Inline
                         } else {
                             DiffViewMode::Split
                         };
+                        self.diff_view = new_mode;
                         self.clear_diff_text_style_caches();
                         handled = true;
+                        let root_view = self.root_view.clone();
+                        let mode = new_mode;
+                        cx.defer(move |cx| {
+                            if let Some(root) = root_view.upgrade() {
+                                root.update(cx, |root, cx| {
+                                    root.set_diff_view_mode(mode, cx);
+                                });
+                            }
+                        });
                     }
                 }
                 "w" if !markdown_preview_active && !conflict_preview_active => {
@@ -1776,6 +1794,14 @@ impl MainPaneView {
                             this.diff_search_recompute_matches_preserving_current();
                         }
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                        let root_view = this.root_view.clone();
+                        cx.defer(move |cx| {
+                            if let Some(root) = root_view.upgrade() {
+                                root.update(cx, |root, cx| {
+                                    root.set_diff_view_mode(DiffViewMode::Inline, cx);
+                                });
+                            }
+                        });
                         cx.notify();
                     })
                     .debug_selector(|| "diff_inline".to_string())
@@ -1793,6 +1819,14 @@ impl MainPaneView {
                             this.diff_search_recompute_matches_preserving_current();
                         }
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                        let root_view = this.root_view.clone();
+                        cx.defer(move |cx| {
+                            if let Some(root) = root_view.upgrade() {
+                                root.update(cx, |root, cx| {
+                                    root.set_diff_view_mode(DiffViewMode::Split, cx);
+                                });
+                            }
+                        });
                         cx.notify();
                     })
                     .debug_selector(|| "diff_split".to_string())

@@ -748,6 +748,11 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffWhitespaceMode::from_key)
             .unwrap_or_default();
+        let diff_view_mode = ui_session
+            .diff_view_mode
+            .as_deref()
+            .and_then(DiffViewMode::from_key)
+            .unwrap_or(DiffViewMode::Split);
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
         let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
@@ -888,6 +893,7 @@ impl GitCometView {
                 diff_scroll_sync,
                 diff_content_mode,
                 diff_whitespace_mode,
+                diff_view_mode,
                 diff_reveal_whitespace_chars,
                 diff_word_wrap,
                 diff_show_line_numbers,
@@ -1103,6 +1109,7 @@ impl GitCometView {
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
@@ -1388,6 +1395,21 @@ impl GitCometView {
         self.diff_scroll_sync = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_scroll_sync(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_diff_view_mode(
+        &mut self,
+        next: DiffViewMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_view_mode == next {
+            return;
+        }
+
+        self.diff_view_mode = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 

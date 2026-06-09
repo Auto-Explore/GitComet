@@ -900,6 +900,7 @@ impl MainPaneView {
         diff_scroll_sync: DiffScrollSync,
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
+        diff_view_mode: DiffViewMode,
         diff_reveal_whitespace_chars: bool,
         diff_word_wrap: bool,
         diff_show_line_numbers: bool,
@@ -1118,7 +1119,7 @@ impl MainPaneView {
             layout_sidebar_collapsed: false,
             layout_details_collapsed: false,
             reveal_whitespace_chars: diff_reveal_whitespace_chars,
-            diff_view: DiffViewMode::Split,
+            diff_view: diff_view_mode,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2761,6 +2762,19 @@ impl MainPaneView {
         self.diff_scroll_sync = next;
         self.sync_diff_split_scroll();
         self.sync_conflict_preview_scroll();
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_diff_view_mode(
+        &mut self,
+        next: DiffViewMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_view == next {
+            return;
+        }
+
+        self.diff_view = next;
         cx.notify();
     }
 
