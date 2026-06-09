@@ -165,6 +165,30 @@ pub(super) enum DiffViewMode {
     Split,
 }
 
+impl DiffViewMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Split => "split",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "inline" => Some(Self::Inline),
+            "split" => Some(Self::Split),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::Inline => "Inline",
+            Self::Split => "Split",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum RenderedPreviewKind {
     Svg,
@@ -3267,6 +3291,7 @@ pub struct GitCometView {
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
+    pub(super) diff_view_mode: DiffViewMode,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,

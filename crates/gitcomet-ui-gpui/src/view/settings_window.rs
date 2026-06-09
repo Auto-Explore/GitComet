@@ -77,6 +77,19 @@ const DIFF_CONTENT_MODE_OPTIONS: &[(&str, DiffContentMode, &str)] = &[
     ),
 ];
 
+const DIFF_VIEW_MODE_OPTIONS: &[(&str, DiffViewMode, &str)] = &[
+    (
+        "settings_window_diff_view_mode_inline",
+        DiffViewMode::Inline,
+        "Show changes inline.",
+    ),
+    (
+        "settings_window_diff_view_mode_split",
+        DiffViewMode::Split,
+        "Show changes in split view.",
+    ),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsSection {
     Theme,
@@ -88,6 +101,7 @@ enum SettingsSection {
     ChangeTracking,
     DiffContentMode,
     Diff,
+    DiffViewMode,
     GitLogDefaultMode,
     GitLogColumns,
     GitLogTagFetch,
@@ -161,12 +175,14 @@ pub(crate) struct SettingsWindowView {
     change_tracking_scroll: UniformListScrollHandle,
     diff_content_mode_scroll: UniformListScrollHandle,
     diff_scroll_sync_scroll: UniformListScrollHandle,
+    diff_view_mode_scroll: UniformListScrollHandle,
     date_time_format: DateTimeFormat,
     timezone: Timezone,
     show_timezone: bool,
     change_tracking_view: ChangeTrackingView,
     diff_content_mode: DiffContentMode,
     diff_whitespace_mode: DiffWhitespaceMode,
+    diff_view_mode: DiffViewMode,
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
     diff_show_line_numbers: bool,
@@ -512,6 +528,11 @@ impl SettingsWindowView {
             .as_deref()
             .and_then(DiffWhitespaceMode::from_key)
             .unwrap_or_default();
+        let diff_view_mode = ui_session
+            .diff_view_mode
+            .as_deref()
+            .and_then(DiffViewMode::from_key)
+            .unwrap_or(DiffViewMode::Split);
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
         let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
@@ -599,12 +620,14 @@ impl SettingsWindowView {
             change_tracking_scroll: UniformListScrollHandle::default(),
             diff_content_mode_scroll: UniformListScrollHandle::default(),
             diff_scroll_sync_scroll: UniformListScrollHandle::default(),
+            diff_view_mode_scroll: UniformListScrollHandle::default(),
             date_time_format,
             timezone,
             show_timezone,
             change_tracking_view,
             diff_content_mode,
             diff_whitespace_mode,
+            diff_view_mode,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
@@ -660,6 +683,7 @@ impl SettingsWindowView {
             diff_scroll_sync: Some(self.diff_scroll_sync.key().to_string()),
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
+            diff_view_mode: Some(self.diff_view_mode.key().to_string()),
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
@@ -1062,6 +1086,20 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_whitespace_mode(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_diff_view_mode(&mut self, next: DiffViewMode, cx: &mut gpui::Context<Self>) {
+        if self.diff_view_mode == next {
+            return;
+        }
+
+        self.diff_view_mode = next;
+        self.expanded_section = None;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_diff_view_mode(next, cx);
         });
         cx.notify();
     }
@@ -2096,6 +2134,31 @@ impl SettingsWindowView {
             .collect()
     }
 
+    fn render_diff_view_mode_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| DIFF_VIEW_MODE_OPTIONS.get(ix).copied())
+            .map(|(id, option, detail)| {
+                this.option_row(
+                    id,
+                    option.settings_label(),
+                    Some(detail.into()),
+                    this.diff_view_mode == option,
+                    theme,
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                    this.set_diff_view_mode(option, cx);
+                }))
+                .into_any_element()
+            })
+            .collect()
+    }
+
     fn render_diff_content_mode_option_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -2931,6 +2994,54 @@ impl Render for SettingsWindowView {
                             "settings_window_diff_content_mode_scrollbar",
                             self.diff_content_mode_scroll.clone(),
                             DIFF_CONTENT_MODE_OPTIONS.len(),
+                            SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                            list,
+                            theme,
+                        ));
+                    }
+
+                    let diff_view_mode_row = self
+                        .summary_row(
+                            "settings_window_diff_view_mode",
+                            "View mode",
+                            self.diff_view_mode.settings_label().into(),
+                            self.expanded_section == Some(SettingsSection::DiffViewMode),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::DiffViewMode, cx);
+                        }));
+
+                    diff_card = diff_card.child(diff_view_mode_row);
+
+                    if self.expanded_section == Some(SettingsSection::DiffViewMode) {
+                        let list = uniform_list(
+                            "settings_window_diff_view_mode_list",
+                            DIFF_VIEW_MODE_OPTIONS.len(),
+                            cx.processor(Self::render_diff_view_mode_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.diff_view_mode_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.diff_view_mode_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        let list = restrict_scroll_to_vertical_axis(list).into_any_element();
+                        diff_card = diff_card.child(self.dropdown_list_container(
+                            "settings_window_diff_view_mode_list_container",
+                            "settings_window_diff_view_mode_scrollbar",
+                            self.diff_view_mode_scroll.clone(),
+                            DIFF_VIEW_MODE_OPTIONS.len(),
                             SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
                             SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
                             list,
