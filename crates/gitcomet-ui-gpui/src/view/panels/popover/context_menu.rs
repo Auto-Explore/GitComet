@@ -145,7 +145,12 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
             return None;
         }
         let shortcut = shortcut.as_ref()?;
-        shortcut.as_ref().eq_ignore_ascii_case(key).then_some(ix)
+        let shortcut_key = shortcut
+            .as_ref()
+            .rsplit('+')
+            .next()
+            .unwrap_or(shortcut.as_ref());
+        shortcut_key.eq_ignore_ascii_case(key).then_some(ix)
     })
 }
 
@@ -1322,7 +1327,7 @@ mod tests {
 
         assert_eq!(context_menu_shortcut_entry_ix(&model, "a"), Some(4));
         assert_eq!(context_menu_shortcut_entry_ix(&model, "A"), Some(4));
-        assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), None);
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), Some(3));
         assert_eq!(context_menu_shortcut_entry_ix(&model, "e"), None);
         assert_eq!(context_menu_shortcut_entry_ix(&model, "enter"), None);
     }
