@@ -8,7 +8,7 @@ use crate::view::{
     PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
     StartupCrashReport, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
     TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, is_diff_shortcut_candidate,
+    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -679,6 +679,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
+        KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),

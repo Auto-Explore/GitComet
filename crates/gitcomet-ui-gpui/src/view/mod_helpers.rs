@@ -3272,6 +3272,10 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
+    pub(super) command_palette: super::command_palette::CommandPaletteState,
+    pub(super) command_palette_open: bool,
+    #[allow(dead_code)]
+    pub(super) command_palette_subscription: Option<gpui::Subscription>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
