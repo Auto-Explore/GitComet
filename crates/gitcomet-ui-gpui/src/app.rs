@@ -615,10 +615,11 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
 fn install_global_diff_shortcut_fallback(cx: &mut App) {
     cx.observe_keystrokes(|event, window, cx| {
         if !is_diff_shortcut_candidate(&event.keystroke)
-            || event
-                .context_stack
-                .iter()
-                .any(|context| context.contains("TextInput"))
+            || event.context_stack.iter().any(|context| {
+                context.contains("TextInput")
+                    || context.contains("ContextMenu")
+                    || context.contains("PopoverPrompt")
+            })
         {
             return;
         }

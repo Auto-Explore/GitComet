@@ -191,6 +191,7 @@ impl DetailsPaneView {
             repo.merge_message_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
+            repo.diff_state.diff_target_rev.hash(&mut hasher);
         }
 
         hasher.finish()
