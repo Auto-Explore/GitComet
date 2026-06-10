@@ -408,6 +408,11 @@ pub(super) fn repo_action_finished(
         return Vec::new();
     };
 
+    repo_state.bump_load_epoch();
+    repo_state
+        .loads_in_flight
+        .clear_flags(RepoLoadsInFlight::WORKTREE_STATUS | RepoLoadsInFlight::STAGED_STATUS);
+
     let mut effects = refresh_primary_effects(repo_state);
     if let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })

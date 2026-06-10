@@ -3779,6 +3779,49 @@ fn repo_action_finished_err_records_diagnostic() {
 }
 
 #[test]
+fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale_in_flight() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS);
+    let old_epoch = state.repos[0].load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        state.repos[0].load_epoch > old_epoch,
+        "load_epoch should be bumped to invalidate stale load results"
+    );
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "a fresh status load should be dispatched even when a stale one was in-flight"
+    );
+}
+
+#[test]
 fn repo_opened_err_records_diagnostic() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

@@ -145,6 +145,11 @@ impl RepoLoadsInFlight {
         }
     }
 
+    pub fn clear_flags(&mut self, flags: u32) {
+        self.in_flight &= !flags;
+        self.pending &= !flags;
+    }
+
     /// For log loads: coalesce by keeping only the latest requested `(scope, cursor)` while a log
     /// load is already in flight.
     pub fn request_log(
@@ -1315,6 +1320,32 @@ mod tests {
         assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
         assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
         assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
+    }
+
+    #[test]
+    fn clear_flags_removes_in_flight_and_pending_bits() {
+        let mut loads = RepoLoadsInFlight::default();
+
+        loads.request(RepoLoadsInFlight::WORKTREE_STATUS);
+        loads.request(RepoLoadsInFlight::LOG);
+
+        loads.clear_flags(RepoLoadsInFlight::WORKTREE_STATUS);
+
+        assert!(!loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
+        assert!(loads.is_in_flight(RepoLoadsInFlight::LOG));
+    }
+
+    #[test]
+    fn clear_flags_clears_pending_too() {
+        let mut loads = RepoLoadsInFlight::default();
+
+        loads.request(RepoLoadsInFlight::WORKTREE_STATUS);
+        loads.request(RepoLoadsInFlight::WORKTREE_STATUS);
+
+        loads.clear_flags(RepoLoadsInFlight::WORKTREE_STATUS);
+
+        loads.finish(RepoLoadsInFlight::WORKTREE_STATUS);
+        assert!(!loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
     }
 
     #[test]
