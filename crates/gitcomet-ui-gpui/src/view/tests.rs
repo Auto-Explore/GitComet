@@ -102,6 +102,50 @@ fn open_repo_tab_context_menu(cx: &mut gpui::VisualTestContext, selector: &'stat
     test_support::redraw(cx);
 }
 
+fn install_app_shortcuts_for_test(cx: &mut gpui::VisualTestContext, backend: Arc<dyn GitBackend>) {
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, backend);
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+}
+
+fn sync_view_snapshot(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+}
+
+fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let focus = app.focus_handle();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    test_support::redraw(cx);
+}
+
+fn command_palette_input_focus(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> Option<gpui::FocusHandle> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .command_palette
+            .query_input
+            .as_ref()
+            .map(|input| input.read(app).focus_handle())
+    })
+}
+
+fn command_palette_is_open(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> bool {
+    cx.update(|_window, app| view.read(app).command_palette_open)
+}
+
 fn available_git_runtime_state() -> GitRuntimeState {
     GitRuntimeState {
         preference: GitExecutablePreference::SystemPath,
@@ -133,6 +177,149 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
         active_repo: Some(repo_id),
         ..Default::default()
     }
+}
+
+#[gpui::test]
+fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected secondary-p from detached focus to open the command palette"
+    );
+    let input_focus = command_palette_input_focus(cx, &view)
+        .expect("expected command palette input to exist after opening");
+    cx.update(|window, app| {
+        assert_eq!(
+            window.focused(app),
+            Some(input_focus),
+            "expected command palette input to own window focus after opening"
+        );
+    });
+}
+
+#[gpui::test]
+fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    store.dispatch(Msg::SetActiveRepo { repo_id: RepoId(2) });
+    sync_view_snapshot(cx, &view);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected command palette to open after switching repository tabs"
+    );
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        !command_palette_is_open(cx, &view),
+        "expected secondary-p to close the command palette"
+    );
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected command palette to reopen after a toggle-close cycle"
+    );
+
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(
+        !command_palette_is_open(cx, &view),
+        "expected escape to close the command palette"
+    );
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected command palette to reopen after closing with escape"
+    );
+}
+
+#[gpui::test]
+fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    let state = view_state_with_active_ready_repo(RepoId(1));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    test_support::redraw(cx);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let stale_focus = this
+                .command_palette
+                .query_input
+                .as_ref()
+                .map(|input| input.read(cx).focus_handle());
+            this.command_palette.restore_focus = stale_focus;
+        });
+    });
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    pump_for(cx, Duration::from_millis(16));
+
+    let diff_focus = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .clone()
+    });
+    cx.update(|window, app| {
+        assert_eq!(
+            window.focused(app),
+            Some(diff_focus),
+            "expected stale command-palette restore focus to fall back to the diff panel"
+        );
+    });
 }
 
 #[test]
