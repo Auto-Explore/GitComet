@@ -1,3 +1,7 @@
+use super::repo_management::{
+    append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
+    selected_history_reloads_for_activation,
+};
 use super::util::{
     SelectedConflictTarget, append_auto_background_metadata_effects,
     append_requested_status_refresh_effects, clear_banner_error_for_repo, diff_reload_effects,
@@ -404,32 +408,62 @@ pub(super) fn repo_action_finished(
     if clear_banner {
         clear_banner_error_for_repo(state, repo_id);
     }
+    let is_active = state.active_repo == Some(repo_id);
+
+    // A completed action mutated the repo, so every load issued before it is now stale. Bump the
+    // load epoch (so those stale results are dropped by the epoch gate), clear all in-flight flags,
+    // reset every `Loading` loadable back to `NotLoaded`, and cancel the orphaned worker tasks.
+    // This mirrors the invalidation repo activation performs; unlike a partial flag clear it never
+    // leaves a non-status load stranded in flight (its flag would otherwise never be cleared).
+    let mut effects: Vec<Effect> = Vec::new();
+    append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
+
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
+        return effects;
     };
 
-    repo_state.bump_load_epoch();
-    repo_state
-        .loads_in_flight
-        .clear_flags(RepoLoadsInFlight::WORKTREE_STATUS | RepoLoadsInFlight::STAGED_STATUS);
+    // Re-issue the primary panes (head branch, ahead/behind, rebase/merge, status, log). The flags
+    // were just cleared, so request_* dispatches fresh loads under the new epoch.
+    effects.extend(refresh_primary_effects(repo_state));
 
-    let mut effects = refresh_primary_effects(repo_state);
-    if let Some(target) = repo_state.diff_state.diff_target.clone()
-        && matches!(target, DiffTarget::WorkingTree { .. })
-    {
-        if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
-            match conflict_target {
-                SelectedConflictTarget::Current => {
-                    effects.extend(start_current_conflict_target_reload(repo_state));
+    // Selected views (branch lists, history, diff) only matter for the repo the user is viewing. A
+    // non-active repo's in-flight views were reset to `NotLoaded` and reload when it is next
+    // activated; the primary panes above are still refreshed so they are current on return.
+    if is_active {
+        // Re-issue branch lists when one was in flight before (refresh_primary_effects does not
+        // cover them); request() returns true now that the flag was cleared.
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::BRANCHES)
+        {
+            effects.push(Effect::LoadBranches { repo_id });
+        }
+        if repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::REMOTE_BRANCHES)
+        {
+            effects.push(Effect::LoadRemoteBranches { repo_id });
+        }
+
+        let history_reloads = selected_history_reloads_for_activation(repo_state);
+        append_selected_history_reload_effects(repo_id, repo_state, history_reloads, &mut effects);
+
+        if let Some(target) = repo_state.diff_state.diff_target.clone() {
+            if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+                match conflict_target {
+                    SelectedConflictTarget::Current => {
+                        effects.extend(start_current_conflict_target_reload(repo_state));
+                    }
+                    SelectedConflictTarget::Path(path) => {
+                        effects.extend(start_conflict_target_reload(repo_state, path));
+                    }
                 }
-                SelectedConflictTarget::Path(path) => {
-                    effects.extend(start_conflict_target_reload(repo_state, path));
-                }
+            } else {
+                effects.extend(diff_reload_effects(repo_state, repo_id, target));
             }
-        } else {
-            effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
     }
+
     effects
 }
 
