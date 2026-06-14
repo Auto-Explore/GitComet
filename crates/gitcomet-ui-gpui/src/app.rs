@@ -257,7 +257,7 @@ pub(crate) fn application() -> gpui::Application {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn application() -> gpui::Application {
-    gpui::application()
+    gpui_platform::application()
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -367,7 +367,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
         if quit_when_all_windows_closed {
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }

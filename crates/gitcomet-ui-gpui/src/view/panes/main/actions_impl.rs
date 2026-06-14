@@ -1247,13 +1247,26 @@ impl MainPaneView {
                 .with_resolved_output_line_count(resolved_line_count)
         });
 
+        // Use `SharedString::from` (not `SharedString::new`) so the existing
+        // `Arc<str>` is passed through to the `SmolStr` backing without a fresh
+        // allocation. `SharedString::new` always copies via `SmolStr::new`,
+        // whereas `From<Arc<str>>` reuses the heap allocation for non-inline
+        // strings.
         let three_way_text = ThreeWaySides {
-            base: file.base.clone().map(SharedString::new).unwrap_or_default(),
-            ours: file.ours.clone().map(SharedString::new).unwrap_or_default(),
+            base: file
+                .base
+                .clone()
+                .map(SharedString::from)
+                .unwrap_or_default(),
+            ours: file
+                .ours
+                .clone()
+                .map(SharedString::from)
+                .unwrap_or_default(),
             theirs: file
                 .theirs
                 .clone()
-                .map(SharedString::new)
+                .map(SharedString::from)
                 .unwrap_or_default(),
         };
         let three_way_line_starts: ThreeWaySides<DeferredLineStarts> = ThreeWaySides {
