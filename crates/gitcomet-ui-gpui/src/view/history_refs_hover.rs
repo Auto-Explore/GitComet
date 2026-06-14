@@ -21,7 +21,7 @@ struct HistoryRefsHoverState {
 #[derive(Clone, Copy, Debug)]
 struct HistoryRefsHoverLayout {
     anchor: Point<Pixels>,
-    anchor_corner: Corner,
+    anchor_corner: Anchor,
     panel_w: Pixels,
     max_panel_h: Pixels,
 }
@@ -439,14 +439,14 @@ fn history_refs_hover_layout(
     if above_h > below_h {
         HistoryRefsHoverLayout {
             anchor: point(anchor_x, above_anchor_y),
-            anchor_corner: Corner::BottomLeft,
+            anchor_corner: Anchor::BottomLeft,
             panel_w,
             max_panel_h: above_h,
         }
     } else {
         HistoryRefsHoverLayout {
             anchor: point(anchor_x, below_anchor_y),
-            anchor_corner: Corner::TopLeft,
+            anchor_corner: Anchor::TopLeft,
             panel_w,
             max_panel_h: below_h,
         }
@@ -687,7 +687,7 @@ mod tests {
             px(8.0),
         );
 
-        assert!(matches!(layout.anchor_corner, Corner::BottomLeft));
+        assert!(matches!(layout.anchor_corner, Anchor::BottomLeft));
         assert_eq!(layout.panel_w, px(220.0));
         assert_eq!(layout.anchor.x, px(72.0));
         assert_eq!(layout.anchor.y, px(150.0));
@@ -727,7 +727,7 @@ mod tests {
             px(8.0),
         );
 
-        assert!(matches!(layout.anchor_corner, Corner::TopLeft));
+        assert!(matches!(layout.anchor_corner, Anchor::TopLeft));
         assert_eq!(layout.anchor, point(px(24.0), px(36.0)));
         assert_eq!(layout.max_panel_h, px(176.0));
         assert!(layout.anchor.y + layout.max_panel_h <= px(212.0));

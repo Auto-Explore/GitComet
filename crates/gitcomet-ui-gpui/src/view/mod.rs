@@ -21,7 +21,7 @@ use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, Corner, CursorStyle,
+    Anchor, Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, CursorStyle,
     Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,

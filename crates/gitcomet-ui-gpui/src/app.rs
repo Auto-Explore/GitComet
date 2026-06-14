@@ -14,8 +14,6 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
-#[cfg(target_os = "windows")]
-use gpui::WindowsPlatform;
 #[cfg(target_os = "macos")]
 use gpui::{Action, Menu, MenuItem, OsAction, SystemMenuType};
 use gpui::{
@@ -30,8 +28,6 @@ use schemars::JsonSchema;
 #[cfg(target_os = "macos")]
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "windows")]
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -248,16 +244,8 @@ pub(crate) fn show_window_system_menu(window: &Window, position: Point<Pixels>) 
     window.show_window_menu(position);
 }
 
-#[cfg(target_os = "windows")]
 pub(crate) fn application() -> gpui::Application {
-    gpui::Application::with_platform(Rc::new(
-        WindowsPlatform::new(false).expect("failed to initialize Windows platform"),
-    ))
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn application() -> gpui::Application {
-    gpui::application()
+    gpui_platform::application()
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -367,7 +355,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
         if quit_when_all_windows_closed {
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
