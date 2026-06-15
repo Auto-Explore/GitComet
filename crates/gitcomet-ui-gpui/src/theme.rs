@@ -1026,6 +1026,17 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color
 }
 
+/// A fixed, deliberately-distinct purple flagging that the user is browsing a
+/// historical commit rather than the live repository state. Intentionally outside
+/// the theme palette so it reads as "off-live" in every theme.
+pub(crate) fn historical_outline(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgb(0xa78bfa)
+    } else {
+        gpui::rgb(0x7c3aed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

@@ -104,6 +104,10 @@ pub enum Effect {
     LoadSubmodules {
         repo_id: RepoId,
     },
+    LoadFileBrowser {
+        repo_id: RepoId,
+        source: FileSource,
+    },
     LoadRebaseAndMergeState {
         repo_id: RepoId,
     },

@@ -286,7 +286,13 @@ impl MainPaneView {
                 && !p.is_dir()
                 && preview_text_file_available
         });
-        has_untracked_preview || has_added_preview || has_deleted_preview
+        // File-browser "open content" forces a full-content preview for any file.
+        let has_content_preview = self.content_preview_abs_path().is_some_and(|p| {
+            !crate::view::should_bypass_text_file_preview_for_path(&p)
+                && !p.is_dir()
+                && (p.is_file() || preview_text_file_available)
+        });
+        has_untracked_preview || has_added_preview || has_deleted_preview || has_content_preview
     }
 
     /// Returns `true` when the markdown rendered preview is currently shown
@@ -774,6 +780,48 @@ impl MainPaneView {
         }
     }
 
+    /// Display path for a file opened via the file browser's "open content"
+    /// (working-tree path on disk, or the file path within a commit).
+    pub(in super::super::super) fn content_preview_abs_path(
+        &self,
+    ) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        if !repo.diff_state.content_preview {
+            return None;
+        }
+        let workdir = repo.spec.workdir.clone();
+        match repo.diff_state.diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. } => Some(if path.is_absolute() {
+                path.clone()
+            } else {
+                workdir.join(path)
+            }),
+            DiffTarget::Commit {
+                path: Some(path), ..
+            } => Some(workdir.join(path)),
+            _ => None,
+        }
+    }
+
+    /// Source path the preview reads from: working-tree content is read straight
+    /// from disk; commit content comes from the New-side blob temp file the diff
+    /// effect materializes.
+    pub(in super::super::super) fn content_preview_source_path(
+        &self,
+    ) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        if !repo.diff_state.content_preview {
+            return None;
+        }
+        match repo.diff_state.diff_target.as_ref()? {
+            DiffTarget::WorkingTree { .. } => self.content_preview_abs_path(),
+            DiffTarget::Commit { .. } => self.preview_text_file_source_path_for_side(
+                gitcomet_core::domain::DiffPreviewTextSide::New,
+            ),
+            _ => None,
+        }
+    }
+
     fn preview_text_file_source_path_for_side(
         &self,
         side: gitcomet_core::domain::DiffPreviewTextSide,
@@ -896,6 +944,23 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self
+            .active_repo()
+            .is_some_and(|repo| repo.diff_state.content_preview)
+        {
+            match (
+                self.content_preview_abs_path(),
+                self.content_preview_source_path(),
+            ) {
+                (Some(display_path), Some(source_path)) => {
+                    self.ensure_worktree_preview_loaded(display_path, source_path, cx);
+                }
+                (Some(display_path), None) => self.ensure_preview_loading(display_path),
+                (None, _) => {}
+            }
+            return;
+        }
+
         if let Some(path) = self.untracked_worktree_preview_path() {
             self.ensure_worktree_preview_loaded(path.clone(), path, cx);
             return;

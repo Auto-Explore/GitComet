@@ -2588,6 +2588,13 @@ pub(super) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    FileBrowserFileMenu {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    BrowseHistoryMenu {
+        repo_id: RepoId,
+    },
     SubmoduleInnerDiffMenu {
         repo_id: RepoId,
         submodule_repo_path: std::path::PathBuf,

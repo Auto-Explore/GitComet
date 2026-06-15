@@ -4,6 +4,7 @@ use crate::ui_scale::UiScale;
 use crate::view::GitCometView;
 use gitcomet_core::domain::{CommitId, LogScope};
 use gitcomet_state::model::RepoId;
+use gitcomet_state::msg::Msg;
 use gpui::prelude::*;
 use gpui::{
     Bounds, ElementId, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
@@ -31,6 +32,9 @@ pub struct CommitShaHoverMenu {
     input: Entity<crate::kit::TextInput>,
     repo_id: RepoId,
     links: Arc<[CommitShaLink]>,
+    /// Whether the menu offers "Navigate" (false for the commit's own SHA, where
+    /// navigating to yourself is a no-op).
+    allow_navigate: bool,
     theme: AppTheme,
     ui_scale: UiScale,
     id: SharedString,
@@ -57,12 +61,14 @@ impl CommitShaHoverMenu {
         ui_scale: UiScale,
         id: impl Into<SharedString>,
         root_view: WeakEntity<GitCometView>,
+        allow_navigate: bool,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
             input,
             repo_id,
             links,
+            allow_navigate,
             theme,
             ui_scale,
             id: id.into(),
@@ -389,34 +395,81 @@ impl CommitShaHoverMenu {
         window.refresh();
     }
 
+    fn on_browse_entry_mouse_down(
+        &mut self,
+        _event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        cx.stop_propagation();
+        let Some(link) = self.active_link().cloned() else {
+            return;
+        };
+        self.close_menu(cx);
+        let repo_id = self.repo_id;
+        let _ = self.root_view.update(cx, move |root, _cx| {
+            root.store.dispatch(Msg::BrowseRepositoryAtCommit {
+                repo_id,
+                commit_id: link.commit_id,
+            });
+        });
+        window.refresh();
+    }
+
     fn render_menu(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let navigate_selector = format!("{}_navigate", self.id);
-        let row = super::context_menu_entry(
-            (
-                ElementId::from("commit_sha_hover_menu_navigate"),
-                self.id.clone(),
+        let mut entries = div().flex().flex_col();
+        if self.allow_navigate {
+            let navigate_selector = format!("{}_navigate", self.id);
+            entries = entries.child(
+                super::context_menu_entry(
+                    (
+                        ElementId::from("commit_sha_hover_menu_navigate"),
+                        self.id.clone(),
+                    ),
+                    self.theme,
+                    self.ui_scale,
+                    false,
+                    false,
+                    Some("icons/link.svg".into()),
+                    "Navigate",
+                    None,
+                )
+                .debug_selector(move || navigate_selector.clone())
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(Self::on_menu_entry_mouse_down),
+                ),
+            );
+        }
+        let browse_selector = format!("{}_browse", self.id);
+        entries = entries.child(
+            super::context_menu_entry(
+                (
+                    ElementId::from("commit_sha_hover_menu_browse"),
+                    self.id.clone(),
+                ),
+                self.theme,
+                self.ui_scale,
+                false,
+                false,
+                Some("icons/history.svg".into()),
+                "Browse repository at this point",
+                None,
+            )
+            .debug_selector(move || browse_selector.clone())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(Self::on_browse_entry_mouse_down),
             ),
-            self.theme,
-            self.ui_scale,
-            false,
-            false,
-            Some("icons/link.svg".into()),
-            "Navigate",
-            None,
-        )
-        .debug_selector(move || navigate_selector.clone())
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(Self::on_menu_entry_mouse_down),
         );
 
-        let menu_surface = super::context_menu(self.theme, row)
+        let menu_surface = super::context_menu(self.theme, entries)
             .id((ElementId::from("commit_sha_hover_menu"), self.id.clone()))
             .debug_selector({
                 let id = format!("{}_menu", self.id);
                 move || id.clone()
             })
-            .w(self.ui_scale.px(152.0))
+            .w(self.ui_scale.px(236.0))
             .p_1()
             .font_family(DEFAULT_UI_FONT_FAMILY)
             .bg(self.theme.colors.surface_bg_elevated)

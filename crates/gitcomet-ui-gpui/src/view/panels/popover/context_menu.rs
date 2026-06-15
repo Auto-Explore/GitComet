@@ -2,6 +2,7 @@ use super::*;
 
 mod branch;
 mod branch_section;
+mod browse_history;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
@@ -13,6 +14,7 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod file_browser_file;
 mod history_branch_filter;
 mod previous_commit_messages;
 mod pull;
@@ -294,6 +296,12 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::FileBrowserFileMenu { repo_id, path } => {
+                Some(file_browser_file::model(self, *repo_id, path))
+            }
+            PopoverKind::BrowseHistoryMenu { repo_id } => {
+                Some(browse_history::model(self, *repo_id))
+            }
             PopoverKind::SubmoduleInnerDiffMenu {
                 repo_id,
                 submodule_repo_path,
@@ -390,6 +398,25 @@ impl PopoverHost {
         match action {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
+            }
+            ContextMenuAction::OpenFileContent {
+                repo_id,
+                source,
+                path,
+            } => {
+                self.store
+                    .dispatch(Msg::OpenFileContent {
+                        repo_id,
+                        source,
+                        path,
+                    });
+            }
+            ContextMenuAction::BrowseRepositoryAtCommit { repo_id, commit_id } => {
+                self.store
+                    .dispatch(Msg::BrowseRepositoryAtCommit { repo_id, commit_id });
+            }
+            ContextMenuAction::ResetBrowseToLive { repo_id } => {
+                self.store.dispatch(Msg::ResetBrowseToLive { repo_id });
             }
             ContextMenuAction::SelectConflictDiff { repo_id, path } => {
                 self.store
@@ -1081,6 +1108,7 @@ impl PopoverHost {
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
+        let entry_tooltips = model.entry_tooltips.clone();
 
         let focus = self.context_menu_focus_handle.clone();
         let current_selected = self.context_menu_selected_ix;
@@ -1206,7 +1234,10 @@ impl PopoverHost {
                         } => {
                             let selected = selected_for_render == Some(ix);
                             let debug_selector = context_menu_entry_debug_selector(label.as_ref());
-                            let tooltip_text = context_menu_entry_tooltip(action.as_ref());
+                            let tooltip_text = entry_tooltips
+                                .get(&ix)
+                                .cloned()
+                                .or_else(|| context_menu_entry_tooltip(action.as_ref()));
                             let tooltip_host_for_move = tooltip_host.clone();
                             let tooltip_text_for_move = tooltip_text.clone();
                             let tooltip_host_for_hover = tooltip_host.clone();

@@ -4,14 +4,14 @@ use super::util::{
 };
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
-    SidebarDataRequest,
+    SidebarDataRequest, SidebarMode,
 };
 use crate::msg::Effect;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, FileStatusKind, LogPage, RecentCommitMessage, ReflogEntry,
-    Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence,
-    Worktree,
+    Branch, CommitDetails, CommitId, FileEntry, FileSource, FileStatusKind, LogPage,
+    RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry,
+    Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::Error;
 use std::path::PathBuf;
@@ -523,6 +523,176 @@ pub(super) fn load_submodules(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     }
 }
 
+pub(super) fn load_file_browser(
+    state: &mut AppState,
+    repo_id: RepoId,
+    source: FileSource,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    repo_state.file_browser.source = source.clone();
+    repo_state.file_browser.entries = Loadable::Loading;
+    repo_state.file_browser.bump_rev();
+    vec![Effect::LoadFileBrowser { repo_id, source }]
+}
+
+pub(super) fn toggle_file_browser_dir(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let path = Arc::new(path);
+        if repo_state.file_browser.expanded_dirs.contains(&path) {
+            repo_state.file_browser.expanded_dirs.remove(&path);
+        } else {
+            repo_state.file_browser.expanded_dirs.insert(path);
+        }
+        repo_state.file_browser.bump_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn set_file_browser_search(
+    state: &mut AppState,
+    repo_id: RepoId,
+    query: String,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if repo_state.file_browser.search_query != query {
+            repo_state.file_browser.search_query = query;
+            repo_state.file_browser.bump_rev();
+        }
+    }
+    Vec::new()
+}
+
+pub(super) fn set_file_browser_source(
+    state: &mut AppState,
+    repo_id: RepoId,
+    source: FileSource,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if repo_state.file_browser.source != source {
+            repo_state.file_browser.source = source.clone();
+            repo_state.file_browser.entries = Loadable::NotLoaded;
+            repo_state.file_browser.expanded_dirs.clear();
+            repo_state.file_browser.search_query.clear();
+            repo_state.file_browser.bump_rev();
+            return vec![Effect::LoadFileBrowser { repo_id, source }];
+        }
+    }
+    Vec::new()
+}
+
+pub(super) fn set_sidebar_mode(
+    state: &mut AppState,
+    mode: SidebarMode,
+) -> Vec<Effect> {
+    if state.sidebar_mode != mode {
+        state.sidebar_mode = mode;
+
+        if mode == SidebarMode::Files {
+            if let Some(repo_id) = state.active_repo {
+                if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    if matches!(repo.file_browser.entries, Loadable::NotLoaded) {
+                        let source = repo.file_browser.source.clone();
+                        return vec![Effect::LoadFileBrowser { repo_id, source }];
+                    }
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+pub(super) fn browse_repository_at_commit(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+) -> Vec<Effect> {
+    const BROWSE_HISTORY_CAP: usize = 32;
+    // Capture the open file (if any) before re-targeting it to the new point.
+    let reopen_path = browse_open_content_path(state, repo_id);
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if !repo_state.browse_history.contains(&commit_id) {
+            repo_state.browse_history.push(commit_id.clone());
+            if repo_state.browse_history.len() > BROWSE_HISTORY_CAP {
+                repo_state.browse_history.remove(0);
+            }
+        }
+    }
+    state.sidebar_mode = SidebarMode::Files;
+    let mut effects =
+        set_file_browser_source(state, repo_id, FileSource::Commit(commit_id.clone()));
+    if let Some(path) = reopen_path {
+        effects.extend(super::diff_selection::open_file_content(
+            state,
+            repo_id,
+            FileSource::Commit(commit_id),
+            path,
+        ));
+    }
+    effects
+}
+
+pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let reopen_path = browse_open_content_path(state, repo_id);
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.browse_history.clear();
+    }
+    let mut effects = set_file_browser_source(state, repo_id, FileSource::WorkingDirectory);
+    if let Some(path) = reopen_path {
+        effects.extend(super::diff_selection::open_file_content(
+            state,
+            repo_id,
+            FileSource::WorkingDirectory,
+            path,
+        ));
+    }
+    effects
+}
+
+/// Path of the file currently shown as full content (if any), so a browse-point
+/// change can re-open the same file at the new point.
+fn browse_open_content_path(state: &AppState, repo_id: RepoId) -> Option<std::path::PathBuf> {
+    let repo = state.repos.iter().find(|r| r.id == repo_id)?;
+    if !repo.diff_state.content_preview {
+        return None;
+    }
+    match &repo.diff_state.diff_target {
+        Some(gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. }) => Some(p.clone()),
+        Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => Some(path.clone()),
+        _ => None,
+    }
+}
+
+pub(super) fn file_browser_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    source: FileSource,
+    result: std::result::Result<Vec<FileEntry>, gitcomet_core::error::Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        if repo_state.file_browser.source != source {
+            return Vec::new();
+        }
+        repo_state.file_browser.entries = match result {
+            Ok(v) => Loadable::Ready(Arc::new(v)),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.file_browser.bump_rev();
+    }
+    Vec::new()
+}
+
 pub(super) fn branches_loaded(
     state: &mut AppState,
     repo_id: RepoId,
@@ -993,6 +1163,40 @@ mod tests {
             parent_ids: Vec::new(),
             files: Vec::new(),
         }
+    }
+
+    #[test]
+    fn browse_history_pushes_dedups_and_go_live_clears() {
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(RepoId(1));
+
+        let a = CommitId("aaaaaaaa".into());
+        let b = CommitId("bbbbbbbb".into());
+
+        browse_repository_at_commit(&mut state, RepoId(1), a.clone());
+        browse_repository_at_commit(&mut state, RepoId(1), b.clone());
+        // Re-browsing an existing point does not duplicate it, just makes it current.
+        browse_repository_at_commit(&mut state, RepoId(1), a.clone());
+
+        let repo = &state.repos[0];
+        assert_eq!(repo.browse_history, vec![a.clone(), b.clone()]);
+        assert_eq!(repo.browsing_commit(), Some(&a));
+        assert_eq!(state.sidebar_mode, SidebarMode::Files);
+
+        reset_browse_to_live(&mut state, RepoId(1));
+        let repo = &state.repos[0];
+        assert!(repo.browse_history.is_empty());
+        assert_eq!(repo.browsing_commit(), None);
+        assert!(matches!(
+            repo.file_browser.source,
+            gitcomet_core::domain::FileSource::WorkingDirectory
+        ));
     }
 
     fn conflicted_status(path: &Path, conflict: FileConflictKind) -> RepoStatus {

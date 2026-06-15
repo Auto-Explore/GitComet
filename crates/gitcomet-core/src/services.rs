@@ -882,6 +882,24 @@ pub trait GitRepository: Send + Sync {
         Ok(submodules)
     }
 
+    fn list_tree_files(
+        &self,
+    ) -> Result<Vec<FileEntry>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tree file listing is not implemented for this backend",
+        )))
+    }
+
+    fn list_tree_files_at_commit(
+        &self,
+        _commit_id: &CommitId,
+    ) -> Result<Vec<FileEntry>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "tree file listing at commit is not implemented for this backend",
+        )))
+    }
+
+
     fn submodule_diff_summary(
         &self,
         _target: &crate::domain::DiffTarget,
