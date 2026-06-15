@@ -117,6 +117,7 @@ mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
 mod file_diff_display;
+mod file_icons;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;

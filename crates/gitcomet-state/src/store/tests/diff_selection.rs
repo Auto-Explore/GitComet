@@ -1,8 +1,8 @@
 use super::*;
 use gitcomet_core::domain::{
-    CommitDetails, CommitFileChange, CommitId, FileConflictKind, FileStatus, FileStatusKind,
-    Submodule, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
-    SubmoduleStatus,
+    CommitDetails, CommitFileChange, CommitId, FileConflictKind, FileDiffImage, FileSource,
+    FileStatus, FileStatusKind, Submodule, SubmoduleDiffSummary, SubmoduleDiffSummaryMode,
+    SubmoduleInnerChange, SubmoduleStatus,
 };
 
 #[test]
@@ -1914,4 +1914,292 @@ fn diff_results_are_ignored_for_non_matching_target() {
     assert!(repo_state.diff_state.diff_file.is_loading());
     assert!(repo_state.diff_state.diff_file_image.is_loading());
     assert_eq!(repo_state.diff_state.diff_target, Some(selected));
+}
+
+#[test]
+fn open_file_content_sets_diff_target_and_content_preview() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let path = PathBuf::from("src/main.rs");
+    let source = FileSource::WorkingDirectory;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id: RepoId(1),
+            source,
+            path: path.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert_eq!(
+        repo_state.diff_state.diff_target,
+        Some(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+    );
+    assert!(repo_state.diff_state.content_preview);
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            ..
+        }
+    )));
+
+    // Test with Commit source
+    let commit_path = PathBuf::from("src/commit.rs");
+    let commit_id = CommitId("deadbeef".into());
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id: RepoId(1),
+            source: FileSource::Commit(commit_id.clone()),
+            path: commit_path.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert_eq!(
+        repo_state.diff_state.diff_target,
+        Some(DiffTarget::Commit {
+            commit_id,
+            path: Some(commit_path),
+        })
+    );
+    assert!(repo_state.diff_state.content_preview);
+    assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
+}
+
+#[test]
+fn open_file_content_skips_conflict_path_during_browse() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    // Set up a conflict so that normal SelectDiff would enter conflict-loading
+    let path = PathBuf::from("conflicted.txt");
+    repo_state.staged_status = Loadable::Ready(Arc::new(vec![FileStatus {
+        path: path.clone(),
+        kind: FileStatusKind::Conflicted,
+        conflict: Some(FileConflictKind::BothModified),
+    }]));
+    repo_state.worktree_status = Loadable::Ready(Arc::new(vec![FileStatus {
+        path: path.clone(),
+        kind: FileStatusKind::Conflicted,
+        conflict: Some(FileConflictKind::BothModified),
+    }]));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id: RepoId(1),
+            source: FileSource::WorkingDirectory,
+            path: path.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert_eq!(
+        repo_state.diff_state.diff_target,
+        Some(DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        })
+    );
+    assert!(repo_state.diff_state.content_preview);
+    // effects should contain LoadSelectedDiff, NOT conflict-loading effects
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadSelectedDiff { .. }))
+    );
+}
+
+#[test]
+fn clear_diff_selection_resets_content_preview_and_ancillary_fields() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+    repo_state.diff_state.content_preview = true;
+    repo_state.diff_state.diff = Loadable::Loading;
+    repo_state.diff_state.diff_file = Loadable::Loading;
+    repo_state.diff_state.diff_preview_text_file = Loadable::Loading;
+    repo_state.diff_state.submodule_summary = Loadable::Loading;
+    repo_state.diff_state.diff_file_image = Loadable::Loading;
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ClearDiffSelection { repo_id: RepoId(1) },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(repo_state.diff_state.diff_target.is_none());
+    assert!(!repo_state.diff_state.content_preview);
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.diff_state.diff_preview_text_file,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.diff_state.submodule_summary,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(effects.is_empty());
+}
+
+#[test]
+fn select_conflict_diff_sets_target_and_resets_content_preview() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.diff_state.content_preview = true;
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let path = PathBuf::from("conflicted.txt");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectConflictDiff {
+            repo_id: RepoId(1),
+            path: path.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(!repo_state.diff_state.content_preview);
+    assert_eq!(
+        repo_state.diff_state.diff_target,
+        Some(DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        })
+    );
+    assert!(matches!(repo_state.diff_state.diff, Loadable::NotLoaded));
+    assert!(matches!(
+        repo_state.diff_state.diff_file,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::NotLoaded
+    ));
+    assert!(
+        repo_state
+            .conflict_state
+            .conflict_file_path
+            .as_ref()
+            .is_some()
+    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadSelectedConflictFile {
+            repo_id: RepoId(1),
+            ..
+        }
+    )));
+}
+
+#[test]
+fn diff_file_image_loaded_drops_old_side_when_content_preview() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let path = PathBuf::from("img.png");
+    let target = DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    repo_state.diff_state.content_preview = true;
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff_file_image = Loadable::Loading;
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let image_data = vec![0xffu8, 0xd8, 0xff];
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffFileImageLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(Some(FileDiffImage {
+                path: path.clone(),
+                old: Some(image_data.clone()),
+                new: Some(image_data),
+            })),
+        }),
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert!(matches!(
+        repo_state.diff_state.diff_file_image,
+        Loadable::Ready(_)
+    ));
+    if let Loadable::Ready(Some(image)) = &repo_state.diff_state.diff_file_image {
+        assert_eq!(image.path, path);
+        assert!(image.old.is_none());
+        assert!(image.new.is_some());
+    }
 }

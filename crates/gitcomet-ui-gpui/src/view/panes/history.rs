@@ -931,6 +931,9 @@ pub(in super::super) struct HistoryView {
     history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     selected_branch: Option<SelectedBranch>,
     pending_history_reveal: Option<PendingHistoryReveal>,
+    /// Last browse-point commit we scrolled to, so a new one is revealed only when
+    /// the historical browse point actually changes.
+    last_browse_commit: Option<CommitId>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -957,6 +960,7 @@ impl HistoryView {
             }
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.worktree_status_cache_rev().hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
         }
@@ -991,6 +995,18 @@ impl HistoryView {
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
             this.state = next;
+
+            // When the historical browse point changes, scroll the history to that
+            // commit (its row is highlighted purple by the canvas).
+            let browse_commit = this
+                .active_repo()
+                .and_then(|repo| repo.browsing_commit().cloned());
+            if browse_commit != this.last_browse_commit {
+                this.last_browse_commit = browse_commit.clone();
+                if let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit) {
+                    this.request_reveal_commit(repo_id, commit_id, Some(LogScope::AllBranches), cx);
+                }
+            }
 
             if changed {
                 this.notify_fingerprint = next_fingerprint;
@@ -1042,6 +1058,7 @@ impl HistoryView {
             history_selected_list_index_cache: None,
             selected_branch: None,
             pending_history_reveal: None,
+            last_browse_commit: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),

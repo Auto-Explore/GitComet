@@ -731,6 +731,9 @@ impl MainPaneView {
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
+            // The historical-browse purple frame keys off content-preview mode, which
+            // can share a diff_target with a plain diff of the same commit+path.
+            repo.diff_state.content_preview.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
 
             // Only include status changes when viewing a working tree diff.
@@ -752,6 +755,8 @@ impl MainPaneView {
                 0
             };
             commit_details_rev.hash(&mut hasher);
+            // The historical-browse purple frame keys off the file browser source.
+            repo.file_browser.file_browser_rev.hash(&mut hasher);
         }
 
         hasher.finish()

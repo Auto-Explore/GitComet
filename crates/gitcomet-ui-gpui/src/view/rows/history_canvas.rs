@@ -211,6 +211,17 @@ pub(super) fn history_commit_row_canvas(
             if hitbox.is_hovered(window) {
                 window.paint_quad(fill(bounds, theme.colors.hover));
             }
+            // Purple highlight on the commit currently being browsed historically.
+            if view
+                .read(cx)
+                .active_repo()
+                .is_some_and(|repo| repo.browsing_commit() == Some(&commit_id))
+            {
+                window.paint_quad(fill(
+                    bounds,
+                    crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22),
+                ));
+            }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
 
             let design_scale_factor = ui_scale::design_scale_factor_from_window(window);

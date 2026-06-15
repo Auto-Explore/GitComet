@@ -300,6 +300,8 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
                 ..
             }
             | PopoverKind::CommitFileMenu { .. }
+            | PopoverKind::FileBrowserFileMenu { .. }
+            | PopoverKind::BrowseHistoryMenu { .. }
     )
 }
 
@@ -470,7 +472,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
                 ),
             ..
         }
-        | PopoverKind::CommitFileMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::FileBrowserFileMenu { .. }
+        | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
@@ -2516,6 +2520,12 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            PopoverKind::FileBrowserFileMenu { repo_id, path } => {
+                self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)
+            }
+            PopoverKind::BrowseHistoryMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::BrowseHistoryMenu { repo_id }, cx)
+            }
             PopoverKind::SubmoduleInnerDiffMenu {
                 repo_id,
                 submodule_repo_path,
