@@ -4,7 +4,11 @@ use gitcomet_core::domain::{DiffArea, FileSource};
 /// Context menu for a file row in the sidebar file browser. The browsed source
 /// (working directory / commit) is read from state so the menu offers the right
 /// actions for each.
-pub(super) fn model(this: &PopoverHost, repo_id: RepoId, path: &std::path::Path) -> ContextMenuModel {
+pub(super) fn model(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    path: &std::path::Path,
+) -> ContextMenuModel {
     let source = this
         .state
         .repos

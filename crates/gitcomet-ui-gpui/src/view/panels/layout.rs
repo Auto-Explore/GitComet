@@ -1059,9 +1059,7 @@ impl DetailsPaneView {
                                         theme,
                                         "Commit SHA",
                                         commit_details_monospace_element(
-                                            self.commit_details_sha_menu
-                                                .clone()
-                                                .into_any_element(),
+                                            self.commit_details_sha_menu.clone().into_any_element(),
                                         ),
                                     ))
                                     .child(commit_details_selectable_row(

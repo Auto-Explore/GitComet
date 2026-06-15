@@ -147,17 +147,14 @@ pub enum FileEntryKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Default)]
 pub enum FileSource {
+    #[default]
     WorkingDirectory,
     Commit(CommitId),
     Branch(String),
 }
 
-impl Default for FileSource {
-    fn default() -> Self {
-        Self::WorkingDirectory
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileEntry {

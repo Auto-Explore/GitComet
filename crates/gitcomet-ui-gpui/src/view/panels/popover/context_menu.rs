@@ -404,12 +404,11 @@ impl PopoverHost {
                 source,
                 path,
             } => {
-                self.store
-                    .dispatch(Msg::OpenFileContent {
-                        repo_id,
-                        source,
-                        path,
-                    });
+                self.store.dispatch(Msg::OpenFileContent {
+                    repo_id,
+                    source,
+                    path,
+                });
             }
             ContextMenuAction::BrowseRepositoryAtCommit { repo_id, commit_id } => {
                 self.store

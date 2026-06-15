@@ -941,18 +941,14 @@ pub(super) fn schedule_load_file_browser(
         msg_tx,
         move |repo, msg_tx| {
             let result = match &source {
-                gitcomet_core::domain::FileSource::WorkingDirectory => {
-                    repo.list_tree_files()
-                }
+                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_tree_files(),
                 gitcomet_core::domain::FileSource::Commit(commit_id) => {
                     repo.list_tree_files_at_commit(commit_id)
                 }
                 gitcomet_core::domain::FileSource::Branch(_name) => {
-                    Err(Error::new(
-                        gitcomet_core::error::ErrorKind::Backend(
-                            "branch file listing is not yet implemented".to_string(),
-                        ),
-                    ))
+                    Err(Error::new(gitcomet_core::error::ErrorKind::Backend(
+                        "branch file listing is not yet implemented".to_string(),
+                    )))
                 }
             };
             send_or_log(

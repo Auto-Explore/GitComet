@@ -219,8 +219,7 @@ pub(super) fn fill_select_diff_inline(
     clear_inline_submodule_diff_state(repo_state);
     repo_state.diff_state.content_preview = content_preview;
 
-    if !content_preview
-        && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
+    if !content_preview && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
     {
         repo_state.set_diff_target(Some(target.clone()));
         repo_state.diff_state.diff = Loadable::NotLoaded;

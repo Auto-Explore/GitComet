@@ -793,9 +793,7 @@ pub(super) fn reduce(
             effects::browse_repository_at_commit(state, repo_id, commit_id)
         }
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
-        Msg::SetSidebarMode { mode } => {
-            effects::set_sidebar_mode(state, mode)
-        }
+        Msg::SetSidebarMode { mode } => effects::set_sidebar_mode(state, mode),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
             diff_selection::stage_hunk(repo_id, patch)

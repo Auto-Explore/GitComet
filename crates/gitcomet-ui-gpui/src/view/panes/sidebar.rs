@@ -18,6 +18,9 @@ use std::sync::Arc;
 use crate::kit::TextInput;
 use crate::kit::TextInputOptions;
 
+type FileBrowserRowsCache =
+    std::cell::RefCell<Option<((RepoId, u64), Rc<[FileBrowserVisibleRow]>)>>;
+
 #[derive(Clone, Debug)]
 struct FileBrowserVisibleRow {
     entry_index: usize,
@@ -44,8 +47,7 @@ pub(in super::super) struct SidebarPaneView {
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     selected_branch: Option<SelectedBranch>,
-    file_browser_rows_cache:
-        std::cell::RefCell<Option<((RepoId, u64), Rc<[FileBrowserVisibleRow]>)>>,
+    file_browser_rows_cache: FileBrowserRowsCache,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,15 +141,14 @@ impl SidebarPaneView {
                 // never write back into the input on a keystroke, which would reset
                 // the cursor and flicker between the old and new value.
                 let text = input.read(cx).text().to_string();
-                if let Some(repo) = this.active_repo() {
-                    if repo.file_browser.search_query != text {
+                if let Some(repo) = this.active_repo()
+                    && repo.file_browser.search_query != text {
                         let repo_id = repo.id;
                         store_for_search.dispatch(Msg::SetFileBrowserSearch {
                             repo_id,
                             query: text,
                         });
                     }
-                }
                 cx.notify();
             });
 
@@ -194,9 +195,10 @@ impl SidebarPaneView {
             .file_browser_search_input
             .read_with(cx, |i: &TextInput, _cx| i.text().to_string());
         if input_text != query {
-            self.file_browser_search_input.update(cx, |input: &mut TextInput, cx| {
-                input.set_text(query, cx);
-            });
+            self.file_browser_search_input
+                .update(cx, |input: &mut TextInput, cx| {
+                    input.set_text(query, cx);
+                });
         }
     }
 
@@ -363,11 +365,7 @@ impl SidebarPaneView {
             .child(content)
     }
 
-    fn render_tab_bar(
-        &mut self,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> gpui::Div {
+    fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let border_color = theme.colors.border;
         let bg = theme.colors.surface_bg;
         let mode = self.state.sidebar_mode;
@@ -383,7 +381,8 @@ impl SidebarPaneView {
             .py(px(2.0))
             .h(px(28.0))
             .when(mode == SidebarMode::Branches, |d| {
-                d.bg(theme.colors.active_section).text_color(theme.colors.text)
+                d.bg(theme.colors.active_section)
+                    .text_color(theme.colors.text)
             })
             .when(mode != SidebarMode::Branches, |d| {
                 d.bg(gpui::transparent_black())
@@ -415,7 +414,8 @@ impl SidebarPaneView {
             .py(px(2.0))
             .h(px(28.0))
             .when(mode == SidebarMode::Files, |d| {
-                d.bg(theme.colors.active_section).text_color(theme.colors.text)
+                d.bg(theme.colors.active_section)
+                    .text_color(theme.colors.text)
             })
             .when(mode != SidebarMode::Files, |d| {
                 d.bg(gpui::transparent_black())
@@ -534,22 +534,22 @@ impl SidebarPaneView {
             .border_color(theme.colors.border)
             .child(self.file_browser_search_input.clone());
 
-        let source_text = self.active_repo().map_or("".to_string(), |repo| {
-            match &repo.file_browser.source {
-                gitcomet_core::domain::FileSource::WorkingDirectory => "HEAD".to_string(),
-                gitcomet_core::domain::FileSource::Commit(commit_id) => {
-                    let hex = commit_id.as_ref();
-                    if hex.len() > 7 {
-                        format!("commit {}", &hex[..7])
-                    } else {
-                        format!("commit {hex}")
+        let source_text =
+            self.active_repo()
+                .map_or("".to_string(), |repo| match &repo.file_browser.source {
+                    gitcomet_core::domain::FileSource::WorkingDirectory => "HEAD".to_string(),
+                    gitcomet_core::domain::FileSource::Commit(commit_id) => {
+                        let hex = commit_id.as_ref();
+                        if hex.len() > 7 {
+                            format!("commit {}", &hex[..7])
+                        } else {
+                            format!("commit {hex}")
+                        }
                     }
-                }
-                gitcomet_core::domain::FileSource::Branch(name) => {
-                    format!("branch {name}")
-                }
-            }
-        });
+                    gitcomet_core::domain::FileSource::Branch(name) => {
+                        format!("branch {name}")
+                    }
+                });
 
         let source_label = div()
             .flex()
@@ -642,11 +642,10 @@ impl SidebarPaneView {
         // tree after switching repos).
         let cache_key = (repo.id, repo.file_browser.file_browser_rev);
         let mut cache = self.file_browser_rows_cache.borrow_mut();
-        if let Some((cached_key, cached_rows)) = cache.as_ref() {
-            if *cached_key == cache_key {
+        if let Some((cached_key, cached_rows)) = cache.as_ref()
+            && *cached_key == cache_key {
                 return cached_rows.to_vec();
             }
-        }
 
         let rows = self.compute_file_browser_visible_rows(repo);
         *cache = Some((cache_key, Rc::from(rows.clone())));
@@ -685,8 +684,7 @@ impl SidebarPaneView {
                 .iter()
                 .enumerate()
                 .filter(|(i, entry)| {
-                    matching_entry_indices.contains(i)
-                        || ancestor_paths.contains(&entry.path)
+                    matching_entry_indices.contains(i) || ancestor_paths.contains(&entry.path)
                 })
                 .map(|(i, entry)| {
                     let is_expanded = match entry.kind {
@@ -773,7 +771,10 @@ impl SidebarPaneView {
             return Vec::new();
         };
         let theme = this.theme;
-        let icon_muted = with_alpha(theme.colors.text_muted, if theme.is_dark { 0.6 } else { 0.5 });
+        let icon_muted = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.6 } else { 0.5 },
+        );
         // Zed renders file/folder icons in a neutral, muted tone rather than a
         // bright accent — match that so the tree reads the same way.
         let icon_color = theme.colors.text_muted;
@@ -793,13 +794,8 @@ impl SidebarPaneView {
             super::super::icons::svg_icon(path, color, scaled_px(size_px))
         };
 
-        let svg_chevron = |expanded: bool| {
-            svg_icon(
-                file_icons::chevron_icon(expanded),
-                icon_muted,
-                10.0,
-            )
-        };
+        let svg_chevron =
+            |expanded: bool| svg_icon(file_icons::chevron_icon(expanded), icon_muted, 10.0);
 
         let chevron_slot = |is_directory: bool, is_expanded: bool| {
             div()
@@ -840,9 +836,7 @@ impl SidebarPaneView {
                 let store = Arc::clone(&store);
 
                 let mut row_div = div()
-                    .id(ElementId::Name(
-                        format!("file_browser_row_{ix}").into(),
-                    ))
+                    .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -855,12 +849,14 @@ impl SidebarPaneView {
 
                 if row.is_directory {
                     let path = (*entry.path).clone();
-                    row_div = row_div.on_click(cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                        store.dispatch(Msg::ToggleFileBrowserDir {
-                            repo_id,
-                            path: path.clone(),
-                        });
-                    }));
+                    row_div = row_div.on_click(cx.listener(
+                        move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                            store.dispatch(Msg::ToggleFileBrowserDir {
+                                repo_id,
+                                path: path.clone(),
+                            });
+                        },
+                    ));
                 } else {
                     let path = (*entry.path).clone();
                     let menu_path = path.clone();
@@ -869,13 +865,15 @@ impl SidebarPaneView {
                         .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
                     let menu_invoker = SharedString::from(format!("file_browser_file_{ix}"));
                     row_div = row_div
-                        .on_click(cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                            store.dispatch(Msg::OpenFileContent {
-                                repo_id,
-                                source: source.clone(),
-                                path: path.clone(),
-                            });
-                        }))
+                        .on_click(
+                            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                store.dispatch(Msg::OpenFileContent {
+                                    repo_id,
+                                    source: source.clone(),
+                                    path: path.clone(),
+                                });
+                            }),
+                        )
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
@@ -1263,5 +1261,41 @@ mod tests {
 
         state.repos[0].branch_sidebar_rev = 42;
         assert_ne!(SidebarNotifyFingerprint::from_state(&state), after_branches);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_tracks_file_browser_rev() {
+        let mut state = AppState {
+            repos: vec![repo_state(RepoId(1), "/tmp/repo")],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        state.repos[0].file_browser.file_browser_rev = 1;
+        let after_bump = SidebarNotifyFingerprint::from_state(&state);
+        assert_ne!(after_bump, initial);
+
+        state.repos[0].file_browser.file_browser_rev = 99;
+        assert_ne!(SidebarNotifyFingerprint::from_state(&state), after_bump);
+    }
+
+    #[test]
+    fn sidebar_notify_fingerprint_ignores_inactive_file_browser_rev() {
+        let mut state = AppState {
+            repos: vec![
+                repo_state(RepoId(1), "/tmp/active"),
+                repo_state(RepoId(2), "/tmp/inactive"),
+            ],
+            active_repo: Some(RepoId(1)),
+            ..AppState::default()
+        };
+
+        let initial = SidebarNotifyFingerprint::from_state(&state);
+
+        // Only change the INACTIVE repo's file_browser_rev
+        state.repos[1].file_browser.file_browser_rev = 42;
+        assert_eq!(SidebarNotifyFingerprint::from_state(&state), initial);
     }
 }

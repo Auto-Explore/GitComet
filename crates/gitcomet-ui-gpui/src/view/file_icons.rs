@@ -508,14 +508,8 @@ mod tests {
         assert_eq!(icon("Dockerfile"), "icons/file_icons/docker.svg");
         assert_eq!(icon(".gitignore"), "icons/file_icons/git.svg");
         assert_eq!(icon(".editorconfig"), "icons/file_icons/editorconfig.svg");
-        assert_eq!(
-            icon("eslint.config.js"),
-            "icons/file_icons/eslint.svg"
-        );
-        assert_eq!(
-            icon(".gitlab-ci.yml"),
-            "icons/file_icons/gitlab.svg"
-        );
+        assert_eq!(icon("eslint.config.js"), "icons/file_icons/eslint.svg");
+        assert_eq!(icon(".gitlab-ci.yml"), "icons/file_icons/gitlab.svg");
     }
 
     #[test]

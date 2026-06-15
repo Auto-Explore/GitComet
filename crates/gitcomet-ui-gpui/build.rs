@@ -58,8 +58,9 @@ fn generate_file_icon_assets(manifest_dir: &std::path::Path, out_dir: &std::path
         .collect();
     names.sort();
 
-    let mut generated =
-        String::from("fn file_icon_bytes(path: &str) -> Option<&'static [u8]> {\n    match path {\n");
+    let mut generated = String::from(
+        "fn file_icon_bytes(path: &str) -> Option<&'static [u8]> {\n    match path {\n",
+    );
     for name in &names {
         let abs = dir.join(name);
         generated.push_str(&format!(
@@ -72,8 +73,7 @@ fn generate_file_icon_assets(manifest_dir: &std::path::Path, out_dir: &std::path
     }
     generated.push_str("];\n");
 
-    fs::write(out_dir.join("file_icons_assets.rs"), generated)
-        .expect("write file_icons_assets.rs");
+    fs::write(out_dir.join("file_icons_assets.rs"), generated).expect("write file_icons_assets.rs");
 }
 
 fn main() {

@@ -2,8 +2,8 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage,
-    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
+    FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry,
+    Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
     SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
@@ -783,7 +783,6 @@ impl GitRepository for GixRepo {
     fn list_tree_files_at_commit(&self, commit_id: &CommitId) -> Result<Vec<FileEntry>> {
         self.list_tree_files_at_commit_impl(commit_id)
     }
-
 
     fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {
         self.submodule_diff_summary_impl(target)

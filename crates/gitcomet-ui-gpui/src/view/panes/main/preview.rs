@@ -782,9 +782,7 @@ impl MainPaneView {
 
     /// Display path for a file opened via the file browser's "open content"
     /// (working-tree path on disk, or the file path within a commit).
-    pub(in super::super::super) fn content_preview_abs_path(
-        &self,
-    ) -> Option<std::path::PathBuf> {
+    pub(in super::super::super) fn content_preview_abs_path(&self) -> Option<std::path::PathBuf> {
         let repo = self.active_repo()?;
         if !repo.diff_state.content_preview {
             return None;

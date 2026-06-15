@@ -562,12 +562,11 @@ pub(super) fn set_file_browser_search(
     repo_id: RepoId,
     query: String,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        if repo_state.file_browser.search_query != query {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.file_browser.search_query != query {
             repo_state.file_browser.search_query = query;
             repo_state.file_browser.bump_rev();
         }
-    }
     Vec::new()
 }
 
@@ -576,8 +575,8 @@ pub(super) fn set_file_browser_source(
     repo_id: RepoId,
     source: FileSource,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        if repo_state.file_browser.source != source {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && repo_state.file_browser.source != source {
             repo_state.file_browser.source = source.clone();
             repo_state.file_browser.entries = Loadable::NotLoaded;
             repo_state.file_browser.expanded_dirs.clear();
@@ -585,27 +584,23 @@ pub(super) fn set_file_browser_source(
             repo_state.file_browser.bump_rev();
             return vec![Effect::LoadFileBrowser { repo_id, source }];
         }
-    }
     Vec::new()
 }
 
-pub(super) fn set_sidebar_mode(
-    state: &mut AppState,
-    mode: SidebarMode,
-) -> Vec<Effect> {
+pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<Effect> {
     if state.sidebar_mode != mode {
         state.sidebar_mode = mode;
 
-        if mode == SidebarMode::Files {
-            if let Some(repo_id) = state.active_repo {
-                if let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                    if matches!(repo.file_browser.entries, Loadable::NotLoaded) {
+        if mode == SidebarMode::Files
+            && let Some(repo_id) = state.active_repo
+                && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
+                    && matches!(
+                        repo.file_browser.entries,
+                        Loadable::NotLoaded | Loadable::Error(_)
+                    ) {
                         let source = repo.file_browser.source.clone();
                         return vec![Effect::LoadFileBrowser { repo_id, source }];
                     }
-                }
-            }
-        }
     }
     Vec::new()
 }
@@ -618,25 +613,28 @@ pub(super) fn browse_repository_at_commit(
     const BROWSE_HISTORY_CAP: usize = 32;
     // Capture the open file (if any) before re-targeting it to the new point.
     let reopen_path = browse_open_content_path(state, repo_id);
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        if !repo_state.browse_history.contains(&commit_id) {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && !repo_state.browse_history.contains(&commit_id) {
             repo_state.browse_history.push(commit_id.clone());
             if repo_state.browse_history.len() > BROWSE_HISTORY_CAP {
                 repo_state.browse_history.remove(0);
             }
         }
-    }
     state.sidebar_mode = SidebarMode::Files;
     let mut effects =
         set_file_browser_source(state, repo_id, FileSource::Commit(commit_id.clone()));
-    if let Some(path) = reopen_path {
-        effects.extend(super::diff_selection::open_file_content(
-            state,
-            repo_id,
-            FileSource::Commit(commit_id),
-            path,
-        ));
-    }
+    if let Some(path) = reopen_path
+        && effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        {
+            effects.extend(super::diff_selection::open_file_content(
+                state,
+                repo_id,
+                FileSource::Commit(commit_id),
+                path,
+            ));
+        }
     effects
 }
 
@@ -646,14 +644,18 @@ pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec
         repo_state.browse_history.clear();
     }
     let mut effects = set_file_browser_source(state, repo_id, FileSource::WorkingDirectory);
-    if let Some(path) = reopen_path {
-        effects.extend(super::diff_selection::open_file_content(
-            state,
-            repo_id,
-            FileSource::WorkingDirectory,
-            path,
-        ));
-    }
+    if let Some(path) = reopen_path
+        && effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        {
+            effects.extend(super::diff_selection::open_file_content(
+                state,
+                repo_id,
+                FileSource::WorkingDirectory,
+                path,
+            ));
+        }
     effects
 }
 
@@ -1134,8 +1136,11 @@ pub(super) fn commit_details_loaded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ConflictFile, RepoState, SidebarDataRequest};
-    use gitcomet_core::domain::{FileConflictKind, FileStatus, LogScope, RepoSpec};
+    use crate::model::{ConflictFile, RepoState, SidebarDataRequest, SidebarMode};
+    use gitcomet_core::domain::{
+        DiffArea, DiffTarget, FileConflictKind, FileEntry, FileEntryKind, FileSource, FileStatus,
+        LogScope, RepoSpec,
+    };
     use gitcomet_core::error::{Error, ErrorKind};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -1301,6 +1306,22 @@ mod tests {
                 repo_id,
                 commit_id.clone(),
                 Ok(commit_details_for(commit_id))
+            )
+            .is_empty()
+        );
+        assert!(load_file_browser(&mut state, repo_id, FileSource::WorkingDirectory).is_empty());
+        assert!(toggle_file_browser_dir(&mut state, repo_id, PathBuf::from("src")).is_empty());
+        assert!(set_file_browser_search(&mut state, repo_id, "query".to_string()).is_empty());
+        assert!(
+            set_file_browser_source(&mut state, repo_id, FileSource::WorkingDirectory).is_empty()
+        );
+        assert!(set_sidebar_mode(&mut state, SidebarMode::Files).is_empty());
+        assert!(
+            file_browser_loaded(
+                &mut state,
+                repo_id,
+                FileSource::WorkingDirectory,
+                Ok(Vec::new())
             )
             .is_empty()
         );
@@ -1690,6 +1711,21 @@ mod tests {
         ));
         assert!(repo_mut(&mut state, repo_id).reflog.is_loading());
         assert!(load_reflog(&mut state, repo_id).is_empty());
+
+        let effects = load_file_browser(&mut state, repo_id, FileSource::WorkingDirectory);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadFileBrowser {
+                repo_id: rid,
+                ref source
+            } if rid == repo_id && matches!(source, FileSource::WorkingDirectory)
+        ));
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(matches!(repo.file_browser.entries, Loadable::Loading));
+            assert_eq!(repo.file_browser.source, FileSource::WorkingDirectory);
+        }
     }
 
     #[test]
@@ -2080,6 +2116,15 @@ mod tests {
         assert!(
             submodules_loaded(&mut state, repo_id, Err(backend_error("submodules"))).is_empty()
         );
+        assert!(
+            file_browser_loaded(
+                &mut state,
+                repo_id,
+                FileSource::WorkingDirectory,
+                Err(backend_error("file_browser")),
+            )
+            .is_empty()
+        );
 
         assert!(matches!(
             repo_mut(&mut state, repo_id).branches,
@@ -2117,9 +2162,13 @@ mod tests {
             repo_mut(&mut state, repo_id).submodules,
             Loadable::Error(_)
         ));
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).file_browser.entries,
+            Loadable::Error(_)
+        ));
 
         let repo = repo_mut(&mut state, repo_id);
-        assert_eq!(repo.diagnostics.len(), 9);
+        assert_eq!(repo.diagnostics.len(), 10);
     }
 
     #[test]
@@ -2291,6 +2340,515 @@ mod tests {
             repo.history_state.commit_details,
             Loadable::Error(_)
         ));
+        assert_eq!(repo.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn file_browser_loaded_updates_state_and_records_errors() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).file_browser.source = FileSource::WorkingDirectory;
+
+        let entries = vec![FileEntry {
+            name: "src".to_string(),
+            path: Arc::new(PathBuf::from("src")),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+        }];
+        let source = FileSource::WorkingDirectory;
+
+        let effects = file_browser_loaded(&mut state, repo_id, source.clone(), Ok(entries));
+        assert!(effects.is_empty());
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(matches!(repo.file_browser.entries, Loadable::Ready(_)));
+            if let Loadable::Ready(arc) = &repo.file_browser.entries {
+                assert_eq!(arc.len(), 1);
+                assert_eq!(arc[0].name, "src");
+            }
+        }
+
+        file_browser_loaded(
+            &mut state,
+            repo_id,
+            source,
+            Err(backend_error("tree failed")),
+        );
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(matches!(repo.file_browser.entries, Loadable::Error(_)));
+        assert_eq!(repo.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn file_browser_loaded_discards_stale_results() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).file_browser.source = FileSource::Branch("main".to_string());
+
+        let entries = vec![FileEntry {
+            name: "stale.txt".to_string(),
+            path: Arc::new(PathBuf::from("stale.txt")),
+            kind: FileEntryKind::File,
+            depth: 0,
+        }];
+        let wrong_source = FileSource::WorkingDirectory;
+
+        let effects = file_browser_loaded(&mut state, repo_id, wrong_source, Ok(entries));
+        assert!(effects.is_empty());
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(matches!(repo.file_browser.entries, Loadable::NotLoaded));
+        assert_eq!(
+            repo.file_browser.source,
+            FileSource::Branch("main".to_string())
+        );
+    }
+
+    #[test]
+    fn toggle_file_browser_dir_expands_and_collapses() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let dir = PathBuf::from("src/sub");
+
+        let initial_rev = repo_mut(&mut state, repo_id).file_browser.file_browser_rev;
+
+        let effects = toggle_file_browser_dir(&mut state, repo_id, dir.clone());
+        assert!(effects.is_empty());
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(
+                repo.file_browser
+                    .expanded_dirs
+                    .contains(&Arc::new(dir.clone()))
+            );
+            assert!(repo.file_browser.file_browser_rev > initial_rev);
+        }
+
+        let rev_after_expand = repo_mut(&mut state, repo_id).file_browser.file_browser_rev;
+        let effects = toggle_file_browser_dir(&mut state, repo_id, dir.clone());
+        assert!(effects.is_empty());
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(!repo.file_browser.expanded_dirs.contains(&Arc::new(dir)));
+            assert!(repo.file_browser.file_browser_rev > rev_after_expand);
+        }
+    }
+
+    #[test]
+    fn set_file_browser_search_updates_query_and_rev() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+
+        let initial_rev = repo_mut(&mut state, repo_id).file_browser.file_browser_rev;
+
+        let effects = set_file_browser_search(&mut state, repo_id, "test".to_string());
+        assert!(effects.is_empty());
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert_eq!(repo.file_browser.search_query, "test");
+            assert!(repo.file_browser.file_browser_rev > initial_rev);
+        }
+
+        let rev_after_first = repo_mut(&mut state, repo_id).file_browser.file_browser_rev;
+        let effects = set_file_browser_search(&mut state, repo_id, "test".to_string());
+        assert!(effects.is_empty());
+        assert_eq!(
+            repo_mut(&mut state, repo_id).file_browser.file_browser_rev,
+            rev_after_first
+        );
+
+        let effects = set_file_browser_search(&mut state, repo_id, "".to_string());
+        assert!(effects.is_empty());
+        assert_eq!(repo_mut(&mut state, repo_id).file_browser.search_query, "");
+    }
+
+    #[test]
+    fn set_file_browser_source_resets_and_emits_load() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let commit_id = CommitId("abcdefgh".into());
+        let source = FileSource::Commit(commit_id);
+
+        let effects = set_file_browser_source(&mut state, repo_id, source.clone());
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(effects[0], Effect::LoadFileBrowser { .. }));
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert_eq!(repo.file_browser.source, source);
+            assert!(matches!(repo.file_browser.entries, Loadable::NotLoaded));
+            assert!(repo.file_browser.expanded_dirs.is_empty());
+            assert!(repo.file_browser.search_query.is_empty());
+        }
+
+        let effects = set_file_browser_source(&mut state, repo_id, source);
+        assert!(effects.is_empty());
+    }
+
+    #[test]
+    fn set_sidebar_mode_triggers_file_browser_load_and_retries_on_error() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
+        assert_eq!(state.sidebar_mode, SidebarMode::Files);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+
+        repo_mut(&mut state, repo_id).file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+        set_sidebar_mode(&mut state, SidebarMode::Branches);
+        let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+
+        repo_mut(&mut state, repo_id).file_browser.entries = Loadable::Error("fail".to_string());
+        set_sidebar_mode(&mut state, SidebarMode::Branches);
+        let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+    }
+
+    #[test]
+    fn load_file_browser_sets_loading_and_emits_effect() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let initial_rev = repo_mut(&mut state, repo_id).file_browser.file_browser_rev;
+
+        let effects = load_file_browser(&mut state, repo_id, FileSource::WorkingDirectory);
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadFileBrowser {
+                repo_id: rid,
+                ..
+            } if rid == repo_id
+        ));
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            assert!(matches!(repo.file_browser.entries, Loadable::Loading));
+            assert_eq!(repo.file_browser.source, FileSource::WorkingDirectory);
+            assert!(repo.file_browser.file_browser_rev > initial_rev);
+        }
+    }
+
+    #[test]
+    fn load_file_browser_noop_when_repo_not_open() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        // open is Loading (set by new_opening), not Ready
+
+        let effects = load_file_browser(&mut state, repo_id, FileSource::WorkingDirectory);
+        assert!(effects.is_empty());
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).file_browser.entries,
+            Loadable::NotLoaded
+        ));
+    }
+
+    #[test]
+    fn browse_open_content_path_returns_correct_paths() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+
+        // content_preview is false → None
+        assert!(browse_open_content_path(&state, repo_id).is_none());
+
+        // Set content_preview = true with Commit target
+        let commit_id = CommitId("abc123".into());
+        let path = PathBuf::from("src/main.rs");
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.content_preview = true;
+            repo.diff_state.diff_target = Some(DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path: Some(path.clone()),
+            });
+        }
+        assert_eq!(
+            browse_open_content_path(&state, repo_id),
+            Some(path.clone())
+        );
+
+        // WorkingTree target
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+                path: path.clone(),
+                area: DiffArea::Unstaged,
+            });
+        }
+        assert_eq!(
+            browse_open_content_path(&state, repo_id),
+            Some(path.clone())
+        );
+
+        // Commit with path: None → None
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.diff_target = Some(DiffTarget::Commit {
+                commit_id,
+                path: None,
+            });
+        }
+        assert!(browse_open_content_path(&state, repo_id).is_none());
+
+        // diff_target is None → None
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.diff_target = None;
+        }
+        assert!(browse_open_content_path(&state, repo_id).is_none());
+
+        // Unknown repo → None
+        assert!(browse_open_content_path(&state, RepoId(999)).is_none());
+    }
+
+    #[test]
+    fn browse_repository_at_commit_reopens_active_file() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let file_path = PathBuf::from("src/lib.rs");
+        let commit_a = CommitId("aaaaaaaa".into());
+        let commit_b = CommitId("bbbbbbbb".into());
+
+        // Set up a content-preview file open at commit_a
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.content_preview = true;
+            repo.diff_state.diff_target = Some(DiffTarget::Commit {
+                commit_id: commit_a.clone(),
+                path: Some(file_path.clone()),
+            });
+        }
+
+        // Browse commit_b — should reopen file at commit_b
+        let effects = browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id: rid,
+                ..
+            } if *rid == repo_id
+        )));
+    }
+
+    #[test]
+    fn reset_browse_to_live_reopens_active_file() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let file_path = PathBuf::from("README.md");
+        let commit_id = CommitId("abcd1234".into());
+
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.content_preview = true;
+            repo.diff_state.diff_target = Some(DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path: Some(file_path.clone()),
+            });
+            repo.file_browser.source = FileSource::Commit(commit_id);
+        }
+
+        let effects = reset_browse_to_live(&mut state, repo_id);
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadSelectedDiff {
+                repo_id: rid,
+                ..
+            } if *rid == repo_id
+        )));
+    }
+
+    #[test]
+    fn browse_repository_at_commit_no_reopen_when_content_preview_is_false() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let commit_a = CommitId("aaaaaaaa".into());
+        let commit_b = CommitId("bbbbbbbb".into());
+
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.diff_state.content_preview = false;
+            repo.diff_state.diff_target = Some(DiffTarget::Commit {
+                commit_id: commit_a,
+                path: Some(PathBuf::from("src/lib.rs")),
+            });
+        }
+
+        let effects = browse_repository_at_commit(&mut state, repo_id, commit_b);
+        // Should not contain LoadSelectedDiff (no file reopen)
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadSelectedDiff { .. }))
+        );
+    }
+
+    #[test]
+    fn browse_history_evicts_oldest_when_exceeding_cap() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        const CAP: usize = 32;
+        for i in 0..CAP + 3 {
+            browse_repository_at_commit(
+                &mut state,
+                repo_id,
+                CommitId(format!("commit{i:08}").into()),
+            );
+        }
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert_eq!(repo.browse_history.len(), CAP);
+        assert_eq!(
+            repo.browse_history[0].0.as_ref(),
+            "commit00000003".to_string()
+        );
+        assert_eq!(
+            repo.browse_history[CAP - 1].0.as_ref(),
+            format!("commit{:08}", CAP + 2)
+        );
+    }
+
+    #[test]
+    fn browse_history_rebrowse_does_not_move_to_mru() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let a = CommitId("aaaaaaaa".into());
+        let b = CommitId("bbbbbbbb".into());
+        let c = CommitId("cccccccc".into());
+
+        browse_repository_at_commit(&mut state, repo_id, a.clone());
+        browse_repository_at_commit(&mut state, repo_id, b.clone());
+        browse_repository_at_commit(&mut state, repo_id, c.clone());
+        // Re-browse a — should NOT move to end
+        browse_repository_at_commit(&mut state, repo_id, a.clone());
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert_eq!(repo.browse_history.len(), 3);
+        // a stays at position 0, not moved to end
+        assert_eq!(repo.browse_history[0], a);
+        assert_eq!(repo.browse_history[1], b);
+        assert_eq!(repo.browse_history[2], c);
+    }
+
+    #[test]
+    fn set_sidebar_mode_noop_without_active_repo() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+        state.active_repo = None;
+
+        let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
+        assert!(effects.is_empty());
+        assert_eq!(state.sidebar_mode, SidebarMode::Files);
+    }
+
+    #[test]
+    fn set_sidebar_mode_emits_load_even_when_repo_not_ready() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        // repo.open is Loading (set by new_opening), not Ready
+
+        let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
+        // set_sidebar_mode does NOT check repo.open — it emits LoadFileBrowser,
+        // but load_file_browser will be a no-op when open isn't Ready.
+        // The effect IS emitted (the no-op is downstream in the effect handler).
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+    }
+
+    #[test]
+    fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        state.active_repo = Some(repo_id);
+        mark_repo_open_ready(&mut state, repo_id);
+
+        let file_path = PathBuf::from("src/main.rs");
+        let commit_id = CommitId("deadbeef".into());
+
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.file_browser.source = FileSource::Commit(commit_id.clone());
+            repo.diff_state.content_preview = true;
+            repo.diff_state.diff_target = Some(DiffTarget::Commit {
+                commit_id: commit_id.clone(),
+                path: Some(file_path),
+            });
+        }
+
+        // Browse the SAME commit — source unchanged, no LoadFileBrowser emitted
+        let effects = browse_repository_at_commit(&mut state, repo_id, commit_id);
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadSelectedDiff { .. }))
+        );
+    }
+
+    #[test]
+    fn file_browser_loaded_cancelled_error_records_diagnostic() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).file_browser.source = FileSource::WorkingDirectory;
+
+        let cancelled = Error::new(ErrorKind::Cancelled);
+        let effects = file_browser_loaded(
+            &mut state,
+            repo_id,
+            FileSource::WorkingDirectory,
+            Err(cancelled),
+        );
+        assert!(effects.is_empty());
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(matches!(repo.file_browser.entries, Loadable::Error(_)));
         assert_eq!(repo.diagnostics.len(), 1);
     }
 }
