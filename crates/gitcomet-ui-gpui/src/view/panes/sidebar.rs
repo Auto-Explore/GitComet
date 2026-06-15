@@ -142,13 +142,14 @@ impl SidebarPaneView {
                 // the cursor and flicker between the old and new value.
                 let text = input.read(cx).text().to_string();
                 if let Some(repo) = this.active_repo()
-                    && repo.file_browser.search_query != text {
-                        let repo_id = repo.id;
-                        store_for_search.dispatch(Msg::SetFileBrowserSearch {
-                            repo_id,
-                            query: text,
-                        });
-                    }
+                    && repo.file_browser.search_query != text
+                {
+                    let repo_id = repo.id;
+                    store_for_search.dispatch(Msg::SetFileBrowserSearch {
+                        repo_id,
+                        query: text,
+                    });
+                }
                 cx.notify();
             });
 
@@ -643,9 +644,10 @@ impl SidebarPaneView {
         let cache_key = (repo.id, repo.file_browser.file_browser_rev);
         let mut cache = self.file_browser_rows_cache.borrow_mut();
         if let Some((cached_key, cached_rows)) = cache.as_ref()
-            && *cached_key == cache_key {
-                return cached_rows.to_vec();
-            }
+            && *cached_key == cache_key
+        {
+            return cached_rows.to_vec();
+        }
 
         let rows = self.compute_file_browser_visible_rows(repo);
         *cache = Some((cache_key, Rc::from(rows.clone())));

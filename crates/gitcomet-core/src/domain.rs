@@ -146,15 +146,13 @@ pub enum FileEntryKind {
     Directory,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub enum FileSource {
     #[default]
     WorkingDirectory,
     Commit(CommitId),
     Branch(String),
 }
-
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileEntry {

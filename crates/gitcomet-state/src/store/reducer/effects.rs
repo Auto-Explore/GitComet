@@ -563,10 +563,11 @@ pub(super) fn set_file_browser_search(
     query: String,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.file_browser.search_query != query {
-            repo_state.file_browser.search_query = query;
-            repo_state.file_browser.bump_rev();
-        }
+        && repo_state.file_browser.search_query != query
+    {
+        repo_state.file_browser.search_query = query;
+        repo_state.file_browser.bump_rev();
+    }
     Vec::new()
 }
 
@@ -576,14 +577,15 @@ pub(super) fn set_file_browser_source(
     source: FileSource,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && repo_state.file_browser.source != source {
-            repo_state.file_browser.source = source.clone();
-            repo_state.file_browser.entries = Loadable::NotLoaded;
-            repo_state.file_browser.expanded_dirs.clear();
-            repo_state.file_browser.search_query.clear();
-            repo_state.file_browser.bump_rev();
-            return vec![Effect::LoadFileBrowser { repo_id, source }];
-        }
+        && repo_state.file_browser.source != source
+    {
+        repo_state.file_browser.source = source.clone();
+        repo_state.file_browser.entries = Loadable::NotLoaded;
+        repo_state.file_browser.expanded_dirs.clear();
+        repo_state.file_browser.search_query.clear();
+        repo_state.file_browser.bump_rev();
+        return vec![Effect::LoadFileBrowser { repo_id, source }];
+    }
     Vec::new()
 }
 
@@ -593,14 +595,15 @@ pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<E
 
         if mode == SidebarMode::Files
             && let Some(repo_id) = state.active_repo
-                && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
-                    && matches!(
-                        repo.file_browser.entries,
-                        Loadable::NotLoaded | Loadable::Error(_)
-                    ) {
-                        let source = repo.file_browser.source.clone();
-                        return vec![Effect::LoadFileBrowser { repo_id, source }];
-                    }
+            && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            && matches!(
+                repo.file_browser.entries,
+                Loadable::NotLoaded | Loadable::Error(_)
+            )
+        {
+            let source = repo.file_browser.source.clone();
+            return vec![Effect::LoadFileBrowser { repo_id, source }];
+        }
     }
     Vec::new()
 }
@@ -614,12 +617,13 @@ pub(super) fn browse_repository_at_commit(
     // Capture the open file (if any) before re-targeting it to the new point.
     let reopen_path = browse_open_content_path(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
-        && !repo_state.browse_history.contains(&commit_id) {
-            repo_state.browse_history.push(commit_id.clone());
-            if repo_state.browse_history.len() > BROWSE_HISTORY_CAP {
-                repo_state.browse_history.remove(0);
-            }
+        && !repo_state.browse_history.contains(&commit_id)
+    {
+        repo_state.browse_history.push(commit_id.clone());
+        if repo_state.browse_history.len() > BROWSE_HISTORY_CAP {
+            repo_state.browse_history.remove(0);
         }
+    }
     state.sidebar_mode = SidebarMode::Files;
     let mut effects =
         set_file_browser_source(state, repo_id, FileSource::Commit(commit_id.clone()));
@@ -627,14 +631,14 @@ pub(super) fn browse_repository_at_commit(
         && effects
             .iter()
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
-        {
-            effects.extend(super::diff_selection::open_file_content(
-                state,
-                repo_id,
-                FileSource::Commit(commit_id),
-                path,
-            ));
-        }
+    {
+        effects.extend(super::diff_selection::open_file_content(
+            state,
+            repo_id,
+            FileSource::Commit(commit_id),
+            path,
+        ));
+    }
     effects
 }
 
@@ -648,14 +652,14 @@ pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec
         && effects
             .iter()
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
-        {
-            effects.extend(super::diff_selection::open_file_content(
-                state,
-                repo_id,
-                FileSource::WorkingDirectory,
-                path,
-            ));
-        }
+    {
+        effects.extend(super::diff_selection::open_file_content(
+            state,
+            repo_id,
+            FileSource::WorkingDirectory,
+            path,
+        ));
+    }
     effects
 }
 
