@@ -779,15 +779,16 @@ impl GitCometView {
         let has_repo = self.active_repo_id().is_some();
         let commands = self.command_palette.filtered_commands(has_repo, &query);
 
-        let mut list = restrict_scroll_to_vertical_axis(
-            div()
-                .id("command_palette_list")
-                .flex()
-                .flex_col()
-                .max_h(palette_max_height - item_height)
-                .overflow_y_scroll()
-                .track_scroll(&self.command_palette.scroll_handle),
-        );
+        let mut list = div()
+            .id("command_palette_list")
+            .flex()
+            .flex_col()
+            .max_h(palette_max_height - item_height)
+            .overflow_y_scroll()
+            .track_scroll(&self.command_palette.scroll_handle)
+            .gap(px(0.0))
+            .items_start();
+        list = restrict_scroll_to_vertical_axis(list);
         let selected_index = self.command_palette.selected_index;
 
         let render_label = |label_str: &str| -> AnyElement {
@@ -957,7 +958,15 @@ impl GitCometView {
                     .border_color(theme.colors.border)
                     .child(query_input.clone()),
             )
-            .child(div().relative().w_full().child(list).child(scrollbar));
+            .child(
+                div()
+                    .id("command_palette_list_container")
+                    .relative()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(list)
+                    .child(scrollbar),
+            );
 
         let scrim = div()
             .absolute()
