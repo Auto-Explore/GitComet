@@ -1,4 +1,4 @@
-use gpui::{Entity, FocusHandle, ScrollHandle};
+use gpui::{Entity, FocusHandle, ScrollHandle, SharedString};
 
 pub(crate) struct CommandEntry {
     pub(crate) id: &'static str,
@@ -435,6 +435,8 @@ pub(crate) struct CommandPaletteState {
     pub(crate) query_input: Option<Entity<crate::view::components::TextInput>>,
     pub(crate) restore_focus: Option<FocusHandle>,
     pub(crate) scroll_handle: ScrollHandle,
+    pub(crate) selected_index: Option<usize>,
+    pub(crate) previous_query: SharedString,
 }
 
 impl CommandPaletteState {

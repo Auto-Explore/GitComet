@@ -276,6 +276,26 @@ impl TextInput {
     pub fn clear_transient_key_presses(&mut self) {
         self.interaction.enter_pressed = false;
         self.interaction.escape_pressed = false;
+        self.interaction.arrow_up_pressed = false;
+        self.interaction.arrow_down_pressed = false;
+        self.interaction.tab_pressed = false;
+        self.interaction.shift_tab_pressed = false;
+    }
+
+    pub fn take_arrow_up_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_up_pressed)
+    }
+
+    pub fn take_arrow_down_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.arrow_down_pressed)
+    }
+
+    pub fn take_tab_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.tab_pressed)
+    }
+
+    pub fn take_shift_tab_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.interaction.shift_tab_pressed)
     }
 
     pub fn set_submit_on_enter(&mut self, submit_on_enter: bool) {
@@ -930,29 +950,33 @@ impl TextInput {
     }
 
     pub(super) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((target, preferred_x)) = self.vertical_move_target(
+        self.interaction.arrow_up_pressed = true;
+        if let Some((target, preferred_x)) = self.vertical_move_target(
             self.cursor_offset(),
             -1.0,
             self.interaction.vertical_motion_x,
-        ) else {
-            return;
-        };
-        self.move_to(target, cx);
-        self.interaction.vertical_motion_x = Some(preferred_x);
-        self.queue_cursor_autoscroll();
+        ) {
+            self.move_to(target, cx);
+            self.interaction.vertical_motion_x = Some(preferred_x);
+            self.queue_cursor_autoscroll();
+        } else {
+            cx.notify();
+        }
     }
 
     pub(super) fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((target, preferred_x)) = self.vertical_move_target(
+        self.interaction.arrow_down_pressed = true;
+        if let Some((target, preferred_x)) = self.vertical_move_target(
             self.cursor_offset(),
             1.0,
             self.interaction.vertical_motion_x,
-        ) else {
-            return;
-        };
-        self.move_to(target, cx);
-        self.interaction.vertical_motion_x = Some(preferred_x);
-        self.queue_cursor_autoscroll();
+        ) {
+            self.move_to(target, cx);
+            self.interaction.vertical_motion_x = Some(preferred_x);
+            self.queue_cursor_autoscroll();
+        } else {
+            cx.notify();
+        }
     }
 
     pub(super) fn select_up(&mut self, _: &SelectUp, _: &mut Window, cx: &mut Context<Self>) {
@@ -2021,13 +2045,40 @@ impl TextInput {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.modifiers.modified() {
+        let key = event.keystroke.key.as_str();
+
+        if key == "escape" {
+            self.interaction.escape_pressed = true;
+            cx.notify();
             return;
         }
 
-        if event.keystroke.key.as_str() == "escape" {
-            self.interaction.escape_pressed = true;
+        let shift = event.keystroke.modifiers.shift;
+
+        if key == "up" {
+            self.interaction.arrow_up_pressed = true;
             cx.notify();
+            return;
+        }
+
+        if key == "down" {
+            self.interaction.arrow_down_pressed = true;
+            cx.notify();
+            return;
+        }
+
+        if key == "tab" {
+            if shift {
+                self.interaction.shift_tab_pressed = true;
+            } else {
+                self.interaction.tab_pressed = true;
+            }
+            cx.notify();
+            return;
+        }
+
+        if event.keystroke.modifiers.modified() {
+            return;
         }
     }
 

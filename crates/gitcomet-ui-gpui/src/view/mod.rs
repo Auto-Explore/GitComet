@@ -574,13 +574,67 @@ impl GitCometView {
                         this.close_command_palette(window, cx);
                         return;
                     }
-                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                    if enter_pressed {
-                        let query = input.read_with(cx, |input, _| input.text().trim().to_string());
+
+                    let arrow_up = input.update(cx, |input, _| input.take_arrow_up_pressed());
+                    let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
+                    if arrow_up || shift_tab {
+                        let query =
+                            input.read_with(cx, |input, _| input.text().trim().to_string());
                         let has_repo = this.active_repo_id().is_some();
-                        let matches = this.command_palette.filtered_commands(has_repo, &query);
-                        if let Some(first) = matches.first() {
-                            let command_id: SharedString = first.id.into();
+                        let matches =
+                            this.command_palette.filtered_commands(has_repo, &query);
+                        if matches.is_empty() {
+                            this.command_palette.selected_index = None;
+                        } else {
+                            let len = matches.len();
+                            this.command_palette.selected_index =
+                                Some(match this.command_palette.selected_index {
+                                    Some(i) if i > 0 => i - 1,
+                                    _ => len - 1,
+                                });
+                        }
+                        cx.notify();
+                        return;
+                    }
+
+                    let arrow_down =
+                        input.update(cx, |input, _| input.take_arrow_down_pressed());
+                    let tab = input.update(cx, |input, _| input.take_tab_pressed());
+                    if arrow_down || tab {
+                        let query =
+                            input.read_with(cx, |input, _| input.text().trim().to_string());
+                        let has_repo = this.active_repo_id().is_some();
+                        let matches =
+                            this.command_palette.filtered_commands(has_repo, &query);
+                        if matches.is_empty() {
+                            this.command_palette.selected_index = None;
+                        } else {
+                            let len = matches.len();
+                            this.command_palette.selected_index =
+                                Some(match this.command_palette.selected_index {
+                                    Some(i) if i + 1 < len => i + 1,
+                                    _ => 0,
+                                });
+                        }
+                        cx.notify();
+                        return;
+                    }
+
+                    let enter_pressed =
+                        input.update(cx, |input, _| input.take_enter_pressed());
+                    if enter_pressed {
+                        let query =
+                            input.read_with(cx, |input, _| input.text().trim().to_string());
+                        let has_repo = this.active_repo_id().is_some();
+                        let matches =
+                            this.command_palette.filtered_commands(has_repo, &query);
+                        let cmd_to_execute = this
+                            .command_palette
+                            .selected_index
+                            .and_then(|i| matches.get(i).copied())
+                            .or_else(|| matches.first().copied());
+                        if let Some(cmd) = cmd_to_execute {
+                            let command_id: SharedString = cmd.id.into();
                             this.close_command_palette(window, cx);
                             this.execute_command(&command_id, Some(window), cx);
                         } else {
@@ -588,11 +642,19 @@ impl GitCometView {
                         }
                         return;
                     }
+
+                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
+                    if query != this.command_palette.previous_query.as_ref() {
+                        this.command_palette.selected_index = None;
+                        this.command_palette.previous_query = query.into();
+                    }
                     cx.notify();
                 }),
             );
 
         self.command_palette.query_input = Some(query_input.clone());
+        self.command_palette.selected_index = None;
+        self.command_palette.previous_query = SharedString::default();
         self.command_palette
             .scroll_handle
             .set_offset(point(px(0.0), px(0.0)));
@@ -686,9 +748,11 @@ impl GitCometView {
             .max_h(palette_max_height - item_height);
         list = restrict_scroll_to_vertical_axis(list);
 
+        let selected_index = self.command_palette.selected_index;
+
         let mut current_category = None;
 
-        for cmd in &commands {
+        for (i, cmd) in commands.iter().enumerate() {
             if current_category != Some(cmd.category) {
                 current_category = Some(cmd.category);
                 list = list.child(
@@ -715,6 +779,12 @@ impl GitCometView {
                 .rounded(px(theme.radii.row))
                 .hover(move |s| s.bg(theme.colors.hover))
                 .cursor(CursorStyle::PointingHand);
+
+            let label_row = if selected_index == Some(i) {
+                label_row.bg(theme.colors.active)
+            } else {
+                label_row
+            };
 
             let cmd_id: SharedString = cmd.id.into();
             let cmd_id_for_click = cmd_id.clone();
@@ -1648,6 +1718,8 @@ impl GitCometView {
             query_input: None,
             restore_focus: None,
             scroll_handle: ScrollHandle::new(),
+            selected_index: None,
+            previous_query: SharedString::default(),
         };
 
         let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
