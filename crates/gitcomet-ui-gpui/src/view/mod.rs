@@ -593,6 +593,23 @@ impl GitCometView {
                                     _ => len - 1,
                                 });
                         }
+                        if let Some(sel) = this.command_palette.selected_index {
+                            let item_h = ui_scale::UiScale::current(cx).px(32.0);
+                            let viewport_h =
+                                ui_scale::UiScale::current(cx).px(400.0) - item_h;
+                            let mut headers_before = 0usize;
+                            let mut cur = None;
+                            for cmd in matches.iter().take(sel.saturating_add(1)) {
+                                if cur != Some(cmd.category) {
+                                    cur = Some(cmd.category);
+                                    headers_before += 1;
+                                }
+                            }
+                            let item_y = item_h * (sel + headers_before) as f32;
+                            let target = (item_y - viewport_h * 0.5).max(px(0.0));
+                            this.command_palette.scroll_handle
+                                .set_offset(point(px(0.0), target));
+                        }
                         cx.notify();
                         return;
                     }
@@ -615,6 +632,23 @@ impl GitCometView {
                                     Some(i) if i + 1 < len => i + 1,
                                     _ => 0,
                                 });
+                        }
+                        if let Some(sel) = this.command_palette.selected_index {
+                            let item_h = ui_scale::UiScale::current(cx).px(32.0);
+                            let viewport_h =
+                                ui_scale::UiScale::current(cx).px(400.0) - item_h;
+                            let mut headers_before = 0usize;
+                            let mut cur = None;
+                            for cmd in matches.iter().take(sel.saturating_add(1)) {
+                                if cur != Some(cmd.category) {
+                                    cur = Some(cmd.category);
+                                    headers_before += 1;
+                                }
+                            }
+                            let item_y = item_h * (sel + headers_before) as f32;
+                            let target = (item_y - viewport_h * 0.5).max(px(0.0));
+                            this.command_palette.scroll_handle
+                                .set_offset(point(px(0.0), target));
                         }
                         cx.notify();
                         return;
@@ -647,6 +681,9 @@ impl GitCometView {
                     if query != this.command_palette.previous_query.as_ref() {
                         this.command_palette.selected_index = None;
                         this.command_palette.previous_query = query.into();
+                        this.command_palette
+                            .scroll_handle
+                            .set_offset(point(px(0.0), px(0.0)));
                     }
                     cx.notify();
                 }),
@@ -742,12 +779,15 @@ impl GitCometView {
         let has_repo = self.active_repo_id().is_some();
         let commands = self.command_palette.filtered_commands(has_repo, &query);
 
-        let mut list = div()
-            .flex()
-            .flex_col()
-            .max_h(palette_max_height - item_height);
-        list = restrict_scroll_to_vertical_axis(list);
-
+        let mut list = restrict_scroll_to_vertical_axis(
+            div()
+                .id("command_palette_list")
+                .flex()
+                .flex_col()
+                .max_h(palette_max_height - item_height)
+                .overflow_y_scroll()
+                .track_scroll(&self.command_palette.scroll_handle),
+        );
         let selected_index = self.command_palette.selected_index;
 
         let render_label = |label_str: &str| -> AnyElement {
@@ -775,12 +815,17 @@ impl GitCometView {
                     .render(cx)
                     .into_any_element()
             } else {
-                div()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_sm()
+                let highlight = gpui::HighlightStyle {
+                    color: Some(theme.colors.accent.into()),
+                    font_weight: Some(FontWeight::BOLD),
+                    ..gpui::HighlightStyle::default()
+                };
+                components::TruncatedText::new(label)
+                    .profile(components::TextTruncationProfile::End)
                     .text_color(theme.colors.text)
-                    .child(label)
+                    .text_sm()
+                    .highlights([(0..0, highlight)])
+                    .render(cx)
                     .into_any_element()
             }
         };
