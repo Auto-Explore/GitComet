@@ -750,6 +750,41 @@ impl GitCometView {
 
         let selected_index = self.command_palette.selected_index;
 
+        let render_label = |label_str: &str| -> AnyElement {
+            let label = label_str.to_string();
+            let match_pos = if !query.is_empty() {
+                label_str
+                    .to_ascii_lowercase()
+                    .find(&query.to_ascii_lowercase())
+            } else {
+                None
+            };
+            if let Some(pos) = match_pos {
+                let end = pos + query.len();
+                let highlight = gpui::HighlightStyle {
+                    color: Some(theme.colors.accent.into()),
+                    font_weight: Some(FontWeight::BOLD),
+                    ..gpui::HighlightStyle::default()
+                };
+                components::TruncatedText::new(label)
+                    .profile(components::TextTruncationProfile::End)
+                    .text_color(theme.colors.text)
+                    .text_sm()
+                    .focus_range(Some(pos..end))
+                    .highlights([(pos..end, highlight)])
+                    .render(cx)
+                    .into_any_element()
+            } else {
+                div()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_sm()
+                    .text_color(theme.colors.text)
+                    .child(label)
+                    .into_any_element()
+            }
+        };
+
         let mut current_category = None;
 
         for (i, cmd) in commands.iter().enumerate() {
@@ -800,53 +835,14 @@ impl GitCometView {
                             .overflow_hidden()
                             .flex_1()
                             .min_w(px(0.0))
-                            .child({
-                                let label = cmd.label.to_string();
-                                let match_pos = if !query.is_empty() {
-                                    cmd.label
-                                        .to_ascii_lowercase()
-                                        .find(&query.to_ascii_lowercase())
-                                } else {
-                                    None
-                                };
-                                if let Some(pos) = match_pos {
-                                    let end = pos + query.len();
-                                    let mut label_div = div()
-                                        .overflow_hidden()
-                                        .whitespace_nowrap()
-                                        .text_sm()
-                                        .text_color(theme.colors.text);
-                                    if pos > 0 {
-                                        label_div = label_div
-                                            .child(div().child((&label[..pos]).to_string()));
-                                    }
-                                    label_div = label_div.child(
-                                        div()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(theme.colors.accent)
-                                            .child((&label[pos..end]).to_string()),
-                                    );
-                                    if end < label.len() {
-                                        label_div = label_div
-                                            .child(div().child((&label[end..]).to_string()));
-                                    }
-                                    label_div
-                                } else {
-                                    div()
-                                        .overflow_hidden()
-                                        .whitespace_nowrap()
-                                        .text_sm()
-                                        .text_color(theme.colors.text)
-                                        .child(label)
-                                }
-                            })
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(shortcut_text),
-                            ),
+                            .child(render_label(cmd.label)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(shortcut_text),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -856,7 +852,6 @@ impl GitCometView {
                         }),
                     )
             } else {
-                let label_text = cmd.label.to_string();
                 label_row
                     .child(
                         div()
@@ -864,10 +859,7 @@ impl GitCometView {
                             .flex_1()
                             .min_w(px(0.0))
                             .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_sm()
-                            .text_color(theme.colors.text)
-                            .child(label_text),
+                            .child(render_label(cmd.label)),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
