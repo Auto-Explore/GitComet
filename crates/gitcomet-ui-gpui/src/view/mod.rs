@@ -1,6 +1,5 @@
 use crate::app::{
-    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRecentPicker, OpenRepository,
-    ResetUiScale,
+    CloseWindow, NewWindow, OpenRecentPicker, OpenRepository,
 };
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
@@ -1035,9 +1034,20 @@ impl GitCometView {
                     let _ = win.update(cx, |_root, win, _cx| win.toggle_fullscreen());
                 }
             }),
-            "increase-ui-scale" => cx.dispatch_action(&IncreaseUiScale),
-            "decrease-ui-scale" => cx.dispatch_action(&DecreaseUiScale),
-            "reset-ui-scale" => cx.dispatch_action(&ResetUiScale),
+            "increase-ui-scale" => cx.defer(|cx| {
+                let next = crate::ui_scale::step_up(crate::ui_scale::current(cx).percent);
+                crate::app::set_app_ui_scale_percent(cx, next);
+            }),
+            "decrease-ui-scale" => cx.defer(|cx| {
+                let next = crate::ui_scale::step_down(crate::ui_scale::current(cx).percent);
+                crate::app::set_app_ui_scale_percent(cx, next);
+            }),
+            "reset-ui-scale" => cx.defer(|cx| {
+                crate::app::set_app_ui_scale_percent(
+                    cx,
+                    crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                );
+            }),
             "close-window" => cx.dispatch_action(&CloseWindow),
             "open-repository" => cx.dispatch_action(&OpenRepository),
             "open-recent" => cx.dispatch_action(&OpenRecentPicker),
@@ -1102,15 +1112,24 @@ impl GitCometView {
             "checkout-branch" => {
                 if let Some(window) = window {
                     self.open_popover_centered(
-                        PopoverKind::BranchPicker,
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Checkout,
+                        },
                         window,
                         cx,
                     );
                 }
             }
             "delete-branch" => {
-                // Opens via sidebar branch context menu, user selects branch there
-                cx.notify();
+                if let Some(window) = window {
+                    self.open_popover_centered(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Delete,
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
             "checkout-remote-branch" => {
                 // Opens via remote branch picker

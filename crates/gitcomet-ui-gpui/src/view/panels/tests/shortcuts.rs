@@ -972,7 +972,9 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         branch_section_model,
         "Enter",
         ContextMenuAction::OpenPopover {
-            kind: PopoverKind::BranchPicker
+            kind: PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::Checkout,
+            },
         }
     );
     assert_shortcut_action!(

@@ -372,7 +372,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
-        PopoverKind::RepoPicker | PopoverKind::BranchPicker => Some(PICKER_WIDTH),
+        PopoverKind::RepoPicker | PopoverKind::BranchPicker { .. } => Some(PICKER_WIDTH),
         PopoverKind::RecentRepositoryPicker => Some(RECENT_PICKER_WIDTH),
         PopoverKind::CreateBranch
         | PopoverKind::StashPrompt
@@ -1644,7 +1644,7 @@ impl PopoverHost {
                 PopoverKind::RecentRepositoryPicker => {
                     let _ = self.ensure_recent_repo_picker_search_input(window, cx);
                 }
-                PopoverKind::BranchPicker => {
+                PopoverKind::BranchPicker { .. } => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
                 }
                 PopoverKind::CreateBranch => {
@@ -2241,7 +2241,7 @@ impl PopoverHost {
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
             PopoverKind::RecentRepositoryPicker => recent_repo_picker::panel(self, cx),
-            PopoverKind::BranchPicker => branch_picker::panel(self, cx),
+            PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::CreateBranch => create_branch::panel(self, cx),
             PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
                 create_branch_from_ref_prompt::panel(self, repo_id, target, cx)

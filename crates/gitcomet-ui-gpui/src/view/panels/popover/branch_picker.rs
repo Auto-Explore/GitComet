@@ -15,7 +15,26 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             Loadable::Ready(branches) => {
                 if let Some(search) = this.branch_picker_search_input.clone() {
                     let repo_id = repo.id;
-                    let branch_names = branches.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+                    let is_delete = matches!(
+                        this.popover,
+                        Some(PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Delete
+                        })
+                    );
+                    let head_branch = match &repo.head_branch {
+                        Loadable::Ready(head) => Some(head.as_str()),
+                        _ => None,
+                    };
+                    let branch_names = branches
+                        .iter()
+                        .filter_map(|b| {
+                            if is_delete && head_branch == Some(b.name.as_str()) {
+                                None
+                            } else {
+                                Some(b.name.clone())
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     let items = branch_names
                         .iter()
                         .map(|name| name.clone().into())
@@ -30,7 +49,12 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .selected_index(this.branch_picker_selected_index)
                             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                                 if let Some(name) = branch_names.get(ix).cloned() {
-                                    this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
+                                    if is_delete {
+                                        this.store.dispatch(Msg::DeleteBranch { repo_id, name });
+                                    } else {
+                                        this.store
+                                            .dispatch(Msg::CheckoutBranch { repo_id, name });
+                                    }
                                 }
                                 this.close_popover(cx);
                             }),
@@ -53,10 +77,23 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             )
                             .on_click(cx.listener(
                                 move |this, _e: &ClickEvent, _w, cx| {
-                                    this.store.dispatch(Msg::CheckoutBranch {
-                                        repo_id,
-                                        name: name.clone(),
-                                    });
+                                    let is_delete = matches!(
+                                        this.popover,
+                                        Some(PopoverKind::BranchPicker {
+                                            purpose: BranchPickerPurpose::Delete
+                                        })
+                                    );
+                                    if is_delete {
+                                        this.store.dispatch(Msg::DeleteBranch {
+                                            repo_id,
+                                            name: name.clone(),
+                                        });
+                                    } else {
+                                        this.store.dispatch(Msg::CheckoutBranch {
+                                            repo_id,
+                                            name: name.clone(),
+                                        });
+                                    }
                                     this.close_popover(cx);
                                 },
                             )),

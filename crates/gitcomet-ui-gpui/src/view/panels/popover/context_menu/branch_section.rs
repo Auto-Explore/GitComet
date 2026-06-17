@@ -21,7 +21,9 @@ fn model_for_section(repo_id: RepoId, section: BranchSection) -> ContextMenuMode
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::BranchPicker,
+            kind: PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::Checkout,
+            },
         }),
     });
 

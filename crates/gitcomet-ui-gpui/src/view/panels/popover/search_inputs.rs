@@ -206,7 +206,7 @@ impl PopoverHost {
                     let enter_pressed =
                         input.update(cx, |input, _| input.take_enter_pressed());
 
-                    if !matches!(this.popover, Some(PopoverKind::BranchPicker)) {
+                    if !matches!(this.popover, Some(PopoverKind::BranchPicker { .. })) {
                         return;
                     }
 
@@ -219,9 +219,28 @@ impl PopoverHost {
                         return;
                     };
 
+                    let is_delete = matches!(
+                        this.popover,
+                        Some(PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Delete
+                        })
+                    );
                     let branches: Vec<String> = match &repo.branches {
                         Loadable::Ready(branches) => {
-                            branches.iter().map(|b| b.name.clone()).collect()
+                            let head_branch = match &repo.head_branch {
+                                Loadable::Ready(head) => Some(head.as_str()),
+                                _ => None,
+                            };
+                            branches
+                                .iter()
+                                .filter_map(|b| {
+                                    if is_delete && head_branch == Some(b.name.as_str()) {
+                                        None
+                                    } else {
+                                        Some(b.name.clone())
+                                    }
+                                })
+                                .collect()
                         }
                         _ => return,
                     };
@@ -267,8 +286,13 @@ impl PopoverHost {
                             if let Some(name) = matches.get(sel) {
                                 let name = name.clone();
                                 let repo_id = repo.id;
-                                this.store
-                                    .dispatch(Msg::CheckoutBranch { repo_id, name });
+                                if is_delete {
+                                    this.store
+                                        .dispatch(Msg::DeleteBranch { repo_id, name });
+                                } else {
+                                    this.store
+                                        .dispatch(Msg::CheckoutBranch { repo_id, name });
+                                }
                                 this.close_popover(cx);
                                 return;
                             }

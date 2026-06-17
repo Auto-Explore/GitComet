@@ -2438,11 +2438,19 @@ pub(super) enum ResolverPickTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BranchPickerPurpose {
+    Checkout,
+    Delete,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
     RecentRepositoryPicker,
-    BranchPicker,
+    BranchPicker {
+        purpose: BranchPickerPurpose,
+    },
     CreateBranch,
     CreateBranchFromRefPrompt {
         repo_id: RepoId,

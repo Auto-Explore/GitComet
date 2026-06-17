@@ -2405,7 +2405,9 @@ fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) 
         let popover_host = view.read(app).popover_host.clone();
         popover_host.update(app, |host, cx| {
             host.open_popover_at(
-                PopoverKind::BranchPicker,
+                PopoverKind::BranchPicker {
+                    purpose: BranchPickerPurpose::Checkout,
+                },
                 point(px(72.0), px(72.0)),
                 window,
                 cx,

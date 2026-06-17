@@ -399,7 +399,14 @@ impl Render for ActionBarView {
                     .child(branch),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(PopoverKind::BranchPicker, e.position(), window, cx);
+                this.open_popover_at(
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    },
+                    e.position(),
+                    window,
+                    cx,
+                );
             }))
             .gitcomet_tooltip(theme, "Select branch".into());
 
