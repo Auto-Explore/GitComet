@@ -43,6 +43,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_sha_menu: Entity<components::CommitShaHoverMenu>,
+    pub(in super::super) commit_details_sha_menu: Entity<components::CommitShaHoverMenu>,
     pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
@@ -191,6 +192,7 @@ impl DetailsPaneView {
             repo.merge_message_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
+            repo.diff_state.diff_target_rev.hash(&mut hasher);
         }
 
         hasher.finish()
@@ -267,6 +269,7 @@ impl DetailsPaneView {
                 crate::ui_scale::UiScale::current(cx),
                 "commit_details_message_sha_hover_menu",
                 root_view.clone(),
+                true,
                 cx,
             )
         });
@@ -325,6 +328,21 @@ impl DetailsPaneView {
                 crate::ui_scale::UiScale::current(cx),
                 "commit_details_parent_sha_hover_menu",
                 root_view.clone(),
+                true,
+                cx,
+            )
+        });
+
+        let commit_details_sha_menu = cx.new(|cx| {
+            components::CommitShaHoverMenu::new(
+                commit_details_sha_input.clone(),
+                RepoId(0),
+                Arc::<[components::CommitShaLink]>::from([]),
+                theme,
+                crate::ui_scale::UiScale::current(cx),
+                "commit_details_sha_hover_menu",
+                root_view.clone(),
+                false,
                 cx,
             )
         });
@@ -375,6 +393,7 @@ impl DetailsPaneView {
             commit_message_input,
             commit_details_message_input,
             commit_details_message_sha_menu,
+            commit_details_sha_menu,
             commit_details_sha_input,
             commit_details_date_input,
             commit_details_parent_input,

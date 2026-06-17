@@ -41,6 +41,41 @@ fn rasterize_svg_png(svg_bytes: &[u8], target_width_px: f32, max_edge_px: f32) -
     pixmap.encode_png().ok()
 }
 
+/// Generate a `file_icon_bytes` lookup and `FILE_ICON_ASSETS` list embedding
+/// every `assets/icons/file_icons/*.svg` via `include_bytes!`, so the file
+/// browser's icons are served by the manual asset registry in `assets.rs`
+/// without hand-maintaining ~100 entries.
+fn generate_file_icon_assets(manifest_dir: &std::path::Path, out_dir: &std::path::Path) {
+    let dir = manifest_dir.join("assets/icons/file_icons");
+    println!("cargo:rerun-if-changed={}", dir.display());
+
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .expect("read file_icons dir")
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            name.ends_with(".svg").then_some(name)
+        })
+        .collect();
+    names.sort();
+
+    let mut generated = String::from(
+        "fn file_icon_bytes(path: &str) -> Option<&'static [u8]> {\n    match path {\n",
+    );
+    for name in &names {
+        let abs = dir.join(name);
+        generated.push_str(&format!(
+            "        \"icons/file_icons/{name}\" => Some(include_bytes!({abs:?}).as_slice()),\n"
+        ));
+    }
+    generated.push_str("        _ => None,\n    }\n}\n\nconst FILE_ICON_ASSETS: &[&str] = &[\n");
+    for name in &names {
+        generated.push_str(&format!("    \"icons/file_icons/{name}\",\n"));
+    }
+    generated.push_str("];\n");
+
+    fs::write(out_dir.join("file_icons_assets.rs"), generated).expect("write file_icons_assets.rs");
+}
+
 fn main() {
     build_themes::generate_embedded_theme_registry();
     println!("cargo:rerun-if-changed=build.rs");
@@ -48,6 +83,8 @@ fn main() {
 
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR missing"));
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR missing"));
+    generate_file_icon_assets(&manifest_dir, &out_dir);
     let svg_path = manifest_dir.join("../../assets/splash_backdrop.svg");
     let out_path =
         PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR missing")).join("splash_backdrop.png");

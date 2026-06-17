@@ -607,6 +607,39 @@ impl DetailsPaneView {
         });
     }
 
+    fn sync_commit_details_sha_menu(
+        &mut self,
+        sha: &str,
+        repo_id: RepoId,
+        interactive: bool,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        Self::sync_commit_details_input_value(&self.commit_details_sha_input, sha, cx);
+        self.commit_details_sha_input.update(cx, |input, cx| {
+            input.set_highlights(commit_sha_field_highlights(sha, theme), cx);
+        });
+        let sha_links: Arc<[components::CommitShaLink]> = if interactive {
+            Arc::from([components::CommitShaLink {
+                range: 0..sha.len(),
+                commit_id: CommitId(sha.to_string().into()),
+            }])
+        } else {
+            Arc::<[components::CommitShaLink]>::from([])
+        };
+        self.commit_details_sha_menu.update(cx, |menu, cx| {
+            menu.sync(
+                self.commit_details_sha_input.clone(),
+                repo_id,
+                sha_links,
+                theme,
+                self.ui_scale(),
+                "commit_details_sha_hover_menu",
+                cx,
+            );
+        });
+    }
+
     fn sync_retained_commit_details_message_input(
         &mut self,
         message: &str,
@@ -961,6 +994,13 @@ impl DetailsPaneView {
                             details.committed_at.as_str(),
                             cx,
                         );
+                        self.sync_commit_details_sha_menu(
+                            details.id.as_ref(),
+                            repo_id,
+                            true,
+                            theme,
+                            cx,
+                        );
                         self.sync_commit_details_parent_input(
                             parent.as_str(),
                             repo_id,
@@ -1018,8 +1058,8 @@ impl DetailsPaneView {
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",
-                                        commit_details_monospace_value(
-                                            self.commit_details_sha_input.clone(),
+                                        commit_details_monospace_element(
+                                            self.commit_details_sha_menu.clone().into_any_element(),
                                         ),
                                     ))
                                     .child(commit_details_selectable_row(

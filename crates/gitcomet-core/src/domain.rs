@@ -140,6 +140,28 @@ pub struct Remote {
     pub url: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileEntryKind {
+    File,
+    Directory,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub enum FileSource {
+    #[default]
+    WorkingDirectory,
+    Commit(CommitId),
+    Branch(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: Arc<PathBuf>,
+    pub kind: FileEntryKind,
+    pub depth: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Worktree {
     pub path: PathBuf,

@@ -297,6 +297,142 @@ impl MainPaneView {
             handled = self.try_select_adjacent_diff_file(repo_id, direction, window, cx);
         }
 
+        if !handled
+            && !self.is_inline_submodule_diff_active()
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && !self
+                .diff_raw_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && !self
+                .diff_search_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && let Some(repo_id) = self.active_repo_id()
+            && let Some(repo) = self.active_repo()
+            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+            && let DiffTarget::WorkingTree { path, area } = &diff_target
+        {
+            let path = path.clone();
+            let area = *area;
+            let status_ready = repo.status_entries_for_area(area).is_some();
+
+            match key {
+                "s" if area == DiffArea::Unstaged && !mods.shift => {
+                    let change_tracking_view = self.active_change_tracking_view(cx);
+                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
+                        repo,
+                        &diff_target,
+                        change_tracking_view,
+                    )
+                    .and_then(|navigation| navigation.next_or_prev_path());
+
+                    if status_ready {
+                        self.store.dispatch(Msg::StagePath {
+                            repo_id,
+                            path: path.clone(),
+                        });
+                        if let Some(next_path) = next_path_in_section {
+                            self.store.dispatch(Msg::SelectDiff {
+                                repo_id,
+                                target: DiffTarget::WorkingTree {
+                                    path: next_path,
+                                    area: DiffArea::Unstaged,
+                                },
+                            });
+                        } else {
+                            self.clear_diff_selection_or_exit(repo_id, cx);
+                        }
+                    } else {
+                        self.store.dispatch(Msg::StagePath {
+                            repo_id,
+                            path: path.clone(),
+                        });
+                    }
+                    self.rebuild_diff_cache(cx);
+                    handled = true;
+                }
+                "u" if area == DiffArea::Staged && !mods.shift => {
+                    let change_tracking_view = self.active_change_tracking_view(cx);
+                    let next_path_in_section = status_nav::status_navigation_context_for_repo(
+                        repo,
+                        &diff_target,
+                        change_tracking_view,
+                    )
+                    .and_then(|navigation| navigation.next_or_prev_path());
+
+                    if status_ready {
+                        self.store.dispatch(Msg::UnstagePath {
+                            repo_id,
+                            path: path.clone(),
+                        });
+                        if let Some(next_path) = next_path_in_section {
+                            self.store.dispatch(Msg::SelectDiff {
+                                repo_id,
+                                target: DiffTarget::WorkingTree {
+                                    path: next_path,
+                                    area: DiffArea::Staged,
+                                },
+                            });
+                        } else {
+                            self.clear_diff_selection_or_exit(repo_id, cx);
+                        }
+                    } else {
+                        self.store.dispatch(Msg::UnstagePath {
+                            repo_id,
+                            path: path.clone(),
+                        });
+                    }
+                    self.rebuild_diff_cache(cx);
+                    handled = true;
+                }
+                "d" if !mods.shift => {
+                    let bounds = window.window_bounds().get_bounds();
+                    let anchor = point(
+                        (bounds.size.width * 0.5).max(px(64.0)),
+                        (bounds.size.height * 0.25).max(px(24.0)),
+                    );
+                    self.open_popover_at(
+                        PopoverKind::DiscardChangesConfirm {
+                            repo_id,
+                            area,
+                            path: Some(path),
+                        },
+                        anchor,
+                        window,
+                        cx,
+                    );
+                    handled = true;
+                }
+                "h" if !mods.shift => {
+                    let bounds = window.window_bounds().get_bounds();
+                    let anchor = point(
+                        (bounds.size.width * 0.5).max(px(64.0)),
+                        (bounds.size.height * 0.25).max(px(24.0)),
+                    );
+                    self.open_popover_at(
+                        PopoverKind::FileHistory {
+                            repo_id,
+                            path: path.clone(),
+                        },
+                        anchor,
+                        window,
+                        cx,
+                    );
+                    handled = true;
+                }
+                "c" if mods.shift => {
+                    crate::clipboard::write_text(cx, path.display().to_string());
+                    handled = true;
+                }
+                _ => {}
+            }
+        }
+
         let copy_target_is_focused = self
             .diff_raw_input
             .read(cx)
@@ -309,6 +445,7 @@ impl MainPaneView {
                 && (mods.control || mods.platform)
                 && !mods.alt
                 && !mods.function
+                && !mods.shift
                 && key == "c"
                 && self.diff_text_has_selection()
             {
@@ -434,6 +571,7 @@ impl MainPaneView {
             && (mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            && !mods.shift
             && key == "c"
             && self.diff_text_has_selection()
         {
@@ -1943,6 +2081,7 @@ impl MainPaneView {
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .on_click(theme, cx, move |this, _e, _w, cx| {
+                        this.clear_status_multi_selection(repo_id, cx);
                         this.clear_diff_selection_or_exit(repo_id, cx);
                         cx.notify();
                     })

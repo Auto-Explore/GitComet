@@ -21,6 +21,18 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    OpenFileContent {
+        repo_id: RepoId,
+        source: gitcomet_core::domain::FileSource,
+        path: std::path::PathBuf,
+    },
+    BrowseRepositoryAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    ResetBrowseToLive {
+        repo_id: RepoId,
+    },
     OpenRepo {
         path: std::path::PathBuf,
     },
@@ -250,11 +262,25 @@ enum ContextMenuItem {
 #[derive(Clone)]
 struct ContextMenuModel {
     items: Vec<ContextMenuItem>,
+    /// Optional hover tooltip per entry index (e.g. the full commit message in the
+    /// browse-history menu). Sparse — most menus leave this empty.
+    entry_tooltips: std::collections::HashMap<usize, SharedString>,
 }
 
 impl ContextMenuModel {
     fn new(items: Vec<ContextMenuItem>) -> Self {
-        Self { items }
+        Self {
+            items,
+            entry_tooltips: std::collections::HashMap::new(),
+        }
+    }
+
+    fn with_entry_tooltips(
+        mut self,
+        entry_tooltips: std::collections::HashMap<usize, SharedString>,
+    ) -> Self {
+        self.entry_tooltips = entry_tooltips;
+        self
     }
 
     fn is_selectable(&self, ix: usize) -> bool {

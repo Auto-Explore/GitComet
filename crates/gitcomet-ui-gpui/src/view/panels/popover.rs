@@ -302,10 +302,12 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
                 ..
             }
             | PopoverKind::CommitFileMenu { .. }
+            | PopoverKind::FileBrowserFileMenu { .. }
+            | PopoverKind::BrowseHistoryMenu { .. }
     )
 }
 
-fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
+fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -361,8 +363,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Corner {
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
-        | PopoverKind::UiScalePicker => Corner::TopRight,
-        _ => Corner::TopLeft,
+        | PopoverKind::UiScalePicker => Anchor::TopRight,
+        _ => Anchor::TopLeft,
     }
 }
 
@@ -472,7 +474,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
                 ),
             ..
         }
-        | PopoverKind::CommitFileMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::FileBrowserFileMenu { .. }
+        | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
@@ -493,23 +497,23 @@ fn popover_preferred_anchor_width(kind: &PopoverKind, ui_scale: ui_scale::UiScal
 }
 
 fn choose_popover_anchor_corner(
-    anchor_corner: Corner,
+    anchor_corner: Anchor,
     space_left: Pixels,
     space_right: Pixels,
     preferred_width: Pixels,
-) -> Corner {
+) -> Anchor {
     match anchor_corner {
-        Corner::TopRight if space_left < preferred_width && space_right > space_left => {
-            Corner::TopLeft
+        Anchor::TopRight if space_left < preferred_width && space_right > space_left => {
+            Anchor::TopLeft
         }
-        Corner::BottomRight if space_left < preferred_width && space_right > space_left => {
-            Corner::BottomLeft
+        Anchor::BottomRight if space_left < preferred_width && space_right > space_left => {
+            Anchor::BottomLeft
         }
-        Corner::TopLeft if space_right < preferred_width && space_left > space_right => {
-            Corner::TopRight
+        Anchor::TopLeft if space_right < preferred_width && space_left > space_right => {
+            Anchor::TopRight
         }
-        Corner::BottomLeft if space_right < preferred_width && space_left > space_right => {
-            Corner::BottomRight
+        Anchor::BottomLeft if space_right < preferred_width && space_left > space_right => {
+            Anchor::BottomRight
         }
         _ => anchor_corner,
     }
@@ -2198,13 +2202,13 @@ impl PopoverHost {
         let is_context_menu = popover_is_context_menu(&kind);
         let mut anchor_corner = popover_anchor_corner(&kind);
 
-        let anchor_for_corner = |corner: Corner| match &anchor_source {
+        let anchor_for_corner = |corner: Anchor| match &anchor_source {
             PopoverAnchor::Point(point) => *point,
             PopoverAnchor::Bounds(bounds) => match corner {
-                Corner::TopLeft => bounds.bottom_left(),
-                Corner::TopRight => bounds.bottom_right(),
-                Corner::BottomLeft => bounds.origin,
-                Corner::BottomRight => bounds.top_right(),
+                Anchor::TopRight => bounds.bottom_right(),
+                Anchor::BottomLeft => bounds.origin,
+                Anchor::BottomRight => bounds.top_right(),
+                _ => bounds.bottom_left(),
             },
         };
 
@@ -2522,6 +2526,12 @@ impl PopoverHost {
                 },
                 cx,
             ),
+            PopoverKind::FileBrowserFileMenu { repo_id, path } => {
+                self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)
+            }
+            PopoverKind::BrowseHistoryMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::BrowseHistoryMenu { repo_id }, cx)
+            }
             PopoverKind::SubmoduleInnerDiffMenu {
                 repo_id,
                 submodule_repo_path,
@@ -2537,7 +2547,7 @@ impl PopoverHost {
             PopoverKind::AppMenu => app_menu::panel(self, cx),
         };
 
-        let is_right = matches!(anchor_corner, Corner::TopRight | Corner::BottomRight);
+        let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
         let use_accent_border = is_context_menu || is_app_menu || is_create_branch_or_stash_prompt;
         let popover_border_color = if use_accent_border {
             with_alpha(theme.colors.accent, 0.90)
@@ -2564,8 +2574,8 @@ impl PopoverHost {
             let above = (above_anchor_y - gap_y) - margin_y;
             if below < scaled_px(240.0) && above > below {
                 anchor_corner = match anchor_corner {
-                    Corner::TopLeft => Corner::BottomLeft,
-                    Corner::TopRight => Corner::BottomRight,
+                    Anchor::TopLeft => Anchor::BottomLeft,
+                    Anchor::TopRight => Anchor::BottomRight,
                     corner => corner,
                 };
             }
@@ -2574,12 +2584,12 @@ impl PopoverHost {
             }
 
             let popover_edge_y = match anchor_corner {
-                Corner::TopLeft | Corner::TopRight => anchor.y + gap_y,
-                Corner::BottomLeft | Corner::BottomRight => anchor.y - gap_y,
+                Anchor::BottomLeft | Anchor::BottomRight => anchor.y - gap_y,
+                _ => anchor.y + gap_y,
             };
             let max_popover_h = match anchor_corner {
-                Corner::TopLeft | Corner::TopRight => (window_h - margin_y) - popover_edge_y,
-                Corner::BottomLeft | Corner::BottomRight => popover_edge_y - margin_y,
+                Anchor::BottomLeft | Anchor::BottomRight => popover_edge_y - margin_y,
+                _ => (window_h - margin_y) - popover_edge_y,
             }
             .max(px(0.0));
             let max_panel_h = (max_popover_h - scaled_px(12.0)).max(px(0.0));
@@ -2587,8 +2597,8 @@ impl PopoverHost {
         }
 
         let offset_y = match anchor_corner {
-            Corner::TopLeft | Corner::TopRight => gap_y,
-            Corner::BottomLeft | Corner::BottomRight => -gap_y,
+            Anchor::BottomLeft | Anchor::BottomRight => -gap_y,
+            _ => gap_y,
         };
 
         let panel = if let Some(max_panel_h) = context_menu_max_panel_h {

@@ -1,12 +1,12 @@
 use super::effects::append_ensure_sidebar_data_effects;
 use super::util::{
-    SelectedConflictTarget, append_auto_background_metadata_effects, append_refresh_full_effects,
-    append_refresh_primary_effects, append_start_conflict_target_reload,
-    append_start_current_conflict_target_reload, background_metadata_effect_capacity,
-    clear_banner_error_for_repo, dedup_paths_in_order, format_failure_summary,
-    handle_session_persist_result, normalize_repo_path, push_diagnostic, push_notification,
-    refresh_full_effect_capacity, refresh_full_effects, refresh_primary_effect_capacity,
-    selected_conflict_target, selected_diff_load_plan,
+    EffectAccumulator, SelectedConflictTarget, append_auto_background_metadata_effects,
+    append_refresh_full_effects, append_refresh_primary_effects,
+    append_start_conflict_target_reload, append_start_current_conflict_target_reload,
+    background_metadata_effect_capacity, clear_banner_error_for_repo, dedup_paths_in_order,
+    format_failure_summary, handle_session_persist_result, normalize_repo_path, push_diagnostic,
+    push_notification, refresh_full_effect_capacity, refresh_full_effects,
+    refresh_primary_effect_capacity, selected_conflict_target, selected_diff_load_plan,
 };
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
@@ -218,7 +218,7 @@ fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     }
 }
 
-fn append_cancel_repo_loads_effect_for_repo(
+pub(in crate::store::reducer) fn append_cancel_repo_loads_effect_for_repo(
     state: &mut AppState,
     repo_id: Option<RepoId>,
     effects: &mut impl Extend<Effect>,
@@ -257,13 +257,13 @@ fn append_open_repo_effect_if_not_loaded(
     }
 }
 
-enum SelectedHistoryReload {
+pub(in crate::store::reducer) enum SelectedHistoryReload {
     FileHistory(PathBuf),
     Blame { path: PathBuf, rev: Option<String> },
     CommitDetails(gitcomet_core::domain::CommitId),
 }
 
-fn selected_history_reloads_for_activation(
+pub(in crate::store::reducer) fn selected_history_reloads_for_activation(
     repo_state: &RepoState,
 ) -> SmallVec<[SelectedHistoryReload; 3]> {
     let mut reloads = SmallVec::new();
@@ -292,17 +292,17 @@ fn selected_history_reloads_for_activation(
     reloads
 }
 
-fn append_selected_history_reload_effects(
+pub(in crate::store::reducer) fn append_selected_history_reload_effects(
     repo_id: RepoId,
     repo_state: &mut RepoState,
     reloads: SmallVec<[SelectedHistoryReload; 3]>,
-    effects: &mut SetActiveRepoEffects,
+    effects: &mut impl EffectAccumulator,
 ) {
     for reload in reloads {
         match reload {
             SelectedHistoryReload::FileHistory(path) => {
                 repo_state.history_state.file_history = Loadable::Loading;
-                effects.push(Effect::LoadFileHistory {
+                effects.push_effect(Effect::LoadFileHistory {
                     repo_id,
                     path,
                     limit: REACTIVATED_FILE_HISTORY_LIMIT,
@@ -310,11 +310,11 @@ fn append_selected_history_reload_effects(
             }
             SelectedHistoryReload::Blame { path, rev } => {
                 repo_state.history_state.blame = Loadable::Loading;
-                effects.push(Effect::LoadBlame { repo_id, path, rev });
+                effects.push_effect(Effect::LoadBlame { repo_id, path, rev });
             }
             SelectedHistoryReload::CommitDetails(commit_id) => {
                 repo_state.set_commit_details(Loadable::Loading);
-                effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
+                effects.push_effect(Effect::LoadCommitDetails { repo_id, commit_id });
             }
         }
     }

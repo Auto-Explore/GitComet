@@ -1249,7 +1249,11 @@ impl SidebarPaneView {
                         .font_weight(FontWeight::BOLD)
                         .text_color(remote_color)
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/folder.svg", remote_color, 14.0))
+                        .child(tree_icon_slot(
+                            super::super::file_icons::folder_icon(!collapsed),
+                            remote_color,
+                            14.0,
+                        ))
                         .child(div().flex_1().min_w(px(0.0)).line_clamp(1).child(name))
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
@@ -1309,7 +1313,11 @@ impl SidebarPaneView {
                         .font_weight(FontWeight::BOLD)
                         .text_color(group_text_color)
                         .child(tree_toggle_slot(Some(collapsed)))
-                        .child(tree_icon_slot("icons/folder.svg", group_icon_color, 14.0))
+                        .child(tree_icon_slot(
+                            super::super::file_icons::folder_icon(!collapsed),
+                            group_icon_color,
+                            14.0,
+                        ))
                         .child(
                             div()
                                 .flex_1()

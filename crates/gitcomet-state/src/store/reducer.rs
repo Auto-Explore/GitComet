@@ -109,6 +109,10 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadTags { .. }
             | Msg::LoadRemoteTags { .. }
             | Msg::RefreshBranches { .. }
+            | Msg::LoadFileBrowser { .. }
+            | Msg::OpenFileContent { .. }
+            | Msg::BrowseRepositoryAtCommit { .. }
+            | Msg::ResetBrowseToLive { .. }
             | Msg::StageHunk { .. }
             | Msg::UnstageHunk { .. }
             | Msg::ApplyWorktreePatch { .. }
@@ -512,9 +516,10 @@ pub(crate) fn fill_select_diff_inline(
     state: &mut AppState,
     repo_id: RepoId,
     target: gitcomet_core::domain::DiffTarget,
+    content_preview: bool,
     effects: &mut SelectDiffEffects,
 ) {
-    diff_selection::fill_select_diff_inline(state, repo_id, target, effects)
+    diff_selection::fill_select_diff_inline(state, repo_id, target, content_preview, effects)
 }
 
 #[inline]
@@ -767,6 +772,28 @@ pub(super) fn reduce(
         Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
         Msg::LoadRemoteTags { repo_id } => effects::load_remote_tags(state, repo_id),
         Msg::RefreshBranches { repo_id } => effects::refresh_branches(state, repo_id),
+        Msg::LoadFileBrowser { repo_id, source } => {
+            effects::load_file_browser(state, repo_id, source)
+        }
+        Msg::ToggleFileBrowserDir { repo_id, path } => {
+            effects::toggle_file_browser_dir(state, repo_id, path)
+        }
+        Msg::SetFileBrowserSearch { repo_id, query } => {
+            effects::set_file_browser_search(state, repo_id, query)
+        }
+        Msg::SetFileBrowserSource { repo_id, source } => {
+            effects::set_file_browser_source(state, repo_id, source)
+        }
+        Msg::OpenFileContent {
+            repo_id,
+            source,
+            path,
+        } => diff_selection::open_file_content(state, repo_id, source, path),
+        Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
+            effects::browse_repository_at_commit(state, repo_id, commit_id)
+        }
+        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
+        Msg::SetSidebarMode { mode } => effects::set_sidebar_mode(state, mode),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
             diff_selection::stage_hunk(repo_id, patch)
@@ -1410,6 +1437,11 @@ pub(super) fn reduce(
         Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
             effects::submodules_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            repo_id,
+            source,
+            result,
+        }) => effects::file_browser_loaded(state, repo_id, source, result),
         Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
             repo_id,
             url,

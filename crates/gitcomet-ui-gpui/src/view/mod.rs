@@ -26,7 +26,7 @@ use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
-    Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, Corner, CursorStyle,
+    Anchor, Animation, AnimationExt, AnyElement, AnyView, App, Bounds, ClickEvent, CursorStyle,
     Decorations, DispatchPhase, Element, ElementId, Entity, FocusHandle, FontWeight,
     GlobalElementId, InspectorElementId, IsZero, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ResizeEdge, ScrollHandle,
@@ -85,7 +85,7 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
-            && matches!(key, "a" | "c"))
+            && matches!(key, "a" | "c" | "s" | "d" | "h" | "u"))
         || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
 }
 
@@ -125,6 +125,7 @@ mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
 mod file_diff_display;
+mod file_icons;
 mod fingerprint;
 mod history_graph;
 pub(crate) mod history_mode;

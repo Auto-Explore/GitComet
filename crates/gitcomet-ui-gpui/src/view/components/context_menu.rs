@@ -332,6 +332,7 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/pencil.svg" => Some("icons/pencil.svg"),
         "icons/cloud.svg" => Some("icons/cloud.svg"),
         "icons/computer.svg" => Some("icons/computer.svg"),
+        "icons/history.svg" => Some("icons/history.svg"),
         _ => None,
     };
     if by_icon.is_some() {
