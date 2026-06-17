@@ -1398,9 +1398,12 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
-        // The annotation column is only drawn in the left split column.
+        // The annotation column is only drawn in the left split column. Reserve
+        // its width whenever annotate mode is on — even before blame data is
+        // ready — so the column space is stable and content does not shift when
+        // blame finishes loading.
         let blame_ctx = this.blame_render_ctx();
-        let annotation_width = if blame_ctx.is_some() && is_left {
+        let annotation_width = if this.annotate_enabled && is_left {
             this.annotate_column_width_px(ui_scale_percent)
         } else {
             px(0.0)
