@@ -2701,8 +2701,6 @@ impl PopoverHost {
                         .justify_center()
                         .child(
                             div()
-                                .w(preferred_width)
-                                .max_w(preferred_width)
                                 .child(popover_container),
                         ),
                 )
