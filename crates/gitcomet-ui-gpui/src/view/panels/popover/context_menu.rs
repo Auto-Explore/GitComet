@@ -707,6 +707,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
@@ -799,6 +800,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
@@ -843,6 +845,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(kind, anchor, window, cx);

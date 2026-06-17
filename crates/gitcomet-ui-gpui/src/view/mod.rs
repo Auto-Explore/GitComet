@@ -552,6 +552,19 @@ impl GitCometView {
         });
     }
 
+    pub(in crate::view) fn open_popover_centered(
+        &mut self,
+        kind: PopoverKind,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_refs_hover_host
+            .update(cx, |host, cx| host.close(cx));
+        self.popover_host.update(cx, |host, cx| {
+            host.open_popover_centered(kind, window, cx)
+        });
+    }
+
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
         kind: PopoverKind,
@@ -713,20 +726,8 @@ impl GitCometView {
         let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
         if let Some(focus) = restore_focus {
             window.focus(&focus, cx);
-            let fallback_focus_next_frame = fallback_focus.clone();
-            window.on_next_frame(move |window, cx| {
-                if !focus.contains_focused(window, cx) {
-                    window.focus(&fallback_focus_next_frame, cx);
-                }
-            });
         } else {
             window.focus(&fallback_focus, cx);
-            let fallback_focus_next_frame = fallback_focus.clone();
-            window.on_next_frame(move |window, cx| {
-                if !fallback_focus_next_frame.contains_focused(window, cx) {
-                    window.focus(&fallback_focus_next_frame, cx);
-                }
-            });
         }
     }
 
@@ -1042,7 +1043,7 @@ impl GitCometView {
             "open-recent" => cx.dispatch_action(&OpenRecentPicker),
             "clone-repository" => {
                 if let Some(window) = window {
-                    self.open_popover_at(PopoverKind::CloneRepo, self.last_mouse_pos, window, cx);
+                    self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
                 }
             }
             "close-repo-tab" => {
@@ -1091,9 +1092,8 @@ impl GitCometView {
             }
             "create-branch" => {
                 if let Some(window) = window {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::CreateBranch,
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1101,9 +1101,8 @@ impl GitCometView {
             }
             "checkout-branch" => {
                 if let Some(window) = window {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::BranchPicker,
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1134,9 +1133,8 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::ForcePushConfirm { repo_id },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1203,7 +1201,7 @@ impl GitCometView {
             }
             "stash" => {
                 if let Some(window) = window {
-                    self.open_popover_at(PopoverKind::StashPrompt, self.last_mouse_pos, window, cx);
+                    self.open_popover_centered(PopoverKind::StashPrompt, window, cx);
                 }
             }
             "stash-pop" => {
@@ -1244,9 +1242,8 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::MergeAbortConfirm { repo_id },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1261,13 +1258,12 @@ impl GitCometView {
                         "reset-mixed" => ResetMode::Mixed,
                         _ => ResetMode::Hard,
                     };
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::ResetPrompt {
                             repo_id,
                             target: "HEAD".into(),
                             mode,
                         },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1277,12 +1273,11 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::CreateTagPrompt {
                             repo_id,
                             target: "HEAD".into(),
                         },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1293,12 +1288,11 @@ impl GitCometView {
             }
             "add-remote" => {
                 if let Some(window) = window {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::Repo {
                             repo_id: self.active_repo_id().unwrap_or(RepoId(0)),
                             kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
                         },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1314,12 +1308,11 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::Repo {
                             repo_id,
                             kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
                         },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );
@@ -1337,12 +1330,11 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    self.open_popover_at(
+                    self.open_popover_centered(
                         PopoverKind::Repo {
                             repo_id,
                             kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
                         },
-                        self.last_mouse_pos,
                         window,
                         cx,
                     );

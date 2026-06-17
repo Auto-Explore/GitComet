@@ -27,6 +27,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .tooltip_host(this.tooltip_host.clone())
                             .empty_text("No branches")
                             .max_height(scaled_px(240.0))
+                            .selected_index(this.branch_picker_selected_index)
                             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                                 if let Some(name) = branch_names.get(ix).cloned() {
                                     this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
@@ -95,6 +96,7 @@ fn branch_picker_status_panel(
             .tooltip_host(this.tooltip_host.clone())
             .empty_text(empty_text)
             .max_height(scaled_px(240.0))
+            .selected_index(this.branch_picker_selected_index)
             .render(theme, ui_scale_percent, cx, |_, _, _, _, _| {})
     } else {
         components::context_menu_label(

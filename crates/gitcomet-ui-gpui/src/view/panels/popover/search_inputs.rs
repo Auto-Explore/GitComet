@@ -194,7 +194,17 @@ impl PopoverHost {
         if self._branch_picker_search_input_subscription.is_none() {
             self._branch_picker_search_input_subscription =
                 Some(cx.observe(input, |this, input, cx| {
-                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+                    let escape_pressed =
+                        input.update(cx, |input, _| input.take_escape_pressed());
+                    let arrow_up_pressed =
+                        input.update(cx, |input, _| input.take_arrow_up_pressed());
+                    let arrow_down_pressed =
+                        input.update(cx, |input, _| input.take_arrow_down_pressed());
+                    let tab_pressed = input.update(cx, |input, _| input.take_tab_pressed());
+                    let shift_tab_pressed =
+                        input.update(cx, |input, _| input.take_shift_tab_pressed());
+                    let enter_pressed =
+                        input.update(cx, |input, _| input.take_enter_pressed());
 
                     if !matches!(this.popover, Some(PopoverKind::BranchPicker)) {
                         return;
@@ -203,6 +213,66 @@ impl PopoverHost {
                     if escape_pressed {
                         this.close_popover(cx);
                         return;
+                    }
+
+                    let Some(repo) = this.active_repo() else {
+                        return;
+                    };
+
+                    let branches: Vec<String> = match &repo.branches {
+                        Loadable::Ready(branches) => {
+                            branches.iter().map(|b| b.name.clone()).collect()
+                        }
+                        _ => return,
+                    };
+                    let query = input
+                        .read_with(cx, |input, _| input.text().trim().to_string());
+                    let matches = match_branches(&branches, &query);
+                    let match_count = matches.len();
+
+                    if arrow_up_pressed || shift_tab_pressed {
+                        this.branch_picker_selected_index =
+                            Some(match this.branch_picker_selected_index {
+                                Some(ix) if ix > 0 => ix - 1,
+                                _ if match_count > 0 => match_count - 1,
+                                _ => return,
+                            });
+                        scroll_branch_picker_to_selected(
+                            this.branch_picker_selected_index.unwrap(),
+                            &this.picker_prompt_scroll,
+                            cx,
+                        );
+                        cx.notify();
+                        return;
+                    }
+
+                    if arrow_down_pressed || tab_pressed {
+                        this.branch_picker_selected_index =
+                            Some(match this.branch_picker_selected_index {
+                                Some(ix) if ix + 1 < match_count => ix + 1,
+                                _ if match_count > 0 => 0,
+                                _ => return,
+                            });
+                        scroll_branch_picker_to_selected(
+                            this.branch_picker_selected_index.unwrap(),
+                            &this.picker_prompt_scroll,
+                            cx,
+                        );
+                        cx.notify();
+                        return;
+                    }
+
+                    if enter_pressed {
+                        if let Some(sel) = this.branch_picker_selected_index {
+                            if let Some(name) = matches.get(sel) {
+                                let name = name.clone();
+                                let repo_id = repo.id;
+                                this.store
+                                    .dispatch(Msg::CheckoutBranch { repo_id, name });
+                                this.close_popover(cx);
+                                return;
+                            }
+                        }
                     }
 
                     cx.notify();
@@ -351,6 +421,41 @@ fn scroll_recent_repo_picker_to_selected(
     let item_h = ui_scale.px(32.0);
     let item_y = item_h * sel as f32;
     let viewport_h = ui_scale.px(320.0) - item_h;
+    let target = (item_y - viewport_h * 0.5).max(px(0.0));
+    scroll_handle.set_offset(point(px(0.0), target));
+}
+
+fn match_branches(branches: &[String], query: &str) -> Vec<String> {
+    if query.is_empty() {
+        return branches.to_vec();
+    }
+    let query_lower = query.to_ascii_lowercase();
+    let mut out: Vec<_> = branches
+        .iter()
+        .filter_map(|name| {
+            let lower = name.to_ascii_lowercase();
+            lower
+                .find(&query_lower)
+                .map(|start| (start, name.len(), name.clone()))
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then_with(|| a.1.cmp(&b.1))
+            .then_with(|| a.2.cmp(&b.2))
+    });
+    out.into_iter().map(|(.., name)| name).collect()
+}
+
+fn scroll_branch_picker_to_selected(
+    sel: usize,
+    scroll_handle: &ScrollHandle,
+    cx: &mut impl BorrowAppContext,
+) {
+    let ui_scale = ui_scale::UiScale::current(cx);
+    let item_h = ui_scale.px(32.0);
+    let item_y = item_h * sel as f32;
+    let viewport_h = ui_scale.px(240.0) - item_h;
     let target = (item_y - viewport_h * 0.5).max(px(0.0));
     scroll_handle.set_offset(point(px(0.0), target));
 }

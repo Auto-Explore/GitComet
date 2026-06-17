@@ -43,6 +43,7 @@ mod worktree_remove_picker;
 enum PopoverAnchor {
     Point(Point<Pixels>),
     Bounds(Bounds<Pixels>),
+    Centered,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,6 +144,7 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     recent_repo_picker_selected_index: Option<usize>,
+    branch_picker_selected_index: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     recent_repo_picker_search_input: Option<Entity<components::TextInput>>,
@@ -1035,6 +1037,7 @@ impl PopoverHost {
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             recent_repo_picker_selected_index: None,
+            branch_picker_selected_index: None,
             repo_picker_search_input: None,
             recent_repo_picker_search_input: None,
             branch_picker_search_input: None,
@@ -1547,6 +1550,15 @@ impl PopoverHost {
         self.open_popover(kind, PopoverAnchor::Point(anchor), window, cx);
     }
 
+    pub(in super::super) fn open_popover_centered(
+        &mut self,
+        kind: PopoverKind,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover(kind, PopoverAnchor::Centered, window, cx);
+    }
+
     pub(in super::super) fn open_popover_for_bounds(
         &mut self,
         kind: PopoverKind,
@@ -1615,6 +1627,7 @@ impl PopoverHost {
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
         self.recent_repo_picker_selected_index = None;
+        self.branch_picker_selected_index = None;
         if is_context_menu {
             self.popover = Some(kind);
             self.context_menu_selected_ix = self
@@ -2148,13 +2161,14 @@ impl Render for PopoverHost {
         });
 
         let popover = self.popover_view(kind, window, cx).into_any_element();
+        let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
         let mut layer = div()
             .id("popover_layer")
             .absolute()
             .top_0()
             .left_0()
             .size_full();
-        if !history_refs_menu_active {
+        if !history_refs_menu_active && !is_centered {
             let scrim = div()
                 .id("popover_scrim")
                 .debug_selector(|| "repo_popover_close".to_string())
@@ -2210,6 +2224,7 @@ impl PopoverHost {
                 Anchor::BottomRight => bounds.top_right(),
                 _ => bounds.bottom_left(),
             },
+            PopoverAnchor::Centered => point(px(0.0), px(0.0)),
         };
 
         // Some popovers have large minimum widths. If the anchor is close to the edge, the popover
@@ -2569,6 +2584,7 @@ impl PopoverHost {
             let (below_anchor_y, above_anchor_y) = match &anchor_source {
                 PopoverAnchor::Point(_) => (anchor.y, anchor.y),
                 PopoverAnchor::Bounds(bounds) => (bounds.bottom_left().y, bounds.origin.y),
+                PopoverAnchor::Centered => (anchor.y, anchor.y),
             };
             let below = (window_h - margin_y) - (below_anchor_y + gap_y);
             let above = (above_anchor_y - gap_y) - margin_y;
@@ -2654,11 +2670,51 @@ impl PopoverHost {
                 .on_action(cx.listener(Self::focus_prev_prompt_field));
         }
 
-        anchored()
-            .position(anchor)
-            .anchor(anchor_corner)
-            .offset(point(px(0.0), offset_y))
-            .child(popover_container)
+        let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
+        if is_centered {
+            let top_offset = scaled_px(80.0);
+            let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                this.close_popover_and_restore_focus(window, cx);
+            });
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .bg(gpui::rgba(0x00000022))
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, scrim_close),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(top_offset)
+                        .left_0()
+                        .w_full()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .w(preferred_width)
+                                .max_w(preferred_width)
+                                .child(popover_container),
+                        ),
+                )
+                .into_any_element()
+        } else {
+            anchored()
+                .position(anchor)
+                .anchor(anchor_corner)
+                .offset(point(px(0.0), offset_y))
+                .child(popover_container)
+                .into_any_element()
+        }
     }
 }
 
