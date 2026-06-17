@@ -546,7 +546,9 @@ pub(super) fn build_row_blame_paint(
             SharedString::from(when),
             SharedString::from(super::blame::author_initials(&line.author)),
             SharedString::from(line.summary.as_ref().to_string()),
-            line.body.as_ref().map(|b| SharedString::from(b.as_ref().to_string())),
+            line.body
+                .as_ref()
+                .map(|b| SharedString::from(b.as_ref().to_string())),
         )
     } else {
         (

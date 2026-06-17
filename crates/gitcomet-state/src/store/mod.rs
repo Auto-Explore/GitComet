@@ -28,11 +28,13 @@ use executor::{
     TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
 };
 use reducer::{
-    fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
+    fill_reorder_repo_tabs_inline, fill_set_active_repo_inline,
     fill_stage_path_inline, fill_stage_paths_inline, fill_unstage_path_inline,
     fill_unstage_paths_inline, reduce, reset_conflict_resolutions_inline,
     set_conflict_region_choice_inline,
 };
+#[cfg(feature = "benchmarks")]
+use reducer::fill_select_diff_inline;
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::try_send_state_changed_or_log;
 use worker_channel::{StoreInstanceId, StoreWorkerCommand, StoreWorkerSender};

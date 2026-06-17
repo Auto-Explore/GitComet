@@ -132,7 +132,12 @@ pub(in crate::view) fn blame_column_layout(
 
 /// Fold blame content into a row's canvas revision key so the cached canvas
 /// repaints when the blame attribution (color/text/commit/width) changes.
-fn mix_blame_revision(base: u64, annotation_width: Pixels, mouse_pos: gpui::Point<Pixels>, blame: Option<&RowBlamePaint>) -> u64 {
+fn mix_blame_revision(
+    base: u64,
+    annotation_width: Pixels,
+    mouse_pos: gpui::Point<Pixels>,
+    blame: Option<&RowBlamePaint>,
+) -> u64 {
     let mut hasher = FxHasher::default();
     base.hash(&mut hasher);
     f32::from(annotation_width).to_bits().hash(&mut hasher);
@@ -212,7 +217,15 @@ fn paint_blame_annotation(
         return;
     }
 
-    paint_gutter_text(&blame.when, layout.when_x, y, text_color, when_metrics, window, cx);
+    paint_gutter_text(
+        &blame.when,
+        layout.when_x,
+        y,
+        text_color,
+        when_metrics,
+        window,
+        cx,
+    );
     paint_gutter_text(
         &blame.initials,
         layout.initials_x,
@@ -517,10 +530,10 @@ fn install_blame_annotation_hover_handler(
 
             let tooltip = match area {
                 Some(AnnotArea::Message) => Some(body.clone().unwrap_or_else(|| summary.clone())),
-                Some(AnnotArea::PriorIcon) => Some(SharedString::from("View file at parent commit")),
-                Some(AnnotArea::BrowseIcon) => {
-                    Some(SharedString::from("View file at this commit"))
+                Some(AnnotArea::PriorIcon) => {
+                    Some(SharedString::from("View file at parent commit"))
                 }
+                Some(AnnotArea::BrowseIcon) => Some(SharedString::from("View file at this commit")),
                 None => None,
             };
 
@@ -1546,7 +1559,8 @@ pub(super) fn inline_diff_line_row_canvas(
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = inline_text_bounds(content_bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
-            let annot_hitboxes = build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
+            let annot_hitboxes =
+                build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
 
             InlineRowPrepaintState {
                 bounds,
@@ -1613,7 +1627,10 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
                 paint_gutter_text(
                     &new,
-                    prepaint.bounds.left() + prepaint.annot_w + prepaint.gutter_total + prepaint.pad,
+                    prepaint.bounds.left()
+                        + prepaint.annot_w
+                        + prepaint.gutter_total
+                        + prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
@@ -1651,7 +1668,8 @@ pub(super) fn inline_diff_line_row_canvas(
             let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds = inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
+            let visible_row_bounds =
+                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
@@ -1776,7 +1794,8 @@ pub(super) fn split_diff_line_row_canvas(
 
             let left_hitbox = window.insert_hitbox(left_text_bounds, HitboxBehavior::Normal);
             let right_hitbox = window.insert_hitbox(right_text_bounds, HitboxBehavior::Normal);
-            let annot_hitboxes = build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
+            let annot_hitboxes =
+                build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
 
             SplitRowPrepaintState {
                 bounds,
@@ -1913,7 +1932,8 @@ pub(super) fn split_diff_line_row_canvas(
             let left_text_bounds = prepaint.left_text_bounds;
             let right_text_bounds = prepaint.right_text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds = inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
+            let visible_row_bounds =
+                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_left_text_bounds = left_text_bounds.intersect(&clip_bounds);
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
@@ -2019,7 +2039,8 @@ pub(super) fn patch_split_column_row_canvas(
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = single_column_text_bounds(content_bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
-            let annot_hitboxes = build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
+            let annot_hitboxes =
+                build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
             SingleColumnRowPrepaintState {
                 bounds,
                 pad,
@@ -2113,7 +2134,8 @@ pub(super) fn patch_split_column_row_canvas(
             let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds = inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
+            let visible_row_bounds =
+                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
@@ -2189,7 +2211,10 @@ pub(super) fn worktree_preview_row_canvas(
             let content = inset_left(bounds, annotation_width);
             let inner = Bounds::new(
                 point(content.left() + bar_w, content.top()),
-                size((content.size.width - bar_w).max(px(0.0)), content.size.height),
+                size(
+                    (content.size.width - bar_w).max(px(0.0)),
+                    content.size.height,
+                ),
             );
             let text_bounds = single_column_text_bounds(inner, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
@@ -2349,14 +2374,12 @@ fn build_annot_hitboxes(
     let clip = window.content_mask().bounds;
     Some(AnnotHitboxes {
         message: window.insert_hitbox(layout.message.intersect(&clip), HitboxBehavior::Normal),
-        prior_icon: window.insert_hitbox(layout.prior_icon.intersect(&clip), HitboxBehavior::Normal),
-        browse_icon: window.insert_hitbox(
-            layout.browse_icon.intersect(&clip),
-            HitboxBehavior::Normal,
-        ),
+        prior_icon: window
+            .insert_hitbox(layout.prior_icon.intersect(&clip), HitboxBehavior::Normal),
+        browse_icon: window
+            .insert_hitbox(layout.browse_icon.intersect(&clip), HitboxBehavior::Normal),
     })
 }
-
 
 #[derive(Clone, Debug)]
 struct InlineRowPrepaintState {

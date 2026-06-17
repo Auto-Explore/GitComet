@@ -124,7 +124,12 @@ impl MainPaneView {
                     commit_id,
                     path: Some(path),
                 } => (
-                    commit_id.as_ref().chars().take(8).collect::<String>().into(),
+                    commit_id
+                        .as_ref()
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                        .into(),
                     path.clone(),
                 ),
                 DiffTarget::WorkingTree { path, .. } => ("Working tree".into(), path.clone()),
@@ -172,7 +177,11 @@ impl MainPaneView {
             .gitcomet_tooltip(theme, "Show file history".into());
 
         let back_btn = components::Button::new("viewer_nav_back", "")
-            .start_slot(svg_icon("icons/arrow_left.svg", theme.colors.text, px(14.0)))
+            .start_slot(svg_icon(
+                "icons/arrow_left.svg",
+                theme.colors.text,
+                px(14.0),
+            ))
             .style(components::ButtonStyle::Outlined)
             .disabled(!can_back)
             .on_click(theme, cx, move |this, _e, _w, cx| {

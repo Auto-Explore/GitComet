@@ -694,9 +694,7 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
 
 /// Resolve the file path and blame revision for a diff target, or `None` for
 /// targets that are not a single tracked file (e.g. a whole-commit diff).
-fn blame_path_rev_for_target(
-    target: &DiffTarget,
-) -> Option<(std::path::PathBuf, Option<String>)> {
+fn blame_path_rev_for_target(target: &DiffTarget) -> Option<(std::path::PathBuf, Option<String>)> {
     match target {
         DiffTarget::WorkingTree { path, .. } => Some((path.clone(), None)),
         DiffTarget::Commit {
@@ -782,7 +780,11 @@ impl MainPaneView {
             // target, the annotation sidebar needs to repaint.
             repo.history_state.blame_path.hash(&mut hasher);
             repo.history_state.blame_rev.hash(&mut hasher);
-            matches!(&repo.history_state.blame, gitcomet_state::model::Loadable::Ready(_)).hash(&mut hasher);
+            matches!(
+                &repo.history_state.blame,
+                gitcomet_state::model::Loadable::Ready(_)
+            )
+            .hash(&mut hasher);
         }
 
         hasher.finish()
@@ -2814,7 +2816,11 @@ impl MainPaneView {
         cx.notify();
     }
 
-    pub(in crate::view) fn set_annotate_enabled(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn set_annotate_enabled(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if self.annotate_enabled == next {
             return;
         }
@@ -2888,8 +2894,8 @@ impl MainPaneView {
 
         if let Some(repo) = self.active_repo() {
             let history = &repo.history_state;
-            let same_target = history.blame_path.as_deref() == Some(path.as_path())
-                && history.blame_rev == rev;
+            let same_target =
+                history.blame_path.as_deref() == Some(path.as_path()) && history.blame_rev == rev;
             // For an already-attempted target, don't re-dispatch — including on
             // error, to avoid a per-frame retry loop. Only `NotLoaded` (a fresh
             // or changed target) triggers a load.
@@ -2899,11 +2905,7 @@ impl MainPaneView {
             }
         }
 
-        self.store.dispatch(Msg::LoadBlame {
-            repo_id,
-            path,
-            rev,
-        });
+        self.store.dispatch(Msg::LoadBlame { repo_id, path, rev });
     }
 
     pub(in crate::view) fn set_diff_content_mode(

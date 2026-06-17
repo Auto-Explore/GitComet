@@ -67,10 +67,7 @@ fn blame_commit_metadata<'a>(
                 Err(_) => (Arc::<str>::default(), None),
             };
             let raw_message = commit.message_raw_sloppy();
-            let summary_bytes = raw_message
-                .lines()
-                .next()
-                .unwrap_or_default();
+            let summary_bytes = raw_message.lines().next().unwrap_or_default();
             let summary = bstr_to_arc_str(summary_bytes);
             let body = {
                 let bytes: &[u8] = raw_message.as_ref();
@@ -161,9 +158,7 @@ impl GixRepo {
         let git_path = gix::path::os_str_into_bstr(path.as_os_str())
             .map(gix::path::to_unix_separators_on_windows)
             .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
-        let outcome = match repo
-            .blame_file(git_path.as_ref(), suspect, Default::default())
-        {
+        let outcome = match repo.blame_file(git_path.as_ref(), suspect, Default::default()) {
             Ok(outcome) => outcome,
             Err(e) => {
                 let msg = format!("gix blame {}: {e}", path.display());

@@ -19,6 +19,7 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
+#[cfg(feature = "benchmarks")]
 pub(crate) use diff_selection::SelectDiffEffects;
 pub(crate) use repo_management::{ReorderRepoTabsEffects, SetActiveRepoEffects};
 
@@ -517,6 +518,7 @@ pub(crate) fn fill_reorder_repo_tabs_inline(
     repo_management::fill_reorder_repo_tabs_inline(state, repo_id, insert_before, effects)
 }
 
+#[cfg(feature = "benchmarks")]
 pub(crate) fn fill_select_diff_inline(
     state: &mut AppState,
     repo_id: RepoId,
@@ -644,10 +646,6 @@ pub(super) fn reduce(
         Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
     );
     let push = is_view_navigation(&msg);
-    let is_global_nav = matches!(
-        msg,
-        Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
-    );
 
     if reconcile {
         reconcile_active_nav_history(state, false);
@@ -657,53 +655,6 @@ pub(super) fn reduce(
 
     if reconcile {
         reconcile_active_nav_history(state, push);
-    }
-
-    // ── Nav-history tracing ──
-    if push || reconcile || is_global_nav {
-        let repo_id = state.active_repo;
-        let nh = repo_id.and_then(|rid| {
-            state
-                .repos
-                .iter()
-                .find(|r| r.id == rid)
-                .map(|r| &r.nav_history)
-        });
-        let trace_label = if is_global_nav {
-            "NAV"
-        } else if push {
-            "PUSH"
-        } else {
-            "FOLD"
-        };
-        let snap = repo_id.and_then(|rid| {
-            state
-                .repos
-                .iter()
-                .find(|r| r.id == rid)
-                .map(|r| r.main_view_snapshot())
-        });
-        if let (Some(nh), Some(snap)) = (nh, snap) {
-            eprintln!(
-                "nav-trace: {:<5} | cursor={}/{} | diff={:?} preview={} commit={}",
-                trace_label,
-                nh.cursor,
-                nh.entries.len(),
-                snap.diff_target
-                    .as_ref()
-                    .map(|t| match t {
-                        gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. } =>
-                            format!("file:{}", p.display()),
-                        _ => "target".into(),
-                    })
-                    .unwrap_or_else(|| "none".into()),
-                snap.content_preview as u8,
-                snap.selected_commit
-                    .as_ref()
-                    .map(|c| c.as_ref().get(0..6).unwrap_or(c.as_ref()))
-                    .unwrap_or("none"),
-            );
-        }
     }
 
     effects

@@ -190,9 +190,11 @@ impl MainPaneView {
                     if *e.drag(cx) != AnnotateResizeHandle::Divider {
                         return;
                     }
-                    let per_unit =
-                        f32::from(crate::ui_scale::design_px_from_percent(1.0, ui_scale_percent))
-                            .max(0.01);
+                    let per_unit = f32::from(crate::ui_scale::design_px_from_percent(
+                        1.0,
+                        ui_scale_percent,
+                    ))
+                    .max(0.01);
                     let dx_design = f32::from(e.event.position.x - state.start_x) / per_unit;
                     this.annotate_column_width = (state.start_width + dx_design).clamp(
                         crate::view::rows::DIFF_ANNOTATION_MIN_WIDTH_PX,
@@ -599,6 +601,18 @@ impl MainPaneView {
                 }
                 "down" => {
                     handled = self.navigate_next_diff_change(cx);
+                }
+                "left" => {
+                    if let Some(repo_id) = self.active_repo_id() {
+                        self.store.dispatch(Msg::GlobalNavBack { repo_id });
+                        handled = true;
+                    }
+                }
+                "right" => {
+                    if let Some(repo_id) = self.active_repo_id() {
+                        self.store.dispatch(Msg::GlobalNavForward { repo_id });
+                        handled = true;
+                    }
                 }
                 _ => {}
             }
@@ -2225,9 +2239,6 @@ impl MainPaneView {
                     .gap_2()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    // Not flex_1: the path sizes to its content (still truncating
-                    // when space is tight) so the revision cluster sits right
-                    // next to the file name rather than being pushed to the edge.
                     .child(div().min_w(px(0.0)).overflow_hidden().child(title))
                     .when_some(viewer_nav, |d, cluster| d.child(cluster)),
             )
