@@ -134,7 +134,7 @@ cask "gitcomet" do
     end
 
     url "https://github.com/${github_repo}/releases/download/v#{version}/gitcomet-v#{version}-macos-#{arch}.dmg"
-    depends_on macos: ">= :ventura"
+    depends_on macos: :ventura
 
     app "GitComet.app"
     binary "#{appdir}/GitComet.app/Contents/MacOS/gitcomet", target: "gitcomet"
