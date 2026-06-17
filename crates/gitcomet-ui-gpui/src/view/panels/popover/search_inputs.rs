@@ -72,7 +72,94 @@ impl PopoverHost {
                 )
             })
         });
+        if self._recent_repo_picker_search_input_subscription.is_none() {
+            self._recent_repo_picker_search_input_subscription =
+                Some(cx.observe(input, |this, input, cx| {
+                    let escape_pressed =
+                        input.update(cx, |input, _| input.take_escape_pressed());
+                    let arrow_up_pressed =
+                        input.update(cx, |input, _| input.take_arrow_up_pressed());
+                    let arrow_down_pressed =
+                        input.update(cx, |input, _| input.take_arrow_down_pressed());
+                    let tab_pressed =
+                        input.update(cx, |input, _| input.take_tab_pressed());
+                    let shift_tab_pressed =
+                        input.update(cx, |input, _| input.take_shift_tab_pressed());
+                    let enter_pressed =
+                        input.update(cx, |input, _| input.take_enter_pressed());
+
+                    if !matches!(this.popover, Some(PopoverKind::RecentRepositoryPicker)) {
+                        return;
+                    }
+
+                    if escape_pressed {
+                        this.close_popover(cx);
+                        return;
+                    }
+
+                    let recent_repos = session::load().recent_repos;
+                    let query = input
+                        .read_with(cx, |input, _| input.text().trim().to_string());
+                    let match_count = count_recent_repo_matches(&recent_repos, &query);
+
+                    if arrow_up_pressed || shift_tab_pressed {
+                        this.recent_repo_picker_selected_index =
+                            Some(match this.recent_repo_picker_selected_index {
+                                Some(ix) if ix > 0 => ix - 1,
+                                _ if match_count > 0 => match_count - 1,
+                                _ => return,
+                            });
+                        scroll_recent_repo_picker_to_selected(
+                            this.recent_repo_picker_selected_index.unwrap(),
+                            &this.picker_prompt_scroll,
+                            cx,
+                        );
+                        cx.notify();
+                        return;
+                    }
+
+                    if arrow_down_pressed || tab_pressed {
+                        this.recent_repo_picker_selected_index =
+                            Some(match this.recent_repo_picker_selected_index {
+                                Some(ix) if ix + 1 < match_count => ix + 1,
+                                _ if match_count > 0 => 0,
+                                _ => return,
+                            });
+                        scroll_recent_repo_picker_to_selected(
+                            this.recent_repo_picker_selected_index.unwrap(),
+                            &this.picker_prompt_scroll,
+                            cx,
+                        );
+                        cx.notify();
+                        return;
+                    }
+
+                    if enter_pressed {
+                        if let Some(sel) = this.recent_repo_picker_selected_index {
+                            let query_lower = query.to_ascii_lowercase();
+                            let matched: Vec<_> = recent_repos
+                                .iter()
+                                .filter(|path| {
+                                    recent_repo_display_text(path)
+                                        .to_ascii_lowercase()
+                                        .contains(&query_lower)
+                                })
+                                .collect();
+                            if let Some(path) = matched.get(sel) {
+                                let path = (*path).clone();
+                                recent_repo_picker::select_recent_repository(
+                                    this, path, cx,
+                                );
+                                return;
+                            }
+                        }
+                    }
+
+                    cx.notify();
+                }));
+        }
         input.update(cx, |input, cx| {
+            input.clear_transient_key_presses();
             input.set_theme(theme, cx);
             input.set_text("", cx);
         });
@@ -228,4 +315,42 @@ impl PopoverHost {
         window.focus(&focus_handle, cx);
         input.clone()
     }
+}
+
+fn recent_repo_display_text(path: &std::path::Path) -> String {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return path.display().to_string();
+    };
+    let Some(parent) = path.parent() else {
+        return name.to_owned();
+    };
+    format!("{} - {}", name, parent.display())
+}
+
+fn count_recent_repo_matches(paths: &[std::path::PathBuf], query: &str) -> usize {
+    if query.is_empty() {
+        return paths.len();
+    }
+    let query_lower = query.to_ascii_lowercase();
+    paths
+        .iter()
+        .filter(|path| {
+            recent_repo_display_text(path)
+                .to_ascii_lowercase()
+                .contains(&query_lower)
+        })
+        .count()
+}
+
+fn scroll_recent_repo_picker_to_selected(
+    sel: usize,
+    scroll_handle: &ScrollHandle,
+    cx: &mut impl BorrowAppContext,
+) {
+    let ui_scale = ui_scale::UiScale::current(cx);
+    let item_h = ui_scale.px(32.0);
+    let item_y = item_h * sel as f32;
+    let viewport_h = ui_scale.px(320.0) - item_h;
+    let target = (item_y - viewport_h * 0.5).max(px(0.0));
+    scroll_handle.set_offset(point(px(0.0), target));
 }

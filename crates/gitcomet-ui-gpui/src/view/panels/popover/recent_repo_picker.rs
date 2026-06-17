@@ -47,6 +47,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .tooltip_host(this.tooltip_host.clone())
                 .empty_text("No recent repositories")
                 .max_height(scaled_px(320.0))
+                .selected_index(this.recent_repo_picker_selected_index)
                 .render(
                     theme,
                     ui_scale_percent,
@@ -94,7 +95,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     }
 }
 
-fn select_recent_repository(
+pub(super) fn select_recent_repository(
     this: &mut PopoverHost,
     path: std::path::PathBuf,
     cx: &mut gpui::Context<PopoverHost>,
