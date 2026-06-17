@@ -1,5 +1,6 @@
 use crate::app::{
-    CloseWindow, NewWindow, OpenRecentPicker, OpenRepository,
+    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRecentPicker, OpenRepository,
+    ResetUiScale,
 };
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
@@ -1016,7 +1017,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) {
         match command_id {
-            "new-window" => cx.dispatch_action(&NewWindow),
+            "new-window" => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
             "open-settings" => cx.defer(|cx| crate::view::open_settings_window(cx)),
             "quit" => cx.defer(|cx| cx.quit()),
             "minimize-window" => cx.defer(|cx| {
@@ -1034,23 +1035,12 @@ impl GitCometView {
                     let _ = win.update(cx, |_root, win, _cx| win.toggle_fullscreen());
                 }
             }),
-            "increase-ui-scale" => cx.defer(|cx| {
-                let next = crate::ui_scale::step_up(crate::ui_scale::current(cx).percent);
-                crate::app::set_app_ui_scale_percent(cx, next);
-            }),
-            "decrease-ui-scale" => cx.defer(|cx| {
-                let next = crate::ui_scale::step_down(crate::ui_scale::current(cx).percent);
-                crate::app::set_app_ui_scale_percent(cx, next);
-            }),
-            "reset-ui-scale" => cx.defer(|cx| {
-                crate::app::set_app_ui_scale_percent(
-                    cx,
-                    crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
-                );
-            }),
-            "close-window" => cx.dispatch_action(&CloseWindow),
-            "open-repository" => cx.dispatch_action(&OpenRepository),
-            "open-recent" => cx.dispatch_action(&OpenRecentPicker),
+            "increase-ui-scale" => cx.defer(|cx| cx.dispatch_action(&IncreaseUiScale)),
+            "decrease-ui-scale" => cx.defer(|cx| cx.dispatch_action(&DecreaseUiScale)),
+            "reset-ui-scale" => cx.defer(|cx| cx.dispatch_action(&ResetUiScale)),
+            "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
+            "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
+            "open-recent" => cx.defer(|cx| cx.dispatch_action(&OpenRecentPicker)),
             "clone-repository" => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
@@ -1075,9 +1065,7 @@ impl GitCometView {
             "next-repo-tab" => {
                 self.activate_next_repo_tab(cx);
             }
-            "open-active-view-search" => {
-                cx.dispatch_action(&OpenActiveViewSearch {});
-            }
+            "open-active-view-search" => cx.defer(|cx| cx.dispatch_action(&OpenActiveViewSearch)),
             "toggle-sidebar" => {
                 self.set_sidebar_collapsed(!self.sidebar_collapsed, cx);
             }
