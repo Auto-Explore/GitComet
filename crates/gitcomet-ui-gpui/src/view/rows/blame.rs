@@ -92,6 +92,7 @@ mod tests {
             summary: Arc::from("summary"),
             body: None,
             line: String::new(),
+            prior_exists: true,
         }
     }
 

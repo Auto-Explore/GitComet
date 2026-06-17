@@ -2259,6 +2259,22 @@ impl GitCometView {
         });
     }
 
+    /// Mouse back/forward side buttons: step the active repo's global navigation
+    /// history (diffs, file content, commit selections). Active anywhere in the
+    /// window.
+    fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.main_pane.read(cx).active_repo_id() else {
+            return;
+        };
+        let msg = if forward {
+            Msg::GlobalNavForward { repo_id }
+        } else {
+            Msg::GlobalNavBack { repo_id }
+        };
+        self.store.dispatch(msg);
+        cx.notify();
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
@@ -2877,6 +2893,19 @@ impl Render for GitCometView {
         root = root.on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
             this.dismiss_history_refs_menus(cx);
         }));
+        root = root
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Back),
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                    this.dispatch_global_nav(false, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                    this.dispatch_global_nav(true, cx);
+                }),
+            );
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,

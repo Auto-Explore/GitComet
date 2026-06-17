@@ -100,6 +100,115 @@ impl MainPaneView {
             })
     }
 
+    /// Revision controls shown next to the file path in the file content
+    /// viewer: back/forward through the cross-file viewer history, plus a
+    /// clickable commit-SHA badge that opens the file-history menu. Returns
+    /// `None` outside the file content viewer (diff and merge views).
+    pub(super) fn diff_viewer_nav_cluster(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.is_file_preview_active() {
+            return None;
+        }
+        let repo = self.active_repo()?;
+        let repo_id = repo.id;
+        let can_back = repo.view_history.can_back();
+        let can_forward = repo.view_history.can_forward();
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+
+        let (badge_label, path): (SharedString, std::path::PathBuf) =
+            match self.rendered_diff_target()? {
+                DiffTarget::Commit {
+                    commit_id,
+                    path: Some(path),
+                } => (
+                    commit_id.as_ref().chars().take(8).collect::<String>().into(),
+                    path.clone(),
+                ),
+                DiffTarget::WorkingTree { path, .. } => ("Working tree".into(), path.clone()),
+                // Range diffs and full-tree commits are not file content views.
+                _ => return None,
+            };
+
+        // Monospace label so the badge keeps a constant width as the SHA changes.
+        let badge = div()
+            .id("viewer_revision_badge")
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .h(components::control_height(ui_scale_percent))
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(theme.colors.border)
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
+            .active(move |s| s.bg(theme.colors.active))
+            .child(svg_icon(
+                "icons/history.svg",
+                theme.colors.text_muted,
+                px(12.0),
+            ))
+            .child(
+                div()
+                    .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                    .text_xs()
+                    .whitespace_nowrap()
+                    .child(badge_label),
+            )
+            .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                this.open_popover_at(
+                    PopoverKind::FileHistory {
+                        repo_id,
+                        path: path.clone(),
+                    },
+                    e.position(),
+                    window,
+                    cx,
+                );
+            }))
+            .gitcomet_tooltip(theme, "Show file history".into());
+
+        let back_btn = components::Button::new("viewer_nav_back", "")
+            .start_slot(svg_icon("icons/arrow_left.svg", theme.colors.text, px(14.0)))
+            .style(components::ButtonStyle::Outlined)
+            .disabled(!can_back)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                this.store.dispatch(Msg::ViewerNavBack { repo_id });
+                cx.notify();
+            })
+            .gitcomet_tooltip(theme, "Back to previous file version".into());
+
+        let forward_btn = components::Button::new("viewer_nav_forward", "")
+            .start_slot(svg_icon(
+                "icons/arrow_right.svg",
+                theme.colors.text,
+                px(14.0),
+            ))
+            .style(components::ButtonStyle::Outlined)
+            .disabled(!can_forward)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                this.store.dispatch(Msg::ViewerNavForward { repo_id });
+                cx.notify();
+            })
+            .gitcomet_tooltip(theme, "Forward to next file version".into());
+
+        // Badge first (immediately next to the path), then back/forward.
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .flex_none()
+                .child(badge)
+                .child(back_btn)
+                .child(forward_btn)
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn diff_nav_hotkey_hint(theme: AppTheme, label: &'static str) -> gpui::Div {
         div()
             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)

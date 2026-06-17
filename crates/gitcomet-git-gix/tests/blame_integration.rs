@@ -85,6 +85,17 @@ fn blame_file_reports_head_and_explicit_revision() {
     assert_eq!(&*head_blame[1].summary, "update");
     assert!(head_blame[1].author_time_unix.is_some());
 
+    // The base commit introduced story.txt, so its lines have no prior
+    // revision; the update commit modified an existing file, so it does.
+    assert!(
+        !head_blame[0].prior_exists,
+        "line from the file-introducing commit must report no prior revision"
+    );
+    assert!(
+        head_blame[1].prior_exists,
+        "line from a later modifying commit must report a prior revision"
+    );
+
     let base_blame = opened
         .blame_file(Path::new("story.txt"), Some(base_id.as_str()))
         .unwrap();

@@ -1637,6 +1637,7 @@ impl MainPaneView {
         // Intentionally no outer panel header; keep diff controls in the inner header.
 
         let title = self.diff_panel_title(theme, cx);
+        let viewer_nav = self.diff_viewer_nav_cluster(theme, cx);
         let inline_submodule_diff_active = self.is_inline_submodule_diff_active();
 
         let has_submodule_summary = self
@@ -2224,7 +2225,11 @@ impl MainPaneView {
                     .gap_2()
                     .min_w(px(0.0))
                     .overflow_hidden()
-                    .child(div().flex_1().min_w(px(0.0)).overflow_hidden().child(title)),
+                    // Not flex_1: the path sizes to its content (still truncating
+                    // when space is tight) so the revision cluster sits right
+                    // next to the file name rather than being pushed to the edge.
+                    .child(div().min_w(px(0.0)).overflow_hidden().child(title))
+                    .when_some(viewer_nav, |d, cluster| d.child(cluster)),
             )
             .child(controls);
 

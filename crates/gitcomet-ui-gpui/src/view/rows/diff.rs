@@ -565,6 +565,7 @@ pub(super) fn build_row_blame_paint(
         body,
         commit_id: gitcomet_core::domain::CommitId(line.commit_id.clone()),
         path: std::sync::Arc::clone(&ctx.path),
+        prior_exists: line.prior_exists,
     })
 }
 

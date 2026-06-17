@@ -162,6 +162,10 @@ pub struct BlameLine {
     pub summary: Arc<str>,
     pub body: Option<Arc<str>>,
     pub line: String,
+    /// Whether the blamed file existed in the first parent of `commit_id`.
+    /// When `false`, "view file at parent commit" is a dead end (this commit
+    /// introduced the file), so the UI hides that affordance.
+    pub prior_exists: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1404,6 +1408,7 @@ mod tests {
             summary: "Initial import".into(),
             body: Some("detailed body".into()),
             line: "hello".to_string(),
+            prior_exists: true,
         };
 
         let cloned = line.clone();

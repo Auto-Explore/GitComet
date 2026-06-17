@@ -267,6 +267,24 @@ pub enum Msg {
     ResetBrowseToLive {
         repo_id: RepoId,
     },
+    /// Step back through the cross-file viewer history (browser-style),
+    /// replaying the previously viewed file/version without recording it.
+    ViewerNavBack {
+        repo_id: RepoId,
+    },
+    /// Step forward through the cross-file viewer history.
+    ViewerNavForward {
+        repo_id: RepoId,
+    },
+    /// Step back through the broad global navigation history (mouse back
+    /// button): diffs, file-content views, and commit selections.
+    GlobalNavBack {
+        repo_id: RepoId,
+    },
+    /// Step forward through the global navigation history (mouse forward button).
+    GlobalNavForward {
+        repo_id: RepoId,
+    },
     SetSidebarMode {
         mode: SidebarMode,
     },

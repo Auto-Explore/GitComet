@@ -19,12 +19,34 @@ struct BlameCommitMetadata {
     author_time_unix: Option<i64>,
     summary: Arc<str>,
     body: Option<Arc<str>>,
+    prior_exists: bool,
+}
+
+/// Whether `path` exists in the tree of `commit`'s first parent. Returns
+/// `false` for root commits (no parent) or when the path is absent there,
+/// which is exactly when navigating to the parent revision is a dead end.
+fn file_exists_at_first_parent(
+    repo: &gix::Repository,
+    commit: &gix::Commit<'_>,
+    path: &Path,
+) -> bool {
+    let Some(parent_id) = commit.parent_ids().next() else {
+        return false;
+    };
+    let Ok(parent) = repo.find_object(parent_id) else {
+        return false;
+    };
+    let Ok(tree) = parent.peel_to_tree() else {
+        return false;
+    };
+    matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
 }
 
 fn blame_commit_metadata<'a>(
     repo: &gix::Repository,
     cache: &'a mut HashMap<gix::ObjectId, BlameCommitMetadata>,
     commit_id: gix::ObjectId,
+    path: &Path,
 ) -> Result<&'a BlameCommitMetadata> {
     match cache.entry(commit_id) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
@@ -34,6 +56,8 @@ fn blame_commit_metadata<'a>(
                     "gix find_commit {commit_id}: {e}"
                 )))
             })?;
+
+            let prior_exists = file_exists_at_first_parent(repo, &commit, path);
 
             let (author, author_time_unix) = match commit.author() {
                 Ok(signature) => (
@@ -79,6 +103,7 @@ fn blame_commit_metadata<'a>(
                 author_time_unix,
                 summary,
                 body,
+                prior_exists,
             }))
         }
     }
@@ -166,7 +191,8 @@ impl GixRepo {
                 }
                 blob_line_ix += 1;
             }
-            let metadata = blame_commit_metadata(&repo, &mut metadata_cache, entry.commit_id)?;
+            let metadata =
+                blame_commit_metadata(&repo, &mut metadata_cache, entry.commit_id, path)?;
             for _ in 0..entry_len {
                 let Some(line) = blob_lines.next() else {
                     return Err(Error::new(ErrorKind::Backend(
@@ -181,6 +207,7 @@ impl GixRepo {
                     summary: metadata.summary.clone(),
                     body: metadata.body.clone(),
                     line: blame_line_text(line),
+                    prior_exists: metadata.prior_exists,
                 });
             }
         }

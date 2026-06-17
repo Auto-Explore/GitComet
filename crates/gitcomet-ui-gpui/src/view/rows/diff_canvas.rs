@@ -80,6 +80,10 @@ pub(in crate::view) struct RowBlamePaint {
     pub(in crate::view) commit_id: gitcomet_core::domain::CommitId,
     /// File path of the annotated view, used by the "view prior change" action.
     pub(in crate::view) path: std::sync::Arc<std::path::Path>,
+    /// Whether the file existed in this commit's parent. When `false`, the
+    /// "view file at parent commit" icon is hidden and non-interactive (the
+    /// commit introduced the file, so there is no prior revision to show).
+    pub(in crate::view) prior_exists: bool,
 }
 
 /// Fixed sub-column geometry for the annotation column, shared by painting and
@@ -142,6 +146,7 @@ fn mix_blame_revision(base: u64, annotation_width: Pixels, mouse_pos: gpui::Poin
         hash_shared_string(&mut hasher, &blame.summary);
         blame.body.hash(&mut hasher);
         blame.commit_id.0.as_ref().hash(&mut hasher);
+        blame.prior_exists.hash(&mut hasher);
     } else {
         u8::MAX.hash(&mut hasher);
     }
@@ -245,19 +250,23 @@ fn paint_blame_annotation(
         }
     });
 
-    let icon_color = if hovered == Some(AnnotArea::PriorIcon) {
-        theme.colors.accent
-    } else {
-        crate::theme::with_alpha(text_color, 0.6)
-    };
-    paint_blame_icon(
-        DIFF_ANNOTATION_PRIOR_ICON,
-        layout.prior_icon,
-        icon_color,
-        ui_scale_percent,
-        window,
-        cx,
-    );
+    // The "view file at parent commit" icon is omitted when the commit
+    // introduced the file (no prior revision to navigate to).
+    if blame.prior_exists {
+        let icon_color = if hovered == Some(AnnotArea::PriorIcon) {
+            theme.colors.accent
+        } else {
+            crate::theme::with_alpha(text_color, 0.6)
+        };
+        paint_blame_icon(
+            DIFF_ANNOTATION_PRIOR_ICON,
+            layout.prior_icon,
+            icon_color,
+            ui_scale_percent,
+            window,
+            cx,
+        );
+    }
     let icon_color = if hovered == Some(AnnotArea::BrowseIcon) {
         theme.colors.accent
     } else {
@@ -321,6 +330,7 @@ fn install_blame_annotation_mouse_handler(
     browse_icon_hitbox: &Hitbox,
     commit_id: gitcomet_core::domain::CommitId,
     path: std::sync::Arc<std::path::Path>,
+    prior_enabled: bool,
 ) {
     window.on_mouse_event({
         let view = view.clone();
@@ -336,7 +346,7 @@ fn install_blame_annotation_mouse_handler(
             let path = path.clone();
             let action = if browse_icon_hitbox.contains(&pos) {
                 BlameClickAction::Browse
-            } else if prior_icon_hitbox.contains(&pos) {
+            } else if prior_enabled && prior_icon_hitbox.contains(&pos) {
                 BlameClickAction::PriorRevision
             } else if message_hitbox.contains(&pos) {
                 BlameClickAction::OpenDetails
@@ -399,11 +409,12 @@ fn render_blame_column(
         ui_scale_percent,
     );
 
+    let prior_enabled = blame.prior_exists;
     let mouse_pos = window.mouse_position();
     let hovered = annot_hitboxes.and_then(|hb| {
         if hb.message.bounds.contains(&mouse_pos) {
             Some(AnnotArea::Message)
-        } else if hb.prior_icon.bounds.contains(&mouse_pos) {
+        } else if prior_enabled && hb.prior_icon.bounds.contains(&mouse_pos) {
             Some(AnnotArea::PriorIcon)
         } else if hb.browse_icon.bounds.contains(&mouse_pos) {
             Some(AnnotArea::BrowseIcon)
@@ -414,7 +425,9 @@ fn render_blame_column(
 
     if let Some(hb) = annot_hitboxes {
         window.set_cursor_style(CursorStyle::PointingHand, &hb.message);
-        window.set_cursor_style(CursorStyle::PointingHand, &hb.prior_icon);
+        if prior_enabled {
+            window.set_cursor_style(CursorStyle::PointingHand, &hb.prior_icon);
+        }
         window.set_cursor_style(CursorStyle::PointingHand, &hb.browse_icon);
     }
 
@@ -443,6 +456,7 @@ fn render_blame_column(
             &hb.browse_icon,
             blame.commit_id.clone(),
             blame.path.clone(),
+            prior_enabled,
         );
         install_blame_annotation_hover_handler(
             window,
@@ -451,6 +465,7 @@ fn render_blame_column(
             hb,
             blame.summary.clone(),
             blame.body.clone(),
+            prior_enabled,
         );
     }
 }
@@ -466,6 +481,7 @@ fn install_blame_annotation_hover_handler(
     hitboxes: &AnnotHitboxes,
     summary: SharedString,
     body: Option<SharedString>,
+    prior_enabled: bool,
 ) {
     window.on_mouse_event({
         let view = view.clone();
@@ -479,7 +495,7 @@ fn install_blame_annotation_hover_handler(
             let pos = event.position;
             let area = if message.contains(&pos) {
                 Some(AnnotArea::Message)
-            } else if prior_icon.contains(&pos) {
+            } else if prior_enabled && prior_icon.contains(&pos) {
                 Some(AnnotArea::PriorIcon)
             } else if browse_icon.contains(&pos) {
                 Some(AnnotArea::BrowseIcon)

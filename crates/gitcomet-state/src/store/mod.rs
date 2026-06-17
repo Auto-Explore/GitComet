@@ -500,41 +500,6 @@ impl AppStore {
                             },
                         );
                     }
-                    Msg::SelectDiff { repo_id, target } => {
-                        let mut effects = reducer::SelectDiffEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
-                            fill_select_diff_inline(
-                                app_state,
-                                repo_id,
-                                target,
-                                false,
-                                &mut effects,
-                            );
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                            effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
-                    }
                     Msg::StagePath { repo_id, path } => {
                         let mut effects = reducer::SinglePathActionEffects::new();
                         let effects = {

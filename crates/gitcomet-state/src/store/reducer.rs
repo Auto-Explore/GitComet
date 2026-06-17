@@ -114,6 +114,10 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::ResetBrowseToLive { .. }
+            | Msg::ViewerNavBack { .. }
+            | Msg::ViewerNavForward { .. }
+            | Msg::GlobalNavBack { .. }
+            | Msg::GlobalNavForward { .. }
             | Msg::StageHunk { .. }
             | Msg::UnstageHunk { .. }
             | Msg::ApplyWorktreePatch { .. }
@@ -635,6 +639,114 @@ pub(super) fn reduce(
     state: &mut AppState,
     msg: Msg,
 ) -> Vec<Effect> {
+    let reconcile = !matches!(
+        msg,
+        Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
+    );
+    let push = is_view_navigation(&msg);
+    let is_global_nav = matches!(
+        msg,
+        Msg::GlobalNavBack { .. } | Msg::GlobalNavForward { .. }
+    );
+
+    if reconcile {
+        reconcile_active_nav_history(state, false);
+    }
+
+    let effects = reduce_inner(repos, id_alloc, state, msg);
+
+    if reconcile {
+        reconcile_active_nav_history(state, push);
+    }
+
+    // ── Nav-history tracing ──
+    if push || reconcile || is_global_nav {
+        let repo_id = state.active_repo;
+        let nh = repo_id.and_then(|rid| {
+            state
+                .repos
+                .iter()
+                .find(|r| r.id == rid)
+                .map(|r| &r.nav_history)
+        });
+        let trace_label = if is_global_nav {
+            "NAV"
+        } else if push {
+            "PUSH"
+        } else {
+            "FOLD"
+        };
+        let snap = repo_id.and_then(|rid| {
+            state
+                .repos
+                .iter()
+                .find(|r| r.id == rid)
+                .map(|r| r.main_view_snapshot())
+        });
+        if let (Some(nh), Some(snap)) = (nh, snap) {
+            eprintln!(
+                "nav-trace: {:<5} | cursor={}/{} | diff={:?} preview={} commit={}",
+                trace_label,
+                nh.cursor,
+                nh.entries.len(),
+                snap.diff_target
+                    .as_ref()
+                    .map(|t| match t {
+                        gitcomet_core::domain::DiffTarget::Commit { path: Some(p), .. } =>
+                            format!("file:{}", p.display()),
+                        _ => "target".into(),
+                    })
+                    .unwrap_or_else(|| "none".into()),
+                snap.content_preview as u8,
+                snap.selected_commit
+                    .as_ref()
+                    .map(|c| c.as_ref().get(0..6).unwrap_or(c.as_ref()))
+                    .unwrap_or("none"),
+            );
+        }
+    }
+
+    effects
+}
+
+/// Whether `msg` is a user-initiated navigation that should create a new global
+/// back/forward step (as opposed to a background change folded into the current
+/// step). `GlobalNav*` replays are handled separately and never reach here as a
+/// "push".
+fn is_view_navigation(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::SelectDiff { .. }
+            | Msg::SelectConflictDiff { .. }
+            | Msg::SelectCommit { .. }
+            | Msg::OpenFileContent { .. }
+            | Msg::BrowseRepositoryAtCommit { .. }
+            | Msg::ResetBrowseToLive { .. }
+            | Msg::OpenInlineSubmoduleDiff { .. }
+            | Msg::SelectInlineSubmoduleDiff { .. }
+            | Msg::CloseInlineSubmoduleDiff { .. }
+    )
+}
+
+/// Sync the active repo's global navigation history against the current
+/// main-view snapshot. See [`crate::model::NavStack::reconcile`].
+fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
+    let Some(repo_id) = state.active_repo else {
+        return;
+    };
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return;
+    };
+    let cur = repo.main_view_snapshot();
+    repo.nav_history.reconcile(cur, push);
+}
+
+fn reduce_inner(
+    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    msg: Msg,
+) -> Vec<Effect> {
     if msg_requires_available_git(&msg) && !state.git_runtime.is_available() {
         return Vec::new();
     }
@@ -803,6 +915,18 @@ pub(super) fn reduce(
             effects::browse_repository_at_commit(state, repo_id, commit_id)
         }
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
+        Msg::ViewerNavBack { repo_id } => {
+            diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Back)
+        }
+        Msg::ViewerNavForward { repo_id } => {
+            diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Forward)
+        }
+        Msg::GlobalNavBack { repo_id } => {
+            diff_selection::global_nav(state, repo_id, crate::model::ViewNavDir::Back)
+        }
+        Msg::GlobalNavForward { repo_id } => {
+            diff_selection::global_nav(state, repo_id, crate::model::ViewNavDir::Forward)
+        }
         Msg::SetSidebarMode { mode } => effects::set_sidebar_mode(state, mode),
         Msg::StageHunk { repo_id, patch } => {
             begin_local_action(state, repo_id);
@@ -1743,5 +1867,398 @@ pub(super) fn reduce(
 
             effects
         }
+    }
+}
+
+#[cfg(test)]
+mod nav_history_tests {
+    use super::*;
+    use crate::model::{AppState, RepoState};
+    use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, RepoSpec};
+    use gitcomet_core::process::{
+        GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
+    };
+    use std::sync::atomic::AtomicU64;
+
+    fn available_state_with_repo(repo_id: RepoId) -> AppState {
+        let mut state = AppState::default();
+        state.git_runtime = GitRuntimeState {
+            preference: GitExecutablePreference::SystemPath,
+            availability: GitExecutableAvailability::Available {
+                version_output: "git version 2.0.0".to_string(),
+            },
+        };
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(repo_id);
+        state
+    }
+
+    fn dispatch(state: &mut AppState, msg: Msg) {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(99);
+        let _ = reduce(&mut repos, &id_alloc, state, msg);
+    }
+
+    fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
+        state.repos.iter().find(|r| r.id == repo_id).unwrap()
+    }
+
+    #[test]
+    fn opening_a_file_diff_is_recorded_and_back_restores_the_log() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let target = DiffTarget::WorkingTree {
+            path: std::path::PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: target.clone(),
+            },
+        );
+        assert_eq!(repo(&state, repo_id).diff_state.diff_target, Some(target));
+        // Origin (history log) seeded + the diff.
+        assert_eq!(repo(&state, repo_id).nav_history.entries.len(), 2);
+
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        assert_eq!(
+            repo(&state, repo_id).diff_state.diff_target,
+            None,
+            "back closes the file diff and shows the history log"
+        );
+
+        dispatch(&mut state, Msg::GlobalNavForward { repo_id });
+        assert!(
+            repo(&state, repo_id).diff_state.diff_target.is_some(),
+            "forward reopens the file diff"
+        );
+    }
+
+    #[test]
+    fn commit_then_file_diffs_are_all_remembered() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let commit_a = CommitId("aaa".into());
+        let file1 = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("file1.rs")),
+        };
+        let file2 = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("file2.rs")),
+        };
+
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_a.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file1.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file2.clone(),
+            },
+        );
+
+        let entries = &repo(&state, repo_id).nav_history.entries;
+        assert!(entries.iter().any(|e| e.diff_target == Some(file1.clone())));
+        assert!(entries.iter().any(|e| e.diff_target == Some(file2.clone())));
+
+        // Back must step one-by-one: file2 diff -> file1 diff -> commit details
+        // (commit selected, no diff) -> history log.
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        assert_eq!(
+            repo(&state, repo_id).diff_state.diff_target,
+            Some(file1.clone())
+        );
+
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(r.diff_state.diff_target, None, "should show commit details");
+        assert_eq!(
+            r.history_state.selected_commit.as_ref(),
+            Some(&commit_a),
+            "commit should still be selected at the details step"
+        );
+
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        assert_eq!(
+            repo(&state, repo_id).history_state.selected_commit,
+            None,
+            "final back returns to the history log with no commit selected"
+        );
+    }
+
+    #[test]
+    fn view_navigation_messages_push_others_fold_in_place() {
+        // User navigations create a new global back/forward step.
+        assert!(is_view_navigation(&Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::WorkingTree {
+                path: std::path::PathBuf::from("a.txt"),
+                area: DiffArea::Unstaged,
+            },
+        }));
+        assert!(is_view_navigation(&Msg::SelectCommit {
+            repo_id: RepoId(1),
+            commit_id: CommitId("a".into()),
+        }));
+        // The file-content viewer's own back/forward does NOT land a global
+        // step — it operates on a separate viewer-level stack so it does not
+        // pollute the global back/forward history.
+        assert!(!is_view_navigation(&Msg::ViewerNavBack {
+            repo_id: RepoId(1)
+        }));
+        // Background / non-navigation messages do not push a step (they are
+        // folded into the current entry in place, so they can't pollute history).
+        assert!(!is_view_navigation(&Msg::DismissBannerError));
+    }
+
+    #[test]
+    fn closure_and_replay_messages_are_not_view_navigations() {
+        assert!(!is_view_navigation(&Msg::ClearDiffSelection {
+            repo_id: RepoId(1),
+        }));
+        assert!(!is_view_navigation(&Msg::ClearCommitSelection {
+            repo_id: RepoId(1),
+        }));
+        assert!(!is_view_navigation(&Msg::ViewerNavBack {
+            repo_id: RepoId(1),
+        }));
+        assert!(!is_view_navigation(&Msg::ViewerNavForward {
+            repo_id: RepoId(1),
+        }));
+    }
+
+    #[test]
+    fn clearing_diff_folds_in_place_and_single_back_goes_to_commit_details() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let commit_a = CommitId("aaa".into());
+        let file = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("file1.rs")),
+        };
+
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_a.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file.clone(),
+            },
+        );
+        // User clicks the same committed file again, which dispatches
+        // ClearDiffSelection to close the diff view.
+        dispatch(&mut state, Msg::ClearDiffSelection { repo_id });
+
+        let entries = &repo(&state, repo_id).nav_history.entries;
+        // After folding in-place, no duplicate entry remains—the file
+        // diff entry is collapsed back into the commit-details entry.
+        assert_eq!(
+            entries.len(),
+            2,
+            "fold-and-collapse must not create a new entry"
+        );
+        assert_eq!(
+            repo(&state, repo_id).nav_history.cursor,
+            1,
+            "cursor should be back at the commit-details step"
+        );
+
+        // One GlobalNavBack from the commit-details view goes to the
+        // history log (origin), confirming the stack did not bloat.
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(r.diff_state.diff_target, None);
+        assert_eq!(r.history_state.selected_commit, None);
+        assert!(!r.nav_history.can_back());
+    }
+
+    #[test]
+    fn clearing_diff_without_folding_previous_allows_correct_back() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let commit_a = CommitId("aaa".into());
+        let commit_b = CommitId("bbb".into());
+        let file = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("file1.rs")),
+        };
+
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_a.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file.clone(),
+            },
+        );
+        // Switch to a different commit (no fold-collapse because the
+        // new state differs from the previous entry).
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_b.clone(),
+            },
+        );
+
+        let r = repo(&state, repo_id);
+        assert_eq!(
+            r.nav_history.entries.len(),
+            4,
+            "select-commit pushes a new entry when the commit changes"
+        );
+        assert_eq!(r.nav_history.cursor, 3);
+        assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_b));
+
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(
+            r.diff_state.diff_target,
+            Some(file),
+            "back should reopen the file diff"
+        );
+        assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_a));
+    }
+
+    #[test]
+    fn browsing_committed_files_within_a_commit_keeps_commit_selected_on_back() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let commit_a = CommitId("aaa".into());
+        let file_a = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("src/a.rs")),
+        };
+        let file_b = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("src/b.rs")),
+        };
+        let file_c = DiffTarget::Commit {
+            commit_id: commit_a.clone(),
+            path: Some(std::path::PathBuf::from("src/c.rs")),
+        };
+
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit_a.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file_a.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file_b.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: file_c.clone(),
+            },
+        );
+
+        let r = repo(&state, repo_id);
+        // Origin + commit details + three file diffs = 5 entries.
+        assert_eq!(
+            r.nav_history.entries.len(),
+            5,
+            "each file selection must push a distinct history entry"
+        );
+        assert_eq!(r.nav_history.cursor, 4);
+        assert_eq!(r.diff_state.diff_target, Some(file_c.clone()));
+
+        // ── Back 1: file_c → file_b ──
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(
+            r.diff_state.diff_target,
+            Some(file_b.clone()),
+            "first back must return to the previously viewed file (b)"
+        );
+        assert_eq!(
+            r.history_state.selected_commit.as_ref(),
+            Some(&commit_a),
+            "commit must remain selected while browsing files"
+        );
+        assert_eq!(r.nav_history.cursor, 3);
+
+        // ── Back 2: file_b → file_a ──
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(
+            r.diff_state.diff_target,
+            Some(file_a.clone()),
+            "second back must return to the first opened file (a)"
+        );
+        assert_eq!(r.history_state.selected_commit.as_ref(), Some(&commit_a));
+        assert_eq!(r.nav_history.cursor, 2);
+
+        // ── Back 3: file_a → commit details (no diff, commit still selected) ──
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(
+            r.diff_state.diff_target, None,
+            "third back closes the last file diff and shows commit details"
+        );
+        assert_eq!(
+            r.history_state.selected_commit.as_ref(),
+            Some(&commit_a),
+            "commit must still be selected — back must not deselect the commit"
+        );
+        assert_eq!(r.nav_history.cursor, 1);
+
+        // ── Back 4: commit details → history log ──
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        let r = repo(&state, repo_id);
+        assert_eq!(r.diff_state.diff_target, None);
+        assert_eq!(
+            r.history_state.selected_commit, None,
+            "only the fourth back returns to the history log"
+        );
+        assert_eq!(r.nav_history.cursor, 0);
+        assert!(!r.nav_history.can_back());
     }
 }
