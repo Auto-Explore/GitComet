@@ -515,6 +515,27 @@ pub(in crate::view) fn diff_split_column_widths(
 
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
+fn scroll_command_palette_to_selected(
+    sel: usize,
+    matches: &[&'static command_palette::CommandEntry],
+    scroll_handle: &ScrollHandle,
+    cx: &mut impl BorrowAppContext,
+) {
+    let item_h = ui_scale::UiScale::current(cx).px(32.0);
+    let viewport_h = ui_scale::UiScale::current(cx).px(400.0) - item_h;
+    let mut headers_before = 0usize;
+    let mut cur = None;
+    for cmd in matches.iter().take(sel.saturating_add(1)) {
+        if cur != Some(cmd.category) {
+            cur = Some(cmd.category);
+            headers_before += 1;
+        }
+    }
+    let item_y = item_h * (sel + headers_before) as f32;
+    let target = (item_y - viewport_h * 0.5).max(px(0.0));
+    scroll_handle.set_offset(point(px(0.0), target));
+}
+
 impl GitCometView {
     pub(in crate::view) fn open_popover_at(
         &mut self,
@@ -575,11 +596,11 @@ impl GitCometView {
                         return;
                     }
 
+                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
+
                     let arrow_up = input.update(cx, |input, _| input.take_arrow_up_pressed());
                     let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
                     if arrow_up || shift_tab {
-                        let query =
-                            input.read_with(cx, |input, _| input.text().trim().to_string());
                         let has_repo = this.active_repo_id().is_some();
                         let matches =
                             this.command_palette.filtered_commands(has_repo, &query);
@@ -594,21 +615,12 @@ impl GitCometView {
                                 });
                         }
                         if let Some(sel) = this.command_palette.selected_index {
-                            let item_h = ui_scale::UiScale::current(cx).px(32.0);
-                            let viewport_h =
-                                ui_scale::UiScale::current(cx).px(400.0) - item_h;
-                            let mut headers_before = 0usize;
-                            let mut cur = None;
-                            for cmd in matches.iter().take(sel.saturating_add(1)) {
-                                if cur != Some(cmd.category) {
-                                    cur = Some(cmd.category);
-                                    headers_before += 1;
-                                }
-                            }
-                            let item_y = item_h * (sel + headers_before) as f32;
-                            let target = (item_y - viewport_h * 0.5).max(px(0.0));
-                            this.command_palette.scroll_handle
-                                .set_offset(point(px(0.0), target));
+                            scroll_command_palette_to_selected(
+                                sel,
+                                &matches,
+                                &this.command_palette.scroll_handle,
+                                cx,
+                            );
                         }
                         cx.notify();
                         return;
@@ -618,8 +630,6 @@ impl GitCometView {
                         input.update(cx, |input, _| input.take_arrow_down_pressed());
                     let tab = input.update(cx, |input, _| input.take_tab_pressed());
                     if arrow_down || tab {
-                        let query =
-                            input.read_with(cx, |input, _| input.text().trim().to_string());
                         let has_repo = this.active_repo_id().is_some();
                         let matches =
                             this.command_palette.filtered_commands(has_repo, &query);
@@ -634,21 +644,12 @@ impl GitCometView {
                                 });
                         }
                         if let Some(sel) = this.command_palette.selected_index {
-                            let item_h = ui_scale::UiScale::current(cx).px(32.0);
-                            let viewport_h =
-                                ui_scale::UiScale::current(cx).px(400.0) - item_h;
-                            let mut headers_before = 0usize;
-                            let mut cur = None;
-                            for cmd in matches.iter().take(sel.saturating_add(1)) {
-                                if cur != Some(cmd.category) {
-                                    cur = Some(cmd.category);
-                                    headers_before += 1;
-                                }
-                            }
-                            let item_y = item_h * (sel + headers_before) as f32;
-                            let target = (item_y - viewport_h * 0.5).max(px(0.0));
-                            this.command_palette.scroll_handle
-                                .set_offset(point(px(0.0), target));
+                            scroll_command_palette_to_selected(
+                                sel,
+                                &matches,
+                                &this.command_palette.scroll_handle,
+                                cx,
+                            );
                         }
                         cx.notify();
                         return;
@@ -657,8 +658,6 @@ impl GitCometView {
                     let enter_pressed =
                         input.update(cx, |input, _| input.take_enter_pressed());
                     if enter_pressed {
-                        let query =
-                            input.read_with(cx, |input, _| input.text().trim().to_string());
                         let has_repo = this.active_repo_id().is_some();
                         let matches =
                             this.command_palette.filtered_commands(has_repo, &query);
@@ -677,9 +676,12 @@ impl GitCometView {
                         return;
                     }
 
-                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
                     if query != this.command_palette.previous_query.as_ref() {
-                        this.command_palette.selected_index = None;
+                        let has_repo = this.active_repo_id().is_some();
+                        let matches =
+                            this.command_palette.filtered_commands(has_repo, &query);
+                        this.command_palette.selected_index =
+                            if matches.is_empty() { None } else { Some(0) };
                         this.command_palette.previous_query = query.into();
                         this.command_palette
                             .scroll_handle
@@ -1204,7 +1206,22 @@ impl GitCometView {
                 }
             }
             "stash-pop" => {
-                cx.notify();
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::PopStash { repo_id, index: 0 });
+                    self.store.dispatch(Msg::LoadStashes { repo_id });
+                }
+            }
+            "stash-apply" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::ApplyStash { repo_id, index: 0 });
+                    self.store.dispatch(Msg::LoadStashes { repo_id });
+                }
+            }
+            "stash-drop" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::DropStash { repo_id, index: 0 });
+                    self.store.dispatch(Msg::LoadStashes { repo_id });
+                }
             }
             "merge" => {
                 cx.notify();

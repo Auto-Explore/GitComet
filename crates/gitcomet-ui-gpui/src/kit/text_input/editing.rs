@@ -2056,12 +2056,16 @@ impl TextInput {
         let shift = event.keystroke.modifiers.shift;
 
         if key == "up" {
+            // Intentionally duplicated with the Up action handler (up()).
+            // This key_down path is a fallback: on some platforms (e.g.
+            // IME composition on Wayland) action dispatch may be suppressed.
             self.interaction.arrow_up_pressed = true;
             cx.notify();
             return;
         }
 
         if key == "down" {
+            // Intentionally duplicated with the Down action handler (down()).
             self.interaction.arrow_down_pressed = true;
             cx.notify();
             return;
