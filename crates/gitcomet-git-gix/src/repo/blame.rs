@@ -18,6 +18,7 @@ struct BlameCommitMetadata {
     author: Arc<str>,
     author_time_unix: Option<i64>,
     summary: Arc<str>,
+    body: Option<Arc<str>>,
 }
 
 fn blame_commit_metadata<'a>(
@@ -41,18 +42,43 @@ fn blame_commit_metadata<'a>(
                 ),
                 Err(_) => (Arc::<str>::default(), None),
             };
-            let summary_bytes = commit
-                .message_raw_sloppy()
+            let raw_message = commit.message_raw_sloppy();
+            let summary_bytes = raw_message
                 .lines()
                 .next()
                 .unwrap_or_default();
             let summary = bstr_to_arc_str(summary_bytes);
+            let body = {
+                let bytes: &[u8] = raw_message.as_ref();
+                if let Some(body_idx) = bytes.windows(2).position(|w| w == b"\n\n") {
+                    let body_bytes = &bytes[body_idx + 2..];
+                    let body_bytes = if body_bytes.first() == Some(&b'\n') {
+                        &body_bytes[1..]
+                    } else {
+                        body_bytes
+                    };
+                    let body_bytes = if body_bytes.last() == Some(&b'\n') {
+                        &body_bytes[..body_bytes.len() - 1]
+                    } else {
+                        body_bytes
+                    };
+                    if body_bytes.is_empty() {
+                        None
+                    } else {
+                        let text = bstr_to_arc_str(body_bytes);
+                        Some(text)
+                    }
+                } else {
+                    None
+                }
+            };
 
             Ok(entry.insert(BlameCommitMetadata {
                 commit_id_text: oid_to_arc_str(&commit_id),
                 author,
                 author_time_unix,
                 summary,
+                body,
             }))
         }
     }
@@ -110,14 +136,15 @@ impl GixRepo {
         let git_path = gix::path::os_str_into_bstr(path.as_os_str())
             .map(gix::path::to_unix_separators_on_windows)
             .map_err(|_| Error::new(ErrorKind::Unsupported("path is not valid UTF-8")))?;
-        let outcome = repo
+        let outcome = match repo
             .blame_file(git_path.as_ref(), suspect, Default::default())
-            .map_err(|e| {
-                Error::new(ErrorKind::Backend(format!(
-                    "gix blame {}: {e}",
-                    path.display()
-                )))
-            })?;
+        {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                let msg = format!("gix blame {}: {e}", path.display());
+                return Err(Error::new(ErrorKind::Backend(msg)));
+            }
+        };
 
         let mut metadata_cache = HashMap::default();
         let total_lines = outcome
@@ -152,6 +179,7 @@ impl GixRepo {
                     author: metadata.author.clone(),
                     author_time_unix: metadata.author_time_unix,
                     summary: metadata.summary.clone(),
+                    body: metadata.body.clone(),
                     line: blame_line_text(line),
                 });
             }

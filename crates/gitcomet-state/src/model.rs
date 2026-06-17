@@ -1302,6 +1302,7 @@ mod tests {
             author: "a".into(),
             author_time_unix: None,
             summary: "s1".into(),
+            body: None,
             line: "line".to_string(),
         }]));
         repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {

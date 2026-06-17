@@ -343,6 +343,7 @@ fn line_number_string(n: Option<u32>) -> SharedString {
     })
 }
 
+mod blame;
 mod canvas;
 #[cfg(test)]
 mod canvas_tests;
@@ -385,6 +386,8 @@ pub(in crate::view) use self::diff_canvas::{
     DiffPaintRecord, clear_diff_paint_log_for_tests, diff_paint_log_for_tests,
 };
 pub(in crate::view) use self::diff_canvas::{
+    AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,
+    DIFF_ANNOTATION_MIN_WIDTH_PX,
     DiffTextWrapSlice, DiffWrapByteRange, diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,

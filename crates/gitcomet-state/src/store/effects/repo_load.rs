@@ -1108,6 +1108,36 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_open_file_at_commit_parent(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    path: std::path::PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        match repo.commit_details(&commit_id) {
+            Ok(details) => {
+                if let Some(parent) = details.parent_ids.first() {
+                    send_or_log(
+                        &msg_tx,
+                        Msg::OpenFileContent {
+                            repo_id,
+                            source: gitcomet_core::domain::FileSource::Commit(parent.clone()),
+                            path,
+                        },
+                    );
+                }
+                // Root commit: no prior revision to open.
+            }
+            Err(_) => {
+                // Could not resolve the commit's parent; leave the view unchanged.
+            }
+        }
+    });
+}
+
 pub(super) fn schedule_load_recent_commit_messages(
     executor: &TaskExecutor,
     repos: &RepoMap,

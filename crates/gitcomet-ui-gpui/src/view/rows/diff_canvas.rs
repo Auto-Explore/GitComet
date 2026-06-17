@@ -10,8 +10,8 @@ use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use gpui::{
-    App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
-    Styled, TextRun, TextStyle, Window, fill, point, px, size,
+    App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Hsla, Pixels,
+    Styled, TextRun, TextStyle, TransformationMatrix, TruncateFrom, Window, fill, point, px, size,
 };
 use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
@@ -35,7 +35,485 @@ const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 const DIFF_ROW_BACKGROUND_OVERDRAW_PX: f32 = 1.0;
 
+/// Default width of the blame/annotate column shown to the left of the diff
+/// content when annotate is enabled. The live width is stored on the view and
+/// is user-resizable; this is only the initial value and clamp reference.
+pub(in crate::view) const DIFF_ANNOTATION_COLUMN_WIDTH_PX: f32 = 300.0;
+/// Min/max bounds the annotation column can be dragged to.
+pub(in crate::view) const DIFF_ANNOTATION_MIN_WIDTH_PX: f32 = 170.0;
+pub(in crate::view) const DIFF_ANNOTATION_MAX_WIDTH_PX: f32 = 640.0;
+/// Width of the recency "heat" bar at the far left of the annotation column.
+pub(in crate::view) const DIFF_ANNOTATION_BORDER_WIDTH_PX: f32 = 3.0;
+/// Gap between annotation sub-columns.
+pub(in crate::view) const DIFF_ANNOTATION_GAP_PX: f32 = 6.0;
+/// Fixed width of the "X ago" sub-column.
+pub(in crate::view) const DIFF_ANNOTATION_WHEN_WIDTH_PX: f32 = 82.0;
+/// Fixed width of the author-initials sub-column.
+pub(in crate::view) const DIFF_ANNOTATION_INITIALS_WIDTH_PX: f32 = 22.0;
+/// Cell width reserved for each trailing action icon.
+pub(in crate::view) const DIFF_ANNOTATION_ICON_WIDTH_PX: f32 = 16.0;
+/// Rendered (square) size of each action icon within its cell.
+pub(in crate::view) const DIFF_ANNOTATION_ICON_GLYPH_PX: f32 = 13.0;
+
+pub(in crate::view) const DIFF_ANNOTATION_PRIOR_ICON: &str = "icons/undo.svg";
+pub(in crate::view) const DIFF_ANNOTATION_BROWSE_ICON: &str = "icons/history.svg";
+
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
+
+/// Per-row blame data prepared for painting in the annotation column.
+#[derive(Clone)]
+pub(in crate::view) struct RowBlamePaint {
+    /// Recency "heat" color for the left border bar (older → newer).
+    pub(in crate::view) border: gpui::Rgba,
+    /// Whether to paint the textual annotation + action icons. `false` on
+    /// interior lines of a same-commit run (only the border bar is painted).
+    pub(in crate::view) show_text: bool,
+    /// Relative time ("3 days ago").
+    pub(in crate::view) when: SharedString,
+    /// Author initials.
+    pub(in crate::view) initials: SharedString,
+    /// Commit summary (truncated with an ellipsis at paint time).
+    pub(in crate::view) summary: SharedString,
+    /// Commit message body (everything after the first line), used for tooltips.
+    pub(in crate::view) body: Option<SharedString>,
+    /// Commit attributed to this line, used for click handling.
+    pub(in crate::view) commit_id: gitcomet_core::domain::CommitId,
+    /// File path of the annotated view, used by the "view prior change" action.
+    pub(in crate::view) path: std::sync::Arc<std::path::Path>,
+}
+
+/// Fixed sub-column geometry for the annotation column, shared by painting and
+/// hit-testing so they stay in sync.
+pub(in crate::view) struct BlameColumnLayout {
+    pub(in crate::view) border: Bounds<Pixels>,
+    pub(in crate::view) when_x: Pixels,
+    pub(in crate::view) initials_x: Pixels,
+    pub(in crate::view) message: Bounds<Pixels>,
+    pub(in crate::view) prior_icon: Bounds<Pixels>,
+    pub(in crate::view) browse_icon: Bounds<Pixels>,
+}
+
+pub(in crate::view) fn blame_column_layout(
+    column_left: Pixels,
+    column_width: Pixels,
+    row_top: Pixels,
+    row_height: Pixels,
+    ui_scale_percent: u32,
+) -> BlameColumnLayout {
+    let border_w = diff_scaled_px(DIFF_ANNOTATION_BORDER_WIDTH_PX, ui_scale_percent);
+    let gap = diff_scaled_px(DIFF_ANNOTATION_GAP_PX, ui_scale_percent);
+    let when_w = diff_scaled_px(DIFF_ANNOTATION_WHEN_WIDTH_PX, ui_scale_percent);
+    let initials_w = diff_scaled_px(DIFF_ANNOTATION_INITIALS_WIDTH_PX, ui_scale_percent);
+    let icon_w = diff_scaled_px(DIFF_ANNOTATION_ICON_WIDTH_PX, ui_scale_percent);
+
+    let right = column_left + column_width;
+    let cell = |x: Pixels, w: Pixels| Bounds::new(point(x, row_top), size(w, row_height));
+
+    let browse_x = right - gap - icon_w;
+    let prior_x = browse_x - gap - icon_w;
+    let when_x = column_left + border_w + gap;
+    let initials_x = when_x + when_w + gap;
+    let message_x = initials_x + initials_w + gap;
+    let message_w = (prior_x - gap - message_x).max(px(0.0));
+
+    BlameColumnLayout {
+        border: cell(column_left, border_w),
+        when_x,
+        initials_x,
+        message: cell(message_x, message_w),
+        prior_icon: cell(prior_x, icon_w),
+        browse_icon: cell(browse_x, icon_w),
+    }
+}
+
+/// Fold blame content into a row's canvas revision key so the cached canvas
+/// repaints when the blame attribution (color/text/commit/width) changes.
+fn mix_blame_revision(base: u64, annotation_width: Pixels, mouse_pos: gpui::Point<Pixels>, blame: Option<&RowBlamePaint>) -> u64 {
+    let mut hasher = FxHasher::default();
+    base.hash(&mut hasher);
+    f32::from(annotation_width).to_bits().hash(&mut hasher);
+    f32::from(mouse_pos.x).to_bits().hash(&mut hasher);
+    f32::from(mouse_pos.y).to_bits().hash(&mut hasher);
+    if let Some(blame) = blame {
+        hash_rgba(&mut hasher, blame.border);
+        blame.show_text.hash(&mut hasher);
+        hash_shared_string(&mut hasher, &blame.when);
+        hash_shared_string(&mut hasher, &blame.initials);
+        hash_shared_string(&mut hasher, &blame.summary);
+        blame.body.hash(&mut hasher);
+        blame.commit_id.0.as_ref().hash(&mut hasher);
+    } else {
+        u8::MAX.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Paint a single line of text truncated to `max_width` with a trailing "…".
+fn paint_truncated_text(
+    text: &SharedString,
+    x: Pixels,
+    y: Pixels,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    metrics: LineMetrics,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if text.is_empty() || max_width <= px(0.0) {
+        return;
+    }
+    let mut style = diff_text_style(window);
+    style.color = color.into();
+    let runs = vec![style.to_run(text.len())];
+    let mut wrapper = window
+        .text_system()
+        .line_wrapper(style.font(), metrics.font_size);
+    let (truncated, runs) =
+        wrapper.truncate_line(text.clone(), max_width, "…", &runs, TruncateFrom::End);
+    let shaped = window
+        .text_system()
+        .shape_line(truncated, metrics.font_size, runs.as_ref(), None);
+    let _ = shaped.paint(
+        point(x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+}
+
+/// Paint the annotation column for one row: a recency border bar and, on run
+/// starts, the "X ago | initials | summary" sub-columns plus two action icons.
+/// When `hovered` is Some, that area gets a highlight + underline (message) or
+/// brighter color (icons).
+#[allow(clippy::too_many_arguments)]
+fn paint_blame_annotation(
+    blame: &RowBlamePaint,
+    layout: &BlameColumnLayout,
+    y: Pixels,
+    text_color: gpui::Rgba,
+    theme: AppTheme,
+    metrics: LineMetrics,
+    when_metrics: LineMetrics,
+    hovered: Option<AnnotArea>,
+    ui_scale_percent: u32,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.paint_quad(fill(layout.border, blame.border));
+
+    if !blame.show_text {
+        return;
+    }
+
+    paint_gutter_text(&blame.when, layout.when_x, y, text_color, when_metrics, window, cx);
+    paint_gutter_text(
+        &blame.initials,
+        layout.initials_x,
+        y,
+        text_color,
+        metrics,
+        window,
+        cx,
+    );
+    window.paint_layer(layout.message, |window| {
+        let message_color = if hovered == Some(AnnotArea::Message) {
+            theme.colors.accent
+        } else {
+            text_color
+        };
+        paint_truncated_text(
+            &blame.summary,
+            layout.message.left(),
+            y,
+            layout.message.size.width,
+            message_color,
+            metrics,
+            window,
+            cx,
+        );
+        if hovered == Some(AnnotArea::Message) {
+            let underline_y = y + metrics.line_height + px(0.5);
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(layout.message.left(), underline_y),
+                    size(layout.message.size.width, px(1.0)),
+                ),
+                theme.colors.accent,
+            ));
+        }
+    });
+
+    let icon_color = if hovered == Some(AnnotArea::PriorIcon) {
+        theme.colors.accent
+    } else {
+        crate::theme::with_alpha(text_color, 0.6)
+    };
+    paint_blame_icon(
+        DIFF_ANNOTATION_PRIOR_ICON,
+        layout.prior_icon,
+        icon_color,
+        ui_scale_percent,
+        window,
+        cx,
+    );
+    let icon_color = if hovered == Some(AnnotArea::BrowseIcon) {
+        theme.colors.accent
+    } else {
+        crate::theme::with_alpha(text_color, 0.6)
+    };
+    paint_blame_icon(
+        DIFF_ANNOTATION_BROWSE_ICON,
+        layout.browse_icon,
+        icon_color,
+        ui_scale_percent,
+        window,
+        cx,
+    );
+}
+
+/// Paint an action icon centered within its cell.
+fn paint_blame_icon(
+    path: &'static str,
+    cell: Bounds<Pixels>,
+    color: gpui::Rgba,
+    ui_scale_percent: u32,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let glyph = diff_scaled_px(DIFF_ANNOTATION_ICON_GLYPH_PX, ui_scale_percent);
+    let glyph = glyph.min(cell.size.width).min(cell.size.height);
+    let ox = cell.left() + (cell.size.width - glyph) * 0.5;
+    let oy = cell.top() + (cell.size.height - glyph) * 0.5;
+    let bounds = Bounds::new(point(ox, oy), size(glyph, glyph));
+    let _ = window.paint_svg(
+        bounds,
+        path.into(),
+        None,
+        TransformationMatrix::unit(),
+        Hsla::from(color),
+        cx,
+    );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(in crate::view) enum AnnotArea {
+    Message,
+    PriorIcon,
+    BrowseIcon,
+}
+
+/// Hitboxes for annotation sub-column interactive areas.
+#[derive(Clone, Debug)]
+struct AnnotHitboxes {
+    message: Hitbox,
+    prior_icon: Hitbox,
+    browse_icon: Hitbox,
+}
+
+/// Register click handling for a row's annotation column.
+fn install_blame_annotation_mouse_handler(
+    window: &mut Window,
+    view: &Entity<MainPaneView>,
+    message_hitbox: &Hitbox,
+    prior_icon_hitbox: &Hitbox,
+    browse_icon_hitbox: &Hitbox,
+    commit_id: gitcomet_core::domain::CommitId,
+    path: std::sync::Arc<std::path::Path>,
+) {
+    window.on_mouse_event({
+        let view = view.clone();
+        let message_hitbox = message_hitbox.clone();
+        let prior_icon_hitbox = prior_icon_hitbox.clone();
+        let browse_icon_hitbox = browse_icon_hitbox.clone();
+        move |event: &gpui::MouseDownEvent, phase, _window, cx| {
+            if phase != DispatchPhase::Bubble || event.button != gpui::MouseButton::Left {
+                return;
+            }
+            let pos = event.position;
+            let commit_id = commit_id.clone();
+            let path = path.clone();
+            let action = if browse_icon_hitbox.contains(&pos) {
+                BlameClickAction::Browse
+            } else if prior_icon_hitbox.contains(&pos) {
+                BlameClickAction::PriorRevision
+            } else if message_hitbox.contains(&pos) {
+                BlameClickAction::OpenDetails
+            } else {
+                return;
+            };
+            view.update(cx, |this, cx| {
+                let Some(repo_id) = this.active_repo_id() else {
+                    return;
+                };
+                let msg = match action {
+                    BlameClickAction::Browse => Msg::OpenFileContent {
+                        repo_id,
+                        source: gitcomet_core::domain::FileSource::Commit(commit_id),
+                        path: path.to_path_buf(),
+                    },
+                    BlameClickAction::PriorRevision => Msg::OpenFileAtCommitParent {
+                        repo_id,
+                        commit_id,
+                        path: path.to_path_buf(),
+                    },
+                    BlameClickAction::OpenDetails => Msg::SelectCommit { repo_id, commit_id },
+                };
+                this.store.dispatch(msg);
+                cx.notify();
+            });
+        }
+    });
+}
+
+enum BlameClickAction {
+    OpenDetails,
+    PriorRevision,
+    Browse,
+}
+
+/// Paint the annotation column for one row: border bar, text, icons, and
+/// hover effects. Installs click handlers and sets cursor + tooltip via hitboxes.
+#[allow(clippy::too_many_arguments)]
+fn render_blame_column(
+    blame: &RowBlamePaint,
+    row_bounds: Bounds<Pixels>,
+    annot_w: Pixels,
+    y: Pixels,
+    theme: AppTheme,
+    metrics: LineMetrics,
+    when_metrics: LineMetrics,
+    ui_scale_percent: u32,
+    visible_ix: usize,
+    annot_hitboxes: Option<&AnnotHitboxes>,
+    view: &Entity<MainPaneView>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let layout = blame_column_layout(
+        row_bounds.left(),
+        annot_w,
+        row_bounds.top(),
+        row_bounds.size.height,
+        ui_scale_percent,
+    );
+
+    let mouse_pos = window.mouse_position();
+    let hovered = annot_hitboxes.and_then(|hb| {
+        if hb.message.bounds.contains(&mouse_pos) {
+            Some(AnnotArea::Message)
+        } else if hb.prior_icon.bounds.contains(&mouse_pos) {
+            Some(AnnotArea::PriorIcon)
+        } else if hb.browse_icon.bounds.contains(&mouse_pos) {
+            Some(AnnotArea::BrowseIcon)
+        } else {
+            None
+        }
+    });
+
+    if let Some(hb) = annot_hitboxes {
+        window.set_cursor_style(CursorStyle::PointingHand, &hb.message);
+        window.set_cursor_style(CursorStyle::PointingHand, &hb.prior_icon);
+        window.set_cursor_style(CursorStyle::PointingHand, &hb.browse_icon);
+    }
+
+    paint_blame_annotation(
+        blame,
+        &layout,
+        y,
+        theme.colors.text_muted,
+        theme,
+        metrics,
+        when_metrics,
+        hovered,
+        ui_scale_percent,
+        window,
+        cx,
+    );
+
+    if blame.show_text
+        && let Some(hb) = annot_hitboxes
+    {
+        install_blame_annotation_mouse_handler(
+            window,
+            view,
+            &hb.message,
+            &hb.prior_icon,
+            &hb.browse_icon,
+            blame.commit_id.clone(),
+            blame.path.clone(),
+        );
+        install_blame_annotation_hover_handler(
+            window,
+            view,
+            visible_ix,
+            hb,
+            blame.summary.clone(),
+            blame.body.clone(),
+        );
+    }
+}
+
+/// Register hover handling for a row's annotation column. On every mouse move it
+/// resolves which sub-area (message / prior icon / browse icon) the cursor is
+/// over and, only when that changes for this row, updates the view's hover state
+/// (which drives the accent highlight on repaint) and the shared tooltip host.
+fn install_blame_annotation_hover_handler(
+    window: &mut Window,
+    view: &Entity<MainPaneView>,
+    visible_ix: usize,
+    hitboxes: &AnnotHitboxes,
+    summary: SharedString,
+    body: Option<SharedString>,
+) {
+    window.on_mouse_event({
+        let view = view.clone();
+        let message = hitboxes.message.clone();
+        let prior_icon = hitboxes.prior_icon.clone();
+        let browse_icon = hitboxes.browse_icon.clone();
+        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            let pos = event.position;
+            let area = if message.contains(&pos) {
+                Some(AnnotArea::Message)
+            } else if prior_icon.contains(&pos) {
+                Some(AnnotArea::PriorIcon)
+            } else if browse_icon.contains(&pos) {
+                Some(AnnotArea::BrowseIcon)
+            } else {
+                None
+            };
+
+            // Cheap gate so plain mouse movement doesn't borrow/notify the view
+            // for every visible row: only act when this row's hover changes, and
+            // never clear a hover that belongs to a different row.
+            let next = area.map(|a| (visible_ix, a));
+            let current = view.read(cx).blame_annot_hover;
+            if current == next {
+                return;
+            }
+            if next.is_none() && !matches!(current, Some((ix, _)) if ix == visible_ix) {
+                return;
+            }
+
+            let tooltip = match area {
+                Some(AnnotArea::Message) => Some(body.clone().unwrap_or_else(|| summary.clone())),
+                Some(AnnotArea::PriorIcon) => Some(SharedString::from("View file at parent commit")),
+                Some(AnnotArea::BrowseIcon) => {
+                    Some(SharedString::from("View file at this commit"))
+                }
+                None => None,
+            };
+
+            view.update(cx, |this, cx| {
+                this.update_blame_annot_hover(next, tooltip, cx);
+            });
+        }
+    });
+}
 
 struct DiffTextPaintPayload {
     text: SharedString,
@@ -1010,6 +1488,9 @@ pub(super) fn inline_diff_line_row_canvas(
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
+    annotation_width: Pixels,
+    blame: Option<RowBlamePaint>,
+    mouse_pos: gpui::Point<Pixels>,
 ) -> AnyElement {
     let paint_payload = diff_text_paint_payload(
         styled,
@@ -1028,6 +1509,7 @@ pub(super) fn inline_diff_line_row_canvas(
         paint_payload.text_hash,
         paint_payload.highlights_hash,
     );
+    let revision = mix_blame_revision(revision, annotation_width, mouse_pos, blame.as_ref());
     let text = paint_payload.text;
     let highlights = paint_payload.highlights;
     let highlights_hash = paint_payload.highlights_hash;
@@ -1045,29 +1527,68 @@ pub(super) fn inline_diff_line_row_canvas(
             } else {
                 px(0.0)
             };
-            let text_bounds = inline_text_bounds(bounds, gutter_total, pad);
+            let content_bounds = inset_left(bounds, annotation_width);
+            let text_bounds = inline_text_bounds(content_bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
+            let annot_hitboxes = build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
 
             InlineRowPrepaintState {
                 bounds,
                 pad,
                 gutter_total,
+                annot_w: annotation_width,
                 text_bounds,
                 text_hitbox,
+                annot_hitboxes,
             }
         },
         move |bounds, prepaint, window, cx| {
             let line_metrics = line_metrics(window);
+            let when_metrics = line_metrics_annot_when(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
 
-            window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
+            // Selection must not tint the annotation sidebar: fill it with a
+            // neutral panel color and fill the content area with the row bg.
+            if prepaint.annot_w > px(0.0) {
+                window.paint_quad(fill(
+                    row_bg_fill_bounds(Bounds::new(
+                        prepaint.bounds.origin,
+                        size(prepaint.annot_w, prepaint.bounds.size.height),
+                    )),
+                    theme.colors.surface_bg,
+                ));
+                window.paint_quad(fill(
+                    row_bg_fill_bounds(inset_left(prepaint.bounds, prepaint.annot_w)),
+                    bg,
+                ));
+            } else {
+                window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
+            }
+
+            if let Some(blame) = &blame {
+                render_blame_column(
+                    blame,
+                    prepaint.bounds,
+                    prepaint.annot_w,
+                    y,
+                    theme,
+                    line_metrics,
+                    when_metrics,
+                    ui_scale_percent,
+                    visible_ix,
+                    prepaint.annot_hitboxes.as_ref(),
+                    &view,
+                    window,
+                    cx,
+                );
+            }
 
             if show_line_numbers {
                 paint_gutter_text(
                     &old,
-                    prepaint.bounds.left() + prepaint.pad,
+                    prepaint.bounds.left() + prepaint.annot_w + prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
@@ -1076,7 +1597,7 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
                 paint_gutter_text(
                     &new,
-                    prepaint.bounds.left() + prepaint.gutter_total + prepaint.pad,
+                    prepaint.bounds.left() + prepaint.annot_w + prepaint.gutter_total + prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
@@ -1114,7 +1635,7 @@ pub(super) fn inline_diff_line_row_canvas(
             let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds = row_bounds.intersect(&clip_bounds);
+            let visible_row_bounds = inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
@@ -1133,7 +1654,7 @@ pub(super) fn inline_diff_line_row_canvas(
 
             if selected {
                 window.paint_quad(gpui::outline(
-                    bounds,
+                    inset_left(bounds, prepaint.annot_w),
                     focused_row_outline_color(theme, bg),
                     gpui::BorderStyle::default(),
                 ));
@@ -1174,6 +1695,9 @@ pub(super) fn split_diff_line_row_canvas(
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
+    annotation_width: Pixels,
+    blame: Option<RowBlamePaint>,
+    mouse_pos: gpui::Point<Pixels>,
 ) -> AnyElement {
     let left_payload = diff_text_paint_payload(
         left_styled,
@@ -1205,6 +1729,7 @@ pub(super) fn split_diff_line_row_canvas(
         right_payload.text_hash,
         right_payload.highlights_hash,
     );
+    let revision = mix_blame_revision(revision, annotation_width, mouse_pos, blame.as_ref());
     let left_text = left_payload.text;
     let left_highlights = left_payload.highlights;
     let left_highlights_hash = left_payload.highlights_hash;
@@ -1228,16 +1753,19 @@ pub(super) fn split_diff_line_row_canvas(
             } else {
                 px(0.0)
             };
-            let (left_col, sep_bounds, right_col) = split_columns(bounds);
+            let content_bounds = inset_left(bounds, annotation_width);
+            let (left_col, sep_bounds, right_col) = split_columns(content_bounds);
             let left_text_bounds = column_text_bounds(left_col, gutter_total, pad);
             let right_text_bounds = column_text_bounds(right_col, gutter_total, pad);
 
             let left_hitbox = window.insert_hitbox(left_text_bounds, HitboxBehavior::Normal);
             let right_hitbox = window.insert_hitbox(right_text_bounds, HitboxBehavior::Normal);
+            let annot_hitboxes = build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
 
             SplitRowPrepaintState {
                 bounds,
                 pad,
+                annot_w: annotation_width,
                 left_col,
                 sep_bounds,
                 right_col,
@@ -1245,21 +1773,52 @@ pub(super) fn split_diff_line_row_canvas(
                 right_text_bounds,
                 left_hitbox,
                 right_hitbox,
+                annot_hitboxes,
             }
         },
         move |bounds, prepaint, window, cx| {
             let line_metrics = line_metrics(window);
+            let when_metrics = line_metrics_annot_when(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.left_hitbox);
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.right_hitbox);
 
+            // Neutral panel bg under the annotation column so selection does
+            // not tint it.
+            if prepaint.annot_w > px(0.0) {
+                window.paint_quad(fill(
+                    row_bg_fill_bounds(Bounds::new(
+                        prepaint.bounds.origin,
+                        size(prepaint.annot_w, prepaint.bounds.size.height),
+                    )),
+                    theme.colors.surface_bg,
+                ));
+            }
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.left_col), left_bg));
             window.paint_quad(fill(
                 row_bg_fill_bounds(prepaint.sep_bounds),
                 theme.colors.border,
             ));
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.right_col), right_bg));
+
+            if let Some(blame) = &blame {
+                render_blame_column(
+                    blame,
+                    prepaint.bounds,
+                    prepaint.annot_w,
+                    y,
+                    theme,
+                    line_metrics,
+                    when_metrics,
+                    ui_scale_percent,
+                    visible_ix,
+                    prepaint.annot_hitboxes.as_ref(),
+                    &view,
+                    window,
+                    cx,
+                );
+            }
 
             if show_line_numbers {
                 paint_gutter_text(
@@ -1338,7 +1897,7 @@ pub(super) fn split_diff_line_row_canvas(
             let left_text_bounds = prepaint.left_text_bounds;
             let right_text_bounds = prepaint.right_text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds = row_bounds.intersect(&clip_bounds);
+            let visible_row_bounds = inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_left_text_bounds = left_text_bounds.intersect(&clip_bounds);
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
@@ -1358,7 +1917,7 @@ pub(super) fn split_diff_line_row_canvas(
 
             if selected {
                 window.paint_quad(gpui::outline(
-                    bounds,
+                    inset_left(bounds, prepaint.annot_w),
                     focused_row_outline_color(theme, left_bg),
                     gpui::BorderStyle::default(),
                 ));
@@ -1392,6 +1951,9 @@ pub(super) fn patch_split_column_row_canvas(
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<DiffTextWrapSlice>,
+    annotation_width: Pixels,
+    blame: Option<RowBlamePaint>,
+    mouse_pos: gpui::Point<Pixels>,
 ) -> AnyElement {
     let region = match column {
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
@@ -1418,6 +1980,7 @@ pub(super) fn patch_split_column_row_canvas(
         text_hash,
         highlights_hash,
     );
+    let revision = mix_blame_revision(revision, annotation_width, mouse_pos, blame.as_ref());
     let canvas_id: gpui::ElementId = (
         match column {
             super::diff::PatchSplitColumn::Left => "diff_row_canvas_file_split_left",
@@ -1437,27 +2000,66 @@ pub(super) fn patch_split_column_row_canvas(
             } else {
                 px(0.0)
             };
-            let text_bounds = single_column_text_bounds(bounds, gutter_total, pad);
+            let content_bounds = inset_left(bounds, annotation_width);
+            let text_bounds = single_column_text_bounds(content_bounds, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
+            let annot_hitboxes = build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
             SingleColumnRowPrepaintState {
                 bounds,
                 pad,
+                annot_w: annotation_width,
                 text_bounds,
                 text_hitbox,
+                annot_hitboxes,
             }
         },
         move |bounds, prepaint, window, cx| {
             let line_metrics = line_metrics(window);
+            let when_metrics = line_metrics_annot_when(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
 
-            window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
+            // Selection must not tint the annotation sidebar: fill it with a
+            // neutral panel color and fill the content area with the row bg.
+            if prepaint.annot_w > px(0.0) {
+                window.paint_quad(fill(
+                    row_bg_fill_bounds(Bounds::new(
+                        prepaint.bounds.origin,
+                        size(prepaint.annot_w, prepaint.bounds.size.height),
+                    )),
+                    theme.colors.surface_bg,
+                ));
+                window.paint_quad(fill(
+                    row_bg_fill_bounds(inset_left(prepaint.bounds, prepaint.annot_w)),
+                    bg,
+                ));
+            } else {
+                window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
+            }
+
+            if let Some(blame) = &blame {
+                render_blame_column(
+                    blame,
+                    prepaint.bounds,
+                    prepaint.annot_w,
+                    y,
+                    theme,
+                    line_metrics,
+                    when_metrics,
+                    ui_scale_percent,
+                    visible_ix,
+                    prepaint.annot_hitboxes.as_ref(),
+                    &view,
+                    window,
+                    cx,
+                );
+            }
 
             if show_line_numbers {
                 paint_gutter_text(
                     &line_no,
-                    prepaint.bounds.left() + prepaint.pad,
+                    prepaint.bounds.left() + prepaint.annot_w + prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
@@ -1495,7 +2097,7 @@ pub(super) fn patch_split_column_row_canvas(
             let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds = row_bounds.intersect(&clip_bounds);
+            let visible_row_bounds = inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
@@ -1511,7 +2113,7 @@ pub(super) fn patch_split_column_row_canvas(
 
             if selected {
                 window.paint_quad(gpui::outline(
-                    bounds,
+                    inset_left(bounds, prepaint.annot_w),
                     focused_row_outline_color(theme, bg),
                     gpui::BorderStyle::default(),
                 ));
@@ -1533,6 +2135,8 @@ pub(super) fn worktree_preview_row_canvas(
     ui_scale_percent: u32,
     ix: usize,
     min_width: Pixels,
+    annotation_width: Pixels,
+    blame: Option<RowBlamePaint>,
     bar_color: Option<gpui::Rgba>,
     line_no: SharedString,
     styled: Option<&CachedDiffStyledText>,
@@ -1564,18 +2168,25 @@ pub(super) fn worktree_preview_row_canvas(
             } else {
                 px(0.0)
             };
+            // Inline annotate reserves a fixed column at the left edge of the row;
+            // the content (change bar, gutter, text) is inset past it.
+            let content = inset_left(bounds, annotation_width);
             let inner = Bounds::new(
-                point(bounds.left() + bar_w, bounds.top()),
-                size((bounds.size.width - bar_w).max(px(0.0)), bounds.size.height),
+                point(content.left() + bar_w, content.top()),
+                size((content.size.width - bar_w).max(px(0.0)), content.size.height),
             );
             let text_bounds = single_column_text_bounds(inner, gutter_total, pad);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
+            let annot_hitboxes =
+                build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
             WorktreePreviewRowPrepaintState {
                 inner,
                 pad,
                 bar_w,
                 text_bounds,
                 text_hitbox,
+                annot_w: annotation_width,
+                annot_hitboxes,
             }
         },
         move |bounds, prepaint, window, cx| {
@@ -1588,11 +2199,30 @@ pub(super) fn worktree_preview_row_canvas(
             {
                 window.paint_quad(fill(
                     Bounds::new(
-                        point(bounds.left(), bounds.top()),
+                        point(bounds.left() + prepaint.annot_w, bounds.top()),
                         size(prepaint.bar_w, bounds.size.height),
                     ),
                     color,
                 ));
+            }
+
+            if let Some(blame) = &blame {
+                let when_metrics = line_metrics_annot_when(window);
+                render_blame_column(
+                    blame,
+                    bounds,
+                    prepaint.annot_w,
+                    y,
+                    theme,
+                    line_metrics,
+                    when_metrics,
+                    ui_scale_percent,
+                    ix,
+                    prepaint.annot_hitboxes.as_ref(),
+                    &view,
+                    window,
+                    cx,
+                );
             }
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
@@ -1677,26 +2307,57 @@ pub(super) fn worktree_preview_row_canvas(
         },
     )
     .h(diff_row_height(ui_scale_percent))
-    .min_w(min_width)
+    .min_w(min_width + annotation_width)
     .w_full()
     .text_xs()
     .whitespace_nowrap()
     .into_any_element()
 }
 
+fn build_annot_hitboxes(
+    window: &mut Window,
+    row_bounds: Bounds<Pixels>,
+    annot_w: Pixels,
+    ui_scale_percent: u32,
+) -> Option<AnnotHitboxes> {
+    if annot_w <= px(0.0) {
+        return None;
+    }
+    let layout = blame_column_layout(
+        row_bounds.left(),
+        annot_w,
+        row_bounds.top(),
+        row_bounds.size.height,
+        ui_scale_percent,
+    );
+    let clip = window.content_mask().bounds;
+    Some(AnnotHitboxes {
+        message: window.insert_hitbox(layout.message.intersect(&clip), HitboxBehavior::Normal),
+        prior_icon: window.insert_hitbox(layout.prior_icon.intersect(&clip), HitboxBehavior::Normal),
+        browse_icon: window.insert_hitbox(
+            layout.browse_icon.intersect(&clip),
+            HitboxBehavior::Normal,
+        ),
+    })
+}
+
+
 #[derive(Clone, Debug)]
 struct InlineRowPrepaintState {
     bounds: Bounds<Pixels>,
     pad: Pixels,
     gutter_total: Pixels,
+    annot_w: Pixels,
     text_bounds: Bounds<Pixels>,
     text_hitbox: Hitbox,
+    annot_hitboxes: Option<AnnotHitboxes>,
 }
 
 #[derive(Clone, Debug)]
 struct SplitRowPrepaintState {
     bounds: Bounds<Pixels>,
     pad: Pixels,
+    annot_w: Pixels,
     left_col: Bounds<Pixels>,
     sep_bounds: Bounds<Pixels>,
     right_col: Bounds<Pixels>,
@@ -1704,14 +2365,17 @@ struct SplitRowPrepaintState {
     right_text_bounds: Bounds<Pixels>,
     left_hitbox: Hitbox,
     right_hitbox: Hitbox,
+    annot_hitboxes: Option<AnnotHitboxes>,
 }
 
 #[derive(Clone, Debug)]
 struct SingleColumnRowPrepaintState {
     bounds: Bounds<Pixels>,
     pad: Pixels,
+    annot_w: Pixels,
     text_bounds: Bounds<Pixels>,
     text_hitbox: Hitbox,
+    annot_hitboxes: Option<AnnotHitboxes>,
 }
 
 #[derive(Clone, Debug)]
@@ -1721,6 +2385,8 @@ struct WorktreePreviewRowPrepaintState {
     bar_w: Pixels,
     text_bounds: Bounds<Pixels>,
     text_hitbox: Hitbox,
+    annot_w: Pixels,
+    annot_hitboxes: Option<AnnotHitboxes>,
 }
 
 #[derive(Clone, Debug)]
@@ -1905,6 +2571,19 @@ fn line_metrics(window: &Window) -> LineMetrics {
     }
 }
 
+/// Smaller font metrics for the "X ago" sub-column in the annotation panel.
+fn line_metrics_annot_when(window: &Window) -> LineMetrics {
+    let style = diff_text_style(window);
+    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE * 0.85;
+    let line_height = style
+        .line_height
+        .to_pixels(font_size.into(), window.rem_size());
+    LineMetrics {
+        font_size,
+        line_height,
+    }
+}
+
 pub(in crate::view) fn diff_text_wrap_char_width(window: &mut Window) -> Pixels {
     let style = diff_text_style(window);
     let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
@@ -1931,11 +2610,11 @@ fn px_2(window: &Window) -> Pixels {
     crate::ui_scale::design_px_from_window(DIFF_ROW_HORIZONTAL_PADDING_PX, window)
 }
 
-fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
+pub(in crate::view) fn diff_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
     crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
 }
 
-fn diff_row_height(ui_scale_percent: u32) -> Pixels {
+pub(in crate::view) fn diff_row_height(ui_scale_percent: u32) -> Pixels {
     diff_scaled_px(DIFF_ROW_HEIGHT_PX, ui_scale_percent)
 }
 
@@ -1966,6 +2645,15 @@ fn inline_text_bounds(bounds: Bounds<Pixels>, gutter_total: Pixels, pad: Pixels)
     let left = bounds.left() + gutter_total * 2.0 + pad;
     let width = (bounds.size.width - gutter_total * 2.0 - pad * 2.0).max(px(0.0));
     Bounds::new(point(left, bounds.top()), size(width, bounds.size.height))
+}
+
+/// Shrink `bounds` from the left by `dx`, reserving that space (e.g. for the
+/// annotation column). Width is clamped to zero.
+fn inset_left(bounds: Bounds<Pixels>, dx: Pixels) -> Bounds<Pixels> {
+    Bounds::new(
+        point(bounds.left() + dx, bounds.top()),
+        size((bounds.size.width - dx).max(px(0.0)), bounds.size.height),
+    )
 }
 
 fn single_column_text_bounds(

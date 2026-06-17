@@ -81,15 +81,27 @@ impl Render for MainPaneView {
             .active_repo()
             .and_then(|r| r.diff_state.diff_target.as_ref())
             .is_some();
+        // Keep blame in sync with the displayed file/revision while annotate is
+        // on; the request is a no-op when the target is unchanged.
+        if self.annotate_enabled && show_diff {
+            self.request_blame_for_current_target(cx);
+        }
         let inner = if show_diff {
             self.diff_view(window, cx).into_any_element()
         } else {
             self.history_view.clone().into_any_element()
         };
+        let show_annotate_handle = self.annotate_enabled && show_diff;
+        let annotate_handle = show_annotate_handle.then(|| {
+            let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+            self.annotate_resize_handle(ui_scale_percent, self.theme, cx)
+        });
         div()
             .size_full()
+            .relative()
             .when(historical_content, |d| d.border_2().border_color(purple))
             .child(inner)
+            .when_some(annotate_handle, |d, handle| d.child(handle))
     }
 }
 

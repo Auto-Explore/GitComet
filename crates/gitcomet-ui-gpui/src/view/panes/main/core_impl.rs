@@ -692,6 +692,26 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
     }
 }
 
+/// Resolve the file path and blame revision for a diff target, or `None` for
+/// targets that are not a single tracked file (e.g. a whole-commit diff).
+fn blame_path_rev_for_target(
+    target: &DiffTarget,
+) -> Option<(std::path::PathBuf, Option<String>)> {
+    match target {
+        DiffTarget::WorkingTree { path, .. } => Some((path.clone(), None)),
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => Some((path.clone(), Some(commit_id.0.to_string()))),
+        DiffTarget::CommitRange {
+            to_commit_id,
+            path: Some(path),
+            ..
+        } => Some((path.clone(), Some(to_commit_id.0.to_string()))),
+        _ => None,
+    }
+}
+
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -757,6 +777,12 @@ impl MainPaneView {
             commit_details_rev.hash(&mut hasher);
             // The historical-browse purple frame keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
+
+            // Blame/annotate data — when blame loads for the first time or changes
+            // target, the annotation sidebar needs to repaint.
+            repo.history_state.blame_path.hash(&mut hasher);
+            repo.history_state.blame_rev.hash(&mut hasher);
+            matches!(&repo.history_state.blame, gitcomet_state::model::Loadable::Ready(_)).hash(&mut hasher);
         }
 
         hasher.finish()
@@ -906,6 +932,7 @@ impl MainPaneView {
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
         diff_view_mode: DiffViewMode,
+        annotate_enabled: bool,
         diff_reveal_whitespace_chars: bool,
         diff_word_wrap: bool,
         diff_show_line_numbers: bool,
@@ -1125,6 +1152,10 @@ impl MainPaneView {
             layout_details_collapsed: false,
             reveal_whitespace_chars: diff_reveal_whitespace_chars,
             diff_view: diff_view_mode,
+            annotate_enabled,
+            annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
+            annotate_resize: None,
+            blame_annot_hover: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2783,6 +2814,98 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_annotate_enabled(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.annotate_enabled == next {
+            return;
+        }
+
+        self.annotate_enabled = next;
+        // The annotation column changes the available text width, so word-wrap
+        // column counts and wrapped-row projection must be recomputed.
+        self.invalidate_diff_wrap_visible_cache();
+        if next {
+            self.request_blame_for_current_target(cx);
+        }
+        cx.notify();
+    }
+
+    /// Scaled pixel width of the annotation column at the current ui scale.
+    pub(in crate::view) fn annotate_column_width_px(&self, ui_scale_percent: u32) -> Pixels {
+        crate::ui_scale::design_px_from_percent(self.annotate_column_width, ui_scale_percent)
+    }
+
+    /// Record the hovered blame annotation sub-area and drive the shared tooltip
+    /// host. `next` is the (row, area) now hovered, or `None` when leaving; the
+    /// blame canvas repaints on `notify` and renders the accent highlight from
+    /// this state. Callers gate this so it only runs when the hover changes.
+    pub(in crate::view) fn update_blame_annot_hover(
+        &mut self,
+        next: Option<(usize, rows::AnnotArea)>,
+        tooltip: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.blame_annot_hover == next {
+            return;
+        }
+        self.blame_annot_hover = next;
+        if let Some(host) = self.tooltip_host.upgrade() {
+            host.update(cx, |host, cx| match tooltip {
+                Some(text) => {
+                    host.set_tooltip_text_if_changed(Some(text), cx);
+                }
+                None => {
+                    host.clear_tooltip(cx);
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// Drop the cached wrapped-row projection so it is recomputed against the
+    /// current text width (which depends on whether the annotation column is
+    /// shown).
+    pub(in crate::view) fn invalidate_diff_wrap_visible_cache(&mut self) {
+        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_cache_key = None;
+    }
+
+    /// When annotate is on, ensure blame for the currently displayed file/rev is
+    /// loaded. Derives the path and revision from the rendered diff target and
+    /// dispatches `LoadBlame`, skipping redundant loads.
+    pub(in crate::view) fn request_blame_for_current_target(
+        &mut self,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let Some((path, rev)) = self
+            .rendered_diff_target()
+            .and_then(blame_path_rev_for_target)
+        else {
+            return;
+        };
+
+        if let Some(repo) = self.active_repo() {
+            let history = &repo.history_state;
+            let same_target = history.blame_path.as_deref() == Some(path.as_path())
+                && history.blame_rev == rev;
+            // For an already-attempted target, don't re-dispatch — including on
+            // error, to avoid a per-frame retry loop. Only `NotLoaded` (a fresh
+            // or changed target) triggers a load.
+            let attempted = !matches!(history.blame, gitcomet_state::model::Loadable::NotLoaded);
+            if same_target && attempted {
+                return;
+            }
+        }
+
+        self.store.dispatch(Msg::LoadBlame {
+            repo_id,
+            path,
+            rev,
+        });
+    }
+
     pub(in crate::view) fn set_diff_content_mode(
         &mut self,
         next: DiffContentMode,
@@ -4092,12 +4215,24 @@ impl MainPaneView {
         } else {
             pad
         };
-        let inline_columns =
-            diff_wrap_columns_for_width(content_width - inline_text_start - pad, char_width);
+        // Inline annotate reserves a fixed column at the left, narrowing the
+        // available text width for word wrapping.
+        let annotation_width = if self.annotate_enabled {
+            self.annotate_column_width_px(ui_scale_percent)
+        } else {
+            px(0.0)
+        };
+        let inline_columns = diff_wrap_columns_for_width(
+            content_width - annotation_width - inline_text_start - pad,
+            char_width,
+        );
 
         let (left_w, right_w) =
             crate::view::diff_split_column_widths(content_width, self.diff_split_ratio);
-        let split_text_width = left_w.min(right_w).max(px(0.0)) - single_text_start - pad;
+        // The annotation column narrows the left split column; subtract it from
+        // the shared wrap width so wrapped text stays within the left column.
+        let split_text_width =
+            left_w.min(right_w).max(px(0.0)) - annotation_width - single_text_start - pad;
         let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
         (inline_columns, split_columns)
     }

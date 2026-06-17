@@ -111,6 +111,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RefreshBranches { .. }
             | Msg::LoadFileBrowser { .. }
             | Msg::OpenFileContent { .. }
+            | Msg::OpenFileAtCommitParent { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::ResetBrowseToLive { .. }
             | Msg::StageHunk { .. }
@@ -789,6 +790,15 @@ pub(super) fn reduce(
             source,
             path,
         } => diff_selection::open_file_content(state, repo_id, source, path),
+        Msg::OpenFileAtCommitParent {
+            repo_id,
+            commit_id,
+            path,
+        } => vec![Effect::OpenFileAtCommitParent {
+            repo_id,
+            commit_id,
+            path,
+        }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
             effects::browse_repository_at_commit(state, repo_id, commit_id)
         }

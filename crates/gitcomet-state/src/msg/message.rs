@@ -252,6 +252,14 @@ pub enum Msg {
         source: FileSource,
         path: PathBuf,
     },
+    /// Open the given file as it was in the parent of `commit_id` (the
+    /// revision just before that commit's change). The parent is resolved
+    /// asynchronously; if `commit_id` is a root commit this is a no-op.
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,

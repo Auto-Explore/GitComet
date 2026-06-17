@@ -407,6 +407,9 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::OpenFileAtCommitParent { .. } => {
+            // No git backend available; nothing to resolve.
+        }
         Effect::LoadDiff { repo_id, target } => {
             send(Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
                 repo_id,
@@ -1558,6 +1561,19 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_load_commit_details(
                     executor, repos, msg_tx, repo_id, commit_id,
+                );
+            }
+        }
+        Effect::OpenFileAtCommitParent {
+            repo_id,
+            commit_id,
+            path,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_open_file_at_commit_parent(
+                    executor, repos, msg_tx, repo_id, commit_id, path,
                 );
             }
         }

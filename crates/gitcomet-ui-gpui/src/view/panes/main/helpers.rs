@@ -2338,6 +2338,14 @@ pub(crate) struct MainPaneView {
 
     pub(in crate::view) reveal_whitespace_chars: bool,
     pub(in crate::view) diff_view: DiffViewMode,
+    pub(in crate::view) annotate_enabled: bool,
+    /// Width (design px) of the annotate column; user-resizable, session-local.
+    pub(in crate::view) annotate_column_width: f32,
+    /// Active annotate-column resize drag, if any.
+    pub(in crate::view) annotate_resize: Option<AnnotateResizeState>,
+    /// Blame annotation sub-area currently hovered (row index + area). Drives the
+    /// accent highlight and tooltip for the annotation column on the next paint.
+    pub(in crate::view) blame_annot_hover: Option<(usize, crate::view::rows::AnnotArea)>,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,

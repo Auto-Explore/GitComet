@@ -393,6 +393,54 @@ pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeF
     format_datetime(time, format, Timezone::Utc, true)
 }
 
+/// Format a unix timestamp (seconds) as a coarse relative duration such as
+/// `just now`, `30 mins ago`, `2 hours ago`, `5 months ago`.
+///
+/// Used by the blame/annotate column. Future or zero deltas render as
+/// `just now`. The breakpoints intentionally favour readable approximations
+/// (30-day months, 365-day years) over calendar accuracy.
+pub(super) fn format_relative_time(unix_secs: i64, now: std::time::SystemTime) -> String {
+    use std::time::UNIX_EPOCH;
+
+    let now_secs = match now.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
+    };
+
+    let delta = now_secs - unix_secs;
+    if delta < 10 {
+        return "just now".to_string();
+    }
+
+    fn unit(value: i64, singular: &str, plural: &str) -> String {
+        if value == 1 {
+            format!("1 {singular} ago")
+        } else {
+            format!("{value} {plural} ago")
+        }
+    }
+
+    let mins = delta / 60;
+    let hours = delta / 3_600;
+    let days = delta / 86_400;
+
+    if delta < 60 {
+        unit(delta, "sec", "secs")
+    } else if mins < 60 {
+        unit(mins, "min", "mins")
+    } else if hours < 24 {
+        unit(hours, "hour", "hours")
+    } else if days < 7 {
+        unit(days, "day", "days")
+    } else if days < 30 {
+        unit(days / 7, "week", "weeks")
+    } else if days < 365 {
+        unit(days / 30, "month", "months")
+    } else {
+        unit(days / 365, "year", "years")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,5 +536,35 @@ mod tests {
             ),
             format!("12/31/1969 20:30 UTC\u{2212}3:30")
         );
+    }
+
+    #[test]
+    fn format_relative_time_covers_all_breakpoints() {
+        let now = UNIX_EPOCH + Duration::from_secs(10_000_000_000);
+        let at = |secs_ago: i64| {
+            let now_secs = 10_000_000_000_i64;
+            format_relative_time(now_secs - secs_ago, now)
+        };
+
+        assert_eq!(at(0), "just now");
+        assert_eq!(at(5), "just now");
+        assert_eq!(at(30), "30 secs ago");
+        assert_eq!(at(60), "1 min ago");
+        assert_eq!(at(120), "2 mins ago");
+        assert_eq!(at(3_600), "1 hour ago");
+        assert_eq!(at(7_200), "2 hours ago");
+        assert_eq!(at(86_400), "1 day ago");
+        assert_eq!(at(3 * 86_400), "3 days ago");
+        assert_eq!(at(7 * 86_400), "1 week ago");
+        assert_eq!(at(30 * 86_400), "1 month ago");
+        assert_eq!(at(60 * 86_400), "2 months ago");
+        assert_eq!(at(365 * 86_400), "1 year ago");
+        assert_eq!(at(800 * 86_400), "2 years ago");
+    }
+
+    #[test]
+    fn format_relative_time_treats_future_as_just_now() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        assert_eq!(format_relative_time(5_000, now), "just now");
     }
 }

@@ -121,6 +121,11 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
     LoadDiff {
         repo_id: RepoId,
         target: DiffTarget,

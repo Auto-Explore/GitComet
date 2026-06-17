@@ -160,6 +160,7 @@ pub struct BlameLine {
     pub author: Arc<str>,
     pub author_time_unix: Option<i64>,
     pub summary: Arc<str>,
+    pub body: Option<Arc<str>>,
     pub line: String,
 }
 
@@ -1401,6 +1402,7 @@ mod tests {
             author: "Alice".into(),
             author_time_unix: Some(1_700_000_000),
             summary: "Initial import".into(),
+            body: Some("detailed body".into()),
             line: "hello".to_string(),
         };
 

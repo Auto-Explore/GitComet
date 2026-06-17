@@ -149,6 +149,76 @@ impl Focusable for MainPaneView {
 }
 
 impl MainPaneView {
+    /// A thin vertical drag handle at the annotation column's right edge that
+    /// resizes the column. Positioned absolutely; the caller's container must
+    /// be `relative()`.
+    pub(in crate::view) fn annotate_resize_handle(
+        &self,
+        ui_scale_percent: u32,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        let annot_w = self.annotate_column_width_px(ui_scale_percent);
+        let handle_w = px(7.0);
+        div()
+            .id("annotate_resize_handle")
+            .absolute()
+            .left((annot_w - handle_w / 2.0).max(px(0.0)))
+            .top(px(0.0))
+            .h_full()
+            .w(handle_w)
+            .cursor(CursorStyle::ResizeLeftRight)
+            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.6)))
+            .on_drag(AnnotateResizeHandle::Divider, |_h, _o, _w, cx| {
+                cx.new(|_cx| AnnotateResizeDragGhost)
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
+                    cx.stop_propagation();
+                    this.annotate_resize = Some(AnnotateResizeState {
+                        start_x: e.position.x,
+                        start_width: this.annotate_column_width,
+                    });
+                }),
+            )
+            .on_drag_move(cx.listener(
+                move |this, e: &gpui::DragMoveEvent<AnnotateResizeHandle>, _w, cx| {
+                    let Some(state) = this.annotate_resize else {
+                        return;
+                    };
+                    if *e.drag(cx) != AnnotateResizeHandle::Divider {
+                        return;
+                    }
+                    let per_unit =
+                        f32::from(crate::ui_scale::design_px_from_percent(1.0, ui_scale_percent))
+                            .max(0.01);
+                    let dx_design = f32::from(e.event.position.x - state.start_x) / per_unit;
+                    this.annotate_column_width = (state.start_width + dx_design).clamp(
+                        crate::view::rows::DIFF_ANNOTATION_MIN_WIDTH_PX,
+                        crate::view::rows::DIFF_ANNOTATION_MAX_WIDTH_PX,
+                    );
+                    this.invalidate_diff_wrap_visible_cache();
+                    cx.notify();
+                },
+            ))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.annotate_resize = None;
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.annotate_resize = None;
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
+    }
+
     pub(crate) fn handle_diff_shortcut(
         &mut self,
         keystroke: &gpui::Keystroke,
@@ -512,6 +582,18 @@ impl MainPaneView {
                     self.toggle_reveal_whitespace_chars(cx);
                     handled = true;
                 }
+                "b" if !markdown_preview_active && !conflict_preview_active => {
+                    let next = !self.annotate_enabled;
+                    handled = true;
+                    let root_view = self.root_view.clone();
+                    cx.defer(move |cx| {
+                        if let Some(root) = root_view.upgrade() {
+                            root.update(cx, |root, cx| {
+                                root.set_annotate_enabled(next, cx);
+                            });
+                        }
+                    });
+                }
                 "up" => {
                     handled = self.navigate_prev_diff_change(cx);
                 }
@@ -695,6 +777,36 @@ impl MainPaneView {
         window.on_next_frame(move |window, cx| {
             window.focus(&focus, cx);
         });
+    }
+
+    /// The "Blame" toggle button, shared by the diff toolbar and the file
+    /// content view so annotations can be toggled in either.
+    fn diff_annotate_toggle_button(
+        &self,
+        theme: AppTheme,
+        selected_bg: gpui::Rgba,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        components::Button::new("diff_annotate", "Blame")
+            .borderless()
+            .style(components::ButtonStyle::Subtle)
+            .selected(self.annotate_enabled)
+            .selected_bg(selected_bg)
+            .on_click(theme, cx, |this, _e, window, cx| {
+                let next = !this.annotate_enabled;
+                this.restore_diff_panel_focus_after_toolbar_action(window, cx);
+                let root_view = this.root_view.clone();
+                cx.defer(move |cx| {
+                    if let Some(root) = root_view.upgrade() {
+                        root.update(cx, |root, cx| {
+                            root.set_annotate_enabled(next, cx);
+                        });
+                    }
+                });
+                cx.notify();
+            })
+            .debug_selector(|| "diff_annotate".to_string())
+            .gitcomet_tooltip(theme, "Toggle blame annotations (Alt+B)".into())
     }
 
     pub(in crate::view) fn open_search_for_active_view(
@@ -1970,6 +2082,9 @@ impl MainPaneView {
                     .debug_selector(|| "diff_split".to_string())
                     .gitcomet_tooltip(theme, "Split diff view (Alt+S)".into());
 
+                let diff_annotate_btn =
+                    self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);
+
                 let view_toggle = div()
                     .id("diff_view_toggle")
                     .flex()
@@ -1989,14 +2104,20 @@ impl MainPaneView {
                     .child(prev_hunk_btn)
                     .child(next_hunk_btn)
                     .when_some(next_file_btn, |d, btn| d.child(btn))
-                    .child(view_toggle);
+                    .child(view_toggle)
+                    .child(diff_annotate_btn);
             } else {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
         } else {
+            // File content view (e.g. a file shown at a commit): expose the
+            // Blame toggle here too so annotations can be walked through history.
+            let annotate_selected_bg =
+                with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
             controls = controls
                 .when_some(prev_file_btn, |d, btn| d.child(btn))
-                .when_some(next_file_btn, |d, btn| d.child(btn));
+                .when_some(next_file_btn, |d, btn| d.child(btn))
+                .child(self.diff_annotate_toggle_button(theme, annotate_selected_bg, cx));
         }
 
         if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {

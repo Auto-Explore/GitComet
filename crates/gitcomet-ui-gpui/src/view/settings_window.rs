@@ -684,6 +684,9 @@ impl SettingsWindowView {
             diff_content_mode: Some(self.diff_content_mode.key().to_string()),
             diff_whitespace_mode: Some(self.diff_whitespace_mode.key().to_string()),
             diff_view_mode: Some(self.diff_view_mode.key().to_string()),
+            // Annotate is toggled from the diff toolbar, not the settings window,
+            // so leave it untouched here (None never overwrites the stored value).
+            annotate_enabled: None,
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),

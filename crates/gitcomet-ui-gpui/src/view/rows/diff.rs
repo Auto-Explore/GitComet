@@ -513,7 +513,84 @@ fn file_diff_split_side_line(row: &FileDiffRow, is_left: bool) -> Option<u32> {
     if is_left { row.old_line } else { row.new_line }
 }
 
+/// Snapshot of blame data needed to render the annotation column for one diff
+/// render pass. Owns its data (an `Arc` clone of the loaded blame plus the
+/// recency range and a single `now` timestamp) so it does not borrow the view.
+pub(super) struct BlameRenderCtx {
+    lines: std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>,
+    range: Option<(i64, i64)>,
+    now: std::time::SystemTime,
+    path: std::sync::Arc<std::path::Path>,
+}
+
+/// Build the per-row annotation paint data for the line displayed at `new_line`,
+/// or `None` for rows without a new-side line (e.g. deletions / headers).
+pub(super) fn build_row_blame_paint(
+    ctx: &BlameRenderCtx,
+    new_line: Option<u32>,
+    theme: AppTheme,
+) -> Option<diff_canvas::RowBlamePaint> {
+    let annotation = super::blame::blame_for_new_line(&ctx.lines, new_line)?;
+    let line = annotation.line;
+    let t = match (line.author_time_unix, ctx.range) {
+        (Some(ts), Some(range)) => super::blame::blame_recency_t(ts, range),
+        _ => 1.0,
+    };
+    let border = crate::theme::blame_heat_color(theme.is_dark, t);
+    let (when, initials, summary, body) = if annotation.is_run_start {
+        let when = line
+            .author_time_unix
+            .map(|ts| crate::view::date_time::format_relative_time(ts, ctx.now))
+            .unwrap_or_else(|| "unknown".to_string());
+        (
+            SharedString::from(when),
+            SharedString::from(super::blame::author_initials(&line.author)),
+            SharedString::from(line.summary.as_ref().to_string()),
+            line.body.as_ref().map(|b| SharedString::from(b.as_ref().to_string())),
+        )
+    } else {
+        (
+            SharedString::default(),
+            SharedString::default(),
+            SharedString::default(),
+            None,
+        )
+    };
+    Some(diff_canvas::RowBlamePaint {
+        border,
+        show_text: annotation.is_run_start,
+        when,
+        initials,
+        summary,
+        body,
+        commit_id: gitcomet_core::domain::CommitId(line.commit_id.clone()),
+        path: std::sync::Arc::clone(&ctx.path),
+    })
+}
+
 impl MainPaneView {
+    /// Build a blame render context when annotate is enabled and blame for the
+    /// current target is loaded; otherwise `None`.
+    pub(super) fn blame_render_ctx(&self) -> Option<BlameRenderCtx> {
+        if !self.annotate_enabled {
+            return None;
+        }
+        let repo = self.active_repo()?;
+        let gitcomet_state::model::Loadable::Ready(lines) = &repo.history_state.blame else {
+            return None;
+        };
+        let path: std::sync::Arc<std::path::Path> =
+            std::sync::Arc::from(repo.history_state.blame_path.as_deref()?);
+        let lines = std::sync::Arc::clone(lines);
+        let range = super::blame::blame_time_range(&lines);
+        Some(BlameRenderCtx {
+            lines,
+            range,
+            now: std::time::SystemTime::now(),
+            path,
+        })
+    }
+
     fn diff_text_segments_cache_get_for_query(
         &mut self,
         key: usize,
@@ -571,6 +648,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let mouse_pos = _window.mouse_position();
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
@@ -578,6 +656,12 @@ impl MainPaneView {
             .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let annotation_width = if this.annotate_enabled {
+            this.annotate_column_width_px(ui_scale_percent)
+        } else {
+            px(0.0)
+        };
+        let blame_ctx = this.blame_render_ctx();
 
         if this.is_collapsed_diff_projection_active() {
             let theme = this.theme;
@@ -794,6 +878,11 @@ impl MainPaneView {
                                 false,
                                 show_line_numbers,
                                 wrap,
+                                annotation_width,
+                                blame_ctx
+                                    .as_ref()
+                                    .and_then(|ctx| build_row_blame_paint(ctx, line.new_line, theme)),
+                                mouse_pos,
                                 cx,
                             )
                         }
@@ -1106,6 +1195,11 @@ impl MainPaneView {
                         false,
                         show_line_numbers,
                         wrap,
+                        annotation_width,
+                        blame_ctx
+                            .as_ref()
+                            .and_then(|ctx| build_row_blame_paint(ctx, line.new_line, theme)),
+                        mouse_pos,
                         cx,
                     )
                 })
@@ -1249,6 +1343,11 @@ impl MainPaneView {
                     context_menu_active,
                     show_line_numbers,
                     wrap,
+                    annotation_width,
+                    blame_ctx
+                        .as_ref()
+                        .and_then(|ctx| build_row_blame_paint(ctx, line.new_line, theme)),
+                    mouse_pos,
                     cx,
                 )
             })
@@ -1258,25 +1357,28 @@ impl MainPaneView {
     pub(in super::super) fn render_diff_split_left_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        Self::render_diff_split_rows(this, PatchSplitColumn::Left, range, cx)
+        let mouse_pos = window.mouse_position();
+        Self::render_diff_split_rows(this, PatchSplitColumn::Left, range, mouse_pos, cx)
     }
 
     pub(in super::super) fn render_diff_split_right_rows(
         this: &mut Self,
         range: Range<usize>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        Self::render_diff_split_rows(this, PatchSplitColumn::Right, range, cx)
+        let mouse_pos = window.mouse_position();
+        Self::render_diff_split_rows(this, PatchSplitColumn::Right, range, mouse_pos, cx)
     }
 
     fn render_diff_split_rows(
         this: &mut Self,
         column: PatchSplitColumn,
         range: Range<usize>,
+        mouse_pos: gpui::Point<Pixels>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let min_width =
@@ -1293,6 +1395,13 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
 
         let is_left = matches!(column, PatchSplitColumn::Left);
+        // The annotation column is only drawn in the left split column.
+        let blame_ctx = this.blame_render_ctx();
+        let annotation_width = if blame_ctx.is_some() && is_left {
+            this.annotate_column_width_px(ui_scale_percent)
+        } else {
+            px(0.0)
+        };
         let region = if is_left {
             DiffTextRegion::SplitLeft
         } else {
@@ -1490,6 +1599,15 @@ impl MainPaneView {
                                 reveal_whitespace_chars,
                                 show_line_numbers,
                                 wrap,
+                                annotation_width,
+                                if is_left {
+                                    blame_ctx.as_ref().and_then(|ctx| {
+                                        build_row_blame_paint(ctx, row.new_line, theme)
+                                    })
+                                } else {
+                                    None
+                                },
+                                mouse_pos,
                                 cx,
                             )
                         }
@@ -1618,8 +1736,17 @@ impl MainPaneView {
                         reveal_whitespace_chars,
                         show_line_numbers,
                         wrap,
-                        cx,
-                    )
+                        annotation_width,
+                        if is_left {
+                            blame_ctx
+                                .as_ref()
+                                .and_then(|ctx| build_row_blame_paint(ctx, row.new_line, theme))
+                        } else {
+                        None
+                    },
+                    mouse_pos,
+                    cx,
+                )
                 })
                 .collect();
         }
@@ -1745,6 +1872,15 @@ impl MainPaneView {
                             reveal_whitespace_chars,
                             show_line_numbers,
                             wrap,
+                            annotation_width,
+                            if is_left {
+                                blame_ctx
+                                    .as_ref()
+                                    .and_then(|ctx| build_row_blame_paint(ctx, row.new_line, theme))
+                            } else {
+                                None
+                            },
+                            mouse_pos,
                             cx,
                         )
                     }
@@ -1847,6 +1983,9 @@ fn diff_row(
     context_menu_active: bool,
     show_line_numbers: bool,
     wrap: Option<diff_canvas::DiffTextWrapSlice>,
+    annotation_width: Pixels,
+    row_blame: Option<diff_canvas::RowBlamePaint>,
+    mouse_pos: gpui::Point<Pixels>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -1999,6 +2138,9 @@ fn diff_row(
             reveal_whitespace_chars,
             show_line_numbers,
             wrap,
+            annotation_width,
+            row_blame,
+            mouse_pos,
         ),
         DiffViewMode::Split => {
             let left_kind = if visual_kind == DiffLineKind::Remove {
@@ -2066,6 +2208,9 @@ fn diff_row(
                 reveal_whitespace_chars,
                 show_line_numbers,
                 wrap,
+                annotation_width,
+                row_blame,
+                mouse_pos,
             )
         }
     }
@@ -2345,6 +2490,9 @@ fn patch_split_column_row(
     reveal_whitespace_chars: bool,
     show_line_numbers: bool,
     wrap: Option<diff_canvas::DiffTextWrapSlice>,
+    annotation_width: Pixels,
+    row_blame: Option<diff_canvas::RowBlamePaint>,
+    mouse_pos: gpui::Point<Pixels>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2393,6 +2541,9 @@ fn patch_split_column_row(
         reveal_whitespace_chars,
         show_line_numbers,
         wrap,
+        annotation_width,
+        row_blame,
+        mouse_pos,
     )
 }
 

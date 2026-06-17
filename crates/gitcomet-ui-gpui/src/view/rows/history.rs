@@ -117,10 +117,21 @@ impl MainPaneView {
         let bar_color = worktree_preview_bar_color(this, theme);
         let defer_cache_write = this.worktree_preview_cache_write_blocked_until_rev
             == Some(this.worktree_preview_content_rev);
+        // Blame annotations for the file content view: a fixed left column when
+        // annotate is on and blame for this target is loaded.
+        let annotation_width = if this.annotate_enabled {
+            this.annotate_column_width_px(ui_scale_percent)
+        } else {
+            px(0.0)
+        };
+        let blame_ctx = this.blame_render_ctx();
 
         range
             .take_while(|ix| *ix < line_count)
             .map(|ix| {
+                let blame = blame_ctx.as_ref().and_then(|ctx| {
+                    super::diff::build_row_blame_paint(ctx, u32::try_from(ix + 1).ok(), theme)
+                });
                 let Some(raw_text) = this.worktree_preview_line_raw_text(ix) else {
                     return diff_canvas::worktree_preview_row_canvas(
                         theme,
@@ -128,6 +139,8 @@ impl MainPaneView {
                         ui_scale_percent,
                         ix,
                         min_width,
+                        annotation_width,
+                        blame,
                         bar_color,
                         line_number_string(u32::try_from(ix + 1).ok()),
                         None,
@@ -198,6 +211,8 @@ impl MainPaneView {
                     ui_scale_percent,
                     ix,
                     min_width,
+                    annotation_width,
+                    blame,
                     bar_color,
                     line_no,
                     styled,
