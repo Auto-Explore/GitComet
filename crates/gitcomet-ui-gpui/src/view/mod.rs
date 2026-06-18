@@ -3727,7 +3727,8 @@ impl Render for GitCometView {
             .relative()
             .size_full()
             .child(body)
-            .child(self.render_command_palette(cx));
+            .child(self.render_command_palette(cx))
+            .child(stable_overlay_view(self.popover_host.clone()));
 
         root = root.child(chrome::window_frame(
             theme,
@@ -3739,8 +3740,6 @@ impl Render for GitCometView {
         root = root.child(stable_overlay_view(self.toast_host.clone()));
 
         root = root.child(stable_overlay_view(self.history_refs_hover_host.clone()));
-
-        root = root.child(stable_overlay_view(self.popover_host.clone()));
 
         root = root.child(stable_overlay_view(self.tooltip_host.clone()));
 
