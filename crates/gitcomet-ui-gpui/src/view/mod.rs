@@ -1158,10 +1158,86 @@ impl GitCometView {
                 self.set_commit_amend_enabled(!currently_enabled, cx);
             }
             "export-patch" => {
-                cx.notify();
+                let Some(repo_id) = self.active_repo_id() else {
+                    return;
+                };
+                let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+                    return;
+                };
+                let commit_id = match &repo.head_branch {
+                    Loadable::Ready(head_name) => match &repo.branches {
+                        Loadable::Ready(branches) => branches
+                            .iter()
+                            .find(|b| b.name == *head_name)
+                            .map(|b| b.target.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(commit_id) = commit_id else {
+                    return;
+                };
+                let sha = commit_id.as_ref();
+                let short = sha.get(0..8).unwrap_or(sha).to_string();
+                let view = cx.weak_entity();
+                cx.defer(move |cx| {
+                    let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                        files: false,
+                        directories: true,
+                        multiple: false,
+                        prompt: Some("Export patch to folder".into()),
+                    });
+                    cx.spawn(async move |cx| {
+                        let result = rx.await;
+                        let paths = match result {
+                            Ok(Ok(Some(paths))) => paths,
+                            _ => return,
+                        };
+                        let Some(folder) = paths.into_iter().next() else {
+                            return;
+                        };
+                        let dest = folder.join(format!("commit-{short}.patch"));
+                        let _ = view.update(cx, |this, _cx| {
+                            this.store.dispatch(Msg::ExportPatch {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                dest,
+                            });
+                        });
+                    })
+                    .detach();
+                });
             }
             "apply-patch" => {
-                cx.notify();
+                let Some(repo_id) = self.active_repo_id() else {
+                    return;
+                };
+                let view = cx.weak_entity();
+                cx.defer(move |cx| {
+                    let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                        files: true,
+                        directories: false,
+                        multiple: false,
+                        prompt: Some("Select patch file".into()),
+                    });
+                    cx.spawn(async move |cx| {
+                        let result = rx.await;
+                        let paths = match result {
+                            Ok(Ok(Some(paths))) => paths,
+                            _ => return,
+                        };
+                        let Some(patch) = paths.into_iter().next() else {
+                            return;
+                        };
+                        let _ = view.update(cx, |this, _cx| {
+                            this.store.dispatch(Msg::ApplyPatch {
+                                repo_id,
+                                patch,
+                            });
+                        });
+                    })
+                    .detach();
+                });
             }
             "stage-all" => {
                 if let Some(repo_id) = self.active_repo_id() {
