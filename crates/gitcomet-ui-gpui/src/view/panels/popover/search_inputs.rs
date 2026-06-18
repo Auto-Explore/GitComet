@@ -206,12 +206,12 @@ impl PopoverHost {
                     let enter_pressed =
                         input.update(cx, |input, _| input.take_enter_pressed());
 
-                    if !matches!(this.popover, Some(PopoverKind::BranchPicker { .. })) {
+                    if !this.inline_branch_picker_active() {
                         return;
                     }
 
                     if escape_pressed {
-                        this.close_popover(cx);
+                        this.handle_inline_branch_picker_escape(cx);
                         return;
                     }
 
@@ -225,22 +225,36 @@ impl PopoverHost {
                             purpose: BranchPickerPurpose::Delete
                         })
                     );
+                    let is_create_from_ref = matches!(
+                        this.popover,
+                        Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                    );
                     let branches: Vec<String> = match &repo.branches {
                         Loadable::Ready(branches) => {
                             let head_branch = match &repo.head_branch {
                                 Loadable::Ready(head) => Some(head.as_str()),
                                 _ => None,
                             };
-                            branches
+                            let mut names: Vec<_> = branches
                                 .iter()
                                 .filter_map(|b| {
-                                    if is_delete && head_branch == Some(b.name.as_str()) {
+                                    if is_delete
+                                        && head_branch == Some(b.name.as_str())
+                                    {
                                         None
                                     } else {
                                         Some(b.name.clone())
                                     }
                                 })
-                                .collect()
+                                .collect();
+                            if is_create_from_ref {
+                                names.insert(0, "HEAD".to_string());
+                                if let Loadable::Ready(tags) = &repo.tags {
+                                    names
+                                        .extend(tags.iter().map(|t| t.name.clone()));
+                                }
+                            }
+                            names
                         }
                         _ => return,
                     };
@@ -256,11 +270,8 @@ impl PopoverHost {
                                 _ if match_count > 0 => match_count - 1,
                                 _ => return,
                             });
-                        scroll_branch_picker_to_selected(
-                            this.branch_picker_selected_index.unwrap(),
-                            &this.picker_prompt_scroll,
-                            cx,
-                        );
+                        this.picker_prompt_scroll
+                            .scroll_to_item(this.branch_picker_selected_index.unwrap());
                         cx.notify();
                         return;
                     }
@@ -272,28 +283,38 @@ impl PopoverHost {
                                 _ if match_count > 0 => 0,
                                 _ => return,
                             });
-                        scroll_branch_picker_to_selected(
-                            this.branch_picker_selected_index.unwrap(),
-                            &this.picker_prompt_scroll,
-                            cx,
-                        );
+                        this.picker_prompt_scroll
+                            .scroll_to_item(this.branch_picker_selected_index.unwrap());
                         cx.notify();
                         return;
                     }
 
                     if enter_pressed {
-                        if let Some(sel) = this.branch_picker_selected_index {
+                        if is_create_from_ref {
+                            let name = if let Some(sel) =
+                                this.branch_picker_selected_index
+                                && let Some(name) = matches.get(sel)
+                            {
+                                name.clone()
+                            } else {
+                                input.read_with(cx, |input, _| {
+                                    input.text().trim().to_string()
+                                })
+                            };
+                            if !name.is_empty() {
+                                let repo_id = repo.id;
+                                this.handle_inline_branch_picker_select(
+                                    name, repo_id, cx,
+                                );
+                                return;
+                            }
+                        } else if let Some(sel) = this.branch_picker_selected_index {
                             if let Some(name) = matches.get(sel) {
                                 let name = name.clone();
                                 let repo_id = repo.id;
-                                if is_delete {
-                                    this.store
-                                        .dispatch(Msg::DeleteBranch { repo_id, name });
-                                } else {
-                                    this.store
-                                        .dispatch(Msg::CheckoutBranch { repo_id, name });
-                                }
-                                this.close_popover(cx);
+                                this.handle_inline_branch_picker_select(
+                                    name, repo_id, cx,
+                                );
                                 return;
                             }
                         }
@@ -469,17 +490,4 @@ fn match_branches(branches: &[String], query: &str) -> Vec<String> {
             .then_with(|| a.2.cmp(&b.2))
     });
     out.into_iter().map(|(.., name)| name).collect()
-}
-
-fn scroll_branch_picker_to_selected(
-    sel: usize,
-    scroll_handle: &ScrollHandle,
-    cx: &mut impl BorrowAppContext,
-) {
-    let ui_scale = ui_scale::UiScale::current(cx);
-    let item_h = ui_scale.px(32.0);
-    let item_y = item_h * sel as f32;
-    let viewport_h = ui_scale.px(240.0) - item_h;
-    let target = (item_y - viewport_h * 0.5).max(px(0.0));
-    scroll_handle.set_offset(point(px(0.0), target));
 }

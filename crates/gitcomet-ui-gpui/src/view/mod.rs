@@ -516,26 +516,6 @@ pub(in crate::view) fn diff_split_column_widths(
 
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
-fn scroll_command_palette_to_selected(
-    sel: usize,
-    matches: &[&'static command_palette::CommandEntry],
-    scroll_handle: &ScrollHandle,
-    cx: &mut impl BorrowAppContext,
-) {
-    let item_h = ui_scale::UiScale::current(cx).px(32.0);
-    let viewport_h = ui_scale::UiScale::current(cx).px(400.0) - item_h;
-    let mut headers_before = 0usize;
-    let mut cur = None;
-    for cmd in matches.iter().take(sel.saturating_add(1)) {
-        if cur != Some(cmd.category) {
-            cur = Some(cmd.category);
-            headers_before += 1;
-        }
-    }
-    let item_y = item_h * (sel + headers_before) as f32;
-    let target = (item_y - viewport_h * 0.5).max(px(0.0));
-    scroll_handle.set_offset(point(px(0.0), target));
-}
 
 impl GitCometView {
     pub(in crate::view) fn open_popover_at(
@@ -629,12 +609,17 @@ impl GitCometView {
                                 });
                         }
                         if let Some(sel) = this.command_palette.selected_index {
-                            scroll_command_palette_to_selected(
-                                sel,
-                                &matches,
-                                &this.command_palette.scroll_handle,
-                                cx,
-                            );
+                            let mut headers_before = 0usize;
+                            let mut cur = None;
+                            for cmd in matches.iter().take(sel.saturating_add(1)) {
+                                if cur != Some(cmd.category) {
+                                    cur = Some(cmd.category);
+                                    headers_before += 1;
+                                }
+                            }
+                            this.command_palette
+                                .scroll_handle
+                                .scroll_to_item(sel + headers_before);
                         }
                         cx.notify();
                         return;
@@ -658,12 +643,17 @@ impl GitCometView {
                                 });
                         }
                         if let Some(sel) = this.command_palette.selected_index {
-                            scroll_command_palette_to_selected(
-                                sel,
-                                &matches,
-                                &this.command_palette.scroll_handle,
-                                cx,
-                            );
+                            let mut headers_before = 0usize;
+                            let mut cur = None;
+                            for cmd in matches.iter().take(sel.saturating_add(1)) {
+                                if cur != Some(cmd.category) {
+                                    cur = Some(cmd.category);
+                                    headers_before += 1;
+                                }
+                            }
+                            this.command_palette
+                                .scroll_handle
+                                .scroll_to_item(sel + headers_before);
                         }
                         cx.notify();
                         return;
@@ -1089,9 +1079,15 @@ impl GitCometView {
                 self.set_diff_reveal_whitespace_chars(!self.diff_reveal_whitespace_chars, cx);
             }
             "create-branch" => {
-                if let Some(window) = window {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
                     self.open_popover_centered(
-                        PopoverKind::CreateBranch,
+                        PopoverKind::CreateBranchFromRefPrompt {
+                            repo_id,
+                            target: "HEAD".to_string(),
+                            source_selectable: true,
+                        },
                         window,
                         cx,
                     );

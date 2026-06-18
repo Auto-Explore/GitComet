@@ -132,7 +132,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
 
         // Popovers that implicitly use the currently active repo.
         PopoverKind::BranchPicker { .. }
-        | PopoverKind::CreateBranch
         | PopoverKind::StashPrompt
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -184,7 +183,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
     match popover {
         PopoverKind::BranchPicker { .. }
-        | PopoverKind::CreateBranch
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
@@ -341,11 +339,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             1u8.hash(hasher);
             (*purpose as u8).hash(hasher);
         }
-        PopoverKind::CreateBranch => 2u8.hash(hasher),
-        PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
+        PopoverKind::CreateBranchFromRefPrompt {
+            repo_id,
+            target,
+            source_selectable,
+        } => {
             66u8.hash(hasher);
             repo_id.hash(hasher);
             target.hash(hasher);
+            source_selectable.hash(hasher);
         }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,

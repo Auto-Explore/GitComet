@@ -2451,10 +2451,10 @@ pub(super) enum PopoverKind {
     BranchPicker {
         purpose: BranchPickerPurpose,
     },
-    CreateBranch,
     CreateBranchFromRefPrompt {
         repo_id: RepoId,
         target: String,
+        source_selectable: bool,
     },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,

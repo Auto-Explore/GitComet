@@ -636,7 +636,18 @@ impl Render for ActionBarView {
             .selected_bg(menu_selected_bg)
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                 this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
-                this.open_popover_for_bounds(PopoverKind::CreateBranch, bounds, window, cx);
+                if let Some(repo_id) = this.state.active_repo {
+                    this.open_popover_for_bounds(
+                        PopoverKind::CreateBranchFromRefPrompt {
+                            repo_id,
+                            target: "HEAD".to_string(),
+                            source_selectable: true,
+                        },
+                        bounds,
+                        window,
+                        cx,
+                    );
+                }
             })
             .gitcomet_tooltip(theme, "Create branch".into());
 
