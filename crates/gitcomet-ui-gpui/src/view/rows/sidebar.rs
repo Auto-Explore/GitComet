@@ -2187,6 +2187,66 @@ mod tests {
     }
 
     #[test]
+    fn listed_workspace_paths_returns_empty_when_worktrees_loading() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Loading;
+
+        let paths = listed_workspace_paths_by_branch(&repo);
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn listed_workspace_paths_returns_empty_when_worktrees_not_loaded() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::NotLoaded;
+
+        let paths = listed_workspace_paths_by_branch(&repo);
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn listed_workspace_paths_returns_empty_when_worktrees_error() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Error("failed to load".into());
+
+        let paths = listed_workspace_paths_by_branch(&repo);
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn listed_workspace_paths_returns_empty_when_no_worktrees() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![]));
+
+        let paths = listed_workspace_paths_by_branch(&repo);
+
+        assert!(paths.is_empty());
+    }
+
+    #[test]
     fn active_workspace_paths_by_branch_only_includes_open_worktrees() {
         let mut repo = RepoState::new_opening(
             RepoId(1),
@@ -2401,6 +2461,126 @@ mod tests {
             active.get("feature/shared"),
             Some(&std::path::PathBuf::from("/tmp/repo-feature-a"))
         );
+    }
+
+    #[test]
+    fn active_workspace_paths_returns_empty_when_worktrees_loading() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Loading;
+
+        let open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+
+        let active = active_workspace_paths_by_branch(&repo, &[open_repo]);
+
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn active_workspace_paths_returns_empty_when_worktrees_not_loaded() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::NotLoaded;
+
+        let open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+
+        let active = active_workspace_paths_by_branch(&repo, &[open_repo]);
+
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn active_workspace_paths_returns_empty_when_worktrees_error() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Error("failed to load".into());
+
+        let open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+
+        let active = active_workspace_paths_by_branch(&repo, &[open_repo]);
+
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn active_workspace_paths_returns_empty_when_worktrees_empty() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![]));
+
+        let open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+
+        let active = active_workspace_paths_by_branch(&repo, &[open_repo]);
+
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn active_workspace_paths_matches_open_repo_by_workdir_path() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo.worktrees = Loadable::Ready(Arc::new(vec![Worktree {
+            path: std::path::PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature/listed".to_string()),
+            detached: false,
+        }]));
+
+        let mut open_repo = RepoState::new_opening(
+            RepoId(2),
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo-feature"),
+            },
+        );
+        open_repo.head_branch = Loadable::Ready("different-branch".to_string());
+
+        let active = active_workspace_paths_by_branch(&repo, &[open_repo]);
+
+        assert_eq!(
+            active.get("different-branch"),
+            Some(&std::path::PathBuf::from("/tmp/repo-feature"))
+        );
+        assert!(!active.contains_key("feature/listed"));
     }
 
     #[test]

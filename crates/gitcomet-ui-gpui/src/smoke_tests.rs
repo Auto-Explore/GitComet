@@ -2346,6 +2346,343 @@ fn worktree_branch_and_path_stay_within_one_sidebar_row(cx: &mut gpui::TestAppCo
     );
 }
 
+#[gpui::test]
+fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_appears_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to appear when worktree is added for a branch"
+    );
+}
+
+#[gpui::test]
+fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_disappears_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to appear"
+    );
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![]),
+        },
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let disappeared = loop {
+        sync_view_for_tests(cx, &view);
+
+        if find_debug_index(cx, "branch_workspace_badge", 64).is_none() {
+            break true;
+        }
+
+        if Instant::now() >= deadline {
+            break false;
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    };
+    assert!(
+        disappeared,
+        "expected workspace badge to disappear after all worktrees are removed"
+    );
+}
+
+#[gpui::test]
+fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_detach_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to appear"
+    );
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: None,
+                detached: true,
+            }]),
+        },
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let disappeared = loop {
+        sync_view_for_tests(cx, &view);
+
+        if find_debug_index(cx, "branch_workspace_badge", 64).is_none() {
+            break true;
+        }
+
+        if Instant::now() >= deadline {
+            break false;
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    };
+    assert!(
+        disappeared,
+        "expected workspace badge to disappear when worktree becomes detached"
+    );
+}
+
+#[gpui::test]
+fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_move_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![
+                Branch {
+                    name: "feature/old".to_string(),
+                    target: CommitId("deadbeef".into()),
+                    upstream: None,
+                    divergence: None,
+                },
+                Branch {
+                    name: "feature/new".to_string(),
+                    target: CommitId("deadbeef".into()),
+                    upstream: None,
+                    divergence: None,
+                },
+            ]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/old".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to appear on old branch"
+    );
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/new".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let index = loop {
+        sync_view_for_tests(cx, &view);
+
+        if let Some(ix) = find_debug_index(cx, "branch_workspace_badge", 64) {
+            break Some(ix);
+        }
+
+        if Instant::now() >= deadline {
+            break None;
+        }
+
+        cx.run_until_parked();
+        std::thread::yield_now();
+    };
+    assert!(
+        index.is_some(),
+        "expected workspace badge to still be present on new branch"
+    );
+}
+
+#[gpui::test]
+fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_detached_badge_hidden_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-detached"),
+                head: None,
+                branch: None,
+                detached: true,
+            }]),
+        },
+    ));
+
+    let section_ix = wait_for_debug_index(cx, &view, "worktrees_section", 64);
+    click_debug_selector(cx, debug_selector("worktrees_section", section_ix), 1);
+
+    let label_ix = wait_for_debug_index(cx, &view, "worktree_path_label", 128);
+    assert!(
+        cx.debug_bounds(debug_selector("worktree_path_label", label_ix)).is_some(),
+        "expected worktree path label to render for detached worktree"
+    );
+
+    assert!(
+        find_debug_index(cx, "worktree_branch_badge", 128).is_some(),
+        "expected branch badge on detached worktree item showing (detached)"
+    );
+}
+
 struct PanelLayoutTestView {
     theme: AppTheme,
     handle: gpui::UniformListScrollHandle,

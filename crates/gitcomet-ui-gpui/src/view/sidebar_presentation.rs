@@ -280,4 +280,252 @@ mod tests {
             Some("feature/new".to_string())
         );
     }
+
+    #[test]
+    fn workspace_badge_index_returns_none_for_unknown_branch() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+
+        assert!(index.listed_path("nonexistent").is_none());
+        assert!(index.active_path("nonexistent").is_none());
+    }
+
+    #[test]
+    fn workspace_badge_index_returns_path_for_listed_worktree() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+
+        assert_eq!(
+            index.listed_path("feature"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+    }
+
+    #[test]
+    fn workspace_badge_index_active_path_returns_none_when_no_open_repo_matches() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+
+        assert!(index.active_path("feature").is_none());
+    }
+
+    #[test]
+    fn workspace_badge_index_active_path_returns_when_open_repo_matches_workdir() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature/listed".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+
+        let mut open_repo = repo_state(RepoId(2), "/tmp/repo-feature");
+        open_repo.head_branch = Loadable::Ready("feature/listed".to_string());
+        open_repo.head_branch_rev = 1;
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[open_repo]);
+
+        assert_eq!(
+            index.active_path("feature/listed"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+    }
+
+    #[test]
+    fn workspace_badge_index_built_with_error_worktrees_returns_empty_maps() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Error("failed to load".into());
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+
+        assert!(index.listed_path("feature").is_none());
+        assert!(index.active_path("feature").is_none());
+    }
+
+    #[test]
+    fn workspace_badge_index_built_with_loading_worktrees_returns_empty_maps() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Loading;
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+
+        assert!(index.listed_path("feature").is_none());
+        assert!(index.active_path("feature").is_none());
+    }
+
+    #[test]
+    fn workspace_badge_index_built_with_not_loaded_worktrees_returns_empty_maps() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::NotLoaded;
+
+        let index = WorkspaceBadgeIndex::for_state(&repo, &[]);
+
+        assert!(index.listed_path("feature").is_none());
+        assert!(index.active_path("feature").is_none());
+    }
+
+    #[test]
+    fn build_sidebar_presentation_includes_workspace_badges_when_worktrees_loaded() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+        repo.branch_sidebar_rev = 1;
+        let state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..Default::default()
+        };
+        let mut cache = SidebarPresentationCache::default();
+
+        let presentation =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+                .expect("sidebar presentation");
+
+        assert_eq!(
+            presentation.workspace_badges.listed_path("feature"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+    }
+
+    #[test]
+    fn build_sidebar_presentation_clears_workspace_badges_when_worktrees_become_error() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+        repo.branch_sidebar_rev = 1;
+        let mut state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..Default::default()
+        };
+        let mut cache = SidebarPresentationCache::default();
+
+        state.repos[0].worktrees = Loadable::Error("failed to load".into());
+        state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
+        state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
+
+        let presentation =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+                .expect("sidebar presentation");
+
+        assert!(presentation.workspace_badges.listed_path("feature").is_none());
+    }
+
+    #[test]
+    fn build_sidebar_presentation_updates_workspace_badges_after_worktree_change() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature/old".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+        repo.branch_sidebar_rev = 1;
+        let mut state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..Default::default()
+        };
+        let mut cache = SidebarPresentationCache::default();
+
+        let initial = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+            .expect("initial sidebar presentation");
+        assert_eq!(
+            initial.workspace_badges.listed_path("feature/old"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+
+        state.repos[0].worktrees =
+            Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+                path: PathBuf::from("/tmp/repo-feature"),
+                head: None,
+                branch: Some("feature/new".to_string()),
+                detached: false,
+            }]));
+        state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
+        state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
+
+        let refreshed = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+            .expect("refreshed sidebar presentation");
+
+        assert!(refreshed.workspace_badges.listed_path("feature/old").is_none());
+        assert_eq!(
+            refreshed.workspace_badges.listed_path("feature/new"),
+            Some(&PathBuf::from("/tmp/repo-feature"))
+        );
+    }
+
+    #[test]
+    fn build_sidebar_presentation_removes_badge_when_worktree_becomes_detached() {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.worktrees = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+            path: PathBuf::from("/tmp/repo-feature"),
+            head: None,
+            branch: Some("feature".to_string()),
+            detached: false,
+        }]));
+        repo.worktrees_rev = 1;
+        repo.branch_sidebar_rev = 1;
+        let mut state = AppState {
+            active_repo: Some(repo.id),
+            repos: vec![repo],
+            ..Default::default()
+        };
+        let mut cache = SidebarPresentationCache::default();
+
+        let initial = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+            .expect("initial sidebar presentation");
+        assert!(initial.workspace_badges.listed_path("feature").is_some());
+
+        state.repos[0].worktrees =
+            Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Worktree {
+                path: PathBuf::from("/tmp/repo-feature"),
+                head: None,
+                branch: None,
+                detached: true,
+            }]));
+        state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
+        state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
+
+        let refreshed = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+            .expect("refreshed sidebar presentation");
+
+        assert!(refreshed.workspace_badges.listed_path("feature").is_none());
+    }
 }
