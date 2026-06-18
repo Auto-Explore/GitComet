@@ -6,6 +6,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{GitBackend, GitRepository, PullMode, Result};
 use gitcomet_state::model::Loadable;
 use gitcomet_state::model::RepoId;
+use gitcomet_state::model::SidebarDataRequest;
 use gitcomet_state::msg::Msg;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
@@ -2680,6 +2681,181 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
     assert!(
         find_debug_index(cx, "worktree_branch_badge", 128).is_some(),
         "expected branch badge on detached worktree item showing (detached)"
+    );
+}
+
+#[gpui::test]
+fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_reload_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to appear"
+    );
+
+    store_for_test.dispatch(Msg::ReloadRepo { repo_id });
+
+    sync_view_for_tests(cx, &view);
+    cx.run_until_parked();
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to survive repo reload and manual worktree resupply"
+    );
+}
+
+#[gpui::test]
+fn workspace_badge_reappears_after_sidebar_data_request_cycle(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_badge_sidebar_cycle_{}",
+        std::process::id()
+    ));
+    let repo_ids =
+        restore_session_and_draw(cx, &store_for_test, view.clone(), vec![base.join("repo1")]);
+    let repo_id = repo_ids[0];
+    wait_for_repo_open(&store_for_test, repo_id);
+    wait_for_initial_worktrees_load_to_settle(cx, &store_for_test, &view, repo_id);
+
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![Branch {
+                name: "feature/workspace".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            }]),
+        },
+    ));
+    store_for_test.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::WorktreesLoaded {
+            repo_id,
+            result: Ok(vec![Worktree {
+                path: base.join("repo-feature"),
+                head: None,
+                branch: Some("feature/workspace".to_string()),
+                detached: false,
+            }]),
+        },
+    ));
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to appear"
+    );
+
+    store_for_test.dispatch(Msg::EnsureSidebarData {
+        repo_id,
+        request: SidebarDataRequest {
+            worktrees: false,
+            submodules: false,
+            stashes: false,
+        },
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let disappeared = loop {
+        sync_view_for_tests(cx, &view);
+        if find_debug_index(cx, "branch_workspace_badge", 64).is_none() {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        cx.run_until_parked();
+        std::thread::yield_now();
+    };
+    assert!(
+        !disappeared,
+        "workspace badge should NOT disappear when EnsureSidebarData sets worktrees:false while data is ready"
+    );
+
+    store_for_test.dispatch(Msg::EnsureSidebarData {
+        repo_id,
+        request: SidebarDataRequest {
+            worktrees: true,
+            submodules: true,
+            stashes: true,
+        },
+    });
+
+    let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
+    assert!(
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        "expected workspace badge to still be present after re-enabling sidebar data request"
     );
 }
 
