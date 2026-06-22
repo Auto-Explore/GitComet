@@ -80,13 +80,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "checkout-remote-branch",
-        label: "Checkout Remote Branch",
-        shortcut: "",
-        category: "Branch",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "pull",
         label: "Pull",
         shortcut: "",
@@ -103,13 +96,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "force-push",
         label: "Force Push",
-        shortcut: "",
-        category: "Sync",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "delete-remote-branch",
-        label: "Delete Remote Branch",
         shortcut: "",
         category: "Sync",
         requires_repo: true,
@@ -182,20 +168,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Fetch All",
         shortcut: "",
         category: "Repository",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "merge",
-        label: "Merge Branch/Ref",
-        shortcut: "",
-        category: "Merge/Rebase",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "rebase",
-        label: "Rebase Onto",
-        shortcut: "",
-        category: "Merge/Rebase",
         requires_repo: true,
     },
     CommandEntry {
@@ -311,13 +283,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "delete-tag",
-        label: "Delete Tag",
-        shortcut: "",
-        category: "Tags",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "new-window",
         label: "New Window",
         shortcut: "Ctrl+N",
@@ -395,20 +360,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "remove-remote",
-        label: "Remove Remote",
-        shortcut: "",
-        category: "Remotes",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "edit-remote-url",
-        label: "Edit Remote URL",
-        shortcut: "",
-        category: "Remotes",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "add-submodule",
         label: "Add Submodule",
         shortcut: "",
@@ -423,26 +374,28 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "remove-submodule",
-        label: "Remove Submodule",
-        shortcut: "",
-        category: "Submodules",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "add-worktree",
         label: "Add Worktree",
         shortcut: "",
         category: "Worktrees",
         requires_repo: true,
     },
-    CommandEntry {
-        id: "remove-worktree",
-        label: "Remove Worktree",
-        shortcut: "",
-        category: "Worktrees",
-        requires_repo: true,
-    },
+    // TODO: "undo"              - Undo (Edit)
+    // TODO: "redo"              - Redo (Edit)
+    // TODO: "keyboard-shortcuts" - Keyboard Shortcuts (Help)
+    // TODO: "blame"            - Blame / Annotate (History)
+    // TODO: "file-history"     - File History (History)
+    // TODO: "search-commits"   - Search Commits (Navigation)
+    // TODO: "rename-branch"    - Rename Branch (Branch)
+    // TODO: "checkout-remote-branch" - Checkout Remote Branch
+    // TODO: "delete-remote-branch"   - Delete Remote Branch
+    // TODO: "merge"                  - Merge Branch/Ref
+    // TODO: "rebase"                 - Rebase Onto
+    // TODO: "delete-tag"             - Delete Tag
+    // TODO: "remove-remote"          - Remove Remote
+    // TODO: "edit-remote-url"        - Edit Remote URL
+    // TODO: "remove-submodule"       - Remove Submodule
+    // TODO: "remove-worktree"        - Remove Worktree
 ];
 
 pub(crate) struct CommandPaletteState {

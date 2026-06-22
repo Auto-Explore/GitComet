@@ -1116,8 +1116,7 @@ impl GitCometView {
                 }
             }
             "checkout-remote-branch" => {
-                // Opens via remote branch picker
-                cx.notify();
+                // TODO: Open remote branch picker
             }
             "pull" => {
                 if let Some(repo_id) = self.active_repo_id() {
@@ -1144,7 +1143,7 @@ impl GitCometView {
                 }
             }
             "delete-remote-branch" => {
-                cx.notify();
+                // TODO: Implement delete remote branch
             }
             "commit" => {
                 if let Some(window) = window {
@@ -1276,7 +1275,7 @@ impl GitCometView {
                 }
             }
             "discard-all" => {
-                cx.notify();
+                // TODO: Implement discard all changes command
             }
             "stash" => {
                 if let Some(window) = window {
@@ -1302,10 +1301,10 @@ impl GitCometView {
                 }
             }
             "merge" => {
-                cx.notify();
+                // TODO: Implement merge branch/ref
             }
             "rebase" => {
-                cx.notify();
+                // TODO: Implement rebase onto
             }
             "rebase-continue" => {
                 if let Some(repo_id) = self.active_repo_id() {
@@ -1363,7 +1362,7 @@ impl GitCometView {
                 }
             }
             "delete-tag" => {
-                cx.notify();
+                // TODO: Implement delete tag
             }
             "add-remote" => {
                 if let Some(window) = window {
@@ -1378,10 +1377,10 @@ impl GitCometView {
                 }
             }
             "remove-remote" => {
-                cx.notify();
+                // TODO: Implement remove remote
             }
             "edit-remote-url" => {
-                cx.notify();
+                // TODO: Implement edit remote URL
             }
             "add-submodule" => {
                 if let Some(repo_id) = self.active_repo_id()
@@ -1403,7 +1402,7 @@ impl GitCometView {
                 }
             }
             "remove-submodule" => {
-                cx.notify();
+                // TODO: Implement remove submodule
             }
             "add-worktree" => {
                 if let Some(repo_id) = self.active_repo_id()
@@ -1420,7 +1419,7 @@ impl GitCometView {
                 }
             }
             "remove-worktree" => {
-                cx.notify();
+                // TODO: Implement remove worktree
             }
             _ => {}
         }
