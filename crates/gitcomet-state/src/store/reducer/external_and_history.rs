@@ -1,3 +1,4 @@
+use super::effects::append_ensure_sidebar_data_effects;
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
     selected_history_reloads_for_activation,
@@ -444,6 +445,10 @@ pub(super) fn repo_action_finished(
         {
             effects.push(Effect::LoadRemoteBranches { repo_id });
         }
+
+        // Re-issue sidebar data loads (worktrees, submodules, stashes) that were
+        // cancelled above; request() returns true now that the flags were cleared.
+        append_ensure_sidebar_data_effects(repo_state, &mut effects);
 
         let history_reloads = selected_history_reloads_for_activation(repo_state);
         append_selected_history_reload_effects(repo_id, repo_state, history_reloads, &mut effects);
