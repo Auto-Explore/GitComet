@@ -407,9 +407,8 @@ mod tests {
         };
         let mut cache = SidebarPresentationCache::default();
 
-        let presentation =
-            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-                .expect("sidebar presentation");
+        let presentation = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+            .expect("sidebar presentation");
 
         assert_eq!(
             presentation.workspace_badges.listed_path("feature"),
@@ -439,11 +438,15 @@ mod tests {
         state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
         state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
 
-        let presentation =
-            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-                .expect("sidebar presentation");
+        let presentation = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
+            .expect("sidebar presentation");
 
-        assert!(presentation.workspace_badges.listed_path("feature").is_none());
+        assert!(
+            presentation
+                .workspace_badges
+                .listed_path("feature")
+                .is_none()
+        );
     }
 
     #[test]
@@ -484,7 +487,12 @@ mod tests {
         let refreshed = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
             .expect("refreshed sidebar presentation");
 
-        assert!(refreshed.workspace_badges.listed_path("feature/old").is_none());
+        assert!(
+            refreshed
+                .workspace_badges
+                .listed_path("feature/old")
+                .is_none()
+        );
         assert_eq!(
             refreshed.workspace_badges.listed_path("feature/new"),
             Some(&PathBuf::from("/tmp/repo-feature"))

@@ -2390,7 +2390,8 @@ fn workspace_badge_appears_when_worktree_added_for_branch(cx: &mut gpui::TestApp
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to appear when worktree is added for a branch"
     );
 }
@@ -2438,7 +2439,8 @@ fn workspace_badge_disappears_when_worktree_removed(cx: &mut gpui::TestAppContex
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to appear"
     );
 
@@ -2513,7 +2515,8 @@ fn workspace_badge_disappears_when_worktree_detaches(cx: &mut gpui::TestAppConte
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to appear"
     );
 
@@ -2601,7 +2604,8 @@ fn workspace_badge_moves_when_worktree_branch_renames(cx: &mut gpui::TestAppCont
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to appear on old branch"
     );
 
@@ -2674,7 +2678,8 @@ fn worktree_branch_badge_hidden_for_detached_worktree_item(cx: &mut gpui::TestAp
 
     let label_ix = wait_for_debug_index(cx, &view, "worktree_path_label", 128);
     assert!(
-        cx.debug_bounds(debug_selector("worktree_path_label", label_ix)).is_some(),
+        cx.debug_bounds(debug_selector("worktree_path_label", label_ix))
+            .is_some(),
         "expected worktree path label to render for detached worktree"
     );
 
@@ -2729,7 +2734,8 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to appear"
     );
 
@@ -2763,15 +2769,14 @@ fn workspace_badge_survives_reload_repo_and_manual_worktree_resupply(
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to survive repo reload and manual worktree resupply"
     );
 }
 
 #[gpui::test]
-fn workspace_badge_reappears_after_sidebar_data_request_cycle(
-    cx: &mut gpui::TestAppContext,
-) {
+fn workspace_badge_reappears_after_sidebar_data_request_cycle(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(SlowSubmoduleBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -2813,7 +2818,8 @@ fn workspace_badge_reappears_after_sidebar_data_request_cycle(
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to appear"
     );
 
@@ -2854,7 +2860,8 @@ fn workspace_badge_reappears_after_sidebar_data_request_cycle(
 
     let badge_ix = wait_for_debug_index(cx, &view, "branch_workspace_badge", 64);
     assert!(
-        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix)).is_some(),
+        cx.debug_bounds(debug_selector("branch_workspace_badge", badge_ix))
+            .is_some(),
         "expected workspace badge to still be present after re-enabling sidebar data request"
     );
 }
