@@ -1640,4 +1640,58 @@ mod tests {
             .is_none()
         );
     }
+
+    #[test]
+    fn branch_sidebar_cache_lookup_by_source_reuses_rows_after_worktrees_rev_bump() {
+        let mut repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let (source_fingerprint, source_parts) =
+            branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
+        let rows: Rc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let mut cache = None;
+
+        branch_sidebar_cache_store(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 1 },
+            source_fingerprint,
+            source_parts.clone(),
+            Rc::clone(&rows),
+        );
+
+        repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+
+        let hit = branch_sidebar_cache_lookup_by_source(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 2 },
+            source_fingerprint,
+            &source_parts,
+        )
+        .expect("matching source fingerprints should reuse cached rows after worktrees rev bump");
+
+        assert!(Rc::ptr_eq(&hit, &rows));
+    }
+
+    #[test]
+    fn branch_sidebar_cache_fingerprint_changes_when_worktrees_rev_bumps() {
+        let mut repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+
+        let fingerprint_before = BranchSidebarFingerprint::from_repo(&repo);
+
+        repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+
+        let fingerprint_after = BranchSidebarFingerprint::from_repo(&repo);
+
+        assert_ne!(fingerprint_before, fingerprint_after);
+    }
 }
