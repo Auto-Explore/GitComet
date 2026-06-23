@@ -325,7 +325,7 @@ fn settings_window_frame(
     if cfg!(target_os = "windows") {
         content
     } else {
-        chrome::window_frame(theme, decorations, content, ui_scale_percent)
+        chrome::window_frame(theme, decorations, content, None, ui_scale_percent)
     }
 }
 

@@ -1410,6 +1410,12 @@ impl GitCometView {
             "remove-worktree" => {
                 // TODO: Implement remove worktree
             }
+            "back" => {
+                // TODO: Implement navigate back
+            }
+            "forward" => {
+                // TODO: Implement navigate forward
+            }
             _ => {}
         }
     }
@@ -3790,7 +3796,13 @@ impl Render for GitCometView {
         let framed_content = div()
             .relative()
             .size_full()
-            .child(body)
+            .child(body);
+
+        let frame_overlay = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
             .child(self.render_command_palette(cx))
             .child(stable_overlay_view(self.popover_host.clone()));
 
@@ -3798,6 +3810,7 @@ impl Render for GitCometView {
             theme,
             decorations,
             framed_content.into_any_element(),
+            Some(frame_overlay.into_any_element()),
             self.ui_scale_percent,
         ));
 

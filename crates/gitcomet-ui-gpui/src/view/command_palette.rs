@@ -51,13 +51,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Working Copy",
         requires_repo: true,
     },
-    CommandEntry {
-        id: "discard-all",
-        label: "Discard All Changes",
-        shortcut: "",
-        category: "Working Copy",
-        requires_repo: true,
-    },
+    // TODO: "discard-all"        - Discard All Changes (Working Copy)
     CommandEntry {
         id: "create-branch",
         label: "Create Branch",
@@ -386,6 +380,8 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "blame"            - Blame / Annotate (History)
     // TODO: "file-history"     - File History (History)
     // TODO: "search-commits"   - Search Commits (Navigation)
+    // TODO: "back"            - Back (Navigation)       Alt+Left
+    // TODO: "forward"         - Forward (Navigation)    Alt+Right
     // TODO: "rename-branch"    - Rename Branch (Branch)
     // TODO: "checkout-remote-branch" - Checkout Remote Branch
     // TODO: "delete-remote-branch"   - Delete Remote Branch

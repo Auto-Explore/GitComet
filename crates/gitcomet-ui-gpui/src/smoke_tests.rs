@@ -119,6 +119,7 @@ fn builds_pure_components_without_panics() {
                 theme,
                 Decorations::Server,
                 content,
+                None,
                 ui_scale::DEFAULT_UI_SCALE_PERCENT,
             );
             let _ = view::window_frame(
@@ -127,6 +128,7 @@ fn builds_pure_components_without_panics() {
                     tiling: Tiling::default(),
                 },
                 div().child("content").into_any_element(),
+                None,
                 ui_scale::DEFAULT_UI_SCALE_PERCENT,
             );
         });
@@ -229,6 +231,7 @@ impl gpui::Render for SmokeView {
             theme,
             window.window_decorations(),
             content,
+            None,
             ui_scale::DEFAULT_UI_SCALE_PERCENT,
         )
     }
@@ -306,6 +309,7 @@ impl gpui::Render for TextInputCursorScrollView {
             theme,
             window.window_decorations(),
             content,
+            None,
             ui_scale::DEFAULT_UI_SCALE_PERCENT,
         )
     }
@@ -356,6 +360,7 @@ impl gpui::Render for TextInputHostView {
             self.theme,
             window.window_decorations(),
             content,
+            None,
             ui_scale::DEFAULT_UI_SCALE_PERCENT,
         )
     }
