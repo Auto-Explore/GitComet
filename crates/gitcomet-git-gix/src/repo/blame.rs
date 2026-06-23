@@ -108,8 +108,15 @@ fn synthesize_uncommitted_blame(contents: &[u8]) -> Vec<BlameLine> {
 
 /// Detect rename tracking configuration (`diff.renames` / `diff.renameLimit`),
 /// falling back to git's defaults (rename detection on at 50% similarity, copy
-/// detection off) when unconfigured. Returns `None` to disable rename tracking
-/// when `diff.renames` is explicitly set to a false value.
+/// detection off) when unconfigured.
+///
+/// Returns `None` to disable rename tracking when `diff.renames` is explicitly
+/// set to a false value. This relies on the gix_blame / gix_diff contract where
+/// `Options.rewrites: None` means "no rewrite/rename tracking" while
+/// `Some(Rewrites { .. })` enables it. Compilation will catch a signature
+/// change (e.g. the type becoming non-optional) but a silent semantic change
+/// (e.g. `None` reinterpreted as "use defaults") would go unnoticed at build
+/// time.
 fn configured_rewrites(repo: &gix::Repository) -> Option<gix::diff::Rewrites> {
     use gix::diff::rewrites::Copies;
 
@@ -802,6 +809,43 @@ mod tests {
                 .as_deref()
                 .map(|p| p.as_os_str().as_bytes()),
             Some(&b"docs/\xff-old.md"[..])
+        );
+    }
+
+    #[test]
+    fn configured_rewrites_disables_renames_when_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path();
+
+        let ok = std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo_path)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git init must succeed");
+
+        // Default (no diff.renames): rename tracking enabled.
+        let repo = gix::open(repo_path).unwrap();
+        assert!(
+            configured_rewrites(&repo).is_some(),
+            "default (no diff.renames) must enable rewrites"
+        );
+
+        // Explicit disable via diff.renames=false.
+        let ok = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(repo_path.to_string_lossy().as_ref())
+            .args(["config", "diff.renames", "false"])
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git config must succeed");
+
+        let repo = gix::open(repo_path).unwrap();
+        assert!(
+            configured_rewrites(&repo).is_none(),
+            "diff.renames=false must disable rewrites entirely"
         );
     }
 }

@@ -519,6 +519,10 @@ pub(crate) fn fill_reorder_repo_tabs_inline(
     repo_management::fill_reorder_repo_tabs_inline(state, repo_id, insert_before, effects)
 }
 
+// The only non-benchmark consumers of `fill_select_diff_inline` live inside
+// the reducer submodule (via the unconditional `pub(super)` definition in
+// `diff_selection.rs`). This public re-export exists solely for the benchmark
+// helper in `store/mod.rs` so that the inline reduce path can be measured.
 #[cfg(feature = "benchmarks")]
 pub(crate) fn fill_select_diff_inline(
     state: &mut AppState,
@@ -677,7 +681,6 @@ fn is_view_navigation(msg: &Msg) -> bool {
             | Msg::ResetBrowseToLive { .. }
             | Msg::OpenInlineSubmoduleDiff { .. }
             | Msg::SelectInlineSubmoduleDiff { .. }
-            | Msg::CloseInlineSubmoduleDiff { .. }
     )
 }
 
@@ -2012,6 +2015,65 @@ mod nav_history_tests {
         assert!(!is_view_navigation(&Msg::ViewerNavForward {
             repo_id: RepoId(1),
         }));
+        assert!(!is_view_navigation(&Msg::CloseInlineSubmoduleDiff {
+            repo_id: RepoId(1),
+        }));
+        assert!(is_view_navigation(&Msg::OpenInlineSubmoduleDiff {
+            repo_id: RepoId(1),
+            submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
+            parent_submodule_path: std::path::PathBuf::from("sub"),
+            entries: vec![],
+            selected_ix: 0,
+        }));
+    }
+
+    #[test]
+    fn close_inline_submodule_diff_folds_in_place_and_does_not_bloat_nav_history() {
+        // Closing a sub-view must fold in-place: if the snapshot after
+        // closing matches a previous entry, it should collapse back to that
+        // entry rather than pushing a duplicate.
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+
+        // Seed: select a working tree diff (entries: [origin, diff], cursor=1).
+        let target = DiffTarget::WorkingTree {
+            path: std::path::PathBuf::from("a.txt"),
+            area: DiffArea::Unstaged,
+        };
+        dispatch(
+            &mut state,
+            Msg::SelectDiff {
+                repo_id,
+                target: target.clone(),
+            },
+        );
+        assert_eq!(repo(&state, repo_id).nav_history.entries.len(), 2);
+        assert_eq!(repo(&state, repo_id).nav_history.cursor, 1);
+
+        // Open inline submodule diff.
+        dispatch(
+            &mut state,
+            Msg::OpenInlineSubmoduleDiff {
+                repo_id,
+                submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
+                parent_submodule_path: std::path::PathBuf::from("vendor/first"),
+                entries: vec![],
+                selected_ix: 0,
+            },
+        );
+
+        // Close inline submodule diff — must fold, not push.
+        dispatch(&mut state, Msg::CloseInlineSubmoduleDiff { repo_id });
+        assert_eq!(
+            repo(&state, repo_id).nav_history.entries.len(),
+            2,
+            "close must not add a new nav entry"
+        );
+        assert_eq!(
+            repo(&state, repo_id).nav_history.cursor,
+            1,
+            "cursor must not advance past the parent diff"
+        );
     }
 
     #[test]
