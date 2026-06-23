@@ -78,7 +78,7 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
-            && matches!(key, "a" | "c" | "s" | "d" | "h" | "u"))
+            && matches!(key, "a" | "c" | "e" | "s" | "d" | "h" | "u"))
         || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
 }
 

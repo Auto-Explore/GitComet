@@ -425,6 +425,21 @@ impl MainPaneView {
                     );
                     handled = true;
                 }
+                "e" if !mods.shift => {
+                    if crate::external_editor::configured_setting().is_some() {
+                        let full_path = repo.spec.workdir.join(&path);
+                        let root_view = self.root_view.clone();
+                        let p = full_path;
+                        cx.defer(move |cx| {
+                            if let Some(root) = root_view.upgrade() {
+                                root.update(cx, |root, cx| {
+                                    root.open_path_in_external_code_editor(p, cx);
+                                });
+                            }
+                        });
+                    }
+                    handled = true;
+                }
                 "c" if mods.shift => {
                     crate::clipboard::write_text(cx, path.display().to_string());
                     handled = true;

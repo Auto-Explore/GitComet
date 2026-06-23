@@ -153,7 +153,7 @@ pub(super) fn model(
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
+            shortcut: Some("Ctrl+E".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::OpenInCodeEditor {
                 repo_id: Some(repo_id),
@@ -346,7 +346,7 @@ fn submodule_status_model(
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
+            shortcut: Some("Ctrl+E".into()),
             disabled: !submodule_menu_state.can_open,
             action: Box::new(ContextMenuAction::OpenInCodeEditor {
                 repo_id: Some(repo_id),

@@ -23,7 +23,7 @@ pub(super) fn model(
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
-            shortcut: None,
+            shortcut: Some("Ctrl+Shift+E".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::OpenInCodeEditor {
                 repo_id: None,

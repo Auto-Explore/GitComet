@@ -30,28 +30,40 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .child(text)
     };
 
-    let entry = |id: &'static str, label: SharedString, disabled: bool| {
-        div()
-            .id(id)
-            .debug_selector(move || id.to_string())
-            .min_h(components::control_height_md(ui_scale_percent))
-            .px(scaled_px(8.0))
-            .py(scaled_px(4.0))
-            .flex()
-            .items_center()
-            .text_sm()
-            .line_height(scaled_px(18.0))
-            .when(!disabled, |d| {
-                d.cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
-            })
-            .when(disabled, |d| {
-                d.text_color(theme.colors.text_muted)
-                    .cursor(CursorStyle::Arrow)
-            })
-            .child(label)
-    };
+    let entry =
+        |id: &'static str, label: SharedString, shortcut: Option<SharedString>, disabled: bool| {
+            div()
+                .id(id)
+                .debug_selector(move || id.to_string())
+                .min_h(components::control_height_md(ui_scale_percent))
+                .px(scaled_px(8.0))
+                .py(scaled_px(4.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .text_sm()
+                .line_height(scaled_px(18.0))
+                .when(!disabled, |d| {
+                    d.cursor(CursorStyle::PointingHand)
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                })
+                .when(disabled, |d| {
+                    d.text_color(theme.colors.text_muted)
+                        .cursor(CursorStyle::Arrow)
+                })
+                .child(label)
+                .when_some(shortcut, |d, s| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(s),
+                    )
+                })
+        };
 
     let mut install_desktop = div()
         .id("app_menu_install_desktop")
@@ -90,7 +102,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .min_w(scaled_px(200.0))
         .child(section_label("app_menu_app_section", "Application"))
         .child(
-            entry("app_menu_settings", "Settings…".into(), false).on_click(cx.listener(
+            entry("app_menu_settings", "Settings…".into(), None, false).on_click(cx.listener(
                 |this, _e: &ClickEvent, _window, cx| {
                     cx.defer(crate::view::open_settings_window);
                     this.close_popover(cx);
@@ -102,6 +114,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 entry(
                     "app_menu_open_in_code_editor",
                     "Open in code editor".into(),
+                    Some("Ctrl+Shift+E".into()),
                     active_repo_workdir.is_none(),
                 )
                 .on_click(cx.listener(
@@ -123,6 +136,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             entry(
                 "app_menu_apply_patch",
                 "Apply patch…".into(),
+                None,
                 active_repo_id.is_none(),
             )
             .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {

@@ -107,6 +107,7 @@ impl ExternalEditorDetectionEnv {
             application_dirs.push(PathBuf::from("/opt"));
             if let Some(home) = env::var_os("HOME").filter(|v| !v.is_empty()) {
                 let home = PathBuf::from(home);
+                application_dirs.push(home.join(".local/share/applications"));
                 jetbrains_toolbox_dirs.push(home.join(".local/share/JetBrains/Toolbox/apps"));
             }
         }
@@ -174,7 +175,7 @@ const PATH_EDITOR_SPECS: &[PathEditorSpec] = &[
     PathEditorSpec {
         id: "zed",
         label: "Zed",
-        names: &["zed"],
+        names: &["zed", "zeditor"],
         terminal: false,
     },
     PathEditorSpec {
@@ -229,6 +230,12 @@ const PATH_EDITOR_SPECS: &[PathEditorSpec] = &[
         id: "jetbrains-rider",
         label: "Rider",
         names: &["rider", "rider.sh", "rider64.exe"],
+        terminal: false,
+    },
+    PathEditorSpec {
+        id: "jetbrains-rustrover",
+        label: "RustRover",
+        names: &["rustrover", "rustrover.sh", "rustrover64.exe"],
         terminal: false,
     },
     PathEditorSpec {
@@ -352,6 +359,7 @@ pub(crate) fn detect_external_editors_with_env(
     }
 
     detect_macos_app_bundles(env, &mut editors, &mut seen);
+    detect_linux_desktop_editors(env, &mut editors, &mut seen);
     detect_jetbrains_toolbox(env, &mut editors, &mut seen);
     detect_visual_studio(env, &mut editors, &mut seen);
 
@@ -716,7 +724,7 @@ fn parse_custom_argument_tokens(raw: &str) -> Result<(Vec<String>, bool), Extern
             let after_next = chars.clone().nth(1);
             if let Some(next) = next {
                 let quote_would_end_arg = quote == Some(next)
-                    && after_next.map_or(true, |after_quote| after_quote.is_whitespace());
+                    && after_next.is_none_or(|after_quote| after_quote.is_whitespace());
                 if !quote_would_end_arg
                     && (next == '\\' || next == '\'' || next == '"' || next.is_whitespace())
                 {
@@ -883,9 +891,9 @@ fn is_executable_program(path: &Path) -> bool {
     {
         use std::os::unix::fs::PermissionsExt;
 
-        return std::fs::metadata(path)
+        std::fs::metadata(path)
             .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
 
     #[cfg(not(unix))]
@@ -943,6 +951,127 @@ fn detect_macos_app_bundles(
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn detect_linux_desktop_editors(
+    env: &ExternalEditorDetectionEnv,
+    editors: &mut Vec<DetectedExternalEditor>,
+    seen: &mut BTreeSet<(String, PathBuf)>,
+) {
+    for dir in &env.application_dirs {
+        if !dir.is_dir() {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "desktop") {
+                continue;
+            }
+            let Some(exec) = parse_desktop_file_exec(&path) else {
+                continue;
+            };
+            let Some(exec_name) = std::path::Path::new(&exec)
+                .file_name()
+                .and_then(|name| name.to_str())
+            else {
+                continue;
+            };
+            let Some(spec) = PATH_EDITOR_SPECS
+                .iter()
+                .chain(TERMINAL_EDITOR_SPECS.iter())
+                .find(|spec| spec.names.contains(&exec_name))
+            else {
+                continue;
+            };
+            let resolved = if std::path::Path::new(&exec).is_absolute() {
+                let candidate = PathBuf::from(&exec);
+                if is_executable_program(&candidate) {
+                    candidate
+                } else {
+                    match find_first_program(&env.path_dirs, spec.names) {
+                        Some(path) => path,
+                        None => continue,
+                    }
+                }
+            } else {
+                match find_first_program(&env.path_dirs, spec.names) {
+                    Some(path) => path,
+                    None => continue,
+                }
+            };
+            push_detected(editors, seen, spec, resolved);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+fn detect_linux_desktop_editors(
+    _env: &ExternalEditorDetectionEnv,
+    _editors: &mut Vec<DetectedExternalEditor>,
+    _seen: &mut BTreeSet<(String, PathBuf)>,
+) {
+}
+
+fn parse_desktop_file_exec(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut in_desktop_entry = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_desktop_entry = trimmed == "[Desktop Entry]";
+            continue;
+        }
+        if !in_desktop_entry {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("Exec=") {
+            let exec = desktop_exec_first_token(rest);
+            if !exec.is_empty() {
+                return Some(exec);
+            }
+        }
+    }
+    None
+}
+
+fn desktop_exec_first_token(raw: &str) -> String {
+    let mut result = String::new();
+    let mut chars = raw.chars().peekable();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(q) if ch == q => {
+                quote = None;
+            }
+            Some(_) => {
+                result.push(ch);
+            }
+            None if ch == '\'' || ch == '"' => {
+                quote = Some(ch);
+            }
+            None if ch.is_whitespace() => {
+                break;
+            }
+            None if ch == '%' => {
+                let next = chars.peek().copied();
+                if next.is_some_and(|c| c.is_ascii_alphabetic()) {
+                    chars.next();
+                    break;
+                }
+                result.push(ch);
+            }
+            None => {
+                result.push(ch);
+            }
+        }
+    }
+
+    result
+}
+
 fn detect_jetbrains_toolbox(
     env: &ExternalEditorDetectionEnv,
     editors: &mut Vec<DetectedExternalEditor>,
@@ -990,7 +1119,7 @@ fn find_named_files_limited_inner(
         let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if names.iter().any(|name| *name == file_name) && !found.iter().any(|p| p == &path) {
+        if names.contains(&file_name) && !found.iter().any(|p| p == &path) {
             found.push(path);
         }
     }
@@ -1042,7 +1171,7 @@ fn editor_label_for_id(id: &str) -> &'static str {
                 .find(|spec| spec.id == id)
                 .map(|spec| spec.label)
         })
-        .or_else(|| match id {
+        .or(match id {
             "visual-studio-professional" => Some("Visual Studio Professional"),
             "visual-studio-community" => Some("Visual Studio Community"),
             "visual-studio-enterprise" => Some("Visual Studio Enterprise"),
