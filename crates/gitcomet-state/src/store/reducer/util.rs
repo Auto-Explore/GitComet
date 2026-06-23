@@ -240,10 +240,21 @@ pub(super) fn selected_diff_load_plan(
             | DiffTarget::CommitRange { path: Some(_), .. }
     );
     let preview = diff_target_preview_flags(target);
-    let preview_only = diff_target_is_preview_only(repo_state, target);
-    let preview_text_side = (supports_file && (!preview.wants_image || preview.is_svg))
-        .then(|| diff_target_preview_text_side(repo_state, target))
-        .flatten();
+    let content_preview = repo_state.diff_state.content_preview;
+    let preview_only = content_preview || diff_target_is_preview_only(repo_state, target);
+    let preview_text_side = if supports_file && (!preview.wants_image || preview.is_svg) {
+        if content_preview {
+            // Commit content is read from a blob temp file (New side); working-tree
+            // content is read straight from disk by the worktree preview and needs
+            // no preview-text-file load.
+            matches!(target, DiffTarget::Commit { .. })
+                .then_some(gitcomet_core::domain::DiffPreviewTextSide::New)
+        } else {
+            diff_target_preview_text_side(repo_state, target)
+        }
+    } else {
+        None
+    };
 
     SelectedDiffLoadPlan {
         load_patch_diff: !preview_only,
@@ -1547,6 +1558,49 @@ mod tests {
             diff_reload_effects(&repo_state, repo_id, commit_without_path).len(),
             1
         );
+    }
+
+    #[test]
+    fn content_preview_forces_full_content_preview_plan() {
+        let mut repo = repo_state(9);
+        repo.diff_state.content_preview = true;
+
+        // Working-tree content is read from disk: no patch diff, no file text, no
+        // preview-text-file load.
+        let worktree = DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: DiffArea::Unstaged,
+        };
+        let plan = selected_diff_load_plan(&repo, &worktree);
+        assert!(!plan.load_patch_diff);
+        assert!(!plan.load_file_text);
+        assert_eq!(plan.preview_text_side, None);
+        assert!(!plan.load_file_image);
+
+        // Commit content reads the New-side blob via a preview text file.
+        let commit = DiffTarget::Commit {
+            commit_id: CommitId("abc123".into()),
+            path: Some(PathBuf::from("src/lib.rs")),
+        };
+        let plan = selected_diff_load_plan(&repo, &commit);
+        assert!(!plan.load_patch_diff);
+        assert_eq!(
+            plan.preview_text_side,
+            Some(gitcomet_core::domain::DiffPreviewTextSide::New)
+        );
+
+        // An image is still loaded as an image, not as text.
+        let image = DiffTarget::Commit {
+            commit_id: CommitId("abc123".into()),
+            path: Some(PathBuf::from("logo.png")),
+        };
+        let plan = selected_diff_load_plan(&repo, &image);
+        assert!(plan.load_file_image);
+        assert_eq!(plan.preview_text_side, None);
+
+        // Without the flag, a tracked file still gets a normal patch diff.
+        repo.diff_state.content_preview = false;
+        assert!(selected_diff_load_plan(&repo, &worktree).load_patch_diff);
     }
 
     #[test]

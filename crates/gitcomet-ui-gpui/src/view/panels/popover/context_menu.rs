@@ -2,6 +2,7 @@ use super::*;
 
 mod branch;
 mod branch_section;
+mod browse_history;
 mod change_tracking_settings;
 mod commit;
 mod commit_file;
@@ -13,11 +14,13 @@ mod diff_actions;
 mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
+mod file_browser_file;
 mod history_branch_filter;
 mod previous_commit_messages;
 mod pull;
 mod push;
 mod remote;
+mod repo_tab;
 mod stash;
 mod status_file;
 mod submodule;
@@ -144,7 +147,12 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
             return None;
         }
         let shortcut = shortcut.as_ref()?;
-        shortcut.as_ref().eq_ignore_ascii_case(key).then_some(ix)
+        let shortcut_key = shortcut
+            .as_ref()
+            .rsplit('+')
+            .next()
+            .unwrap_or(shortcut.as_ref());
+        shortcut_key.eq_ignore_ascii_case(key).then_some(ix)
     })
 }
 
@@ -233,12 +241,18 @@ impl PopoverHost {
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
                 Some(previous_commit_messages::model(self, *repo_id))
             }
+            PopoverKind::RepoTabMenu { repo_id } => Some(repo_tab::model(self, *repo_id)),
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 Some(commit::model(self, *repo_id, commit_id))
             }
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 Some(tag::model(self, *repo_id, commit_id))
             }
+            PopoverKind::TagRefMenu {
+                repo_id,
+                commit_id,
+                name,
+            } => Some(tag::model_for_tag(self, *repo_id, commit_id, name)),
             PopoverKind::StatusFileMenu {
                 repo_id,
                 area,
@@ -282,6 +296,12 @@ impl PopoverHost {
                 commit_id,
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
+            PopoverKind::FileBrowserFileMenu { repo_id, path } => {
+                Some(file_browser_file::model(self, *repo_id, path))
+            }
+            PopoverKind::BrowseHistoryMenu { repo_id } => {
+                Some(browse_history::model(self, *repo_id))
+            }
             PopoverKind::SubmoduleInnerDiffMenu {
                 repo_id,
                 submodule_repo_path,
@@ -379,6 +399,24 @@ impl PopoverHost {
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
+            ContextMenuAction::OpenFileContent {
+                repo_id,
+                source,
+                path,
+            } => {
+                self.store.dispatch(Msg::OpenFileContent {
+                    repo_id,
+                    source,
+                    path,
+                });
+            }
+            ContextMenuAction::BrowseRepositoryAtCommit { repo_id, commit_id } => {
+                self.store
+                    .dispatch(Msg::BrowseRepositoryAtCommit { repo_id, commit_id });
+            }
+            ContextMenuAction::ResetBrowseToLive { repo_id } => {
+                self.store.dispatch(Msg::ResetBrowseToLive { repo_id });
+            }
             ContextMenuAction::SelectConflictDiff { repo_id, path } => {
                 self.store
                     .dispatch(Msg::SelectConflictDiff { repo_id, path });
@@ -474,6 +512,21 @@ impl PopoverHost {
             }
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
+            }
+            ContextMenuAction::ActivateRepo { repo_id } => {
+                self.store.dispatch(Msg::SetActiveRepo { repo_id });
+            }
+            ContextMenuAction::CloseRepo { repo_id } => {
+                self.store.dispatch(Msg::CloseRepo { repo_id });
+            }
+            ContextMenuAction::CloseRepos {
+                repo_ids,
+                activate_after,
+            } => {
+                self.store.dispatch(Msg::CloseRepos {
+                    repo_ids,
+                    activate_after,
+                });
             }
             ContextMenuAction::OpenSubmoduleDiffInTab { path, target } => {
                 self.main_pane.update(cx, |pane, cx| {
@@ -1083,6 +1136,7 @@ impl PopoverHost {
         let model_for_keys = model.clone();
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
+        let entry_tooltips = model.entry_tooltips.clone();
 
         let focus = self.context_menu_focus_handle.clone();
         let current_selected = self.context_menu_selected_ix;
@@ -1208,7 +1262,10 @@ impl PopoverHost {
                         } => {
                             let selected = selected_for_render == Some(ix);
                             let debug_selector = context_menu_entry_debug_selector(label.as_ref());
-                            let tooltip_text = context_menu_entry_tooltip(action.as_ref());
+                            let tooltip_text = entry_tooltips
+                                .get(&ix)
+                                .cloned()
+                                .or_else(|| context_menu_entry_tooltip(action.as_ref()));
                             let tooltip_host_for_move = tooltip_host.clone();
                             let tooltip_text_for_move = tooltip_text.clone();
                             let tooltip_host_for_hover = tooltip_host.clone();
@@ -1329,7 +1386,7 @@ mod tests {
 
         assert_eq!(context_menu_shortcut_entry_ix(&model, "a"), Some(4));
         assert_eq!(context_menu_shortcut_entry_ix(&model, "A"), Some(4));
-        assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), None);
+        assert_eq!(context_menu_shortcut_entry_ix(&model, "c"), Some(3));
         assert_eq!(context_menu_shortcut_entry_ix(&model, "e"), None);
         assert_eq!(context_menu_shortcut_entry_ix(&model, "enter"), None);
     }

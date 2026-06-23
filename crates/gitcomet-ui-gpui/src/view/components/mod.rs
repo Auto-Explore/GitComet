@@ -1,4 +1,5 @@
 mod button;
+mod commit_sha_hover_menu;
 mod containers;
 mod context_menu;
 mod diff_stat;
@@ -11,6 +12,7 @@ mod tokens;
 mod truncated_text;
 
 pub use button::{Button, ButtonStyle};
+pub use commit_sha_hover_menu::{CommitShaHoverMenu, CommitShaLink};
 pub use containers::{empty_state, split_columns_header};
 #[cfg(test)]
 pub use containers::{panel, pill};

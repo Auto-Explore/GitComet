@@ -186,6 +186,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::FileBrowserLoaded {
+                repo_id,
+                source,
+                result,
+            } => f
+                .debug_struct("FileBrowserLoaded")
+                .field("repo_id", repo_id)
+                .field("source", source)
+                .field("result", result)
+                .finish(),
             InternalMsg::SubmoduleAddTrustChecked {
                 repo_id,
                 url,

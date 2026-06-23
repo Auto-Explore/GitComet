@@ -151,6 +151,7 @@ fn image_rs_format_for_diff_preview(format: gpui::ImageFormat) -> Option<image::
         gpui::ImageFormat::Tiff => Some(image::ImageFormat::Tiff),
         gpui::ImageFormat::Ico => Some(image::ImageFormat::Ico),
         gpui::ImageFormat::Svg => None,
+        gpui::ImageFormat::Pnm => Some(image::ImageFormat::Pnm),
     }
 }
 

@@ -176,7 +176,32 @@ pub(super) fn select_diff(
     target: DiffTarget,
 ) -> Vec<Effect> {
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, &mut effects);
+    fill_select_diff_inline(state, repo_id, target, false, &mut effects);
+    effects.into_vec()
+}
+
+/// Open `source`/`path` as a full-content file preview in the main pane,
+/// reusing the added/removed-file preview renderer (no diff, no green/red).
+pub(super) fn open_file_content(
+    state: &mut AppState,
+    repo_id: RepoId,
+    source: gitcomet_core::domain::FileSource,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let target = match source {
+        gitcomet_core::domain::FileSource::WorkingDirectory => DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        },
+        gitcomet_core::domain::FileSource::Commit(commit_id) => DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        },
+        // Branch file listing is not wired, so this is unreachable from the UI.
+        gitcomet_core::domain::FileSource::Branch(_) => return Vec::new(),
+    };
+    let mut effects = SelectDiffEffects::new();
+    fill_select_diff_inline(state, repo_id, target, true, &mut effects);
     effects.into_vec()
 }
 
@@ -184,6 +209,7 @@ pub(super) fn fill_select_diff_inline(
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
+    content_preview: bool,
     effects: &mut SelectDiffEffects,
 ) {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -191,8 +217,10 @@ pub(super) fn fill_select_diff_inline(
     };
 
     clear_inline_submodule_diff_state(repo_state);
+    repo_state.diff_state.content_preview = content_preview;
 
-    if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+    if !content_preview && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
+    {
         repo_state.set_diff_target(Some(target.clone()));
         repo_state.diff_state.diff = Loadable::NotLoaded;
         repo_state.diff_state.diff_file = Loadable::NotLoaded;
@@ -241,6 +269,7 @@ pub(super) fn select_conflict_diff(
     };
 
     clear_inline_submodule_diff_state(repo_state);
+    repo_state.diff_state.content_preview = false;
 
     let target = DiffTarget::WorkingTree {
         path: path.clone(),
@@ -263,6 +292,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
     };
 
     clear_inline_submodule_diff_state(repo_state);
+    repo_state.diff_state.content_preview = false;
 
     repo_state.set_diff_target(None);
     repo_state.diff_state.diff = Loadable::NotLoaded;
@@ -466,9 +496,20 @@ pub(super) fn diff_file_image_loaded(
         if !current_plan.load_file_image {
             return Vec::new();
         }
+        let content_preview = repo_state.diff_state.content_preview;
         repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
         repo_state.diff_state.diff_file_image = match result {
-            Ok(v) => Loadable::Ready(v.map(Arc::new)),
+            Ok(v) => {
+                let v = v.map(|mut image| {
+                    // The content view shows the file itself, not a before/after
+                    // diff — drop the old side so it renders as a single image.
+                    if content_preview {
+                        image.old = None;
+                    }
+                    image
+                });
+                Loadable::Ready(v.map(Arc::new))
+            }
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())

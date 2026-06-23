@@ -1,5 +1,5 @@
 use crate::model::GitLogTagFetchMode;
-use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest};
+use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest, SidebarMode};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
@@ -104,6 +104,10 @@ pub enum Msg {
     },
     CloseRepo {
         repo_id: RepoId,
+    },
+    CloseRepos {
+        repo_ids: Vec<RepoId>,
+        activate_after: Option<RepoId>,
     },
     ShowBannerError {
         repo_id: Option<RepoId>,
@@ -226,6 +230,37 @@ pub enum Msg {
     },
     RefreshBranches {
         repo_id: RepoId,
+    },
+    LoadFileBrowser {
+        repo_id: RepoId,
+        source: FileSource,
+    },
+    ToggleFileBrowserDir {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    SetFileBrowserSearch {
+        repo_id: RepoId,
+        query: String,
+    },
+    SetFileBrowserSource {
+        repo_id: RepoId,
+        source: FileSource,
+    },
+    OpenFileContent {
+        repo_id: RepoId,
+        source: FileSource,
+        path: PathBuf,
+    },
+    BrowseRepositoryAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    ResetBrowseToLive {
+        repo_id: RepoId,
+    },
+    SetSidebarMode {
+        mode: SidebarMode,
     },
     StageHunk {
         repo_id: RepoId,
@@ -708,6 +743,11 @@ pub enum InternalMsg {
     SubmodulesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Submodule>, Error>,
+    },
+    FileBrowserLoaded {
+        repo_id: RepoId,
+        source: FileSource,
+        result: Result<Vec<FileEntry>, Error>,
     },
     SubmoduleAddTrustChecked {
         repo_id: RepoId,

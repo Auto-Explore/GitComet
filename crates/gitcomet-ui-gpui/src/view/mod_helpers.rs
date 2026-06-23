@@ -165,6 +165,30 @@ pub(super) enum DiffViewMode {
     Split,
 }
 
+impl DiffViewMode {
+    pub(super) const fn key(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Split => "split",
+        }
+    }
+
+    pub(super) fn from_key(raw: &str) -> Option<Self> {
+        match raw {
+            "inline" => Some(Self::Inline),
+            "split" => Some(Self::Split),
+            _ => None,
+        }
+    }
+
+    pub(super) const fn settings_label(self) -> &'static str {
+        match self {
+            Self::Inline => "Inline",
+            Self::Split => "Split",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum RenderedPreviewKind {
     Svg,
@@ -2499,6 +2523,9 @@ pub(super) enum PopoverKind {
     PreviousCommitMessagesMenu {
         repo_id: RepoId,
     },
+    RepoTabMenu {
+        repo_id: RepoId,
+    },
     AppMenu,
     DiffActionMenu,
     DiffHunkMenu {
@@ -2561,14 +2588,27 @@ pub(super) enum PopoverKind {
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
+    FileBrowserFileMenu {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    BrowseHistoryMenu {
+        repo_id: RepoId,
+    },
     SubmoduleInnerDiffMenu {
         repo_id: RepoId,
         submodule_repo_path: std::path::PathBuf,
         target: DiffTarget,
     },
+    #[allow(dead_code)]
     TagMenu {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    TagRefMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        name: String,
     },
     HistoryBranchFilter {
         repo_id: RepoId,
@@ -3237,6 +3277,7 @@ pub struct GitCometView {
     pub(super) bottom_status_bar: Entity<BottomStatusBarView>,
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
+    pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
@@ -3257,6 +3298,7 @@ pub struct GitCometView {
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
+    pub(super) diff_view_mode: DiffViewMode,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,

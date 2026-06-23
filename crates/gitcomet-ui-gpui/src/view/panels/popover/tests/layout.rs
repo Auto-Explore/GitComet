@@ -14,11 +14,11 @@ fn popover_width_spec_scales_with_zoom() {
 #[test]
 fn choose_popover_anchor_corner_prefers_side_with_more_space() {
     assert_eq!(
-        choose_popover_anchor_corner(Corner::TopRight, px(260.0), px(640.0), px(420.0),),
-        Corner::TopLeft,
+        choose_popover_anchor_corner(Anchor::TopRight, px(260.0), px(640.0), px(420.0),),
+        Anchor::TopLeft,
     );
     assert_eq!(
-        choose_popover_anchor_corner(Corner::BottomLeft, px(500.0), px(260.0), px(420.0),),
-        Corner::BottomRight,
+        choose_popover_anchor_corner(Anchor::BottomLeft, px(500.0), px(260.0), px(420.0),),
+        Anchor::BottomRight,
     );
 }

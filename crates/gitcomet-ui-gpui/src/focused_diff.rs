@@ -516,7 +516,7 @@ pub fn run_focused_diff(config: FocusedDiffConfig) -> i32 {
                 }
                 let ui_session = session::load();
                 let ui_scale = crate::ui_scale::current_or_initialize_from_session(&ui_session, cx);
-                cx.on_window_closed(|cx| {
+                cx.on_window_closed(|cx, _| {
                     if cx.windows().is_empty() {
                         cx.quit();
                     }

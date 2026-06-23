@@ -238,7 +238,7 @@ impl Render for TooltipHost {
             layer = layer.child(
                 anchored()
                     .position(pos)
-                    .anchor(Corner::TopLeft)
+                    .anchor(Anchor::TopLeft)
                     .offset(point(px(0.0), px(0.0)))
                     .child(
                         div()

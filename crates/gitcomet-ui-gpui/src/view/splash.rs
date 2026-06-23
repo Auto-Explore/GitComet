@@ -256,6 +256,7 @@ impl GitCometView {
                         offset: point(px(0.0), px(22.0)),
                         blur_radius: px(52.0),
                         spread_radius: px(0.0),
+                        inset: false,
                     }])
                     .p_4()
                     .child(content),
@@ -416,6 +417,7 @@ impl GitCometView {
                                 offset: point(px(0.0), px(22.0)),
                                 blur_radius: px(52.0),
                                 spread_radius: px(0.0),
+                                inset: false,
                             }])
                             .p_4()
                             .child(self.git_unavailable_panel_content(theme, cx)),
@@ -630,6 +632,7 @@ impl GitCometView {
                             offset: point(px(0.0), px(40.0)),
                             blur_radius: px(80.0),
                             spread_radius: px(0.0),
+                            inset: false,
                         }])
                         .child(
                             div()

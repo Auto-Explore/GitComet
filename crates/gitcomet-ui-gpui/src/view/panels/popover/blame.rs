@@ -36,6 +36,7 @@ pub(super) fn panel(
                         .child(
                             components::TruncatedText::path(title.clone())
                                 .id(("blame_title_path", repo_id.0))
+                                .text_color(theme.colors.text_muted)
                                 .full_text_tooltip(this.tooltip_host.clone())
                                 .render(cx),
                         ),
@@ -103,6 +104,7 @@ pub(super) fn panel(
             )
             .h(px(360.0))
             .track_scroll(&this.blame_scroll);
+            let list = restrict_scroll_to_vertical_axis(list);
             let scrollbar_gutter = components::Scrollbar::visible_gutter(
                 this.blame_scroll.clone(),
                 components::ScrollbarAxis::Vertical,

@@ -460,7 +460,8 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
         .into_iter()
         .map(bytes_to_text_preserving_utf8)
         .map(|text| text.trim().to_string())
-        .find(|text| !text.is_empty());
+        .find(|text| !text.is_empty())
+        .map(add_git_failure_hint);
     Error::new(ErrorKind::Git(GitFailure::new(
         label,
         GitFailureId::CommandFailed,
@@ -469,6 +470,22 @@ pub(crate) fn git_command_failed_error(label: &str, output: Output) -> Error {
         stderr,
         detail,
     )))
+}
+
+fn add_git_failure_hint(mut detail: String) -> String {
+    if git_failure_looks_like_missing_gpg(&detail)
+        && !detail.contains("git config --global gpg.program")
+    {
+        detail.push_str(
+            "\n\nHint: Git could not complete GPG signing. GitComet may be running with a GUI app PATH that differs from your shell PATH. If Git cannot find gpg, configure an absolute GPG path with `git config --global gpg.program /path/to/gpg`, or make gpg available on GitComet's PATH.",
+        );
+    }
+    detail
+}
+
+fn git_failure_looks_like_missing_gpg(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    lower.contains("cannot run") && lower.contains("gpg")
 }
 
 fn run_command_with_timeout(
@@ -1207,6 +1224,48 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn failing_command_with_missing_gpg() -> Command {
+        shell_command(
+            "printf 'error: cannot run gpg: No such file or directory\nerror: gpg failed to sign the data:\nfatal: failed to write commit object\n' >&2; exit 128",
+        )
+    }
+
+    #[cfg(windows)]
+    fn failing_command_with_missing_gpg() -> Command {
+        shell_command(
+            "[Console]::Error.Write(\"error: cannot run gpg: No such file or directory`nerror: gpg failed to sign the data:`nfatal: failed to write commit object`n\"); exit 128",
+        )
+    }
+
+    #[cfg(unix)]
+    fn failing_command_with_gpg_signing_error() -> Command {
+        shell_command(
+            "printf 'error: gpg failed to sign the data\nfatal: failed to write commit object\n' >&2; exit 128",
+        )
+    }
+
+    #[cfg(windows)]
+    fn failing_command_with_gpg_signing_error() -> Command {
+        shell_command(
+            "[Console]::Error.Write(\"error: gpg failed to sign the data`nfatal: failed to write commit object`n\"); exit 128",
+        )
+    }
+
+    #[cfg(unix)]
+    fn failing_command_with_missing_gpg_program_path() -> Command {
+        shell_command(
+            "printf 'error: cannot run /opt/homebrew/bin/gpg: Datei oder Verzeichnis nicht gefunden\nerror: gpg failed to sign the data:\nfatal: failed to write commit object\n' >&2; exit 128",
+        )
+    }
+
+    #[cfg(windows)]
+    fn failing_command_with_missing_gpg_program_path() -> Command {
+        shell_command(
+            "[Console]::Error.Write(\"error: cannot run C:/Program Files/Git/usr/bin/gpg.exe: Het systeem kan het opgegeven bestand niet vinden.`nerror: gpg failed to sign the data:`nfatal: failed to write commit object`n\"); exit 128",
+        )
+    }
+
+    #[cfg(unix)]
     fn sleep_command(seconds: u64) -> Command {
         shell_command(&format!("sleep {seconds}"))
     }
@@ -1249,6 +1308,58 @@ mod tests {
                 assert_eq!(failure.stderr(), b"");
                 assert_eq!(failure.detail(), Some("stdout only"));
                 assert_eq!(failure.to_string(), "git synthetic failed: stdout only");
+            }
+            other => panic!("expected structured git failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_failure_adds_gpg_signing_hint() {
+        let err = run_git_with_output(failing_command_with_missing_gpg(), "git commit")
+            .expect_err("expected failing command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                let detail = failure.detail().expect("expected failure detail");
+                assert!(detail.contains("cannot run gpg"));
+                assert!(detail.contains("GUI app PATH"));
+                assert!(detail.contains("git config --global gpg.program /path/to/gpg"));
+            }
+            other => panic!("expected structured git failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_failure_does_not_add_path_hint_for_other_gpg_signing_errors() {
+        let err = run_git_with_output(failing_command_with_gpg_signing_error(), "git commit")
+            .expect_err("expected failing command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                let detail = failure.detail().expect("expected failure detail");
+                assert!(detail.contains("gpg failed to sign the data"));
+                assert!(!detail.contains("GUI app PATH"));
+                assert!(!detail.contains("git config --global gpg.program /path/to/gpg"));
+            }
+            other => panic!("expected structured git failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_failure_adds_gpg_signing_hint_for_missing_gpg_program_path() {
+        let err = run_git_with_output(
+            failing_command_with_missing_gpg_program_path(),
+            "git commit",
+        )
+        .expect_err("expected failing command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                let detail = failure.detail().expect("expected failure detail");
+                assert!(detail.contains("cannot run"));
+                assert!(detail.contains("gpg"));
+                assert!(detail.contains("GUI app PATH"));
+                assert!(detail.contains("git config --global gpg.program /path/to/gpg"));
             }
             other => panic!("expected structured git failure, got {other:?}"),
         }

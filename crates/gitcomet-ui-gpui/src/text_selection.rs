@@ -79,9 +79,41 @@ pub(crate) fn token_range_for_offset(text: &str, offset: usize) -> Range<usize> 
     start..end
 }
 
+fn is_ascii_hex(byte: u8) -> bool {
+    byte.is_ascii_hexdigit()
+}
+
+pub(crate) fn commit_sha_ranges(text: &str) -> Vec<Range<usize>> {
+    const MIN_SHA_LEN: usize = 7;
+    const MAX_SHA_LEN: usize = 40;
+
+    let bytes = text.as_bytes();
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+
+    while cursor < bytes.len() {
+        if !is_ascii_hex(bytes[cursor]) {
+            cursor += 1;
+            continue;
+        }
+
+        let start = cursor;
+        while cursor < bytes.len() && is_ascii_hex(bytes[cursor]) {
+            cursor += 1;
+        }
+
+        let len = cursor - start;
+        if (MIN_SHA_LEN..=MAX_SHA_LEN).contains(&len) {
+            ranges.push(start..cursor);
+        }
+    }
+
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
-    use super::token_range_for_offset;
+    use super::{commit_sha_ranges, token_range_for_offset};
 
     #[test]
     fn token_range_selects_words_whitespace_and_symbols() {
@@ -96,5 +128,23 @@ mod tests {
     fn token_range_uses_previous_boundary_at_end_of_text() {
         let text = "alpha";
         assert_eq!(token_range_for_offset(text, text.len()), 0..5);
+    }
+
+    #[test]
+    fn commit_sha_ranges_find_hex_runs_with_boundaries() {
+        let text = "fix deadbee, parent 0123456789abcdef0123456789abcdef01234567.";
+        assert_eq!(commit_sha_ranges(text), vec![4..11, 20..60]);
+    }
+
+    #[test]
+    fn commit_sha_ranges_accept_uppercase_and_reject_short_or_long_runs() {
+        let text = "abc123 89ABCDEF 0123456789abcdef0123456789abcdef012345678";
+        assert_eq!(commit_sha_ranges(text), vec![7..15]);
+    }
+
+    #[test]
+    fn commit_sha_ranges_keep_embedded_non_hex_boundaries() {
+        let text = "(deadbee)/feedface not-a-sha";
+        assert_eq!(commit_sha_ranges(text), vec![1..8, 10..18]);
     }
 }
