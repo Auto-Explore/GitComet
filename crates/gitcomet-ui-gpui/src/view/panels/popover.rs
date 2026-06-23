@@ -22,6 +22,7 @@ mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
+mod picker_nav;
 mod repo_picker;
 mod reset_prompt;
 mod search_inputs;
@@ -127,6 +128,9 @@ pub(in super::super) struct PopoverHost {
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _recent_repo_picker_search_input_subscription: Option<gpui::Subscription>,
+    _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
+    _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
+    _file_history_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
     _submodule_ref_input_subscription: gpui::Subscription,
@@ -142,8 +146,12 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
+    repo_picker_selected_index: Option<usize>,
     recent_repo_picker_selected_index: Option<usize>,
     branch_picker_selected_index: Option<usize>,
+    worktree_picker_selected_index: Option<usize>,
+    submodule_picker_selected_index: Option<usize>,
+    file_history_selected_index: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     recent_repo_picker_search_input: Option<Entity<components::TextInput>>,
@@ -1015,6 +1023,9 @@ impl PopoverHost {
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
             _recent_repo_picker_search_input_subscription: None,
+            _worktree_picker_search_input_subscription: None,
+            _submodule_picker_search_input_subscription: None,
+            _file_history_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
             _submodule_ref_input_subscription: submodule_ref_input_subscription,
@@ -1029,8 +1040,12 @@ impl PopoverHost {
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
+            repo_picker_selected_index: None,
             recent_repo_picker_selected_index: None,
             branch_picker_selected_index: None,
+            worktree_picker_selected_index: None,
+            submodule_picker_selected_index: None,
+            file_history_selected_index: None,
             repo_picker_search_input: None,
             recent_repo_picker_search_input: None,
             branch_picker_search_input: None,
@@ -1689,8 +1704,12 @@ impl PopoverHost {
 
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
+        self.repo_picker_selected_index = None;
         self.recent_repo_picker_selected_index = None;
         self.branch_picker_selected_index = None;
+        self.worktree_picker_selected_index = None;
+        self.submodule_picker_selected_index = None;
+        self.file_history_selected_index = None;
         if is_context_menu {
             self.popover = Some(kind);
             self.context_menu_selected_ix = self
