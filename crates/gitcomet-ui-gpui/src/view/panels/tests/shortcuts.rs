@@ -4957,11 +4957,15 @@ fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
     let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
-    open_popover_for_test(cx, &view, PopoverKind::CreateBranchFromRefPrompt {
-        repo_id: RepoId(1),
-        target: "HEAD".to_string(),
-        source_selectable: false,
-    });
+    open_popover_for_test(
+        cx,
+        &view,
+        PopoverKind::CreateBranchFromRefPrompt {
+            repo_id: RepoId(1),
+            target: "HEAD".to_string(),
+            source_selectable: false,
+        },
+    );
     draw_and_drain_test_window(cx);
 
     let default_width = debug_width(cx, "app_popover");

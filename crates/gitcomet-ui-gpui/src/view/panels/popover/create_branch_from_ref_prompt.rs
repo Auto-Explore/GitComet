@@ -95,8 +95,7 @@ pub(super) fn panel(
                     names
                 })
                 .unwrap_or_default();
-            let items: Vec<SharedString> =
-                branches.iter().map(|n| n.clone().into()).collect();
+            let items: Vec<SharedString> = branches.iter().map(|n| n.clone().into()).collect();
 
             div()
                 .flex()
@@ -109,58 +108,35 @@ pub(super) fn panel(
                         .text_color(theme.colors.text_muted)
                         .child("Source:"),
                 )
-                .child(div().px_2().pb_1().w_full().min_w(px(0.0)).child(
-                    components::PickerPrompt::new(
-                        search,
-                        this.picker_prompt_scroll.clone(),
-                    )
-                    .items(items)
-                    .tooltip_host(this.tooltip_host.clone())
-                    .empty_text("No matches")
-                    .max_height(scaled_px(240.0))
-                    .selected_index(this.branch_picker_selected_index)
-                    .render(
-                        theme,
-                        ui_scale_percent,
-                        cx,
-                        move |this, ix, _e, _w, cx| {
-                            let branches: Vec<String> = this
-                                .active_repo()
-                                .map(|repo| {
-                                    let mut names: Vec<String> =
-                                        vec!["HEAD".to_string()];
-                                    if let Loadable::Ready(branches) =
-                                        &repo.branches
-                                    {
-                                        names.extend(
-                                            branches
-                                                .iter()
-                                                .map(|b| b.name.clone()),
-                                        );
-                                    }
-                                    if let Loadable::Ready(tags) =
-                                        &repo.tags
-                                    {
-                                        names.extend(
-                                            tags.iter()
-                                                .map(|t| t.name.clone()),
-                                        );
-                                    }
-                                    names
-                                })
-                                .unwrap_or_default();
-                            if let Some(name) = branches.get(ix).cloned()
-                            {
-                                let repo_id = this
-                                    .active_repo_id()
-                                    .unwrap_or(RepoId(0));
-                                this.handle_inline_branch_picker_select(
-                                    name, repo_id, cx,
-                                );
-                            }
-                        },
+                .child(
+                    div().px_2().pb_1().w_full().min_w(px(0.0)).child(
+                        components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
+                            .items(items)
+                            .tooltip_host(this.tooltip_host.clone())
+                            .empty_text("No matches")
+                            .max_height(scaled_px(240.0))
+                            .selected_index(this.branch_picker_selected_index)
+                            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+                                let branches: Vec<String> = this
+                                    .active_repo()
+                                    .map(|repo| {
+                                        let mut names: Vec<String> = vec!["HEAD".to_string()];
+                                        if let Loadable::Ready(branches) = &repo.branches {
+                                            names.extend(branches.iter().map(|b| b.name.clone()));
+                                        }
+                                        if let Loadable::Ready(tags) = &repo.tags {
+                                            names.extend(tags.iter().map(|t| t.name.clone()));
+                                        }
+                                        names
+                                    })
+                                    .unwrap_or_default();
+                                if let Some(name) = branches.get(ix).cloned() {
+                                    let repo_id = this.active_repo_id().unwrap_or(RepoId(0));
+                                    this.handle_inline_branch_picker_select(name, repo_id, cx);
+                                }
+                            }),
                     ),
-                ))
+                )
         } else {
             div()
                 .flex()
@@ -173,10 +149,7 @@ pub(super) fn panel(
                         .text_color(theme.colors.text_muted)
                         .child("Source:"),
                 )
-                .child(
-                    div().px_2().pb_1().w_full().min_w(px(0.0))
-                        .child(search),
-                )
+                .child(div().px_2().pb_1().w_full().min_w(px(0.0)).child(search))
         }
     } else {
         div()
@@ -240,7 +213,11 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("create_branch_from_ref_cancel", "Cancel")
                         .focus_handle(this.create_branch_from_ref_cancel_focus_handle.clone())
-                        .separated_end_slot(hotkey_hint(theme, "create_branch_from_ref_cancel_hint", "Esc"))
+                        .separated_end_slot(hotkey_hint(
+                            theme,
+                            "create_branch_from_ref_cancel_hint",
+                            "Esc",
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
@@ -249,7 +226,11 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("create_branch_from_ref_go", "Create")
                         .focus_handle(this.create_branch_from_ref_submit_focus_handle.clone())
-                        .separated_end_slot(hotkey_hint(theme, "create_branch_from_ref_go_hint", "Enter"))
+                        .separated_end_slot(hotkey_hint(
+                            theme,
+                            "create_branch_from_ref_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_create)
                         .on_click(theme, cx, |this, _e, window, cx| {

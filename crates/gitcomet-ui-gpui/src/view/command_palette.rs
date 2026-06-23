@@ -427,9 +427,7 @@ impl CommandPaletteState {
             .into_iter()
             .filter_map(|(ix, cmd)| {
                 let label_lower = cmd.label.to_ascii_lowercase();
-                label_lower
-                    .find(&query_lower)
-                    .map(|pos| (pos, ix, cmd))
+                label_lower.find(&query_lower).map(|pos| (pos, ix, cmd))
             })
             .collect();
 

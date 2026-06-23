@@ -75,18 +75,15 @@ impl PopoverHost {
         if self._recent_repo_picker_search_input_subscription.is_none() {
             self._recent_repo_picker_search_input_subscription =
                 Some(cx.observe(input, |this, input, cx| {
-                    let escape_pressed =
-                        input.update(cx, |input, _| input.take_escape_pressed());
+                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
                     let arrow_up_pressed =
                         input.update(cx, |input, _| input.take_arrow_up_pressed());
                     let arrow_down_pressed =
                         input.update(cx, |input, _| input.take_arrow_down_pressed());
-                    let tab_pressed =
-                        input.update(cx, |input, _| input.take_tab_pressed());
+                    let tab_pressed = input.update(cx, |input, _| input.take_tab_pressed());
                     let shift_tab_pressed =
                         input.update(cx, |input, _| input.take_shift_tab_pressed());
-                    let enter_pressed =
-                        input.update(cx, |input, _| input.take_enter_pressed());
+                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
 
                     if !matches!(this.popover, Some(PopoverKind::RecentRepositoryPicker)) {
                         return;
@@ -98,8 +95,7 @@ impl PopoverHost {
                     }
 
                     let recent_repos = session::load().recent_repos;
-                    let query = input
-                        .read_with(cx, |input, _| input.text().trim().to_string());
+                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
                     let match_count = count_recent_repo_matches(&recent_repos, &query);
 
                     if arrow_up_pressed || shift_tab_pressed {
@@ -147,9 +143,7 @@ impl PopoverHost {
                                 .collect();
                             if let Some(path) = matched.get(sel) {
                                 let path = (*path).clone();
-                                recent_repo_picker::select_recent_repository(
-                                    this, path, cx,
-                                );
+                                recent_repo_picker::select_recent_repository(this, path, cx);
                                 return;
                             }
                         }
@@ -194,8 +188,7 @@ impl PopoverHost {
         if self._branch_picker_search_input_subscription.is_none() {
             self._branch_picker_search_input_subscription =
                 Some(cx.observe(input, |this, input, cx| {
-                    let escape_pressed =
-                        input.update(cx, |input, _| input.take_escape_pressed());
+                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
                     let arrow_up_pressed =
                         input.update(cx, |input, _| input.take_arrow_up_pressed());
                     let arrow_down_pressed =
@@ -203,8 +196,7 @@ impl PopoverHost {
                     let tab_pressed = input.update(cx, |input, _| input.take_tab_pressed());
                     let shift_tab_pressed =
                         input.update(cx, |input, _| input.take_shift_tab_pressed());
-                    let enter_pressed =
-                        input.update(cx, |input, _| input.take_enter_pressed());
+                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
 
                     if !this.inline_branch_picker_active() {
                         return;
@@ -238,9 +230,7 @@ impl PopoverHost {
                             let mut names: Vec<_> = branches
                                 .iter()
                                 .filter_map(|b| {
-                                    if is_delete
-                                        && head_branch == Some(b.name.as_str())
-                                    {
+                                    if is_delete && head_branch == Some(b.name.as_str()) {
                                         None
                                     } else {
                                         Some(b.name.clone())
@@ -250,16 +240,14 @@ impl PopoverHost {
                             if is_create_from_ref {
                                 names.insert(0, "HEAD".to_string());
                                 if let Loadable::Ready(tags) = &repo.tags {
-                                    names
-                                        .extend(tags.iter().map(|t| t.name.clone()));
+                                    names.extend(tags.iter().map(|t| t.name.clone()));
                                 }
                             }
                             names
                         }
                         _ => return,
                     };
-                    let query = input
-                        .read_with(cx, |input, _| input.text().trim().to_string());
+                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
                     let matches = match_branches(&branches, &query);
                     let match_count = matches.len();
 
@@ -291,30 +279,23 @@ impl PopoverHost {
 
                     if enter_pressed {
                         if is_create_from_ref {
-                            let name = if let Some(sel) =
-                                this.branch_picker_selected_index
+                            let name = if let Some(sel) = this.branch_picker_selected_index
                                 && let Some(name) = matches.get(sel)
                             {
                                 name.clone()
                             } else {
-                                input.read_with(cx, |input, _| {
-                                    input.text().trim().to_string()
-                                })
+                                input.read_with(cx, |input, _| input.text().trim().to_string())
                             };
                             if !name.is_empty() {
                                 let repo_id = repo.id;
-                                this.handle_inline_branch_picker_select(
-                                    name, repo_id, cx,
-                                );
+                                this.handle_inline_branch_picker_select(name, repo_id, cx);
                                 return;
                             }
                         } else if let Some(sel) = this.branch_picker_selected_index {
                             if let Some(name) = matches.get(sel) {
                                 let name = name.clone();
                                 let repo_id = repo.id;
-                                this.handle_inline_branch_picker_select(
-                                    name, repo_id, cx,
-                                );
+                                this.handle_inline_branch_picker_select(name, repo_id, cx);
                                 return;
                             }
                         }

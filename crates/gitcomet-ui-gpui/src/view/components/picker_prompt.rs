@@ -174,7 +174,8 @@ impl PickerPrompt {
                 if is_selected {
                     row = row.bg(theme.colors.active);
                 }
-                row = row.hover(move |s| s.bg(theme.colors.hover))
+                row = row
+                    .hover(move |s| s.bg(theme.colors.hover))
                     .active(move |s| s.bg(theme.colors.active));
                 list = list.child(row);
             }

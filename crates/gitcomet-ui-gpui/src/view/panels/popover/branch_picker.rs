@@ -52,8 +52,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                                     if is_delete {
                                         this.store.dispatch(Msg::DeleteBranch { repo_id, name });
                                     } else {
-                                        this.store
-                                            .dispatch(Msg::CheckoutBranch { repo_id, name });
+                                        this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                                     }
                                 }
                                 this.close_popover(cx);

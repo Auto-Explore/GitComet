@@ -371,9 +371,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
     match kind {
         PopoverKind::RepoPicker | PopoverKind::BranchPicker { .. } => Some(PICKER_WIDTH),
         PopoverKind::RecentRepositoryPicker => Some(RECENT_PICKER_WIDTH),
-        PopoverKind::StashPrompt
-        | PopoverKind::CloneRepo
-        | PopoverKind::CreateTagPrompt { .. } => Some(DIALOG_420_WIDTH),
+        PopoverKind::StashPrompt | PopoverKind::CloneRepo | PopoverKind::CreateTagPrompt { .. } => {
+            Some(DIALOG_420_WIDTH)
+        }
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::StashDropConfirm { .. }
@@ -1511,8 +1511,7 @@ impl PopoverHost {
                 self.close_popover(cx);
             }
             _ => {
-                self.store
-                    .dispatch(Msg::CheckoutBranch { repo_id, name });
+                self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                 self.close_popover(cx);
             }
         }
@@ -1540,9 +1539,7 @@ impl PopoverHost {
                 }
             }
             Some(PopoverKind::CreateBranchFromRefPrompt {
-                repo_id,
-                target,
-                ..
+                repo_id, target, ..
             }) => Some((*repo_id, target.clone())),
             _ => None,
         }
@@ -1684,8 +1681,7 @@ impl PopoverHost {
         let keep_active_invoker = is_context_menu
             || matches!(
                 &kind,
-                PopoverKind::CreateBranchFromRefPrompt { .. }
-                    | PopoverKind::StashPrompt
+                PopoverKind::CreateBranchFromRefPrompt { .. } | PopoverKind::StashPrompt
             );
         if !keep_active_invoker {
             self.clear_active_context_menu_invoker(cx);
@@ -2277,8 +2273,7 @@ impl PopoverHost {
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
         let is_create_branch_or_stash_prompt = matches!(
             &kind,
-            PopoverKind::CreateBranchFromRefPrompt { .. }
-                | PopoverKind::StashPrompt
+            PopoverKind::CreateBranchFromRefPrompt { .. } | PopoverKind::StashPrompt
         );
         let is_context_menu = popover_is_context_menu(&kind);
         let mut anchor_corner = popover_anchor_corner(&kind);
@@ -2313,16 +2308,14 @@ impl PopoverHost {
                 repo_id,
                 target,
                 source_selectable,
-            } => {
-                create_branch_from_ref_prompt::panel(
-                    self,
-                    repo_id,
-                    target,
-                    source_selectable,
-                    window,
-                    cx,
-                )
-            }
+            } => create_branch_from_ref_prompt::panel(
+                self,
+                repo_id,
+                target,
+                source_selectable,
+                window,
+                cx,
+            ),
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
                 remote,
@@ -2776,10 +2769,7 @@ impl PopoverHost {
                         .w_full()
                         .flex()
                         .justify_center()
-                        .child(
-                            div()
-                                .child(popover_container),
-                        ),
+                        .child(div().child(popover_container)),
                 )
                 .into_any_element()
         } else {

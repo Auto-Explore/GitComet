@@ -516,7 +516,6 @@ pub(in crate::view) fn diff_split_column_widths(
 
 pub(crate) const UI_MONOSPACE_FONT_FAMILY: &str = crate::bundled_fonts::LILEX_FONT_FAMILY;
 
-
 impl GitCometView {
     pub(in crate::view) fn open_popover_at(
         &mut self,
@@ -540,9 +539,8 @@ impl GitCometView {
     ) {
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
-        self.popover_host.update(cx, |host, cx| {
-            host.open_popover_centered(kind, window, cx)
-        });
+        self.popover_host
+            .update(cx, |host, cx| host.open_popover_centered(kind, window, cx));
     }
 
     pub(in crate::view) fn open_popover_for_bounds(
@@ -596,8 +594,7 @@ impl GitCometView {
                     let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
                     if arrow_up || shift_tab {
                         let has_repo = this.active_repo_id().is_some();
-                        let matches =
-                            this.command_palette.filtered_commands(has_repo, &query);
+                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         if matches.is_empty() {
                             this.command_palette.selected_index = None;
                         } else {
@@ -625,13 +622,11 @@ impl GitCometView {
                         return;
                     }
 
-                    let arrow_down =
-                        input.update(cx, |input, _| input.take_arrow_down_pressed());
+                    let arrow_down = input.update(cx, |input, _| input.take_arrow_down_pressed());
                     let tab = input.update(cx, |input, _| input.take_tab_pressed());
                     if arrow_down || tab {
                         let has_repo = this.active_repo_id().is_some();
-                        let matches =
-                            this.command_palette.filtered_commands(has_repo, &query);
+                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         if matches.is_empty() {
                             this.command_palette.selected_index = None;
                         } else {
@@ -659,12 +654,10 @@ impl GitCometView {
                         return;
                     }
 
-                    let enter_pressed =
-                        input.update(cx, |input, _| input.take_enter_pressed());
+                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
                     if enter_pressed {
                         let has_repo = this.active_repo_id().is_some();
-                        let matches =
-                            this.command_palette.filtered_commands(has_repo, &query);
+                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         let cmd_to_execute = this
                             .command_palette
                             .selected_index
@@ -682,8 +675,7 @@ impl GitCometView {
 
                     if query != this.command_palette.previous_query.as_ref() {
                         let has_repo = this.active_repo_id().is_some();
-                        let matches =
-                            this.command_palette.filtered_commands(has_repo, &query);
+                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         this.command_palette.selected_index =
                             if matches.is_empty() { None } else { Some(0) };
                         this.command_palette.previous_query = query.into();
@@ -1229,10 +1221,7 @@ impl GitCometView {
                             return;
                         };
                         let _ = view.update(cx, |this, _cx| {
-                            this.store.dispatch(Msg::ApplyPatch {
-                                repo_id,
-                                patch,
-                            });
+                            this.store.dispatch(Msg::ApplyPatch { repo_id, patch });
                         });
                     })
                     .detach();
