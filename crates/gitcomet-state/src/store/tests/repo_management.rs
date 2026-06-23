@@ -3887,6 +3887,67 @@ fn repo_action_finished_reissues_inflight_non_status_loads() {
 }
 
 #[test]
+fn repo_action_finished_reissues_inflight_sidebar_data_loads() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].open = Loadable::Ready(());
+
+    state.repos[0].set_sidebar_data_request(SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    });
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREES);
+    state.repos[0].worktrees = Loadable::Loading;
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::SUBMODULES);
+    state.repos[0].submodules = Loadable::Loading;
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STASHES);
+    state.repos[0].stashes = Loadable::Loading;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        has_worktree_refresh_effect(&effects, repo_id),
+        "worktrees should be re-loaded after a repo action, not stranded in NotLoaded"
+    );
+    assert!(
+        has_submodule_load_effect(&effects, repo_id),
+        "submodules should be re-loaded after a repo action, not stranded in NotLoaded"
+    );
+    assert!(
+        has_stash_load_effect(&effects, repo_id),
+        "stashes should be re-loaded after a repo action, not stranded in NotLoaded"
+    );
+}
+
+#[test]
 fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

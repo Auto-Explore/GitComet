@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -49,7 +49,7 @@ jobs:
             target_platform: aarch64-linux
             runs_on: ubuntu-22.04-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Show Git version
         run: git --version
       - name: Install Rust toolchain
@@ -86,7 +86,7 @@ jobs:
             pkg-config \
             tar \
             which
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Show Git version
         run: git --version
       - name: Install Rust toolchain
@@ -132,7 +132,7 @@ jobs:
       XDG_SESSION_TYPE: ${{ matrix.profile.session_type }}
       XDG_CURRENT_DESKTOP: ${{ matrix.profile.desktop }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Show Git version
         run: git --version
       - name: Install Linux UI native dependencies
@@ -192,7 +192,7 @@ jobs:
             name: intel (macos-15-intel)
             runs_on: macos-15-intel
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Show Git version
         run: git --version
       - name: Install Rust toolchain
@@ -244,7 +244,7 @@ jobs:
           - target_platform: aarch64-windows
             runs_on: windows-11-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Show Git version
         shell: pwsh
         run: git --version
