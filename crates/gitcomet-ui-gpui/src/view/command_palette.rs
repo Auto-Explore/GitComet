@@ -35,7 +35,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Apply Patch",
         shortcut: "",
         category: "Commit",
-        requires_repo: false,
+        requires_repo: true,
     },
     CommandEntry {
         id: "stage-all",
@@ -51,7 +51,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Working Copy",
         requires_repo: true,
     },
-    // TODO: "discard-all"        - Discard All Changes (Working Copy)
     CommandEntry {
         id: "create-branch",
         label: "Create Branch",
@@ -392,6 +391,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "edit-remote-url"        - Edit Remote URL
     // TODO: "remove-submodule"       - Remove Submodule
     // TODO: "remove-worktree"        - Remove Worktree
+    // TODO: "discard-all"        - Discard All Changes (Working Copy)
 ];
 
 pub(crate) struct CommandPaletteState {
