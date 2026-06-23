@@ -853,7 +853,7 @@ impl PopoverHost {
             }
             ContextMenuAction::TerminalOpenExternal { repo_id } => {
                 let _ = self.root_view.update(cx, |root, cx| {
-                    let _ = root.open_external_terminal_from_menu(repo_id, window, cx);
+                    root.open_external_terminal_from_menu(repo_id, window, cx);
                 });
             }
             ContextMenuAction::ApplyIndexPatch {

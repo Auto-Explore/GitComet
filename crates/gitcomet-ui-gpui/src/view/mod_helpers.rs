@@ -2,6 +2,8 @@ use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
 use std::sync::Mutex;
 
+type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
+
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
 }
@@ -2895,10 +2897,9 @@ pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf 
 }
 
 pub(super) struct TerminalIo {
-    pub(super) master: Box<dyn portable_pty::MasterPty + Send>,
-    pub(super) writer: Option<Box<dyn std::io::Write + Send>>,
-    pub(super) killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
-    pub(super) size: portable_pty::PtySize,
+    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(super) events_rx:
+        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2962,7 +2963,8 @@ pub(super) struct TerminalSessionHandle {
 }
 
 pub(super) struct TerminalSessionState {
-    pub(super) parser: vt100::Parser,
+    pub(super) term_lock: Option<AlacrittyTermLock>,
+    pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(super) grid_size: TerminalGridSize,
     pub(super) connected: bool,
     pub(super) exit_status: Option<String>,
@@ -2981,8 +2983,8 @@ pub(super) enum TerminalWriteRequest {
 pub(super) struct TerminalViewportView {
     pub(super) theme: AppTheme,
     pub(super) focus_handle: FocusHandle,
-    pub(super) session: TerminalSessionHandle,
-    pub(super) io: Arc<Mutex<TerminalIo>>,
+    pub(super) term_lock: Option<AlacrittyTermLock>,
+    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
     pub(super) layout_cache: Option<TerminalLayoutCache>,
     pub(super) render_cache: TerminalRenderCache,
     pub(super) cursor_blink_visible: bool,
@@ -2990,6 +2992,8 @@ pub(super) struct TerminalViewportView {
     pub(super) cursor_blink_active: bool,
     pub(super) cursor_blink_task_scheduled: bool,
     pub(super) cursor_blink_seq: u64,
+    pub(super) content_epoch: u64,
+    pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
 }
 
 pub(super) struct RepoTerminalSession {
@@ -2997,22 +3001,26 @@ pub(super) struct RepoTerminalSession {
     pub(super) repo_name: String,
     pub(super) focus_handle: FocusHandle,
     pub(super) io: std::sync::Arc<std::sync::Mutex<TerminalIo>>,
-    pub(super) parser: vt100::Parser,
+    pub(super) term_lock: Option<AlacrittyTermLock>,
+    pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
+    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(super) events_rx:
+        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
     pub(super) grid_size: TerminalGridSize,
     pub(super) content_epoch: u64,
     pub(super) render_cache: TerminalRenderCache,
     pub(super) connected: bool,
     pub(super) exit_status: Option<String>,
-    pub(super) terminal: TerminalSessionHandle,
     pub(super) viewport: Entity<TerminalViewportView>,
     pub(super) session_seq: u64,
     pub(super) selection: Option<TerminalSelection>,
     pub(super) selection_drag_anchor: Option<TerminalGridPoint>,
     pub(super) viewport_bounds: Option<Bounds<Pixels>>,
+    pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct TerminalPanelResizeState {
+pub(crate) struct TerminalPanelResizeState {
     pub(super) start_y: Pixels,
     pub(super) start_height: Pixels,
 }

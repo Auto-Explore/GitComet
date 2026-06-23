@@ -620,7 +620,7 @@ fn install_global_diff_shortcut_fallback(cx: &mut App) {
             || event
                 .context_stack
                 .iter()
-                .any(|context| context.contains("TextInput"))
+                .any(|context| context.contains("TextInput") || context.contains("Terminal"))
         {
             return;
         }

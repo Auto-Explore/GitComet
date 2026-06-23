@@ -19,32 +19,32 @@ const LINUX_AUTOMATIC_TERMINALS: &[LinuxAutomaticTerminal] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
-pub(in crate::view) enum EmbeddedShellMode {
+pub(in crate::view) enum ActionBarTerminalTarget {
     #[default]
-    Automatic,
-    CustomProgram,
+    Embedded,
+    External,
 }
 
-impl EmbeddedShellMode {
+impl ActionBarTerminalTarget {
     pub(in crate::view) fn from_key(raw: &str) -> Option<Self> {
         match raw.trim() {
-            "automatic" => Some(Self::Automatic),
-            "custom_program" => Some(Self::CustomProgram),
+            "embedded" => Some(Self::Embedded),
+            "external" => Some(Self::External),
             _ => None,
         }
     }
 
     pub(in crate::view) fn key(self) -> &'static str {
         match self {
-            Self::Automatic => "automatic",
-            Self::CustomProgram => "custom_program",
+            Self::Embedded => "embedded",
+            Self::External => "external",
         }
     }
 
     pub(in crate::view) fn label(self) -> &'static str {
         match self {
-            Self::Automatic => "Automatic",
-            Self::CustomProgram => "Custom program",
+            Self::Embedded => "Embedded terminal",
+            Self::External => "External terminal",
         }
     }
 }
@@ -52,7 +52,6 @@ impl EmbeddedShellMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
 pub(in crate::view) enum ExternalTerminalMode {
     #[default]
-    Automatic,
     SystemDefault,
     CustomProgram,
 }
@@ -60,7 +59,6 @@ pub(in crate::view) enum ExternalTerminalMode {
 impl ExternalTerminalMode {
     pub(in crate::view) fn from_key(raw: &str) -> Option<Self> {
         match raw.trim() {
-            "automatic" => Some(Self::Automatic),
             "system_default" => Some(Self::SystemDefault),
             "custom_program" => Some(Self::CustomProgram),
             _ => None,
@@ -69,7 +67,6 @@ impl ExternalTerminalMode {
 
     pub(in crate::view) fn key(self) -> &'static str {
         match self {
-            Self::Automatic => "automatic",
             Self::SystemDefault => "system_default",
             Self::CustomProgram => "custom_program",
         }
@@ -77,7 +74,6 @@ impl ExternalTerminalMode {
 
     pub(in crate::view) fn label(self) -> &'static str {
         match self {
-            Self::Automatic => "Automatic",
             Self::SystemDefault => "System default",
             Self::CustomProgram => "Custom launcher",
         }
@@ -86,23 +82,19 @@ impl ExternalTerminalMode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct TerminalPreferences {
-    pub(in crate::view) embedded_shell_mode: EmbeddedShellMode,
-    pub(in crate::view) embedded_shell_program: String,
     pub(in crate::view) external_terminal_mode: ExternalTerminalMode,
     pub(in crate::view) external_terminal_program: String,
     pub(in crate::view) external_terminal_args: Vec<String>,
-    pub(in crate::view) external_terminal_fallback: bool,
+    pub(in crate::view) action_bar_terminal_target: ActionBarTerminalTarget,
 }
 
 impl Default for TerminalPreferences {
     fn default() -> Self {
         Self {
-            embedded_shell_mode: EmbeddedShellMode::Automatic,
-            embedded_shell_program: String::new(),
-            external_terminal_mode: ExternalTerminalMode::Automatic,
+            external_terminal_mode: ExternalTerminalMode::SystemDefault,
             external_terminal_program: String::new(),
             external_terminal_args: Vec::new(),
-            external_terminal_fallback: true,
+            action_bar_terminal_target: ActionBarTerminalTarget::Embedded,
         }
     }
 }
@@ -110,16 +102,6 @@ impl Default for TerminalPreferences {
 impl TerminalPreferences {
     pub(in crate::view) fn from_ui_session(ui_session: &session::UiSession) -> Self {
         let mut preferences = Self::default();
-        if let Some(mode) = ui_session
-            .terminal_embedded_shell_mode
-            .as_deref()
-            .and_then(EmbeddedShellMode::from_key)
-        {
-            preferences.embedded_shell_mode = mode;
-        }
-        if let Some(program) = ui_session.terminal_embedded_shell_program.as_ref() {
-            preferences.embedded_shell_program = program.clone();
-        }
         if let Some(mode) = ui_session
             .terminal_external_mode
             .as_deref()
@@ -137,38 +119,26 @@ impl TerminalPreferences {
                 .filter(|arg| !arg.is_empty())
                 .collect();
         }
-        if let Some(enabled) = ui_session.terminal_external_fallback {
-            preferences.external_terminal_fallback = enabled;
+        if let Some(target) = ui_session
+            .terminal_action_bar_target
+            .as_deref()
+            .and_then(ActionBarTerminalTarget::from_key)
+        {
+            preferences.action_bar_terminal_target = target;
         }
         preferences
     }
 
     pub(in crate::view) fn apply_to_ui_settings(&self, settings: &mut session::UiSettings) {
-        settings.terminal_embedded_shell_mode = Some(self.embedded_shell_mode.key().to_string());
-        settings.terminal_embedded_shell_program = Some(self.embedded_shell_program.clone());
         settings.terminal_external_mode = Some(self.external_terminal_mode.key().to_string());
         settings.terminal_external_program = Some(self.external_terminal_program.clone());
         settings.terminal_external_args = Some(self.external_terminal_args.clone());
-        settings.terminal_external_fallback = Some(self.external_terminal_fallback);
-    }
-
-    pub(in crate::view) fn embedded_summary(&self) -> String {
-        match self.embedded_shell_mode {
-            EmbeddedShellMode::Automatic => "Automatic".to_string(),
-            EmbeddedShellMode::CustomProgram => {
-                let program = self.embedded_shell_program.trim();
-                if program.is_empty() {
-                    "Custom program (not set)".to_string()
-                } else {
-                    format!("Custom: {program}")
-                }
-            }
-        }
+        settings.terminal_action_bar_target =
+            Some(self.action_bar_terminal_target.key().to_string());
     }
 
     pub(in crate::view) fn external_summary(&self) -> String {
         match self.external_terminal_mode {
-            ExternalTerminalMode::Automatic => "Automatic".to_string(),
             ExternalTerminalMode::SystemDefault => "System default (best effort)".to_string(),
             ExternalTerminalMode::CustomProgram => {
                 let program = self.external_terminal_program.trim();
@@ -238,20 +208,9 @@ pub(in crate::view) fn parse_terminal_args_multiline(raw: &str) -> Vec<String> {
         .collect()
 }
 
-pub(in crate::view) fn resolve_embedded_shell_program(
-    preferences: &TerminalPreferences,
-) -> Result<PathBuf, String> {
-    match preferences.embedded_shell_mode {
-        EmbeddedShellMode::Automatic => resolve_automatic_embedded_shell_program()
-            .ok_or_else(|| "No shell program was found for the embedded terminal.".to_string()),
-        EmbeddedShellMode::CustomProgram => {
-            let program = preferences.embedded_shell_program.trim();
-            if program.is_empty() {
-                return Err("Set a custom shell program in Settings > Terminal.".to_string());
-            }
-            Ok(PathBuf::from(program))
-        }
-    }
+pub(in crate::view) fn resolve_embedded_shell_program() -> Result<PathBuf, String> {
+    resolve_automatic_embedded_shell_program()
+        .ok_or_else(|| "No shell program was found for the embedded terminal.".to_string())
 }
 
 pub(in crate::view) fn launch_external_terminal_from_preferences(
@@ -267,7 +226,6 @@ pub(in crate::view) fn resolve_external_terminal_launch_spec(
     context: &ExternalTerminalLaunchContext,
 ) -> Result<ExternalTerminalLaunchSpec, String> {
     match preferences.external_terminal_mode {
-        ExternalTerminalMode::Automatic => resolve_automatic_external_terminal_launch_spec(context),
         ExternalTerminalMode::SystemDefault => {
             resolve_system_default_external_terminal_launch_spec(context)
         }
@@ -587,8 +545,6 @@ mod tests {
     #[test]
     fn terminal_preferences_from_ui_session_ignores_invalid_modes_and_trims_args() {
         let ui_session = session::UiSession {
-            terminal_embedded_shell_mode: Some("wat".to_string()),
-            terminal_embedded_shell_program: Some("  /bin/fish  ".to_string()),
             terminal_external_mode: Some(" nope ".to_string()),
             terminal_external_program: Some(" wezterm ".to_string()),
             terminal_external_args: Some(vec![
@@ -596,45 +552,39 @@ mod tests {
                 "".to_string(),
                 " {cwd} ".to_string(),
             ]),
-            terminal_external_fallback: Some(false),
+            terminal_action_bar_target: Some(" external ".to_string()),
             ..session::UiSession::default()
         };
 
         let preferences = TerminalPreferences::from_ui_session(&ui_session);
         assert_eq!(
-            preferences.embedded_shell_mode,
-            EmbeddedShellMode::Automatic
-        );
-        assert_eq!(preferences.embedded_shell_program, "  /bin/fish  ");
-        assert_eq!(
             preferences.external_terminal_mode,
-            ExternalTerminalMode::Automatic
+            ExternalTerminalMode::SystemDefault
         );
         assert_eq!(preferences.external_terminal_program, " wezterm ");
         assert_eq!(
             preferences.external_terminal_args,
             vec!["start".to_string(), "{cwd}".to_string()]
         );
-        assert!(!preferences.external_terminal_fallback);
+        assert_eq!(
+            preferences.action_bar_terminal_target,
+            ActionBarTerminalTarget::External
+        );
     }
 
     #[test]
     fn terminal_preference_summaries_report_custom_missing_values() {
         let preferences = TerminalPreferences {
-            embedded_shell_mode: EmbeddedShellMode::CustomProgram,
             external_terminal_mode: ExternalTerminalMode::CustomProgram,
             ..TerminalPreferences::default()
         };
 
-        assert_eq!(preferences.embedded_summary(), "Custom program (not set)");
         assert_eq!(preferences.external_summary(), "Custom launcher (not set)");
     }
 
     #[test]
     fn terminal_preferences_round_trip_via_ui_settings() {
         let preferences = TerminalPreferences {
-            embedded_shell_mode: EmbeddedShellMode::CustomProgram,
-            embedded_shell_program: "/bin/zsh".to_string(),
             external_terminal_mode: ExternalTerminalMode::CustomProgram,
             external_terminal_program: "wezterm".to_string(),
             external_terminal_args: vec![
@@ -642,15 +592,11 @@ mod tests {
                 "--cwd".to_string(),
                 "{cwd}".to_string(),
             ],
-            external_terminal_fallback: false,
+            action_bar_terminal_target: ActionBarTerminalTarget::External,
         };
 
         let mut settings = session::UiSettings::default();
         preferences.apply_to_ui_settings(&mut settings);
-        assert_eq!(
-            settings.terminal_embedded_shell_mode.as_deref(),
-            Some("custom_program")
-        );
         assert_eq!(
             settings.terminal_external_mode.as_deref(),
             Some("custom_program")
@@ -663,19 +609,10 @@ mod tests {
                 "{cwd}".to_string()
             ])
         );
-        assert_eq!(settings.terminal_external_fallback, Some(false));
-    }
-
-    #[test]
-    fn resolve_embedded_shell_program_requires_custom_value() {
-        let preferences = TerminalPreferences {
-            embedded_shell_mode: EmbeddedShellMode::CustomProgram,
-            embedded_shell_program: "   ".to_string(),
-            ..TerminalPreferences::default()
-        };
-
-        let err = resolve_embedded_shell_program(&preferences).expect_err("blank custom shell");
-        assert_eq!(err, "Set a custom shell program in Settings > Terminal.");
+        assert_eq!(
+            settings.terminal_action_bar_target.as_deref(),
+            Some("external")
+        );
     }
 
     #[test]

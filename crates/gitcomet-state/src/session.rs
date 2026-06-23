@@ -42,12 +42,10 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
-    pub terminal_embedded_shell_mode: Option<String>,
-    pub terminal_embedded_shell_program: Option<String>,
     pub terminal_external_mode: Option<String>,
     pub terminal_external_program: Option<String>,
     pub terminal_external_args: Option<Vec<String>>,
-    pub terminal_external_fallback: Option<bool>,
+    pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
@@ -156,12 +154,10 @@ struct UiSessionFile {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
-    terminal_embedded_shell_mode: Option<String>,
-    terminal_embedded_shell_program: Option<String>,
     terminal_external_mode: Option<String>,
     terminal_external_program: Option<String>,
     terminal_external_args: Option<Vec<String>>,
-    terminal_external_fallback: Option<bool>,
+    terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
@@ -245,12 +241,10 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
-        terminal_embedded_shell_mode: file.terminal_embedded_shell_mode,
-        terminal_embedded_shell_program: file.terminal_embedded_shell_program,
         terminal_external_mode: file.terminal_external_mode,
         terminal_external_program: file.terminal_external_program,
         terminal_external_args: file.terminal_external_args,
-        terminal_external_fallback: file.terminal_external_fallback,
+        terminal_action_bar_target: file.terminal_action_bar_target,
         history_show_tags: file.history_show_tags,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
@@ -542,12 +536,10 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
-    pub terminal_embedded_shell_mode: Option<String>,
-    pub terminal_embedded_shell_program: Option<String>,
     pub terminal_external_mode: Option<String>,
     pub terminal_external_program: Option<String>,
     pub terminal_external_args: Option<Vec<String>>,
-    pub terminal_external_fallback: Option<bool>,
+    pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
@@ -642,12 +634,6 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
     if let Some(value) = settings.history_show_sha {
         file.history_show_sha = Some(value);
     }
-    if let Some(value) = settings.terminal_embedded_shell_mode {
-        file.terminal_embedded_shell_mode = Some(value);
-    }
-    if let Some(value) = settings.terminal_embedded_shell_program {
-        file.terminal_embedded_shell_program = Some(value);
-    }
     if let Some(value) = settings.terminal_external_mode {
         file.terminal_external_mode = Some(value);
     }
@@ -662,8 +648,8 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
             .collect::<Vec<_>>();
         file.terminal_external_args = Some(values);
     }
-    if let Some(value) = settings.terminal_external_fallback {
-        file.terminal_external_fallback = Some(value);
+    if let Some(value) = settings.terminal_action_bar_target {
+        file.terminal_action_bar_target = Some(value);
     }
     if let Some(value) = settings.history_show_tags {
         file.history_show_tags = Some(value);
@@ -3187,8 +3173,6 @@ mod tests {
 
         persist_ui_settings_to_path(
             UiSettings {
-                terminal_embedded_shell_mode: Some("custom_program".to_string()),
-                terminal_embedded_shell_program: Some("/bin/zsh".to_string()),
                 terminal_external_mode: Some("custom_program".to_string()),
                 terminal_external_program: Some("wezterm".to_string()),
                 terminal_external_args: Some(vec![
@@ -3196,7 +3180,7 @@ mod tests {
                     "--cwd".to_string(),
                     "{cwd}".to_string(),
                 ]),
-                terminal_external_fallback: Some(false),
+                terminal_action_bar_target: Some("external".to_string()),
                 ..UiSettings::default()
             },
             &path,
@@ -3204,14 +3188,6 @@ mod tests {
         .expect("persist ui settings");
 
         let loaded = load_from_path(&path);
-        assert_eq!(
-            loaded.terminal_embedded_shell_mode.as_deref(),
-            Some("custom_program")
-        );
-        assert_eq!(
-            loaded.terminal_embedded_shell_program.as_deref(),
-            Some("/bin/zsh")
-        );
         assert_eq!(
             loaded.terminal_external_mode.as_deref(),
             Some("custom_program")
@@ -3225,7 +3201,10 @@ mod tests {
                 "{cwd}".to_string()
             ])
         );
-        assert_eq!(loaded.terminal_external_fallback, Some(false));
+        assert_eq!(
+            loaded.terminal_action_bar_target.as_deref(),
+            Some("external")
+        );
     }
 
     #[test]

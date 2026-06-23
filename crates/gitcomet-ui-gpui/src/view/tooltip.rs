@@ -136,12 +136,10 @@ impl GitCometView {
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
-                            terminal_embedded_shell_mode: None,
-                            terminal_embedded_shell_program: None,
                             terminal_external_mode: None,
                             terminal_external_program: None,
                             terminal_external_args: None,
-                            terminal_external_fallback: None,
+                            terminal_action_bar_target: None,
                             history_show_tags: Some(history_show_tags),
                             history_tag_fetch_mode: Some(if history_auto_fetch_tags_on_repo_activation
                             {

@@ -68,9 +68,12 @@ syntax-repo = [
 ]
 
 [dependencies]
+alacritty_terminal = { workspace = true }
 fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-core = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
 gitcomet-tree-sitter-alloc = { path = "../gitcomet-tree-sitter-alloc" }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
@@ -80,7 +83,6 @@ image = { workspace = true }
 lru = { workspace = true }
 memchr = { workspace = true }
 mimalloc = { workspace = true }
-portable-pty = { workspace = true }
 pulldown-cmark = { workspace = true }
 regex = { workspace = true }
 resvg = { workspace = true }
@@ -134,7 +136,6 @@ tree-sitter-yaml = { workspace = true, optional = true }
 tree-sitter-zig = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
-vt100 = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { workspace = true }

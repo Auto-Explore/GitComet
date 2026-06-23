@@ -142,6 +142,7 @@ mod settings_window;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
+mod terminal_alacritty;
 mod terminal_panel;
 mod terminal_preferences;
 #[cfg(test)]
@@ -172,8 +173,8 @@ use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
 pub(in crate::view) use terminal_preferences::{
-    EmbeddedShellMode, ExternalTerminalLaunchContext, ExternalTerminalMode, TerminalPreferences,
-    launch_external_terminal_from_preferences, parse_terminal_args_multiline,
+    ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
+    TerminalPreferences, launch_external_terminal_from_preferences, parse_terminal_args_multiline,
     resolve_embedded_shell_program,
 };
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
@@ -194,6 +195,7 @@ use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
+pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
@@ -1092,6 +1094,7 @@ impl GitCometView {
         };
 
         view.set_theme(initial_theme, cx);
+        view.sync_action_bar_terminal_target(cx);
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
