@@ -44,19 +44,20 @@ fn model_for_state(
     }];
 
     if crate::external_editor::configured_setting().is_some()
-        && let Some(ref workdir) = workdir {
-            items.push(ContextMenuItem::Separator);
-            items.push(ContextMenuItem::Entry {
-                label: "Open in code editor".into(),
-                icon: Some("icons/open_external.svg".into()),
-                shortcut: Some("Ctrl+Shift+E".into()),
-                disabled: false,
-                action: Box::new(ContextMenuAction::OpenInCodeEditor {
-                    repo_id: None,
-                    path: workdir.clone(),
-                }),
-            });
-        }
+        && let Some(ref workdir) = workdir
+    {
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Open in code editor".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: Some("Ctrl+Shift+E".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenInCodeEditor {
+                repo_id: None,
+                path: workdir.clone(),
+            }),
+        });
+    }
 
     items.push(ContextMenuItem::Separator);
     items.extend_from_slice(&[

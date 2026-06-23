@@ -5422,6 +5422,46 @@ fn ctrl_e_opens_file_in_code_editor(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn ctrl_e_is_ignored_when_no_editor_configured(cx: &mut gpui::TestAppContext) {
+    let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70621);
+    let commit_id = CommitId("abcdef00112233dd".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_e_no_editor",
+        std::process::id()
+    ));
+
+    std::fs::create_dir_all(&workdir).expect("should create temp workdir");
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let full_path = workdir.join(&path);
+    if let Some(parent) = full_path.parent() {
+        std::fs::create_dir_all(parent).expect("should create parent dir");
+    }
+    std::fs::write(&full_path, "// test file").expect("should write test file");
+
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-e");
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
 fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

@@ -466,6 +466,19 @@ fn configured_setting_override() -> &'static Mutex<Option<Option<ExternalCodeEdi
     CONFIGURED_SETTING_OVERRIDE.get_or_init(|| Mutex::new(None))
 }
 
+static SESSION_SETTING_CACHE: OnceLock<Mutex<Option<Option<ExternalCodeEditorSetting>>>> =
+    OnceLock::new();
+
+fn session_setting_cache() -> &'static Mutex<Option<Option<ExternalCodeEditorSetting>>> {
+    SESSION_SETTING_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn invalidate_session_setting_cache() {
+    *session_setting_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_CONFIGURED_SETTING_OVERRIDE: std::cell::RefCell<Option<Option<ExternalCodeEditorSetting>>> =
@@ -477,6 +490,7 @@ pub(crate) fn set_configured_setting_override(setting: Option<ExternalCodeEditor
     *configured_setting_override()
         .lock()
         .unwrap_or_else(|err| err.into_inner()) = Some(setting);
+    invalidate_session_setting_cache();
 }
 
 #[cfg(test)]
@@ -484,6 +498,7 @@ pub(crate) fn set_configured_setting_override(setting: Option<ExternalCodeEditor
     TEST_CONFIGURED_SETTING_OVERRIDE.with(|override_setting| {
         *override_setting.borrow_mut() = Some(setting);
     });
+    invalidate_session_setting_cache();
 }
 
 #[cfg(test)]
@@ -494,6 +509,7 @@ fn clear_configured_setting_override() {
     *configured_setting_override()
         .lock()
         .unwrap_or_else(|err| err.into_inner()) = None;
+    invalidate_session_setting_cache();
 }
 
 #[cfg(test)]
@@ -519,6 +535,14 @@ impl Drop for ConfiguredSettingOverrideTestGuard {
     fn drop(&mut self) {
         clear_configured_setting_override();
     }
+}
+
+#[cfg(test)]
+fn session_setting_cache_value() -> Option<Option<ExternalCodeEditorSetting>> {
+    session_setting_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
 }
 
 #[cfg(not(test))]
@@ -549,7 +573,17 @@ pub(crate) fn configured_setting_preference_override() -> Option<Option<External
 pub(crate) fn configured_setting() -> Option<ExternalCodeEditorSetting> {
     match configured_setting_from_override() {
         Some(setting) => setting.filter(setting_is_configured),
-        None => configured_setting_from_session(),
+        None => {
+            let mut cache = session_setting_cache()
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            if let Some(cached) = cache.as_ref() {
+                return cached.clone();
+            }
+            let setting = configured_setting_from_session();
+            *cache = Some(setting.clone());
+            setting
+        }
     }
 }
 
@@ -1717,5 +1751,78 @@ mod tests {
             err,
             ExternalEditorError::InvalidCustomArguments(_)
         ));
+    }
+
+    #[test]
+    fn configured_setting_caches_session_value_on_repeated_calls() {
+        let _guard = configured_setting_override_test_guard();
+
+        assert!(session_setting_cache_value().is_none());
+
+        let first = configured_setting();
+        let cached = session_setting_cache_value();
+
+        assert_eq!(
+            first,
+            cached.and_then(|c| c),
+            "configured_setting() should populate the cache with the session-derived value"
+        );
+
+        let second = configured_setting();
+        assert_eq!(
+            first, second,
+            "repeated calls should return the same cached value"
+        );
+    }
+
+    #[test]
+    fn configured_setting_override_invalidates_session_cache() {
+        let _guard = configured_setting_override_test_guard();
+
+        configured_setting();
+        assert!(
+            session_setting_cache_value().is_some(),
+            "cache should be populated after first configured_setting() call"
+        );
+
+        set_configured_setting_override(Some(ExternalCodeEditorSetting::Custom {
+            executable: PathBuf::from("/usr/bin/editor"),
+            arguments: None,
+        }));
+
+        assert!(
+            session_setting_cache_value().is_none(),
+            "cache should be invalidated after set_configured_setting_override is called"
+        );
+
+        let result = configured_setting();
+        assert!(
+            result.is_some(),
+            "should return override value without touching cache"
+        );
+    }
+
+    #[test]
+    fn configured_setting_override_clear_invalidates_session_cache() {
+        let _guard = configured_setting_override_test_guard();
+
+        set_configured_setting_override(Some(ExternalCodeEditorSetting::Custom {
+            executable: PathBuf::from("/usr/bin/editor"),
+            arguments: None,
+        }));
+        assert!(configured_setting().is_some(), "override should be active");
+
+        clear_configured_setting_override();
+
+        assert!(
+            session_setting_cache_value().is_none(),
+            "cache should be invalidated when override is cleared"
+        );
+
+        assert_eq!(
+            configured_setting_preference_override(),
+            None,
+            "override should be cleared"
+        );
     }
 }
