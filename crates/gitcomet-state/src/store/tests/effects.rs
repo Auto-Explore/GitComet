@@ -4816,7 +4816,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::LoadBlame {
                 repo_id,
                 path: PathBuf::from("tracked.txt"),
-                rev: Some("HEAD".to_string()),
+                source: gitcomet_core::domain::BlameSource::Revision(Some("HEAD".to_string())),
             },
             1,
         ),

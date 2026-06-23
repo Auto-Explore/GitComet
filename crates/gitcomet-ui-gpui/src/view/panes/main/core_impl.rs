@@ -692,20 +692,39 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
     }
 }
 
-/// Resolve the file path and blame revision for a diff target, or `None` for
-/// targets that are not a single tracked file (e.g. a whole-commit diff).
-fn blame_path_rev_for_target(target: &DiffTarget) -> Option<(std::path::PathBuf, Option<String>)> {
+/// Resolve the file path and blame source for a diff target, or `None` for
+/// targets that do not support blame annotation (e.g. whole-commit diffs with no
+/// selected path).
+///
+/// Committed-file diffs blame the committed revision shown on the new side.
+/// Working-tree diffs blame the displayed new-side content for their area (see
+/// [`gitcomet_core::services::Repo::blame_worktree_file`]); lines not yet
+/// committed are surfaced as "Not Committed Yet". In both cases blame is
+/// computed against the exact content rendered on the new side, so the 1:1
+/// `new_line` mapping in the annotation column stays correct.
+fn blame_path_rev_for_target(
+    target: &DiffTarget,
+) -> Option<(std::path::PathBuf, gitcomet_core::domain::BlameSource)> {
+    use gitcomet_core::domain::BlameSource;
     match target {
-        DiffTarget::WorkingTree { path, .. } => Some((path.clone(), None)),
+        DiffTarget::WorkingTree { path, area } => {
+            Some((path.clone(), BlameSource::WorkingTree(*area)))
+        }
         DiffTarget::Commit {
             commit_id,
             path: Some(path),
-        } => Some((path.clone(), Some(commit_id.0.to_string()))),
+        } => Some((
+            path.clone(),
+            BlameSource::Revision(Some(commit_id.0.to_string())),
+        )),
         DiffTarget::CommitRange {
             to_commit_id,
             path: Some(path),
             ..
-        } => Some((path.clone(), Some(to_commit_id.0.to_string()))),
+        } => Some((
+            path.clone(),
+            BlameSource::Revision(Some(to_commit_id.0.to_string())),
+        )),
         _ => None,
     }
 }
@@ -779,7 +798,7 @@ impl MainPaneView {
             // Blame/annotate data — when blame loads for the first time or changes
             // target, the annotation sidebar needs to repaint.
             repo.history_state.blame_path.hash(&mut hasher);
-            repo.history_state.blame_rev.hash(&mut hasher);
+            repo.history_state.blame_source.hash(&mut hasher);
             matches!(
                 &repo.history_state.blame,
                 gitcomet_state::model::Loadable::Ready(_)
@@ -1158,6 +1177,7 @@ impl MainPaneView {
             annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
             annotate_resize: None,
             blame_annot_hover: None,
+            blame_time_range_cache: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2840,6 +2860,18 @@ impl MainPaneView {
         crate::ui_scale::design_px_from_percent(self.annotate_column_width, ui_scale_percent)
     }
 
+    /// Whether the annotation column should be shown for the currently rendered
+    /// diff target. Requires the user toggle to be on AND the target to support
+    /// blame (committed-file and working-tree views — see
+    /// [`blame_path_rev_for_target`]).
+    pub(in crate::view) fn annotation_active(&self) -> bool {
+        self.annotate_enabled
+            && self
+                .rendered_diff_target()
+                .and_then(blame_path_rev_for_target)
+                .is_some()
+    }
+
     /// Record the hovered blame annotation sub-area and drive the shared tooltip
     /// host. `next` is the (row, area) now hovered, or `None` when leaving; the
     /// blame canvas repaints on `notify` and renders the accent highlight from
@@ -2885,7 +2917,7 @@ impl MainPaneView {
         let Some(repo_id) = self.active_repo_id() else {
             return;
         };
-        let Some((path, rev)) = self
+        let Some((path, source)) = self
             .rendered_diff_target()
             .and_then(blame_path_rev_for_target)
         else {
@@ -2894,8 +2926,8 @@ impl MainPaneView {
 
         if let Some(repo) = self.active_repo() {
             let history = &repo.history_state;
-            let same_target =
-                history.blame_path.as_deref() == Some(path.as_path()) && history.blame_rev == rev;
+            let same_target = history.blame_path.as_deref() == Some(path.as_path())
+                && history.blame_source.as_ref() == Some(&source);
             // For an already-attempted target, don't re-dispatch — including on
             // error, to avoid a per-frame retry loop. Only `NotLoaded` (a fresh
             // or changed target) triggers a load.
@@ -2905,7 +2937,11 @@ impl MainPaneView {
             }
         }
 
-        self.store.dispatch(Msg::LoadBlame { repo_id, path, rev });
+        self.store.dispatch(Msg::LoadBlame {
+            repo_id,
+            path,
+            source,
+        });
     }
 
     pub(in crate::view) fn set_diff_content_mode(
@@ -4219,7 +4255,7 @@ impl MainPaneView {
         };
         // Inline annotate reserves a fixed column at the left, narrowing the
         // available text width for word wrapping.
-        let annotation_width = if self.annotate_enabled {
+        let annotation_width = if self.annotation_active() {
             self.annotate_column_width_px(ui_scale_percent)
         } else {
             px(0.0)

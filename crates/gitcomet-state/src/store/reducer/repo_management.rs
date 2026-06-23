@@ -259,7 +259,10 @@ fn append_open_repo_effect_if_not_loaded(
 
 pub(in crate::store::reducer) enum SelectedHistoryReload {
     FileHistory(PathBuf),
-    Blame { path: PathBuf, rev: Option<String> },
+    Blame {
+        path: PathBuf,
+        source: gitcomet_core::domain::BlameSource,
+    },
     CommitDetails(gitcomet_core::domain::CommitId),
 }
 
@@ -276,11 +279,9 @@ pub(in crate::store::reducer) fn selected_history_reloads_for_activation(
 
     if matches!(repo_state.history_state.blame, Loadable::NotLoaded)
         && let Some(path) = repo_state.history_state.blame_path.clone()
+        && let Some(source) = repo_state.history_state.blame_source.clone()
     {
-        reloads.push(SelectedHistoryReload::Blame {
-            path,
-            rev: repo_state.history_state.blame_rev.clone(),
-        });
+        reloads.push(SelectedHistoryReload::Blame { path, source });
     }
 
     if matches!(repo_state.history_state.commit_details, Loadable::NotLoaded)
@@ -308,9 +309,13 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
                     limit: REACTIVATED_FILE_HISTORY_LIMIT,
                 });
             }
-            SelectedHistoryReload::Blame { path, rev } => {
+            SelectedHistoryReload::Blame { path, source } => {
                 repo_state.history_state.blame = Loadable::Loading;
-                effects.push_effect(Effect::LoadBlame { repo_id, path, rev });
+                effects.push_effect(Effect::LoadBlame {
+                    repo_id,
+                    path,
+                    source,
+                });
             }
             SelectedHistoryReload::CommitDetails(commit_id) => {
                 repo_state.set_commit_details(Loadable::Loading);
@@ -1046,7 +1051,7 @@ pub(super) fn repo_opened_ok(
             repo_state.history_state.file_history_path = None;
             repo_state.history_state.file_history = Loadable::NotLoaded;
             repo_state.history_state.blame_path = None;
-            repo_state.history_state.blame_rev = None;
+            repo_state.history_state.blame_source = None;
             repo_state.history_state.blame = Loadable::NotLoaded;
             repo_state.set_worktrees(Loadable::NotLoaded);
             repo_state.set_submodules(Loadable::NotLoaded);

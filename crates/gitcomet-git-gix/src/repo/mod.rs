@@ -1,9 +1,9 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry,
-    Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
+    Branch, Commit, CommitDetails, CommitId, Diff, DiffArea, DiffPreviewTextSide, DiffTarget,
+    FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage,
+    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
     SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
@@ -693,6 +693,19 @@ impl GitRepository for GixRepo {
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
         self.blame_file_impl(path, rev)
+    }
+
+    fn blame_worktree_file(&self, path: &Path, area: DiffArea) -> Result<Vec<BlameLine>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
+        self.blame_worktree_file_impl(path, area)
+    }
+
+    fn resolve_file_path_at_commit(
+        &self,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        self.resolve_file_path_at_commit_impl(path, commit)
     }
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {

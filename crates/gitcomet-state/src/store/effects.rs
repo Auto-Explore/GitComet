@@ -325,14 +325,16 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadBlame { repo_id, path, rev } => {
-            send(Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
-                repo_id,
-                path,
-                rev,
-                result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+        Effect::LoadBlame {
+            repo_id,
+            path,
+            source,
+        } => send(Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
+            repo_id,
+            path,
+            source,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadWorktrees { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                 repo_id,
@@ -407,7 +409,7 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::OpenFileAtCommitParent { .. } => {
+        Effect::OpenFileAtCommitParent { .. } | Effect::OpenFileAtCommit { .. } => {
             // No git backend available; nothing to resolve.
         }
         Effect::LoadDiff { repo_id, target } => {
@@ -1455,11 +1457,15 @@ pub(super) fn schedule_effect(
                 );
             }
         }
-        Effect::LoadBlame { repo_id, path, rev } => {
+        Effect::LoadBlame {
+            repo_id,
+            path,
+            source,
+        } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
-                repo_load::schedule_load_blame(executor, repos, msg_tx, repo_id, path, rev);
+                repo_load::schedule_load_blame(executor, repos, msg_tx, repo_id, path, source);
             }
         }
         Effect::LoadWorktrees { repo_id } => {
@@ -1573,6 +1579,19 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_open_file_at_commit_parent(
+                    executor, repos, msg_tx, repo_id, commit_id, path,
+                );
+            }
+        }
+        Effect::OpenFileAtCommit {
+            repo_id,
+            commit_id,
+            path,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_open_file_at_commit(
                     executor, repos, msg_tx, repo_id, commit_id, path,
                 );
             }

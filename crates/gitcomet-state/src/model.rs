@@ -605,7 +605,7 @@ pub struct HistoryState {
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
     pub blame_path: Option<PathBuf>,
-    pub blame_rev: Option<String>,
+    pub blame_source: Option<BlameSource>,
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
@@ -624,7 +624,7 @@ impl Default for HistoryState {
             file_history_path: None,
             file_history: Loadable::NotLoaded,
             blame_path: None,
-            blame_rev: None,
+            blame_source: None,
             blame: Loadable::NotLoaded,
             selected_commit: None,
             selected_commit_rev: 0,
@@ -1654,6 +1654,8 @@ mod tests {
             body: None,
             line: "line".to_string(),
             prior_exists: true,
+            source_path: None,
+            prior_commit: None,
         }]));
         repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
             id: CommitId("c1".into()),

@@ -1044,19 +1044,39 @@ pub(crate) fn historical_outline(is_dark: bool) -> Rgba {
 /// The anchor colors are intentionally outside the theme palette so the heat
 /// gradient reads consistently in every theme.
 pub(crate) fn blame_heat_color(is_dark: bool, t: f32) -> Rgba {
-    let t = t.clamp(0.0, 1.0);
     // old (cool, dim) -> new (warm, bright)
     let (old, new) = if is_dark {
         (gpui::rgb(0x2f4858), gpui::rgb(0xf6c453))
     } else {
         (gpui::rgb(0xbcd0dd), gpui::rgb(0xd98324))
     };
-    Rgba {
-        r: old.r + (new.r - old.r) * t,
-        g: old.g + (new.g - old.g) * t,
-        b: old.b + (new.b - old.b) * t,
-        a: 1.0,
+    mix_colors(old, new, t)
+}
+
+/// Border color for uncommitted ("Local change") rows in the blame/annotate
+/// column. A bright yellow that stands apart from the recency heat gradient so
+/// not-yet-committed lines are immediately distinguishable. Used when blaming a
+/// committed revision, where staged/unstaged has no meaning.
+pub(crate) fn blame_local_change_color(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgb(0xffe000)
+    } else {
+        gpui::rgb(0xf5c400)
     }
+}
+
+/// Border color for *staged* local changes in the blame/annotate column. Reuses
+/// the theme's diff "added" accent so staged lines read green, consistent with
+/// the rest of the diff UI.
+pub(crate) fn blame_staged_color(theme: AppTheme) -> Rgba {
+    theme.colors.diff_add_text
+}
+
+/// Border color for *unstaged* local changes in the blame/annotate column.
+/// Reuses the theme's diff "removed" accent so unstaged lines read red, standing
+/// apart from the green staged bar.
+pub(crate) fn blame_unstaged_color(theme: AppTheme) -> Rgba {
+    theme.colors.diff_remove_text
 }
 
 #[cfg(test)]

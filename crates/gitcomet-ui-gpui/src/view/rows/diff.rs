@@ -521,23 +521,176 @@ pub(super) struct BlameRenderCtx {
     range: Option<(i64, i64)>,
     now: std::time::SystemTime,
     path: std::sync::Arc<std::path::Path>,
+    /// The commit currently being viewed (when blaming a specific revision), used
+    /// to hide the "view file at this commit" action on lines from that commit.
+    viewed_commit: Option<std::sync::Arc<str>>,
+    /// The working-tree area being blamed (`Some` for staged/unstaged diffs),
+    /// used to classify uncommitted lines as staged vs unstaged. `None` when
+    /// blaming a committed revision, where that distinction has no meaning.
+    area: Option<gitcomet_core::domain::DiffArea>,
 }
 
-/// Build the per-row annotation paint data for the line displayed at `new_line`,
-/// or `None` for rows without a new-side line (e.g. deletions / headers).
+/// Staged vs unstaged classification for an uncommitted blame row when blaming a
+/// working-tree area.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum LocalChange {
+    Staged,
+    Unstaged,
+}
+
+/// Classify an uncommitted (or removal) blame row as staged vs unstaged from
+/// whether it is a genuine *context* line and the blamed [`DiffArea`].
+///
+/// `Staged` area: every local line is staged. `Unstaged` area: an unchanged
+/// *context* line (identical in index and worktree but differing from `HEAD`) is
+/// a *staged* change; any actual change on the new side — an add or a
+/// modification — is an *unstaged* change, which therefore overrides staged when
+/// a line carries both staged and unstaged edits. Removals are also changes and
+/// are classified with `is_context == false`. Views without diff sidedness (full
+/// file content) pass `is_context == false`, yielding the area default
+/// (`Staged → Staged`, `Unstaged → Unstaged`).
+fn classify_local_change(area: gitcomet_core::domain::DiffArea, is_context: bool) -> LocalChange {
+    use gitcomet_core::domain::DiffArea;
+    match area {
+        DiffArea::Staged => LocalChange::Staged,
+        DiffArea::Unstaged if is_context => LocalChange::Staged,
+        DiffArea::Unstaged => LocalChange::Unstaged,
+    }
+}
+
+/// Run-grouping identity for a blamed row. Consecutive rows in the same group
+/// collapse into one attribution run (the textual label is painted only on the
+/// run start). Local lines all share the all-zero commit id, so the
+/// staged/unstaged kind is part of the group to break a run at a staged↔unstaged
+/// boundary.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlameGroup {
+    Committed,
+    /// A local change; `None` when blaming a revision (legacy "Now" rendering).
+    Local(Option<LocalChange>),
+}
+
+/// Previous rendered blamed row's state, threaded across a row sequence so run
+/// starts are computed against the previously *rendered* line and group.
+#[derive(Clone, Copy, Default)]
+pub(super) struct BlamePrev {
+    new_line: Option<u32>,
+    group: Option<BlameGroup>,
+}
+
+/// Border color for a local-change group, reusing the diff add/remove palette.
+fn local_change_color(theme: AppTheme, local: Option<LocalChange>) -> gpui::Rgba {
+    match local {
+        Some(LocalChange::Staged) => crate::theme::blame_staged_color(theme),
+        Some(LocalChange::Unstaged) => crate::theme::blame_unstaged_color(theme),
+        None => crate::theme::blame_local_change_color(theme.is_dark),
+    }
+}
+
+/// Run-start label for a local-change group.
+fn local_change_label(local: Option<LocalChange>) -> &'static str {
+    match local {
+        Some(LocalChange::Staged) => "Staged",
+        Some(LocalChange::Unstaged) => "Unstaged",
+        None => "Now",
+    }
+}
+
+/// Build the per-row annotation paint data for a diff row, given its old-side
+/// and new-side (1-based) line numbers. Returns `None` for rows that carry no
+/// annotation (e.g. headers, or pure deletions outside a working-tree blame).
+///
+/// `is_context` is `true` only for genuinely unchanged lines (so a staged-only
+/// edit, which appears as context in the unstaged diff, is labeled "Staged"); any
+/// add/modify/removal passes `false`. `old_line` is used only to recognize a pure
+/// removal worth a bar. Full file-content views without diff sidedness pass
+/// `is_context = false`, falling back to the area default.
 pub(super) fn build_row_blame_paint(
     ctx: &BlameRenderCtx,
+    is_context: bool,
+    old_line: Option<u32>,
     new_line: Option<u32>,
+    prev_new_line: Option<u32>,
     theme: AppTheme,
 ) -> Option<diff_canvas::RowBlamePaint> {
-    let annotation = super::blame::blame_for_new_line(&ctx.lines, new_line)?;
-    let line = annotation.line;
-    let t = match (line.author_time_unix, ctx.range) {
-        (Some(ts), Some(range)) => super::blame::blame_recency_t(ts, range),
-        _ => 1.0,
+    let prev = BlamePrev {
+        new_line: prev_new_line,
+        group: None,
     };
-    let border = crate::theme::blame_heat_color(theme.is_dark, t);
-    let (when, initials, summary, body) = if annotation.is_run_start {
+    build_row_blame_paint_inner(ctx, is_context, old_line, new_line, prev, theme)
+        .map(|(paint, _)| paint)
+}
+
+/// Core blame-paint builder shared by the tracked and untracked entry points.
+/// Returns the paint plus the row's [`BlameGroup`] so the caller can thread it
+/// into the next row's run-start decision.
+fn build_row_blame_paint_inner(
+    ctx: &BlameRenderCtx,
+    is_context: bool,
+    old_line: Option<u32>,
+    new_line: Option<u32>,
+    prev: BlamePrev,
+    theme: AppTheme,
+) -> Option<(diff_canvas::RowBlamePaint, BlameGroup)> {
+    // A pure removal (no new-side line) has no `BlameLine` to attribute, but in a
+    // working-tree blame it is still a local change worth a colored bar so a
+    // deleted chunk is visible in the annotation column. A removal is a change,
+    // so it never counts as context.
+    if new_line.is_none() {
+        let area = ctx.area?;
+        old_line?;
+        let local = classify_local_change(area, false);
+        let group = BlameGroup::Local(Some(local));
+        let is_run_start = prev.group != Some(group);
+        return Some((removal_blame_paint(ctx, local, is_run_start, theme), group));
+    }
+
+    let annotation = super::blame::blame_for_new_line(&ctx.lines, new_line, prev.new_line)?;
+    let line = annotation.line;
+    // Working-tree blame surfaces not-yet-committed lines with an empty or
+    // all-zero object id. These render as a distinct local-change row: a
+    // staged/unstaged-colored bar, the matching label, no author initials, no
+    // summary, and no action icons.
+    let uncommitted = line.commit_id.is_empty() || line.commit_id.bytes().all(|b| b == b'0');
+    let group = if uncommitted {
+        BlameGroup::Local(ctx.area.map(|area| classify_local_change(area, is_context)))
+    } else {
+        BlameGroup::Committed
+    };
+    // Break a run when the classification group changes from the previous
+    // rendered row, even when the underlying commit id is identical (all local
+    // lines share the all-zero id), so a staged chunk and an adjacent unstaged
+    // chunk each get their own label. Only force this when a previous group is
+    // actually known (the tracked diff path); the untracked file-content path
+    // leaves `prev.group == None` and relies on `annotation.is_run_start` alone.
+    let is_run_start =
+        annotation.is_run_start || (prev.group.is_some() && prev.group != Some(group));
+
+    let border = match group {
+        BlameGroup::Local(local) => local_change_color(theme, local),
+        BlameGroup::Committed => {
+            let t = match (line.author_time_unix, ctx.range) {
+                (Some(ts), Some(range)) => super::blame::blame_recency_t(ts, range),
+                _ => 1.0,
+            };
+            crate::theme::blame_heat_color(theme.is_dark, t)
+        }
+    };
+    let (when, initials, summary, body) = if !is_run_start {
+        (
+            SharedString::default(),
+            SharedString::default(),
+            SharedString::default(),
+            None,
+        )
+    } else if let BlameGroup::Local(local) = group {
+        (
+            SharedString::from(local_change_label(local)),
+            SharedString::default(),
+            SharedString::default(),
+            None,
+        )
+    } else {
         let when = line
             .author_time_unix
             .map(|ts| crate::view::date_time::format_relative_time(ts, ctx.now))
@@ -545,37 +698,90 @@ pub(super) fn build_row_blame_paint(
         (
             SharedString::from(when),
             SharedString::from(super::blame::author_initials(&line.author)),
-            SharedString::from(line.summary.as_ref().to_string()),
-            line.body
-                .as_ref()
-                .map(|b| SharedString::from(b.as_ref().to_string())),
-        )
-    } else {
-        (
-            SharedString::default(),
-            SharedString::default(),
-            SharedString::default(),
-            None,
+            // `Arc<str>` -> `SharedString` is a refcount bump, not a byte copy,
+            // so this avoids re-allocating the summary/body every render pass.
+            SharedString::from(line.summary.clone()),
+            line.body.clone().map(SharedString::from),
         )
     };
-    Some(diff_canvas::RowBlamePaint {
+    let paint = diff_canvas::RowBlamePaint {
         border,
-        show_text: annotation.is_run_start,
+        show_text: is_run_start,
         when,
         initials,
         summary,
         body,
         commit_id: gitcomet_core::domain::CommitId(line.commit_id.clone()),
         path: std::sync::Arc::clone(&ctx.path),
+        source_path: line.source_path.as_deref().map(std::sync::Arc::from),
         prior_exists: line.prior_exists,
-    })
+        prior_commit: line
+            .prior_commit
+            .clone()
+            .map(gitcomet_core::domain::CommitId),
+        is_viewed_commit: ctx.viewed_commit.as_deref() == Some(line.commit_id.as_ref()),
+    };
+    Some((paint, group))
+}
+
+/// Build the annotation paint for a pure-removal row, which has no `BlameLine`:
+/// just a colored bar plus the staged/unstaged label on the run start.
+fn removal_blame_paint(
+    ctx: &BlameRenderCtx,
+    local: LocalChange,
+    is_run_start: bool,
+    theme: AppTheme,
+) -> diff_canvas::RowBlamePaint {
+    let when = if is_run_start {
+        SharedString::from(local_change_label(Some(local)))
+    } else {
+        SharedString::default()
+    };
+    diff_canvas::RowBlamePaint {
+        border: local_change_color(theme, Some(local)),
+        show_text: is_run_start,
+        when,
+        initials: SharedString::default(),
+        summary: SharedString::default(),
+        body: None,
+        commit_id: gitcomet_core::domain::CommitId(std::sync::Arc::from("")),
+        path: std::sync::Arc::clone(&ctx.path),
+        source_path: None,
+        prior_exists: false,
+        prior_commit: None,
+        is_viewed_commit: false,
+    }
+}
+
+/// Build the blame paint for a row while tracking the previous blamed row's
+/// new-side line number and group in `prev`, so run starts are computed against
+/// the previously *rendered* line and break at staged↔unstaged boundaries.
+/// `prev` must be threaded once per rendered row sequence (one cell per map).
+fn build_row_blame_paint_tracked(
+    ctx: &BlameRenderCtx,
+    is_context: bool,
+    old_line: Option<u32>,
+    new_line: Option<u32>,
+    prev: &std::cell::Cell<BlamePrev>,
+    theme: AppTheme,
+) -> Option<diff_canvas::RowBlamePaint> {
+    let prev_state = prev.get();
+    let result = build_row_blame_paint_inner(ctx, is_context, old_line, new_line, prev_state, theme);
+    prev.set(BlamePrev {
+        new_line: new_line.or(prev_state.new_line),
+        group: match &result {
+            Some((_, group)) => Some(*group),
+            None => prev_state.group,
+        },
+    });
+    result.map(|(paint, _)| paint)
 }
 
 impl MainPaneView {
     /// Build a blame render context when annotate is enabled and blame for the
     /// current target is loaded; otherwise `None`.
-    pub(super) fn blame_render_ctx(&self) -> Option<BlameRenderCtx> {
-        if !self.annotate_enabled {
+    pub(super) fn blame_render_ctx(&mut self) -> Option<BlameRenderCtx> {
+        if !self.annotation_active() {
             return None;
         }
         let repo = self.active_repo()?;
@@ -584,13 +790,39 @@ impl MainPaneView {
         };
         let path: std::sync::Arc<std::path::Path> =
             std::sync::Arc::from(repo.history_state.blame_path.as_deref()?);
+        // When blaming a specific commit, that commit is the one currently being
+        // viewed; "view file at this commit" on its own lines would be a no-op.
+        let viewed_commit = match &repo.history_state.blame_source {
+            Some(gitcomet_core::domain::BlameSource::Revision(Some(rev))) => {
+                Some(std::sync::Arc::<str>::from(rev.as_str()))
+            }
+            _ => None,
+        };
+        // The blamed working-tree area, used to classify uncommitted lines as
+        // staged vs unstaged. `None` for revision blame (no such distinction).
+        let area = match &repo.history_state.blame_source {
+            Some(gitcomet_core::domain::BlameSource::WorkingTree(area)) => Some(*area),
+            _ => None,
+        };
         let lines = std::sync::Arc::clone(lines);
-        let range = super::blame::blame_time_range(&lines);
+        // The time range never changes for a given loaded blame, so memoize it by
+        // the blame Arc's identity instead of rescanning every frame.
+        let key = std::sync::Arc::as_ptr(&lines) as usize;
+        let range = match self.blame_time_range_cache {
+            Some((cached_key, range)) if cached_key == key => range,
+            _ => {
+                let range = super::blame::blame_time_range(&lines);
+                self.blame_time_range_cache = Some((key, range));
+                range
+            }
+        };
         Some(BlameRenderCtx {
             lines,
             range,
             now: std::time::SystemTime::now(),
             path,
+            viewed_commit,
+            area,
         })
     }
 
@@ -651,7 +883,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let mouse_pos = _window.mouse_position();
+        let annot_hover = this.blame_annot_hover;
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
@@ -659,7 +891,7 @@ impl MainPaneView {
             .then(|| Arc::new(DiffSearchMatcher::new(query.as_ref(), query_options)));
         let reveal_whitespace_chars = this.reveal_whitespace_chars;
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let annotation_width = if this.annotate_enabled {
+        let annotation_width = if this.annotation_active() {
             this.annotate_column_width_px(ui_scale_percent)
         } else {
             px(0.0)
@@ -676,6 +908,7 @@ impl MainPaneView {
             let pinned_hunk_shell_width = collapsed_hunk_shell_width(&this.diff_scroll, min_width);
             let pinned_hunk_shell_scroll = this.diff_scroll.clone();
 
+            let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
             return range
                 .map(|visible_ix| {
                     let selected = this
@@ -884,8 +1117,8 @@ impl MainPaneView {
                                 annotation_width,
                                 blame_ctx
                                     .as_ref()
-                                    .and_then(|ctx| build_row_blame_paint(ctx, line.new_line, theme)),
-                                mouse_pos,
+                                    .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, theme)),
+                                annot_hover,
                                 cx,
                             )
                         }
@@ -993,6 +1226,7 @@ impl MainPaneView {
                 }
             }
 
+            let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
             return range
                 .map(|visible_ix| {
                     let selected = this
@@ -1201,8 +1435,8 @@ impl MainPaneView {
                         annotation_width,
                         blame_ctx
                             .as_ref()
-                            .and_then(|ctx| build_row_blame_paint(ctx, line.new_line, theme)),
-                        mouse_pos,
+                            .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, theme)),
+                        annot_hover,
                         cx,
                     )
                 })
@@ -1214,6 +1448,7 @@ impl MainPaneView {
         let repo_id_for_context_menu = this.active_repo_id();
         let active_context_menu_invoker = this.active_context_menu_invoker.clone();
         let syntax_mode = this.patch_diff_syntax_mode();
+        let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
         range
             .map(|visible_ix| {
                 let selected = this
@@ -1347,10 +1582,10 @@ impl MainPaneView {
                     show_line_numbers,
                     wrap,
                     annotation_width,
-                    blame_ctx
-                        .as_ref()
-                        .and_then(|ctx| build_row_blame_paint(ctx, line.new_line, theme)),
-                    mouse_pos,
+                    blame_ctx.as_ref().and_then(|ctx| {
+                        build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, theme)
+                    }),
+                    annot_hover,
                     cx,
                 )
             })
@@ -1360,28 +1595,28 @@ impl MainPaneView {
     pub(in super::super) fn render_diff_split_left_rows(
         this: &mut Self,
         range: Range<usize>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let mouse_pos = window.mouse_position();
-        Self::render_diff_split_rows(this, PatchSplitColumn::Left, range, mouse_pos, cx)
+        let annot_hover = this.blame_annot_hover;
+        Self::render_diff_split_rows(this, PatchSplitColumn::Left, range, annot_hover, cx)
     }
 
     pub(in super::super) fn render_diff_split_right_rows(
         this: &mut Self,
         range: Range<usize>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let mouse_pos = window.mouse_position();
-        Self::render_diff_split_rows(this, PatchSplitColumn::Right, range, mouse_pos, cx)
+        let annot_hover = this.blame_annot_hover;
+        Self::render_diff_split_rows(this, PatchSplitColumn::Right, range, annot_hover, cx)
     }
 
     fn render_diff_split_rows(
         this: &mut Self,
         column: PatchSplitColumn,
         range: Range<usize>,
-        mouse_pos: gpui::Point<Pixels>,
+        annot_hover: Option<(usize, AnnotArea)>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let min_width =
@@ -1401,9 +1636,15 @@ impl MainPaneView {
         // The annotation column is only drawn in the left split column. Reserve
         // its width whenever annotate mode is on — even before blame data is
         // ready — so the column space is stable and content does not shift when
-        // blame finishes loading.
-        let blame_ctx = this.blame_render_ctx();
-        let annotation_width = if this.annotate_enabled && is_left {
+        // blame finishes loading. Only the left column needs the blame context;
+        // building it for the right column would clone the blame data and rescan
+        // the time range for nothing.
+        let blame_ctx = if is_left {
+            this.blame_render_ctx()
+        } else {
+            None
+        };
+        let annotation_width = if this.annotation_active() && is_left {
             this.annotate_column_width_px(ui_scale_percent)
         } else {
             px(0.0)
@@ -1457,6 +1698,7 @@ impl MainPaneView {
                 this.diff_split_right_scroll.clone()
             };
 
+            let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
             return range
                 .map(|visible_ix| {
                     let selected = this
@@ -1608,12 +1850,12 @@ impl MainPaneView {
                                 annotation_width,
                                 if is_left {
                                     blame_ctx.as_ref().and_then(|ctx| {
-                                        build_row_blame_paint(ctx, row.new_line, theme)
+                                        build_row_blame_paint_tracked(ctx, matches!(visual_kind, FileDiffRowKind::Context), row.old_line, row.new_line, &blame_prev_nl, theme)
                                     })
                                 } else {
                                     None
                                 },
-                                mouse_pos,
+                                annot_hover,
                                 cx,
                             )
                         }
@@ -1639,6 +1881,7 @@ impl MainPaneView {
                 Arc::clone(&this.file_diff_new_line_starts)
             };
 
+            let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
             return range
                 .map(|visible_ix| {
                     let selected = this
@@ -1746,11 +1989,11 @@ impl MainPaneView {
                         if is_left {
                             blame_ctx
                                 .as_ref()
-                                .and_then(|ctx| build_row_blame_paint(ctx, row.new_line, theme))
+                                .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, FileDiffRowKind::Context), row.old_line, row.new_line, &blame_prev_nl, theme))
                         } else {
                         None
                     },
-                    mouse_pos,
+                    annot_hover,
                     cx,
                 )
                 })
@@ -1760,6 +2003,7 @@ impl MainPaneView {
         let theme = this.theme;
         let cache_epoch = 0u64;
         let syntax_mode = this.patch_diff_syntax_mode();
+        let blame_prev_nl = std::cell::Cell::new(BlamePrev::default());
         range
             .map(|visible_ix| {
                 let selected = this
@@ -1880,13 +2124,20 @@ impl MainPaneView {
                             wrap,
                             annotation_width,
                             if is_left {
-                                blame_ctx
-                                    .as_ref()
-                                    .and_then(|ctx| build_row_blame_paint(ctx, row.new_line, theme))
+                                blame_ctx.as_ref().and_then(|ctx| {
+                                    build_row_blame_paint_tracked(
+                                        ctx,
+                                        matches!(visual_kind, FileDiffRowKind::Context),
+                                        row.old_line,
+                                        row.new_line,
+                                        &blame_prev_nl,
+                                        theme,
+                                    )
+                                })
                             } else {
                                 None
                             },
-                            mouse_pos,
+                            annot_hover,
                             cx,
                         )
                     }
@@ -1991,7 +2242,7 @@ fn diff_row(
     wrap: Option<diff_canvas::DiffTextWrapSlice>,
     annotation_width: Pixels,
     row_blame: Option<diff_canvas::RowBlamePaint>,
-    mouse_pos: gpui::Point<Pixels>,
+    annot_hover: Option<(usize, AnnotArea)>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -2146,7 +2397,7 @@ fn diff_row(
             wrap,
             annotation_width,
             row_blame,
-            mouse_pos,
+            annot_hover,
         ),
         DiffViewMode::Split => {
             let left_kind = if visual_kind == DiffLineKind::Remove {
@@ -2216,7 +2467,7 @@ fn diff_row(
                 wrap,
                 annotation_width,
                 row_blame,
-                mouse_pos,
+                annot_hover,
             )
         }
     }
@@ -2498,7 +2749,7 @@ fn patch_split_column_row(
     wrap: Option<diff_canvas::DiffTextWrapSlice>,
     annotation_width: Pixels,
     row_blame: Option<diff_canvas::RowBlamePaint>,
-    mouse_pos: gpui::Point<Pixels>,
+    annot_hover: Option<(usize, AnnotArea)>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2549,7 +2800,7 @@ fn patch_split_column_row(
         wrap,
         annotation_width,
         row_blame,
-        mouse_pos,
+        annot_hover,
     )
 }
 
@@ -3090,6 +3341,206 @@ mod tests {
             reveal_up_lines: 0,
             reveal_down_lines: 0,
         }
+    }
+
+    fn uncommitted_blame_line() -> gitcomet_core::services::BlameLine {
+        gitcomet_core::services::BlameLine {
+            commit_id: std::sync::Arc::from("0000000000000000000000000000000000000000"),
+            author: std::sync::Arc::from("Not Committed Yet"),
+            author_time_unix: None,
+            summary: std::sync::Arc::from("Not Committed Yet"),
+            body: None,
+            line: String::new(),
+            prior_exists: false,
+            source_path: None,
+            prior_commit: None,
+        }
+    }
+
+    fn committed_blame_line(sha: &str) -> gitcomet_core::services::BlameLine {
+        gitcomet_core::services::BlameLine {
+            commit_id: std::sync::Arc::from(sha),
+            author: std::sync::Arc::from("Jane Doe"),
+            author_time_unix: Some(1_700_000_000),
+            summary: std::sync::Arc::from("a commit"),
+            body: None,
+            line: String::new(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
+        }
+    }
+
+    fn blame_ctx(
+        lines: Vec<gitcomet_core::services::BlameLine>,
+        area: Option<gitcomet_core::domain::DiffArea>,
+    ) -> BlameRenderCtx {
+        BlameRenderCtx {
+            lines: std::sync::Arc::new(lines),
+            range: None,
+            now: std::time::SystemTime::now(),
+            path: std::sync::Arc::from(std::path::Path::new("file.rs")),
+            viewed_commit: None,
+            area,
+        }
+    }
+
+    #[test]
+    fn classify_local_change_matrix() {
+        use gitcomet_core::domain::DiffArea;
+        // Staged area: every local line is staged regardless of context-ness.
+        assert_eq!(
+            classify_local_change(DiffArea::Staged, true),
+            LocalChange::Staged
+        );
+        assert_eq!(
+            classify_local_change(DiffArea::Staged, false),
+            LocalChange::Staged
+        );
+        // Unstaged area: an unchanged context line is a staged change; any actual
+        // change (add / modify / remove) is an unstaged change.
+        assert_eq!(
+            classify_local_change(DiffArea::Unstaged, true),
+            LocalChange::Staged
+        );
+        assert_eq!(
+            classify_local_change(DiffArea::Unstaged, false),
+            LocalChange::Unstaged
+        );
+    }
+
+    #[test]
+    fn unstaged_diff_separates_staged_context_from_unstaged_add() {
+        use gitcomet_core::domain::DiffArea;
+        let theme = AppTheme::gitcomet_dark();
+        let ctx = blame_ctx(
+            vec![uncommitted_blame_line(), uncommitted_blame_line()],
+            Some(DiffArea::Unstaged),
+        );
+        // Uncommitted context line -> staged: green diff-add bar.
+        let (staged, _) =
+            build_row_blame_paint_inner(&ctx, true, Some(1), Some(1), BlamePrev::default(), theme)
+                .unwrap();
+        assert_eq!(staged.border, theme.colors.diff_add_text);
+        assert_eq!(staged.when.as_ref(), "Staged");
+        // Added line -> unstaged: red diff-remove bar.
+        let (unstaged, _) =
+            build_row_blame_paint_inner(&ctx, false, None, Some(2), BlamePrev::default(), theme)
+                .unwrap();
+        assert_eq!(unstaged.border, theme.colors.diff_remove_text);
+        assert_eq!(unstaged.when.as_ref(), "Unstaged");
+    }
+
+    #[test]
+    fn modified_line_with_both_sides_is_unstaged_not_staged() {
+        use gitcomet_core::domain::DiffArea;
+        let theme = AppTheme::gitcomet_dark();
+        let ctx = blame_ctx(vec![uncommitted_blame_line()], Some(DiffArea::Unstaged));
+        // A split `Modify` row has both old and new line numbers, but it is a
+        // change, not unchanged context. Unstaged must override staged here.
+        let (paint, _) =
+            build_row_blame_paint_inner(&ctx, false, Some(1), Some(1), BlamePrev::default(), theme)
+                .unwrap();
+        assert_eq!(paint.border, theme.colors.diff_remove_text);
+        assert_eq!(paint.when.as_ref(), "Unstaged");
+    }
+
+    #[test]
+    fn staged_area_labels_all_local_as_staged() {
+        use gitcomet_core::domain::DiffArea;
+        let theme = AppTheme::gitcomet_dark();
+        let ctx = blame_ctx(vec![uncommitted_blame_line()], Some(DiffArea::Staged));
+        // Even an added line is "Staged" when viewing the staged area.
+        let (paint, _) =
+            build_row_blame_paint_inner(&ctx, false, None, Some(1), BlamePrev::default(), theme)
+                .unwrap();
+        assert_eq!(paint.border, theme.colors.diff_add_text);
+        assert_eq!(paint.when.as_ref(), "Staged");
+    }
+
+    #[test]
+    fn revision_blame_keeps_now_label() {
+        let theme = AppTheme::gitcomet_dark();
+        // No working-tree area (revision blame) -> legacy generic local change.
+        let ctx = blame_ctx(vec![uncommitted_blame_line()], None);
+        let (paint, _) =
+            build_row_blame_paint_inner(&ctx, true, Some(1), Some(1), BlamePrev::default(), theme)
+                .unwrap();
+        assert_eq!(
+            paint.border,
+            crate::theme::blame_local_change_color(theme.is_dark)
+        );
+        assert_eq!(paint.when.as_ref(), "Now");
+    }
+
+    #[test]
+    fn run_breaks_at_staged_unstaged_boundary() {
+        use gitcomet_core::domain::DiffArea;
+        let theme = AppTheme::gitcomet_dark();
+        let ctx = blame_ctx(
+            vec![
+                uncommitted_blame_line(),
+                uncommitted_blame_line(),
+                uncommitted_blame_line(),
+            ],
+            Some(DiffArea::Unstaged),
+        );
+        let prev = std::cell::Cell::new(BlamePrev::default());
+        // Line 1: staged context -> run start, label shown.
+        let p1 = build_row_blame_paint_tracked(&ctx, true, Some(1), Some(1), &prev, theme).unwrap();
+        assert!(p1.show_text);
+        assert_eq!(p1.when.as_ref(), "Staged");
+        // Line 2: staged context, contiguous -> not a run start (label not repeated).
+        let p2 = build_row_blame_paint_tracked(&ctx, true, Some(2), Some(2), &prev, theme).unwrap();
+        assert!(!p2.show_text);
+        // Line 3: unstaged add. The new-side line is still contiguous, but the
+        // staged->unstaged group change must start a new run with its label.
+        let p3 = build_row_blame_paint_tracked(&ctx, false, None, Some(3), &prev, theme).unwrap();
+        assert!(p3.show_text);
+        assert_eq!(p3.when.as_ref(), "Unstaged");
+    }
+
+    #[test]
+    fn untracked_content_view_collapses_consecutive_same_commit_lines() {
+        // The full file-content view uses the untracked `build_row_blame_paint`
+        // (no threaded group). Consecutive lines of the same commit must collapse
+        // into one run: the message shows on the first line only, not repeated.
+        let theme = AppTheme::gitcomet_dark();
+        let sha = "1111111111111111111111111111111111111111";
+        let ctx = blame_ctx(
+            vec![committed_blame_line(sha), committed_blame_line(sha)],
+            Some(gitcomet_core::domain::DiffArea::Unstaged),
+        );
+        // Line 1 (no previous rendered line) starts the run -> shows the summary.
+        let first = build_row_blame_paint(&ctx, false, None, Some(1), None, theme).unwrap();
+        assert!(first.show_text);
+        assert_eq!(first.summary.as_ref(), "a commit");
+        // Line 2 is contiguous and same commit -> not a run start, no repeated text.
+        let second = build_row_blame_paint(&ctx, false, None, Some(2), Some(1), theme).unwrap();
+        assert!(!second.show_text);
+        assert!(second.when.as_ref().is_empty());
+        assert!(second.summary.as_ref().is_empty());
+    }
+
+    #[test]
+    fn removal_rows_get_a_local_bar_only_in_working_tree_blame() {
+        use gitcomet_core::domain::DiffArea;
+        let theme = AppTheme::gitcomet_dark();
+        // Pure removal (old side only) in the unstaged area -> unstaged bar + label,
+        // even though there is no `BlameLine` for a deleted line.
+        let ctx = blame_ctx(Vec::new(), Some(DiffArea::Unstaged));
+        let prev = std::cell::Cell::new(BlamePrev::default());
+        let removal =
+            build_row_blame_paint_tracked(&ctx, false, Some(5), None, &prev, theme).unwrap();
+        assert_eq!(removal.border, theme.colors.diff_remove_text);
+        assert_eq!(removal.when.as_ref(), "Unstaged");
+        // Revision blame has no staged/unstaged concept, so removals get no bar.
+        let ctx_rev = blame_ctx(Vec::new(), None);
+        let prev_rev = std::cell::Cell::new(BlamePrev::default());
+        assert!(
+            build_row_blame_paint_tracked(&ctx_rev, false, Some(5), None, &prev_rev, theme)
+                .is_none()
+        );
     }
 
     #[test]

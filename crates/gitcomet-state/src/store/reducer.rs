@@ -113,6 +113,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadFileBrowser { .. }
             | Msg::OpenFileContent { .. }
             | Msg::OpenFileAtCommitParent { .. }
+            | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::ResetBrowseToLive { .. }
             | Msg::ViewerNavBack { .. }
@@ -671,6 +672,7 @@ fn is_view_navigation(msg: &Msg) -> bool {
             | Msg::SelectConflictDiff { .. }
             | Msg::SelectCommit { .. }
             | Msg::OpenFileContent { .. }
+            | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::ResetBrowseToLive { .. }
             | Msg::OpenInlineSubmoduleDiff { .. }
@@ -830,7 +832,11 @@ fn reduce_inner(
             path,
             limit,
         } => effects::load_file_history(state, repo_id, path, limit),
-        Msg::LoadBlame { repo_id, path, rev } => effects::load_blame(state, repo_id, path, rev),
+        Msg::LoadBlame {
+            repo_id,
+            path,
+            source,
+        } => effects::load_blame(state, repo_id, path, source),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
         Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
@@ -858,6 +864,15 @@ fn reduce_inner(
             commit_id,
             path,
         } => vec![Effect::OpenFileAtCommitParent {
+            repo_id,
+            commit_id,
+            path,
+        }],
+        Msg::OpenFileAtCommit {
+            repo_id,
+            commit_id,
+            path,
+        } => vec![Effect::OpenFileAtCommit {
             repo_id,
             commit_id,
             path,
@@ -1507,9 +1522,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
             repo_id,
             path,
-            rev,
+            source,
             result,
-        }) => effects::blame_loaded(state, repo_id, path, rev, result),
+        }) => effects::blame_loaded(state, repo_id, path, source, result),
         Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
             repo_id,
             path,

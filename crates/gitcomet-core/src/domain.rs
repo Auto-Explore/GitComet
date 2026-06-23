@@ -299,10 +299,20 @@ pub enum FileStatusKind {
     Conflicted,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DiffArea {
     Staged,
     Unstaged,
+}
+
+/// What a blame computation runs against: a committed revision (or HEAD when
+/// `None`), or the working-tree content shown on the new side of a
+/// staged/unstaged diff. Working-tree blame attributes uncommitted lines to a
+/// synthetic "Not Committed Yet" entry.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum BlameSource {
+    Revision(Option<String>),
+    WorkingTree(DiffArea),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

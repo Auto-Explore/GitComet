@@ -269,7 +269,25 @@ pub(super) fn global_nav(
     // Restore the selected commit (history-log selection / commit details).
     match snapshot.selected_commit {
         Some(commit_id) => {
-            effects.extend(super::effects::select_commit(state, repo_id, commit_id));
+            let sel_effects = super::effects::select_commit(state, repo_id, commit_id.clone());
+            // `select_commit` no-ops when this commit is already selected, but a
+            // prior nav step or a cancelled load may have left its details
+            // unloaded. In that case (and only when no load is already pending)
+            // reload them so navigating back does not leave the pane blank.
+            let select_was_noop = sel_effects.is_empty();
+            effects.extend(sel_effects);
+            if select_was_noop
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                let needs_load = !matches!(
+                    &repo_state.history_state.commit_details,
+                    Loadable::Ready(details) if details.id == commit_id
+                ) && !repo_state.history_state.commit_details.is_loading();
+                if needs_load {
+                    repo_state.set_commit_details(Loadable::NotLoaded);
+                    effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
+                }
+            }
         }
         None => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {

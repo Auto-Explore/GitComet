@@ -2346,6 +2346,10 @@ pub(crate) struct MainPaneView {
     /// Blame annotation sub-area currently hovered (row index + area). Drives the
     /// accent highlight and tooltip for the annotation column on the next paint.
     pub(in crate::view) blame_annot_hover: Option<(usize, crate::view::rows::AnnotArea)>,
+    /// Memoized `(min, max)` author-time range for the currently loaded blame,
+    /// keyed by the blame `Arc`'s pointer. The range never changes after load, so
+    /// this avoids rescanning all blame lines on every render frame.
+    pub(in crate::view) blame_time_range_cache: Option<(usize, Option<(i64, i64)>)>,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,

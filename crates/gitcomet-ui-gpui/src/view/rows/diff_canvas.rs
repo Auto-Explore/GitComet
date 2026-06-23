@@ -2,9 +2,10 @@ use super::canvas::keyed_canvas;
 use super::diff_text::{
     PreparedDocumentByteRangeHighlights, build_cached_diff_query_overlay_styled_text,
     build_cached_diff_styled_text, build_cached_diff_styled_text_from_relative_highlights,
-    slice_cached_diff_styled_text, syntax_highlights_for_streamed_line_slice_heuristic,
-    whitespace_visible_line_styled_text, whitespace_visible_line_styled_text_for_raw,
-    whitespace_visible_line_text, whitespace_visible_styled_text,
+    hash_rgba_bits as hash_rgba, slice_cached_diff_styled_text,
+    syntax_highlights_for_streamed_line_slice_heuristic, whitespace_visible_line_styled_text,
+    whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text,
+    whitespace_visible_styled_text,
 };
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
@@ -54,6 +55,8 @@ pub(in crate::view) const DIFF_ANNOTATION_INITIALS_WIDTH_PX: f32 = 22.0;
 pub(in crate::view) const DIFF_ANNOTATION_ICON_WIDTH_PX: f32 = 16.0;
 /// Rendered (square) size of each action icon within its cell.
 pub(in crate::view) const DIFF_ANNOTATION_ICON_GLYPH_PX: f32 = 13.0;
+/// Diameter of the "viewing file at this commit" dot in the trailing slot.
+pub(in crate::view) const DIFF_ANNOTATION_DOT_DIAMETER_PX: f32 = 6.0;
 
 pub(in crate::view) const DIFF_ANNOTATION_PRIOR_ICON: &str = "icons/undo.svg";
 pub(in crate::view) const DIFF_ANNOTATION_BROWSE_ICON: &str = "icons/history.svg";
@@ -80,10 +83,25 @@ pub(in crate::view) struct RowBlamePaint {
     pub(in crate::view) commit_id: gitcomet_core::domain::CommitId,
     /// File path of the annotated view, used by the "view prior change" action.
     pub(in crate::view) path: std::sync::Arc<std::path::Path>,
+    /// The file's path at `commit_id` when it differs from `path` because the
+    /// file was renamed at/after that commit. Navigation actions ("view file at
+    /// this commit" / "prior revision") use this historical name so they don't
+    /// look up the current path in an older tree where it doesn't exist.
+    pub(in crate::view) source_path: Option<std::sync::Arc<std::path::Path>>,
     /// Whether the file existed in this commit's parent. When `false`, the
     /// "view file at parent commit" icon is hidden and non-interactive (the
     /// commit introduced the file, so there is no prior revision to show).
     pub(in crate::view) prior_exists: bool,
+    /// For an uncommitted ("Now") line, the base revision the working-tree change
+    /// was made against (git blame porcelain `previous`). When `Some`, the
+    /// "view file at parent commit" icon is shown on the local-change row and
+    /// navigating opens that revision directly. `None` for committed lines (which
+    /// resolve their parent from `commit_id`) and for newly-added files.
+    pub(in crate::view) prior_commit: Option<gitcomet_core::domain::CommitId>,
+    /// Whether this line's commit is the revision currently being viewed. When
+    /// `true`, the "view file at this commit" icon is hidden and non-interactive
+    /// (navigating there would be a no-op).
+    pub(in crate::view) is_viewed_commit: bool,
 }
 
 /// Fixed sub-column geometry for the annotation column, shared by painting and
@@ -131,18 +149,21 @@ pub(in crate::view) fn blame_column_layout(
 }
 
 /// Fold blame content into a row's canvas revision key so the cached canvas
-/// repaints when the blame attribution (color/text/commit/width) changes.
+/// repaints when the blame attribution (color/text/commit/width) or this row's
+/// own hover highlight changes.
 fn mix_blame_revision(
     base: u64,
     annotation_width: Pixels,
-    mouse_pos: gpui::Point<Pixels>,
+    hover: Option<AnnotArea>,
     blame: Option<&RowBlamePaint>,
 ) -> u64 {
     let mut hasher = FxHasher::default();
     base.hash(&mut hasher);
     f32::from(annotation_width).to_bits().hash(&mut hasher);
-    f32::from(mouse_pos.x).to_bits().hash(&mut hasher);
-    f32::from(mouse_pos.y).to_bits().hash(&mut hasher);
+    // Only this row's own hover state feeds the cache key (not the raw cursor
+    // position), so the cached canvas is invalidated only when the highlighted
+    // sub-area of this specific row changes — not on every mouse move.
+    hover.hash(&mut hasher);
     if let Some(blame) = blame {
         hash_rgba(&mut hasher, blame.border);
         blame.show_text.hash(&mut hasher);
@@ -152,6 +173,14 @@ fn mix_blame_revision(
         blame.body.hash(&mut hasher);
         blame.commit_id.0.as_ref().hash(&mut hasher);
         blame.prior_exists.hash(&mut hasher);
+        blame
+            .prior_commit
+            .as_ref()
+            .map(|c| c.0.as_ref())
+            .hash(&mut hasher);
+        // Folded in so the trailing slot repaints when the viewed revision
+        // changes (it toggles the browse icon vs. the "viewing here" dot).
+        blame.is_viewed_commit.hash(&mut hasher);
     } else {
         u8::MAX.hash(&mut hasher);
     }
@@ -193,6 +222,15 @@ fn paint_truncated_text(
     );
 }
 
+/// Whether a blame entry points at a real commit. Working-tree blame surfaces
+/// uncommitted lines with an empty or all-zero object id ("Not Committed Yet");
+/// those have no commit to open, so their action icons and click handlers are
+/// suppressed.
+fn blame_commit_is_navigable(commit_id: &gitcomet_core::domain::CommitId) -> bool {
+    let id = commit_id.0.as_ref();
+    !id.is_empty() && !id.bytes().all(|b| b == b'0')
+}
+
 /// Paint the annotation column for one row: a recency border bar and, on run
 /// starts, the "X ago | initials | summary" sub-columns plus two action icons.
 /// When `hovered` is Some, that area gets a highlight + underline (message) or
@@ -207,6 +245,8 @@ fn paint_blame_annotation(
     metrics: LineMetrics,
     when_metrics: LineMetrics,
     hovered: Option<AnnotArea>,
+    prior_enabled: bool,
+    browse_enabled: bool,
     ui_scale_percent: u32,
     window: &mut Window,
     cx: &mut App,
@@ -263,9 +303,10 @@ fn paint_blame_annotation(
         }
     });
 
-    // The "view file at parent commit" icon is omitted when the commit
-    // introduced the file (no prior revision to navigate to).
-    if blame.prior_exists {
+    // The "view file at parent commit" icon. Shown for committed lines whose
+    // parent has the file, and for uncommitted ("Now") lines that carry a base
+    // revision (the committed state before the local change).
+    if prior_enabled {
         let icon_color = if hovered == Some(AnnotArea::PriorIcon) {
             theme.colors.accent
         } else {
@@ -280,19 +321,31 @@ fn paint_blame_annotation(
             cx,
         );
     }
-    let icon_color = if hovered == Some(AnnotArea::BrowseIcon) {
-        theme.colors.accent
-    } else {
-        crate::theme::with_alpha(text_color, 0.6)
-    };
-    paint_blame_icon(
-        DIFF_ANNOTATION_BROWSE_ICON,
-        layout.browse_icon,
-        icon_color,
-        ui_scale_percent,
-        window,
-        cx,
-    );
+    if blame.is_viewed_commit {
+        // The file is currently open at this line's commit: mark it with a dot in
+        // the trailing slot (where the browse icon would otherwise sit) instead of
+        // the "view file at this commit" icon, which would be a no-op here.
+        paint_blame_dot(
+            layout.browse_icon,
+            crate::theme::with_alpha(theme.colors.accent, 0.7),
+            ui_scale_percent,
+            window,
+        );
+    } else if browse_enabled {
+        let icon_color = if hovered == Some(AnnotArea::BrowseIcon) {
+            theme.colors.accent
+        } else {
+            crate::theme::with_alpha(text_color, 0.6)
+        };
+        paint_blame_icon(
+            DIFF_ANNOTATION_BROWSE_ICON,
+            layout.browse_icon,
+            icon_color,
+            ui_scale_percent,
+            window,
+            cx,
+        );
+    }
 }
 
 /// Paint an action icon centered within its cell.
@@ -319,7 +372,24 @@ fn paint_blame_icon(
     );
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// Paint a small filled dot centered within `cell`, marking the line's commit as
+/// the revision the file is currently being viewed at.
+fn paint_blame_dot(
+    cell: Bounds<Pixels>,
+    color: gpui::Rgba,
+    ui_scale_percent: u32,
+    window: &mut Window,
+) {
+    let diameter = diff_scaled_px(DIFF_ANNOTATION_DOT_DIAMETER_PX, ui_scale_percent)
+        .min(cell.size.width)
+        .min(cell.size.height);
+    let ox = cell.left() + (cell.size.width - diameter) * 0.5;
+    let oy = cell.top() + (cell.size.height - diameter) * 0.5;
+    let bounds = Bounds::new(point(ox, oy), size(diameter, diameter));
+    window.paint_quad(fill(bounds, color).corner_radii(diameter * 0.5));
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(in crate::view) enum AnnotArea {
     Message,
     PriorIcon,
@@ -335,6 +405,7 @@ struct AnnotHitboxes {
 }
 
 /// Register click handling for a row's annotation column.
+#[allow(clippy::too_many_arguments)]
 fn install_blame_annotation_mouse_handler(
     window: &mut Window,
     view: &Entity<MainPaneView>,
@@ -343,7 +414,11 @@ fn install_blame_annotation_mouse_handler(
     browse_icon_hitbox: &Hitbox,
     commit_id: gitcomet_core::domain::CommitId,
     path: std::sync::Arc<std::path::Path>,
+    source_path: Option<std::sync::Arc<std::path::Path>>,
+    prior_commit: Option<gitcomet_core::domain::CommitId>,
+    message_enabled: bool,
     prior_enabled: bool,
+    browse_enabled: bool,
 ) {
     window.on_mouse_event({
         let view = view.clone();
@@ -357,29 +432,46 @@ fn install_blame_annotation_mouse_handler(
             let pos = event.position;
             let commit_id = commit_id.clone();
             let path = path.clone();
-            let action = if browse_icon_hitbox.contains(&pos) {
+            // For renamed files, navigate to the historical name at this commit
+            // rather than the current path (which may not exist in that tree).
+            let historical_path = source_path
+                .as_deref()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_else(|| path.to_path_buf());
+            let action = if browse_enabled && browse_icon_hitbox.contains(&pos) {
                 BlameClickAction::Browse
             } else if prior_enabled && prior_icon_hitbox.contains(&pos) {
                 BlameClickAction::PriorRevision
-            } else if message_hitbox.contains(&pos) {
+            } else if message_enabled && message_hitbox.contains(&pos) {
                 BlameClickAction::OpenDetails
             } else {
                 return;
             };
+            let prior_commit = prior_commit.clone();
             view.update(cx, |this, cx| {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
                 let msg = match action {
-                    BlameClickAction::Browse => Msg::OpenFileContent {
-                        repo_id,
-                        source: gitcomet_core::domain::FileSource::Commit(commit_id),
-                        path: path.to_path_buf(),
-                    },
-                    BlameClickAction::PriorRevision => Msg::OpenFileAtCommitParent {
+                    BlameClickAction::Browse => Msg::OpenFileAtCommit {
                         repo_id,
                         commit_id,
-                        path: path.to_path_buf(),
+                        path: historical_path,
+                    },
+                    // An uncommitted ("Now") line's prior is the base revision it
+                    // was edited from: open that commit directly. A committed line
+                    // resolves and opens its commit's parent.
+                    BlameClickAction::PriorRevision => match prior_commit {
+                        Some(base) => Msg::OpenFileAtCommit {
+                            repo_id,
+                            commit_id: base,
+                            path: historical_path,
+                        },
+                        None => Msg::OpenFileAtCommitParent {
+                            repo_id,
+                            commit_id,
+                            path: historical_path,
+                        },
                     },
                     BlameClickAction::OpenDetails => Msg::SelectCommit { repo_id, commit_id },
                 };
@@ -422,26 +514,34 @@ fn render_blame_column(
         ui_scale_percent,
     );
 
-    let prior_enabled = blame.prior_exists;
-    let mouse_pos = window.mouse_position();
-    let hovered = annot_hitboxes.and_then(|hb| {
-        if hb.message.bounds.contains(&mouse_pos) {
-            Some(AnnotArea::Message)
-        } else if prior_enabled && hb.prior_icon.bounds.contains(&mouse_pos) {
-            Some(AnnotArea::PriorIcon)
-        } else if hb.browse_icon.bounds.contains(&mouse_pos) {
-            Some(AnnotArea::BrowseIcon)
-        } else {
-            None
-        }
-    });
+    let navigable = blame_commit_is_navigable(&blame.commit_id);
+    // "View file at parent commit": committed lines whose parent has the file, or
+    // uncommitted ("Now") lines carrying a base revision (the state before the
+    // local change).
+    let prior_enabled = (blame.prior_exists && navigable) || blame.prior_commit.is_some();
+    // The commit message opens commit details — only for real commits.
+    let message_enabled = navigable;
+    // Hide "view file at this commit" when already viewing that commit (a dot is
+    // painted there instead) and for uncommitted lines (no commit to browse).
+    let browse_enabled = navigable && !blame.is_viewed_commit;
+    // Drive the hover highlight from stored hover state (updated by the hover
+    // handler on real hover transitions) rather than the live cursor position,
+    // so this matches the value folded into the canvas revision key.
+    let hovered = view
+        .read(cx)
+        .blame_annot_hover
+        .and_then(|(ix, area)| (ix == visible_ix).then_some(area));
 
     if let Some(hb) = annot_hitboxes {
-        window.set_cursor_style(CursorStyle::PointingHand, &hb.message);
+        if message_enabled {
+            window.set_cursor_style(CursorStyle::PointingHand, &hb.message);
+        }
         if prior_enabled {
             window.set_cursor_style(CursorStyle::PointingHand, &hb.prior_icon);
         }
-        window.set_cursor_style(CursorStyle::PointingHand, &hb.browse_icon);
+        if browse_enabled {
+            window.set_cursor_style(CursorStyle::PointingHand, &hb.browse_icon);
+        }
     }
 
     paint_blame_annotation(
@@ -453,12 +553,15 @@ fn render_blame_column(
         metrics,
         when_metrics,
         hovered,
+        prior_enabled,
+        browse_enabled,
         ui_scale_percent,
         window,
         cx,
     );
 
     if blame.show_text
+        && (message_enabled || prior_enabled || browse_enabled)
         && let Some(hb) = annot_hitboxes
     {
         install_blame_annotation_mouse_handler(
@@ -469,7 +572,11 @@ fn render_blame_column(
             &hb.browse_icon,
             blame.commit_id.clone(),
             blame.path.clone(),
+            blame.source_path.clone(),
+            blame.prior_commit.clone(),
+            message_enabled,
             prior_enabled,
+            browse_enabled,
         );
         install_blame_annotation_hover_handler(
             window,
@@ -478,7 +585,9 @@ fn render_blame_column(
             hb,
             blame.summary.clone(),
             blame.body.clone(),
+            message_enabled,
             prior_enabled,
+            browse_enabled,
         );
     }
 }
@@ -494,7 +603,9 @@ fn install_blame_annotation_hover_handler(
     hitboxes: &AnnotHitboxes,
     summary: SharedString,
     body: Option<SharedString>,
+    message_enabled: bool,
     prior_enabled: bool,
+    browse_enabled: bool,
 ) {
     window.on_mouse_event({
         let view = view.clone();
@@ -506,11 +617,11 @@ fn install_blame_annotation_hover_handler(
                 return;
             }
             let pos = event.position;
-            let area = if message.contains(&pos) {
+            let area = if message_enabled && message.contains(&pos) {
                 Some(AnnotArea::Message)
             } else if prior_enabled && prior_icon.contains(&pos) {
                 Some(AnnotArea::PriorIcon)
-            } else if browse_icon.contains(&pos) {
+            } else if browse_enabled && browse_icon.contains(&pos) {
                 Some(AnnotArea::BrowseIcon)
             } else {
                 None
@@ -531,7 +642,7 @@ fn install_blame_annotation_hover_handler(
             let tooltip = match area {
                 Some(AnnotArea::Message) => Some(body.clone().unwrap_or_else(|| summary.clone())),
                 Some(AnnotArea::PriorIcon) => {
-                    Some(SharedString::from("View file at parent commit"))
+                    Some(SharedString::from("View file prior this change"))
                 }
                 Some(AnnotArea::BrowseIcon) => Some(SharedString::from("View file at this commit")),
                 None => None,
@@ -622,13 +733,6 @@ impl DiffTextWrapSlice {
     }
 }
 
-fn hash_rgba(hasher: &mut FxHasher, color: gpui::Rgba) {
-    color.r.to_bits().hash(hasher);
-    color.g.to_bits().hash(hasher);
-    color.b.to_bits().hash(hasher);
-    color.a.to_bits().hash(hasher);
-}
-
 fn hash_shared_string(hasher: &mut FxHasher, text: &SharedString) {
     text.as_ref().hash(hasher);
 }
@@ -641,6 +745,41 @@ fn row_bg_fill_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
             bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX),
         ),
     )
+}
+
+/// Paint the neutral sidebar quad behind the annotation column (width `annot_w`)
+/// so selection tint does not bleed into it.
+fn paint_annotation_sidebar(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    annot_w: Pixels,
+    sidebar_bg: gpui::Rgba,
+) {
+    window.paint_quad(fill(
+        row_bg_fill_bounds(Bounds::new(
+            bounds.origin,
+            size(annot_w, bounds.size.height),
+        )),
+        sidebar_bg,
+    ));
+}
+
+/// Fill a single-content-area row background, reserving a neutral annotation
+/// sidebar (width `annot_w`) at the left. With `annot_w == 0` this simply fills
+/// `bounds` with `bg`.
+fn paint_row_bg_with_annotation(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    annot_w: Pixels,
+    bg: gpui::Rgba,
+    sidebar_bg: gpui::Rgba,
+) {
+    if annot_w > px(0.0) {
+        paint_annotation_sidebar(window, bounds, annot_w, sidebar_bg);
+        window.paint_quad(fill(row_bg_fill_bounds(inset_left(bounds, annot_w)), bg));
+    } else {
+        window.paint_quad(fill(row_bg_fill_bounds(bounds), bg));
+    }
 }
 
 fn inline_row_canvas_revision_key(
@@ -1519,7 +1658,7 @@ pub(super) fn inline_diff_line_row_canvas(
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
     blame: Option<RowBlamePaint>,
-    mouse_pos: gpui::Point<Pixels>,
+    annot_hover: Option<(usize, AnnotArea)>,
 ) -> AnyElement {
     let paint_payload = diff_text_paint_payload(
         styled,
@@ -1538,7 +1677,8 @@ pub(super) fn inline_diff_line_row_canvas(
         paint_payload.text_hash,
         paint_payload.highlights_hash,
     );
-    let revision = mix_blame_revision(revision, annotation_width, mouse_pos, blame.as_ref());
+    let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
+    let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
     let text = paint_payload.text;
     let highlights = paint_payload.highlights;
     let highlights_hash = paint_payload.highlights_hash;
@@ -1581,21 +1721,13 @@ pub(super) fn inline_diff_line_row_canvas(
 
             // Selection must not tint the annotation sidebar: fill it with a
             // neutral panel color and fill the content area with the row bg.
-            if prepaint.annot_w > px(0.0) {
-                window.paint_quad(fill(
-                    row_bg_fill_bounds(Bounds::new(
-                        prepaint.bounds.origin,
-                        size(prepaint.annot_w, prepaint.bounds.size.height),
-                    )),
-                    theme.colors.surface_bg,
-                ));
-                window.paint_quad(fill(
-                    row_bg_fill_bounds(inset_left(prepaint.bounds, prepaint.annot_w)),
-                    bg,
-                ));
-            } else {
-                window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
-            }
+            paint_row_bg_with_annotation(
+                window,
+                prepaint.bounds,
+                prepaint.annot_w,
+                bg,
+                theme.colors.surface_bg,
+            );
 
             if let Some(blame) = &blame {
                 render_blame_column(
@@ -1731,7 +1863,7 @@ pub(super) fn split_diff_line_row_canvas(
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
     blame: Option<RowBlamePaint>,
-    mouse_pos: gpui::Point<Pixels>,
+    annot_hover: Option<(usize, AnnotArea)>,
 ) -> AnyElement {
     let left_payload = diff_text_paint_payload(
         left_styled,
@@ -1763,7 +1895,8 @@ pub(super) fn split_diff_line_row_canvas(
         right_payload.text_hash,
         right_payload.highlights_hash,
     );
-    let revision = mix_blame_revision(revision, annotation_width, mouse_pos, blame.as_ref());
+    let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
+    let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
     let left_text = left_payload.text;
     let left_highlights = left_payload.highlights;
     let left_highlights_hash = left_payload.highlights_hash;
@@ -1822,13 +1955,12 @@ pub(super) fn split_diff_line_row_canvas(
             // Neutral panel bg under the annotation column so selection does
             // not tint it.
             if prepaint.annot_w > px(0.0) {
-                window.paint_quad(fill(
-                    row_bg_fill_bounds(Bounds::new(
-                        prepaint.bounds.origin,
-                        size(prepaint.annot_w, prepaint.bounds.size.height),
-                    )),
+                paint_annotation_sidebar(
+                    window,
+                    prepaint.bounds,
+                    prepaint.annot_w,
                     theme.colors.surface_bg,
-                ));
+                );
             }
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.left_col), left_bg));
             window.paint_quad(fill(
@@ -1989,7 +2121,7 @@ pub(super) fn patch_split_column_row_canvas(
     wrap: Option<DiffTextWrapSlice>,
     annotation_width: Pixels,
     blame: Option<RowBlamePaint>,
-    mouse_pos: gpui::Point<Pixels>,
+    annot_hover: Option<(usize, AnnotArea)>,
 ) -> AnyElement {
     let region = match column {
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
@@ -2016,7 +2148,8 @@ pub(super) fn patch_split_column_row_canvas(
         text_hash,
         highlights_hash,
     );
-    let revision = mix_blame_revision(revision, annotation_width, mouse_pos, blame.as_ref());
+    let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
+    let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
     let canvas_id: gpui::ElementId = (
         match column {
             super::diff::PatchSplitColumn::Left => "diff_row_canvas_file_split_left",
@@ -2059,21 +2192,13 @@ pub(super) fn patch_split_column_row_canvas(
 
             // Selection must not tint the annotation sidebar: fill it with a
             // neutral panel color and fill the content area with the row bg.
-            if prepaint.annot_w > px(0.0) {
-                window.paint_quad(fill(
-                    row_bg_fill_bounds(Bounds::new(
-                        prepaint.bounds.origin,
-                        size(prepaint.annot_w, prepaint.bounds.size.height),
-                    )),
-                    theme.colors.surface_bg,
-                ));
-                window.paint_quad(fill(
-                    row_bg_fill_bounds(inset_left(prepaint.bounds, prepaint.annot_w)),
-                    bg,
-                ));
-            } else {
-                window.paint_quad(fill(row_bg_fill_bounds(prepaint.bounds), bg));
-            }
+            paint_row_bg_with_annotation(
+                window,
+                prepaint.bounds,
+                prepaint.annot_w,
+                bg,
+                theme.colors.surface_bg,
+            );
 
             if let Some(blame) = &blame {
                 render_blame_column(
@@ -2234,7 +2359,16 @@ pub(super) fn worktree_preview_row_canvas(
             let line_metrics = line_metrics(window);
             let y = center_text_y(bounds, line_metrics.line_height);
 
-            window.paint_quad(fill(bounds, theme.colors.window_bg));
+            // Reserve the annotation sidebar with the neutral panel color (matching
+            // the diff renderers) so the blame column background is consistent with
+            // the diff view; fill the content area with the row background.
+            paint_row_bg_with_annotation(
+                window,
+                bounds,
+                prepaint.annot_w,
+                theme.colors.window_bg,
+                theme.colors.surface_bg,
+            );
             if let Some(color) = bar_color
                 && prepaint.bar_w > px(0.0)
             {

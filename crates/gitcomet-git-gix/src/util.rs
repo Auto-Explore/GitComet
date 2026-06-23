@@ -582,6 +582,53 @@ pub(crate) fn run_git_raw_output(cmd: Command, label: &str) -> Result<Output> {
     run_command_with_timeout(cmd, label, git_command_timeout(), None)
 }
 
+/// Run a local git command, feeding `input` to its stdin and returning captured
+/// stdout. Used for `git blame --contents -`, where the file content to blame is
+/// provided on stdin. Writes stdin and drains stdout/stderr on separate threads
+/// so large inputs cannot deadlock the pipes.
+pub(crate) fn run_git_with_stdin_capture(
+    mut cmd: Command,
+    input: Vec<u8>,
+    label: &str,
+) -> Result<Vec<u8>> {
+    use std::io::Write as _;
+
+    configure_background_command(&mut cmd);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(io_err)?;
+
+    let stdin = child.stdin.take();
+    let writer = thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(&input);
+            // Dropping `stdin` here closes the pipe so git sees EOF.
+        }
+    });
+    let stdout_handle = spawn_read_pipe(child.stdout.take());
+    let stderr_handle = spawn_read_pipe(child.stderr.take());
+
+    let status = child.wait().map_err(io_err)?;
+    let _ = writer.join();
+    let stdout = stdout_handle.join().unwrap_or_default();
+    let stderr = stderr_handle.join().unwrap_or_default();
+
+    if !status.success() {
+        return Err(git_command_failed_error(
+            label,
+            Output {
+                status,
+                stdout,
+                stderr,
+            },
+        ));
+    }
+    Ok(stdout)
+}
+
 pub(crate) fn run_git_parsed_stdout<T, F>(
     cmd: Command,
     label: &str,

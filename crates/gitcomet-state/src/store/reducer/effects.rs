@@ -41,12 +41,12 @@ pub(super) fn blame_loaded(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
-    rev: Option<String>,
+    source: gitcomet_core::domain::BlameSource,
     result: std::result::Result<Vec<gitcomet_core::services::BlameLine>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.history_state.blame_path.as_ref() == Some(&path)
-        && repo_state.history_state.blame_rev == rev
+        && repo_state.history_state.blame_source.as_ref() == Some(&source)
     {
         repo_state.history_state.blame = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
@@ -476,15 +476,19 @@ pub(super) fn load_blame(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
-    rev: Option<String>,
+    source: gitcomet_core::domain::BlameSource,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
     repo_state.history_state.blame_path = Some(path.clone());
-    repo_state.history_state.blame_rev = rev.clone();
+    repo_state.history_state.blame_source = Some(source.clone());
     repo_state.history_state.blame = Loadable::Loading;
-    vec![Effect::LoadBlame { repo_id, path, rev }]
+    vec![Effect::LoadBlame {
+        repo_id,
+        path,
+        source,
+    }]
 }
 
 pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -1272,7 +1276,16 @@ mod tests {
         assert!(
             file_history_loaded(&mut state, repo_id, path.clone(), Ok(empty_log_page())).is_empty()
         );
-        assert!(blame_loaded(&mut state, repo_id, path.clone(), None, Ok(Vec::new())).is_empty());
+        assert!(
+            blame_loaded(
+                &mut state,
+                repo_id,
+                path.clone(),
+                gitcomet_core::domain::BlameSource::Revision(None),
+                Ok(Vec::new())
+            )
+            .is_empty()
+        );
         assert!(conflict_file_loaded(&mut state, repo_id, path.clone(), Ok(None), None).is_empty());
         assert!(worktrees_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
         assert!(submodules_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
@@ -1291,7 +1304,15 @@ mod tests {
         );
         assert!(load_reflog(&mut state, repo_id).is_empty());
         assert!(load_file_history(&mut state, repo_id, path.clone(), 25).is_empty());
-        assert!(load_blame(&mut state, repo_id, path.clone(), Some("HEAD".to_string())).is_empty());
+        assert!(
+            load_blame(
+                &mut state,
+                repo_id,
+                path.clone(),
+                gitcomet_core::domain::BlameSource::Revision(Some("HEAD".to_string()))
+            )
+            .is_empty()
+        );
         assert!(load_worktrees(&mut state, repo_id).is_empty());
         assert!(load_submodules(&mut state, repo_id).is_empty());
         assert!(branches_loaded(&mut state, repo_id, Ok(Vec::new())).is_empty());
@@ -1372,23 +1393,25 @@ mod tests {
     }
 
     #[test]
-    fn blame_loaded_requires_matching_path_and_rev() {
+    fn blame_loaded_requires_matching_path_and_source() {
+        use gitcomet_core::domain::BlameSource;
+
         let repo_id = RepoId(1);
         let mut state = new_state_with_repo(repo_id);
         let path = PathBuf::from("src/lib.rs");
-        let rev = Some("HEAD~1".to_string());
+        let source = BlameSource::Revision(Some("HEAD~1".to_string()));
 
         {
             let repo = repo_mut(&mut state, repo_id);
             repo.history_state.blame_path = Some(path.clone());
-            repo.history_state.blame_rev = rev.clone();
+            repo.history_state.blame_source = Some(source.clone());
         }
 
         blame_loaded(
             &mut state,
             repo_id,
             path.clone(),
-            Some("different".to_string()),
+            BlameSource::Revision(Some("different".to_string())),
             Ok(Vec::new()),
         );
         assert!(matches!(
@@ -1400,7 +1423,7 @@ mod tests {
             &mut state,
             repo_id,
             path.clone(),
-            rev.clone(),
+            source.clone(),
             Ok(Vec::new()),
         );
         assert!(matches!(
@@ -1412,7 +1435,7 @@ mod tests {
             &mut state,
             repo_id,
             path,
-            rev,
+            source,
             Err(backend_error("blame failed")),
         );
         let repo = repo_mut(&mut state, repo_id);
@@ -1639,7 +1662,7 @@ mod tests {
             &mut state,
             repo_id,
             blame_path.clone(),
-            Some("HEAD".to_string()),
+            gitcomet_core::domain::BlameSource::Revision(Some("HEAD".to_string())),
         );
         assert_eq!(effects.len(), 1);
         assert!(matches!(
@@ -1647,13 +1670,18 @@ mod tests {
             Effect::LoadBlame {
                 repo_id: rid,
                 ref path,
-                ref rev
-            } if rid == repo_id && path == &blame_path && rev.as_deref() == Some("HEAD")
+                source: gitcomet_core::domain::BlameSource::Revision(Some(ref rev))
+            } if rid == repo_id && path == &blame_path && rev == "HEAD"
         ));
         {
             let repo = repo_mut(&mut state, repo_id);
             assert_eq!(repo.history_state.blame_path.as_ref(), Some(&blame_path));
-            assert_eq!(repo.history_state.blame_rev.as_deref(), Some("HEAD"));
+            assert_eq!(
+                repo.history_state.blame_source,
+                Some(gitcomet_core::domain::BlameSource::Revision(Some(
+                    "HEAD".to_string()
+                )))
+            );
             assert!(repo.history_state.blame.is_loading());
         }
 

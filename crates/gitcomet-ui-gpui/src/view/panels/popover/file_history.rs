@@ -132,10 +132,12 @@ pub(super) fn panel(
                         };
                         // Open the file's *content* at the chosen commit (which
                         // also records the view in the back/forward history),
-                        // rather than showing that commit's diff.
-                        this.store.dispatch(Msg::OpenFileContent {
+                        // rather than showing that commit's diff. Routed through
+                        // `OpenFileAtCommit` so the path is resolved to the name
+                        // the file had at that commit, following renames.
+                        this.store.dispatch(Msg::OpenFileAtCommit {
                             repo_id,
-                            source: gitcomet_core::domain::FileSource::Commit(commit_id),
+                            commit_id,
                             path: path.clone(),
                         });
                         this.close_popover(cx);

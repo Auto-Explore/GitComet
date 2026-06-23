@@ -214,7 +214,7 @@ pub enum Msg {
     LoadBlame {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
     },
     LoadWorktrees {
         repo_id: RepoId,
@@ -256,6 +256,16 @@ pub enum Msg {
     /// revision just before that commit's change). The parent is resolved
     /// asynchronously; if `commit_id` is a root commit this is a no-op.
     OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
+    /// Open the file's content at `commit_id`, resolving `path` to the name the
+    /// file has in that commit's tree (following renames) before opening. Used
+    /// by the file-history list so navigating across a rename does not look up a
+    /// name that is absent from the target commit's tree. Resolved
+    /// asynchronously; falls back to `path` when no rename mapping is found.
+    OpenFileAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
         path: PathBuf,
@@ -753,7 +763,7 @@ pub enum InternalMsg {
     BlameLoaded {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {

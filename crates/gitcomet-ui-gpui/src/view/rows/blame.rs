@@ -19,9 +19,18 @@ pub(in crate::view) struct BlameAnnotation<'a> {
 /// Resolve the blame entry for a displayed row by its new-side (1-based) line
 /// number. Rows without a new-side line (pure deletions) return `None`. For the
 /// file-content view, line numbers map 1:1 onto the blamed file.
+///
+/// `prev_new_line` is the new-side line number of the previous *rendered* blamed
+/// row (or `None` if there was none). A row starts a new attribution run — and
+/// shows the commit text — unless the previous rendered blamed line is exactly
+/// file line `n - 1` and shares this line's commit. Comparing against the
+/// previous *rendered* line (rather than blindly against `lines[idx - 1]`)
+/// ensures the first visible line of a hunk is treated as a run start even when
+/// the hidden preceding file line happens to share its commit.
 pub(in crate::view) fn blame_for_new_line(
     lines: &[BlameLine],
     new_line: Option<u32>,
+    prev_new_line: Option<u32>,
 ) -> Option<BlameAnnotation<'_>> {
     let n = new_line? as usize;
     if n == 0 {
@@ -29,9 +38,10 @@ pub(in crate::view) fn blame_for_new_line(
     }
     let idx = n - 1;
     let line = lines.get(idx)?;
-    let is_run_start = idx == 0
-        || lines
-            .get(idx - 1)
+    let is_run_start = prev_new_line != Some((n - 1) as u32)
+        || idx
+            .checked_sub(1)
+            .and_then(|i| lines.get(i))
             .is_none_or(|prev| prev.commit_id != line.commit_id);
     Some(BlameAnnotation { line, is_run_start })
 }
@@ -93,6 +103,8 @@ mod tests {
             body: None,
             line: String::new(),
             prior_exists: true,
+            source_path: None,
+            prior_commit: None,
         }
     }
 
@@ -105,19 +117,37 @@ mod tests {
         ];
 
         // No new-side line (deletion) -> None.
-        assert!(blame_for_new_line(&lines, None).is_none());
+        assert!(blame_for_new_line(&lines, None, None).is_none());
         // Line 0 is invalid (1-based).
-        assert!(blame_for_new_line(&lines, Some(0)).is_none());
+        assert!(blame_for_new_line(&lines, Some(0), None).is_none());
 
-        let l1 = blame_for_new_line(&lines, Some(1)).unwrap();
+        // Rendered contiguously: prev_new_line == n - 1.
+        let l1 = blame_for_new_line(&lines, Some(1), None).unwrap();
         assert!(l1.is_run_start);
-        let l2 = blame_for_new_line(&lines, Some(2)).unwrap();
+        let l2 = blame_for_new_line(&lines, Some(2), Some(1)).unwrap();
         assert!(!l2.is_run_start);
-        let l3 = blame_for_new_line(&lines, Some(3)).unwrap();
+        let l3 = blame_for_new_line(&lines, Some(3), Some(2)).unwrap();
         assert!(l3.is_run_start);
 
         // Out of range.
-        assert!(blame_for_new_line(&lines, Some(4)).is_none());
+        assert!(blame_for_new_line(&lines, Some(4), Some(3)).is_none());
+    }
+
+    #[test]
+    fn blame_for_new_line_run_start_at_hunk_boundary() {
+        // Same commit on both lines, but they are not contiguous in render order
+        // (the previous rendered blamed line is line 1, not line 2). The first
+        // visible line of the new hunk must still start a run.
+        let lines = vec![
+            line("aaa", Some(1)),
+            line("aaa", Some(1)),
+            line("aaa", Some(1)),
+        ];
+        let gapped = blame_for_new_line(&lines, Some(3), Some(1)).unwrap();
+        assert!(gapped.is_run_start);
+        // Contiguous continuation of the same commit is not a run start.
+        let cont = blame_for_new_line(&lines, Some(3), Some(2)).unwrap();
+        assert!(!cont.is_run_start);
     }
 
     #[test]
