@@ -577,7 +577,10 @@ mod tests {
     #[test]
     fn utf8_cache_reuses_shared_string_for_entry_and_return_value() {
         let mut cache = PathDisplayCache::default();
-        let path = PathBuf::from("src/lib.rs");
+        // `SharedString` is backed by `SmolStr`, which stores strings up to 23
+        // bytes inline (copied, not `Arc`-shared). To exercise the zero-copy
+        // path the label must exceed that inline capacity.
+        let path = PathBuf::from("src/deeply/nested/module/path/file.rs");
         let display = cached_path_display(&mut cache, &path);
 
         let cached = cache

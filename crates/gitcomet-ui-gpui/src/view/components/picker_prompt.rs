@@ -2,6 +2,7 @@ use super::control_height_md;
 use crate::kit::{Scrollbar, ScrollbarAxis, TextInput};
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
+use crate::view::restrict_scroll_to_vertical_axis;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
@@ -114,6 +115,7 @@ impl PickerPrompt {
             .overflow_y_scroll()
             .max_h(self.max_height)
             .track_scroll(&scroll_handle);
+        list = restrict_scroll_to_vertical_axis(list);
 
         if matches.is_empty() {
             list = list.child(

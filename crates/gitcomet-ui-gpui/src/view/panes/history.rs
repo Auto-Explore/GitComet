@@ -1,8 +1,9 @@
 use super::super::*;
 use crate::view::caches::{
     HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm, analyze_history_stashes,
-    build_history_branch_text_by_target, build_history_tag_names_by_target,
-    build_history_visible_indices, next_history_stash_tip_for_commit_ix,
+    build_history_branch_ref_items_by_target, build_history_branch_text_by_target,
+    build_history_tag_names_by_target, build_history_visible_indices,
+    history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
 };
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -616,10 +617,33 @@ struct PendingHistoryReveal {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PendingHistoryRevealDecision {
     set_scope: Option<LogScope>,
-    select_commit: bool,
+    select_commit: Option<CommitId>,
     scroll_to_list_ix: Option<usize>,
     load_more: bool,
     clear_pending: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HistoryCommitReferenceMatch {
+    Unique { list_ix: usize, commit_id: CommitId },
+    Ambiguous,
+    Missing,
+}
+
+fn commit_id_matches_reference(commit_id: &CommitId, reference: &CommitId) -> bool {
+    let commit_id = commit_id.as_ref();
+    let reference = reference.as_ref();
+    commit_id.eq_ignore_ascii_case(reference)
+        || (reference.len() >= 7
+            && reference.len() < commit_id.len()
+            && commit_id
+                .get(..reference.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(reference)))
+}
+
+fn commit_id_reference_needs_resolution(reference: &CommitId) -> bool {
+    let reference = reference.as_ref();
+    (7..40).contains(&reference.len()) && reference.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn history_selected_list_index_cache_matches(
@@ -693,13 +717,46 @@ fn peek_history_selected_list_index(
     }
 
     let selected_commit = selected_commit?;
+    match visible_commit_match_for_reference(
+        selected_commit,
+        visible_indices,
+        commits,
+        show_working_tree_summary_row,
+    ) {
+        HistoryCommitReferenceMatch::Unique { list_ix, .. } => Some(list_ix),
+        HistoryCommitReferenceMatch::Ambiguous | HistoryCommitReferenceMatch::Missing => None,
+    }
+}
+
+fn visible_commit_match_for_reference(
+    reference: &CommitId,
+    visible_indices: &HistoryVisibleIndices,
+    commits: &[Commit],
+    show_working_tree_summary_row: bool,
+) -> HistoryCommitReferenceMatch {
     let offset = usize::from(show_working_tree_summary_row);
-    let visible_ix = visible_indices.iter().position(|commit_ix| {
-        commits
-            .get(commit_ix)
-            .is_some_and(|commit| &commit.id == selected_commit)
-    })?;
-    Some(visible_ix + offset)
+    let mut found = None;
+
+    for (visible_ix, commit_ix) in visible_indices.iter().enumerate() {
+        let Some(commit) = commits.get(commit_ix) else {
+            continue;
+        };
+        if !commit_id_matches_reference(&commit.id, reference) {
+            continue;
+        }
+
+        let next = (visible_ix + offset, commit.id.clone());
+        if found.is_some() {
+            return HistoryCommitReferenceMatch::Ambiguous;
+        }
+        found = Some(next);
+    }
+
+    if let Some((list_ix, commit_id)) = found {
+        HistoryCommitReferenceMatch::Unique { list_ix, commit_id }
+    } else {
+        HistoryCommitReferenceMatch::Missing
+    }
 }
 
 fn resolve_history_selected_list_index(
@@ -743,15 +800,15 @@ fn decide_pending_history_reveal(
     active_repo_id: Option<RepoId>,
     current_scope: Option<LogScope>,
     selected_commit: Option<&CommitId>,
-    log_rev: u64,
-    stashes_rev: u64,
+    _log_rev: u64,
+    _stashes_rev: u64,
     log_loading_more: bool,
     display_page: Option<&LogPage>,
     live_page_has_more: Option<bool>,
     cache_request_matches: bool,
     visible_indices: Option<&HistoryVisibleIndices>,
     show_working_tree_summary_row: bool,
-    selected_list_index_cache: Option<&HistorySelectedListIndexCache>,
+    _selected_list_index_cache: Option<&HistorySelectedListIndexCache>,
 ) -> PendingHistoryRevealDecision {
     let mut decision = PendingHistoryRevealDecision::default();
 
@@ -765,7 +822,13 @@ fn decide_pending_history_reveal(
         return decision;
     };
 
-    decision.select_commit = selected_commit != Some(&pending.commit_id);
+    let reference_needs_resolution = commit_id_reference_needs_resolution(&pending.commit_id);
+    if !reference_needs_resolution
+        && !selected_commit
+            .is_some_and(|selected| commit_id_matches_reference(selected, &pending.commit_id))
+    {
+        decision.select_commit = Some(pending.commit_id.clone());
+    }
 
     let Some(display_page) = display_page else {
         return decision;
@@ -777,20 +840,36 @@ fn decide_pending_history_reveal(
         return decision;
     };
 
-    if let Some(list_ix) = peek_history_selected_list_index(
-        selected_list_index_cache,
-        pending.repo_id,
-        log_rev,
-        stashes_rev,
-        current_scope,
-        show_working_tree_summary_row,
-        Some(&pending.commit_id),
+    match visible_commit_match_for_reference(
+        &pending.commit_id,
         visible_indices,
         &display_page.commits,
+        show_working_tree_summary_row,
     ) {
-        decision.scroll_to_list_ix = Some(list_ix);
-        decision.clear_pending = true;
-        return decision;
+        HistoryCommitReferenceMatch::Unique { list_ix, commit_id } => {
+            if reference_needs_resolution {
+                match live_page_has_more {
+                    Some(false) => {}
+                    Some(true) => {
+                        decision.load_more = !log_loading_more;
+                        return decision;
+                    }
+                    None => return decision,
+                }
+            }
+            if selected_commit != Some(&commit_id) {
+                decision.select_commit = Some(commit_id);
+            }
+            decision.scroll_to_list_ix = Some(list_ix);
+            decision.clear_pending = true;
+            return decision;
+        }
+        HistoryCommitReferenceMatch::Ambiguous => {
+            decision.select_commit = None;
+            decision.clear_pending = true;
+            return decision;
+        }
+        HistoryCommitReferenceMatch::Missing => {}
     }
 
     match live_page_has_more {
@@ -852,6 +931,9 @@ pub(in super::super) struct HistoryView {
     history_selected_list_index_cache: Option<HistorySelectedListIndexCache>,
     selected_branch: Option<SelectedBranch>,
     pending_history_reveal: Option<PendingHistoryReveal>,
+    /// Last browse-point commit we scrolled to, so a new one is revealed only when
+    /// the historical browse point actually changes.
+    last_browse_commit: Option<CommitId>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
@@ -867,6 +949,8 @@ impl HistoryView {
             && let Some(repo) = state.repos.iter().find(|r| r.id == repo_id)
         {
             repo.log_rev.hash(&mut hasher);
+            repo.history_state.log_rev.hash(&mut hasher);
+            repo.history_state.history_scope.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
@@ -876,6 +960,7 @@ impl HistoryView {
             }
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
+            repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.worktree_status_cache_rev().hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
         }
@@ -908,14 +993,26 @@ impl HistoryView {
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
-            if next_fingerprint == this.notify_fingerprint {
-                this.state = next;
-                return;
+            let changed = next_fingerprint != this.notify_fingerprint;
+            this.state = next;
+
+            // When the historical browse point changes, scroll the history to that
+            // commit (its row is highlighted purple by the canvas).
+            let browse_commit = this
+                .active_repo()
+                .and_then(|repo| repo.browsing_commit().cloned());
+            if browse_commit != this.last_browse_commit {
+                this.last_browse_commit = browse_commit.clone();
+                if let (Some(repo_id), Some(commit_id)) = (this.active_repo_id(), browse_commit) {
+                    this.request_reveal_commit(repo_id, commit_id, Some(LogScope::AllBranches), cx);
+                }
             }
 
-            this.notify_fingerprint = next_fingerprint;
-            this.state = next;
-            cx.notify();
+            if changed {
+                this.notify_fingerprint = next_fingerprint;
+                this.dismiss_history_refs_hover(cx);
+                cx.notify();
+            }
         });
 
         let history_panel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
@@ -961,6 +1058,7 @@ impl HistoryView {
             history_selected_list_index_cache: None,
             selected_branch: None,
             pending_history_reveal: None,
+            last_browse_commit: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
@@ -975,6 +1073,29 @@ impl HistoryView {
     pub(in super::super) fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in crate::view) fn show_history_refs_hover(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        source_bounds: Bounds<Pixels>,
+        items: Arc<[HistoryRefListItem]>,
+        pointer: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.show_history_refs_hover(
+                repo_id,
+                commit_id,
+                source_bounds,
+                items,
+                pointer,
+                window,
+                cx,
+            );
+        });
     }
 
     pub(in crate::view) fn display_log_page_for_repo(repo: &RepoState) -> Option<Arc<LogPage>> {
@@ -1479,10 +1600,10 @@ impl HistoryView {
             return;
         }
 
-        if decision.select_commit {
+        if let Some(commit_id) = decision.select_commit {
             self.store.dispatch(Msg::SelectCommit {
                 repo_id: pending.repo_id,
-                commit_id: pending.commit_id.clone(),
+                commit_id,
             });
         }
 
@@ -1501,6 +1622,7 @@ impl HistoryView {
                     list_ix,
                 );
             }
+            self.dismiss_history_refs_hover(cx);
             self.history_scroll
                 .scroll_to_item_strict(list_ix, gpui::ScrollStrategy::Center);
         } else if decision.load_more {
@@ -2032,6 +2154,13 @@ fn build_history_decoration_cache(
     );
     let (mut branch_text_by_target, head_branches_text) =
         build_history_branch_text_by_target(branches, remote_branches, head_branch, head_target);
+    let (mut branch_ref_items_by_target, head_branch_ref_items) =
+        build_history_branch_ref_items_by_target(
+            branches,
+            remote_branches,
+            head_branch,
+            head_target,
+        );
     let mut tag_names_by_target = build_history_tag_names_by_target(tags);
     let mut row_vms = Vec::with_capacity(base.visible_indices.len());
     for (commit_ix, base_row) in base.visible_indices.iter().zip(base.row_vms.iter()) {
@@ -2046,9 +2175,19 @@ fn build_history_decoration_cache(
                 .remove(commit_id)
                 .unwrap_or_else(HistoryTextVm::default)
         };
+        let branch_items = if base_row.is_head {
+            head_branch_ref_items.clone().unwrap_or_default()
+        } else {
+            branch_ref_items_by_target
+                .remove(commit_id)
+                .unwrap_or_default()
+        };
+        let tag_names = tag_names_by_target.remove(commit_id).unwrap_or_default();
+        let ref_items = history_ref_items_from_displayed_refs(&tag_names, branch_items);
         row_vms.push(HistoryDecorationRowVm {
             branches_text,
-            tag_names: tag_names_by_target.remove(commit_id).unwrap_or_default(),
+            tag_names,
+            ref_items,
         });
     }
 
@@ -2614,7 +2753,7 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: true,
+                select_commit: Some(CommitId("c".into())),
                 scroll_to_list_ix: Some(2),
                 load_more: false,
                 clear_pending: true,
@@ -2651,7 +2790,7 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: true,
+                select_commit: Some(CommitId("c".into())),
                 scroll_to_list_ix: None,
                 load_more: true,
                 clear_pending: false,
@@ -2688,7 +2827,7 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: Some(LogScope::AllBranches),
-                select_commit: true,
+                select_commit: Some(CommitId("c".into())),
                 scroll_to_list_ix: None,
                 load_more: false,
                 clear_pending: false,
@@ -2725,7 +2864,7 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: true,
+                select_commit: Some(CommitId("c".into())),
                 scroll_to_list_ix: None,
                 load_more: false,
                 clear_pending: true,
@@ -2763,8 +2902,250 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: false,
+                select_commit: None,
                 scroll_to_list_ix: Some(1),
+                load_more: false,
+                clear_pending: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_unique_abbreviated_commit_scrolls_and_selects_full_id() {
+        let full = "abcdef0123456789abcdef0123456789abcdef01";
+        let other = "1234567890abcdef1234567890abcdef12345678";
+        let commits = vec![
+            commit(other, &["p0"], "other"),
+            commit(full, &[other], "target"),
+        ];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId(full[..8].into()),
+            fallback_scope: Some(LogScope::AllBranches),
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            21,
+            34,
+            false,
+            Some(&log_page(commits, None)),
+            Some(false),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: Some(CommitId(full.into())),
+                scroll_to_list_ix: Some(1),
+                load_more: false,
+                clear_pending: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_abbreviated_commit_loads_more_before_selecting_visible_match() {
+        let full = "abcdef0123456789abcdef0123456789abcdef01";
+        let other = "1234567890abcdef1234567890abcdef12345678";
+        let commits = vec![
+            commit(other, &["p0"], "other"),
+            commit(full, &[other], "target"),
+        ];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId(full[..8].into()),
+            fallback_scope: Some(LogScope::AllBranches),
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            21,
+            34,
+            false,
+            Some(&log_page(commits, Some("next"))),
+            Some(true),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: None,
+                scroll_to_list_ix: None,
+                load_more: true,
+                clear_pending: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_abbreviated_commit_waits_for_display_page_before_selecting() {
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId("abcdef01".into()),
+            fallback_scope: Some(LogScope::AllBranches),
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            21,
+            34,
+            false,
+            None,
+            None,
+            true,
+            None,
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: None,
+                scroll_to_list_ix: None,
+                load_more: false,
+                clear_pending: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_abbreviated_commit_waits_for_matching_cache_before_selecting() {
+        let full = "abcdef0123456789abcdef0123456789abcdef01";
+        let commits = vec![commit(full, &["p0"], "target")];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId(full[..8].into()),
+            fallback_scope: Some(LogScope::AllBranches),
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            21,
+            34,
+            false,
+            Some(&log_page(commits, None)),
+            Some(false),
+            false,
+            Some(&HistoryVisibleIndices::all(1)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: None,
+                scroll_to_list_ix: None,
+                load_more: false,
+                clear_pending: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_uppercase_abbreviated_commit_scrolls_and_selects_full_id() {
+        let full = "abcdef0123456789abcdef0123456789abcdef01";
+        let other = "1234567890abcdef1234567890abcdef12345678";
+        let commits = vec![
+            commit(other, &["p0"], "other"),
+            commit(full, &[other], "target"),
+        ];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId(full[..8].to_ascii_uppercase().into()),
+            fallback_scope: Some(LogScope::AllBranches),
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            21,
+            34,
+            false,
+            Some(&log_page(commits, None)),
+            Some(false),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: Some(CommitId(full.into())),
+                scroll_to_list_ix: Some(1),
+                load_more: false,
+                clear_pending: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pending_history_reveal_ambiguous_abbreviated_commit_clears_without_selecting() {
+        let first = "abcdef0123456789abcdef0123456789abcdef01";
+        let second = "abcdef0123456789abcdef0123456789abcdef02";
+        let commits = vec![
+            commit(first, &["p0"], "first"),
+            commit(second, &["p0"], "second"),
+        ];
+        let pending = PendingHistoryReveal {
+            repo_id: RepoId(7),
+            commit_id: CommitId(first[..8].into()),
+            fallback_scope: Some(LogScope::AllBranches),
+        };
+
+        let decision = decide_pending_history_reveal(
+            &pending,
+            Some(RepoId(7)),
+            Some(LogScope::CurrentBranch),
+            None,
+            21,
+            34,
+            false,
+            Some(&log_page(commits, None)),
+            Some(false),
+            true,
+            Some(&HistoryVisibleIndices::all(2)),
+            false,
+            None,
+        );
+
+        assert_eq!(
+            decision,
+            PendingHistoryRevealDecision {
+                set_scope: None,
+                select_commit: None,
+                scroll_to_list_ix: None,
                 load_more: false,
                 clear_pending: true,
             }
@@ -2942,6 +3323,1169 @@ mod tests {
             )
         );
         assert_ne!(after_when_text, before_when_text);
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_lists_refs_and_opens_item_menus(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commit_id = CommitId("tip".into());
+        let base_commit_id = CommitId("base".into());
+        let page = Arc::new(log_page(
+            vec![
+                commit("tip", &[base_commit_id.as_ref()], "tip"),
+                commit(base_commit_id.as_ref(), &[], "base"),
+            ],
+            None,
+        ));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", "tip"),
+            branch("feature", "tip"),
+        ]));
+        repo.branches_rev = 1;
+        repo.remote_branches =
+            Loadable::Ready(Arc::new(vec![remote_branch("origin", "main", "tip")]));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::Tag {
+                name: "release".to_string(),
+                target: commit_id.clone(),
+            },
+            gitcomet_core::domain::Tag {
+                name: "old-release".to_string(),
+                target: base_commit_id.clone(),
+            },
+        ]));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+        wait_until(cx, "history second row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_1").is_some()
+        });
+
+        let redraw = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+        };
+
+        let refs_column_point = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+            let selector = match row_ix {
+                0 => "history_row_0",
+                1 => "history_row_1",
+                _ => panic!("unsupported row index {row_ix}"),
+            };
+            let row = cx
+                .debug_bounds(selector)
+                .expect("history row should be rendered");
+            point(row.left() + px(24.0), row.center().y)
+        };
+
+        let away_from_refs_column_point = |cx: &mut gpui::VisualTestContext| {
+            let row = cx
+                .debug_bounds("history_row_0")
+                .expect("history row should be rendered");
+            point(row.right() - px(8.0), row.center().y)
+        };
+
+        let move_to_refs_column = |cx: &mut gpui::VisualTestContext| {
+            let point = refs_column_point(cx, 0);
+            cx.simulate_mouse_move(point, None, gpui::Modifiers::default());
+            cx.run_until_parked();
+            redraw(cx);
+        };
+
+        let open_refs_hover = |cx: &mut gpui::VisualTestContext| {
+            move_to_refs_column(cx);
+            cx.executor().advance_clock(Duration::from_millis(200));
+            cx.run_until_parked();
+            redraw(cx);
+        };
+
+        move_to_refs_column(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert!(!crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let away = away_from_refs_column_point(cx);
+        cx.simulate_mouse_move(away, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert!(!crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        open_refs_hover(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        let feature_center = cx
+            .debug_bounds("history_refs_hover_item_local_branch_feature")
+            .expect("expected feature ref item in debug bounds")
+            .center();
+        cx.simulate_mouse_move(feature_center, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(150));
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        let click_hover_item = |cx: &mut gpui::VisualTestContext,
+                                selector: &'static str,
+                                button: gpui::MouseButton| {
+            let center = cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
+                .center();
+            cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(center, button, gpui::Modifiers::default());
+            cx.simulate_mouse_up(center, button, gpui::Modifiers::default());
+            cx.run_until_parked();
+            redraw(cx);
+        };
+
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_local_branch_feature",
+            gpui::MouseButton::Left,
+        );
+        let feature_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                feature_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("feature".into())
+            );
+        });
+
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_tag_release",
+            gpui::MouseButton::Left,
+        );
+        let release_left_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::TagRefMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                    name: "release".to_string()
+                })
+            );
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                release_left_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("release".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        open_refs_hover(cx);
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_local_branch_feature",
+            gpui::MouseButton::Right,
+        );
+        let feature_context_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                feature_context_pinned_ix
+            );
+        });
+
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_tag_release",
+            gpui::MouseButton::Right,
+        );
+        let release_context_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::TagRefMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                    name: "release".to_string()
+                })
+            );
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                release_context_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("release".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        open_refs_hover(cx);
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_tag_release",
+            gpui::MouseButton::Left,
+        );
+        let release_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::TagRefMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                    name: "release".to_string()
+                })
+            );
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                release_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("release".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+        });
+
+        open_refs_hover(cx);
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        let source_bounds = cx
+            .update(|_window, app| {
+                crate::view::test_support::history_refs_hover_source_bounds(view.read(app), app)
+            })
+            .expect("history refs hover should expose source bounds");
+        click_hover_item(
+            cx,
+            "history_refs_hover_item_local_branch_feature",
+            gpui::MouseButton::Right,
+        );
+        let frozen_feature_pinned_ix = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app)
+        });
+        let frozen_source_bounds = cx
+            .update(|_window, app| {
+                assert_eq!(
+                    crate::view::test_support::popover_kind(view.read(app), app),
+                    Some(PopoverKind::BranchMenu {
+                        repo_id,
+                        section: BranchSection::Local,
+                        name: "feature".to_string()
+                    })
+                );
+                assert_eq!(
+                    crate::view::test_support::history_refs_hover_pinned_item_ix(
+                        view.read(app),
+                        app
+                    ),
+                    frozen_feature_pinned_ix
+                );
+                assert_eq!(
+                    crate::view::test_support::history_refs_hover_pinned_item_text(
+                        view.read(app),
+                        app
+                    ),
+                    Some("feature".into())
+                );
+                crate::view::test_support::history_refs_hover_source_bounds(view.read(app), app)
+            })
+            .expect("history refs hover should remain open while menu is open");
+
+        let other_commit_ref_point = refs_column_point(cx, 1);
+        cx.simulate_mouse_move(other_commit_ref_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(250));
+        cx.run_until_parked();
+        redraw(cx);
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_source_bounds(view.read(app), app),
+                Some(frozen_source_bounds)
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                frozen_feature_pinned_ix
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("feature".into())
+            );
+        });
+
+        cx.update(|_window, app| {
+            let popover_host = view.read(app).popover_host.clone();
+            popover_host.update(app, |host, cx| host.close_popover(cx));
+        });
+        cx.run_until_parked();
+        redraw(cx);
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_ix(view.read(app), app),
+                None
+            );
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                None
+            );
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let away_x = if source_bounds.right() + px(8.0) < row.right() {
+            source_bounds.right() + px(8.0)
+        } else {
+            source_bounds.left() - px(8.0)
+        };
+        let away = point(away_x, source_bounds.center().y);
+        assert!(!source_bounds.contains(&away));
+        cx.simulate_mouse_move(away, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(150));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(!hover_open, "history refs hover host should be closed");
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert!(!crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commits = (0..80)
+            .map(|ix| {
+                let id = format!("c{ix:02}");
+                commit(&id, &[], &format!("commit {ix:02}"))
+            })
+            .collect::<Vec<_>>();
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-scroll"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(row.left() + px(24.0), row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let scroll_y = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_scroll.0.borrow().base_handle.offset().y
+            })
+        };
+        let before_scroll_y = scroll_y(cx);
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: hover_point,
+            delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-240.0))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        wait_until(cx, "history list to scroll", |cx| {
+            scroll_y(cx) != before_scroll_y
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when history scrolls without a mouse move"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_move(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commits = vec![
+            commit("c1", &["c0"], "commit 1"),
+            commit("c0", &[], "commit 0"),
+        ];
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-click-close"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c1")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history rows with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some() && cx.debug_bounds("history_row_1").is_some()
+        });
+
+        let hover_row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(hover_row.left() + px(24.0), hover_row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let other_row = cx
+            .debug_bounds("history_row_1")
+            .expect("second history row should be rendered");
+        let click_point = point(other_row.right() - px(8.0), other_row.center().y);
+        cx.simulate_mouse_down(
+            click_point,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            click_point,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when another commit is clicked without a mouse move"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_item_click_keeps_existing_history_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let selected_commit = CommitId("c0".into());
+        let hovered_commit = CommitId("c1".into());
+        let commits = vec![
+            commit(
+                hovered_commit.as_ref(),
+                &[selected_commit.as_ref()],
+                "commit 1",
+            ),
+            commit(selected_commit.as_ref(), &[], "commit 0"),
+        ];
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-selection-priority"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.history_state.selected_commit = Some(selected_commit.clone());
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", hovered_commit.as_ref()),
+            branch("feature", hovered_commit.as_ref()),
+        ]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history rows with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some() && cx.debug_bounds("history_row_1").is_some()
+        });
+
+        let hover_row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(hover_row.left() + px(24.0), hover_row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert_eq!(
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history
+                    .active_repo()
+                    .and_then(|repo| repo.history_state.selected_commit.clone())
+            }),
+            Some(selected_commit.clone())
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+
+        let item_center = cx
+            .debug_bounds("history_refs_hover_item_local_branch_feature")
+            .expect("expected feature ref item in debug bounds")
+            .center();
+        cx.simulate_mouse_move(item_center, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(
+            item_center,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            item_center,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::history_refs_hover_pinned_item_text(view.read(app), app),
+                Some("feature".into())
+            );
+        });
+        assert_eq!(
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history
+                    .active_repo()
+                    .and_then(|repo| repo.history_state.selected_commit.clone())
+            }),
+            Some(selected_commit)
+        );
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_and_item_menu_close_when_history_page_changes_without_mouse_move(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let base_commit_id = CommitId("base".into());
+        let initial_page = Arc::new(log_page(
+            vec![
+                commit("tip", &[base_commit_id.as_ref()], "tip"),
+                commit(base_commit_id.as_ref(), &[], "base"),
+            ],
+            None,
+        ));
+        let mut initial_repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-page-change"),
+            },
+        );
+        initial_repo.history_state.history_scope = LogScope::AllBranches;
+        initial_repo.head_branch = Loadable::Ready("main".to_string());
+        initial_repo.head_branch_rev = 1;
+        initial_repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", "tip"),
+            branch("feature", "tip"),
+        ]));
+        initial_repo.branches_rev = 1;
+        initial_repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        initial_repo.remote_branches_rev = 1;
+        initial_repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        initial_repo.tags_rev = 1;
+        initial_repo.log = Loadable::Ready(Arc::clone(&initial_page));
+        initial_repo.log_rev = 1;
+        initial_repo.history_state.log = Loadable::Ready(Arc::clone(&initial_page));
+        initial_repo.history_state.log_rev = 1;
+
+        let initial_state = Arc::new(AppState {
+            repos: vec![initial_repo.clone()],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let switched_page = Arc::new(log_page(vec![commit("main-tip", &[], "main tip")], None));
+        let mut switched_repo = initial_repo;
+        switched_repo.history_state.history_scope = LogScope::CurrentBranch;
+        switched_repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "main-tip")]));
+        switched_repo.branches_rev = 2;
+        switched_repo.log = Loadable::Ready(Arc::clone(&switched_page));
+        switched_repo.log_rev = 2;
+        switched_repo.history_state.log = Loadable::Ready(Arc::clone(&switched_page));
+        switched_repo.history_state.log_rev = 2;
+
+        let switched_state = Arc::new(AppState {
+            repos: vec![switched_repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        let apply_state = |cx: &mut gpui::VisualTestContext, state: Arc<AppState>| {
+            cx.update(|window, app| {
+                let ui_model = view.read(app)._ui_model.clone();
+                ui_model.update(app, |model, cx| {
+                    model.set_state(Arc::clone(&state), cx);
+                });
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+            cx.update(|window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                history_view.update(app, |history, cx| history.ensure_history_cache(cx));
+                window.refresh();
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        };
+
+        apply_state(cx, initial_state);
+
+        wait_until(cx, "history rows with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some() && cx.debug_bounds("history_row_1").is_some()
+        });
+
+        let refs_column_point = |cx: &mut gpui::VisualTestContext| {
+            let row = cx
+                .debug_bounds("history_row_0")
+                .expect("history row should be rendered");
+            point(row.left() + px(24.0), row.center().y)
+        };
+        let hover_point = refs_column_point(cx);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let feature_center = cx
+            .debug_bounds("history_refs_hover_item_local_branch_feature")
+            .expect("expected feature ref item in debug bounds")
+            .center();
+        cx.simulate_mouse_move(feature_center, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(
+            feature_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            feature_center,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string()
+                })
+            );
+        });
+
+        apply_state(cx, switched_state);
+
+        wait_until(cx, "switched history row", |cx| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_cache.as_ref().is_some_and(|cache| {
+                    cache.base.request.history_scope == LogScope::CurrentBranch
+                        && cache.base.row_vms.len() == 1
+                        && cache.base.row_vms[0].summary.as_ref() == "main tip"
+                })
+            })
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when the history page changes without a mouse move"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                None,
+                "history refs item menu should close when the history page changes"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn history_refs_hover_closes_when_history_scrolls_programmatically(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let selected_commit = CommitId("c50".into());
+        let commits = (0..80)
+            .map(|ix| {
+                let id = format!("c{ix:02}");
+                commit(&id, &[], &format!("commit {ix:02}"))
+            })
+            .collect::<Vec<_>>();
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-programmatic-scroll"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.history_state.selected_commit = Some(selected_commit.clone());
+        repo.history_state.commit_details =
+            Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                id: selected_commit.clone(),
+                message: "commit 50".into(),
+                committed_at: "2026-05-26 12:00:00 +0300".into(),
+                parent_ids: vec![],
+                files: vec![],
+            }));
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let hover_point = point(row.left() + px(24.0), row.center().y);
+        cx.simulate_mouse_move(hover_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_some());
+        cx.update(|_window, app| {
+            assert!(crate::view::test_support::history_refs_hover_is_open(
+                view.read(app),
+                app
+            ));
+        });
+
+        let scroll_y = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_window, app| {
+                let main_pane = view.read(app).main_pane.clone();
+                let history_view = main_pane.read(app).history_view.clone();
+                let history = history_view.read(app);
+                history.history_scroll.0.borrow().base_handle.offset().y
+            })
+        };
+        let before_scroll_y = scroll_y(cx);
+
+        cx.update(|window, app| {
+            let main_pane = view.read(app).main_pane.clone();
+            let history_view = main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                history.request_reveal_commit(repo_id, selected_commit.clone(), None, cx);
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        wait_until(cx, "history list to scroll programmatically", |cx| {
+            scroll_y(cx) != before_scroll_y
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover should close when history scrolls programmatically"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
     }
 
     #[gpui::test]

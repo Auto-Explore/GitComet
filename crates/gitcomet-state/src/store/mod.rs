@@ -60,6 +60,7 @@ fn is_control_msg(msg: &Msg) -> bool {
         msg,
         Msg::OpenRepo(_)
             | Msg::CloseRepo { .. }
+            | Msg::CloseRepos { .. }
             | Msg::SetActiveRepo { .. }
             | Msg::ReorderRepoTabs { .. }
     )
@@ -398,6 +399,19 @@ impl AppStore {
                             token.cancellation.cancel();
                         }
                     }
+                    Msg::CloseRepos { repo_ids, .. } => {
+                        for repo_id in repo_ids {
+                            repo_monitors.stop(*repo_id);
+                            if let Some(token) = repo_task_tokens.remove(repo_id) {
+                                repo_load_trace::trace!(
+                                    "close_repos cancelling_repo_load_token repo_id={:?} load_epoch={}",
+                                    repo_id,
+                                    token.load_epoch
+                                );
+                                token.cancellation.cancel();
+                            }
+                        }
+                    }
                     Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
                         repo_id,
                         load_epoch,
@@ -493,7 +507,13 @@ impl AppStore {
                                 thread_state.write().unwrap_or_else(|e| e.into_inner());
                             let app_state = make_mut_state_with_diagnostics(&mut app_state);
                             let reduce_started = Instant::now();
-                            fill_select_diff_inline(app_state, repo_id, target, &mut effects);
+                            fill_select_diff_inline(
+                                app_state,
+                                repo_id,
+                                target,
+                                false,
+                                &mut effects,
+                            );
                             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
                         };
@@ -855,7 +875,7 @@ pub(crate) fn with_select_diff_inline_for_bench<T>(
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
     let mut effects = reducer::SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, &mut effects);
+    fill_select_diff_inline(state, repo_id, target, false, &mut effects);
     f(state, &effects)
 }
 

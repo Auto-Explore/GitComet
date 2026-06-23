@@ -46,6 +46,62 @@ fn wait_until(description: &str, ready: impl Fn() -> bool) {
     }
 }
 
+fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+}
+
+fn install_repo_tab_test_state(
+    store: &AppStore,
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    active_repo: RepoId,
+) {
+    install_repo_tab_test_state_with_count(store, view, cx, active_repo, 3);
+}
+
+fn install_repo_tab_test_state_with_count(
+    store: &AppStore,
+    view: &gpui::Entity<GitCometView>,
+    cx: &mut gpui::VisualTestContext,
+    active_repo: RepoId,
+    repo_count: u64,
+) {
+    let mut state = AppState {
+        active_repo: Some(active_repo),
+        ..AppState::default()
+    };
+    for ix in 1..=repo_count {
+        state.repos.push(RepoState::new_opening(
+            RepoId(ix),
+            RepoSpec {
+                workdir: PathBuf::from(format!("/tmp/repo-tab-menu-{ix}")),
+            },
+        ));
+    }
+    store.replace_snapshot_for_test(Arc::new(state));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+}
+
+fn open_repo_tab_context_menu(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    test_support::redraw(cx);
+}
+
 fn available_git_runtime_state() -> GitRuntimeState {
     GitRuntimeState {
         preference: GitExecutablePreference::SystemPath,
@@ -2376,6 +2432,185 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     wait_until("loading repo tab to close", || {
         store_for_assert.snapshot().repos.is_empty()
     });
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_repo_tab_context_menu(cx, "repo_tab_2");
+
+    assert_eq!(store.snapshot().active_repo, Some(RepoId(1)));
+    cx.debug_bounds("context_menu_active")
+        .expect("expected Active menu item");
+    cx.debug_bounds("context_menu_close")
+        .expect("expected Close menu item");
+    cx.debug_bounds("context_menu_close_repositories_to_the_right")
+        .expect("expected Close repositories to the right menu item");
+    cx.debug_bounds("context_menu_close_other_repositories")
+        .expect("expected Close other repositories menu item");
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_active_activates_selected_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_repo_tab_context_menu(cx, "repo_tab_2");
+    click_debug_selector(cx, "context_menu_active");
+
+    wait_until("repo tab menu active action", || {
+        store.snapshot().active_repo == Some(RepoId(2))
+    });
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_close_closes_selected_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_repo_tab_context_menu(cx, "repo_tab_2");
+    click_debug_selector(cx, "context_menu_close");
+
+    wait_until("repo tab menu close action", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect::<Vec<_>>()
+            == vec![RepoId(1), RepoId(3)]
+    });
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_close_to_right_closes_right_repos(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(3));
+    open_repo_tab_context_menu(cx, "repo_tab_2");
+    click_debug_selector(cx, "context_menu_close_repositories_to_the_right");
+
+    wait_until("repo tab menu close right action", || {
+        let snapshot = store.snapshot();
+        snapshot
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect::<Vec<_>>()
+            == vec![RepoId(1), RepoId(2)]
+            && snapshot.active_repo == Some(RepoId(2))
+    });
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_close_other_repos_keeps_selected_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    open_repo_tab_context_menu(cx, "repo_tab_2");
+    click_debug_selector(cx, "context_menu_close_other_repositories");
+
+    wait_until("repo tab menu close other action", || {
+        let snapshot = store.snapshot();
+        snapshot
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect::<Vec<_>>()
+            == vec![RepoId(2)]
+            && snapshot.active_repo == Some(RepoId(2))
+    });
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_active_is_disabled_for_active_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(2));
+    open_repo_tab_context_menu(cx, "repo_tab_2");
+    click_debug_selector(cx, "context_menu_active");
+
+    assert_eq!(store.snapshot().active_repo, Some(RepoId(2)));
+    cx.debug_bounds("context_menu_active")
+        .expect("expected disabled Active item to leave the menu open");
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_close_right_is_disabled_for_last_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state(&store, &view, cx, RepoId(2));
+    open_repo_tab_context_menu(cx, "repo_tab_3");
+    click_debug_selector(cx, "context_menu_close_repositories_to_the_right");
+
+    let snapshot = store.snapshot();
+    assert_eq!(
+        snapshot
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect::<Vec<_>>(),
+        vec![RepoId(1), RepoId(2), RepoId(3)]
+    );
+    assert_eq!(snapshot.active_repo, Some(RepoId(2)));
+    cx.debug_bounds("context_menu_close_repositories_to_the_right")
+        .expect("expected disabled close-right item to leave the menu open");
+}
+
+#[gpui::test]
+fn repo_tab_context_menu_close_others_is_disabled_for_single_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_repo_tab_test_state_with_count(&store, &view, cx, RepoId(1), 1);
+    open_repo_tab_context_menu(cx, "repo_tab_1");
+    click_debug_selector(cx, "context_menu_close_other_repositories");
+
+    let snapshot = store.snapshot();
+    assert_eq!(
+        snapshot
+            .repos
+            .iter()
+            .map(|repo| repo.id)
+            .collect::<Vec<_>>(),
+        vec![RepoId(1)]
+    );
+    assert_eq!(snapshot.active_repo, Some(RepoId(1)));
+    cx.debug_bounds("context_menu_close_other_repositories")
+        .expect("expected disabled close-others item to leave the menu open");
 }
 
 #[test]

@@ -70,15 +70,26 @@ impl Render for MainPaneView {
             v.set_history_content_width(history_content_width);
         });
 
+        // Purple frame only when the content pane shows a file's content at a
+        // historical browse point — not when it shows a normal (staged/unstaged/
+        // commit) diff, even while a browse point is active.
+        let historical_content = self
+            .active_repo()
+            .is_some_and(|r| r.browsing_commit().is_some() && r.diff_state.content_preview);
+        let purple = crate::theme::historical_outline(self.theme.is_dark);
         let show_diff = self
             .active_repo()
             .and_then(|r| r.diff_state.diff_target.as_ref())
             .is_some();
-        if show_diff {
-            div().size_full().child(self.diff_view(window, cx))
+        let inner = if show_diff {
+            self.diff_view(window, cx).into_any_element()
         } else {
-            div().size_full().child(self.history_view.clone())
-        }
+            self.history_view.clone().into_any_element()
+        };
+        div()
+            .size_full()
+            .when(historical_content, |d| d.border_2().border_color(purple))
+            .child(inner)
     }
 }
 

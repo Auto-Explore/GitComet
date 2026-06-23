@@ -345,6 +345,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadFileBrowser { repo_id, source } => {
+            send(Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                repo_id,
+                source,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::CheckSubmoduleAddTrust {
             repo_id,
             url,
@@ -1474,6 +1481,20 @@ pub(super) fn schedule_effect(
                     repos,
                     msg_tx,
                     repo_id,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadFileBrowser { repo_id, source } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_file_browser(
+                    repo_load_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    source,
                     cancellation,
                 );
             }

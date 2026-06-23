@@ -774,6 +774,20 @@ fn cached_provider_ranges(cache: &ProviderHighlightCache) -> Vec<Range<usize>> {
         .collect()
 }
 
+fn text_input_test_position(input: &TextInput) -> Point<Pixels> {
+    let bounds = input.layout.bounds.expect("expected text input bounds");
+    let line_height = if input.layout.line_height.is_zero() {
+        px(16.0)
+    } else {
+        input.layout.line_height
+    };
+    point(bounds.left() + px(2.0), bounds.top() + line_height / 2.0)
+}
+
+fn text_input_hotspot_ranges() -> Vec<Range<usize>> {
+    vec![0..7]
+}
+
 #[gpui::test]
 fn truncated_read_only_select_all_returns_full_source_text(cx: &mut gpui::TestAppContext) {
     let text = "0123456789abcdef0123456789abcdef";
@@ -799,6 +813,199 @@ fn truncated_read_only_select_all_returns_full_source_text(cx: &mut gpui::TestAp
 
             assert_eq!(input.selected_text(), Some(text.to_string()));
         });
+    });
+}
+
+#[gpui::test]
+fn hotspot_hit_test_finds_range_at_pointer_position(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                read_only: true,
+                chromeless: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("deadbee target", cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let position = cx.update(|_window, app| text_input_test_position(input.read(app)));
+    cx.update(|_window, app| {
+        let hotspot = input
+            .read(app)
+            .hotspot_range_index_at_position(position, &text_input_hotspot_ranges());
+        assert_eq!(hotspot, Some(0));
+    });
+}
+
+#[gpui::test]
+fn hotspot_hit_test_includes_right_side_of_final_glyph(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                read_only: true,
+                chromeless: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("deadbee target", cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let position = cx.update(|_window, app| {
+        let input = input.read(app);
+        let bounds = input.layout.bounds.expect("expected text input bounds");
+        let line_height = if input.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            input.layout.line_height
+        };
+        let TextInputLayout::Plain(lines) = input
+            .layout
+            .last
+            .as_ref()
+            .expect("expected text input layout")
+        else {
+            panic!("expected plain text input layout");
+        };
+        let line = lines.first().expect("expected first shaped line");
+        let final_glyph_left = line.x_for_index(6);
+        let final_glyph_right = line.x_for_index(7);
+        let final_glyph_width = final_glyph_right - final_glyph_left;
+        let position = point(
+            bounds.left() + final_glyph_left + (final_glyph_width * 3.0) / 4.0,
+            bounds.top() + line_height / 2.0,
+        );
+        position
+    });
+    cx.update(|_window, app| {
+        let hotspot = input
+            .read(app)
+            .hotspot_range_index_at_position(position, &text_input_hotspot_ranges());
+        assert_eq!(hotspot, Some(0));
+    });
+}
+
+#[gpui::test]
+fn hotspot_hit_test_returns_none_outside_bounds(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                read_only: true,
+                chromeless: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("deadbee target", cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let outside = cx.update(|_window, app| {
+        let input = input.read(app);
+        let bounds = input.layout.bounds.expect("expected text input bounds");
+        point(bounds.left() + px(2.0), bounds.top() - px(2.0))
+    });
+    cx.update(|_window, app| {
+        let hotspot = input
+            .read(app)
+            .hotspot_range_index_at_position(outside, &text_input_hotspot_ranges());
+        assert_eq!(hotspot, None);
+    });
+}
+
+#[gpui::test]
+fn hotspot_hit_test_ignores_trailing_blank_space_after_link(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                read_only: true,
+                chromeless: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("deadbee", cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let position = cx.update(|_window, app| {
+        let input = input.read(app);
+        let bounds = input.layout.bounds.expect("expected text input bounds");
+        let line_height = if input.layout.line_height.is_zero() {
+            px(16.0)
+        } else {
+            input.layout.line_height
+        };
+        let position = point(bounds.right() - px(2.0), bounds.top() + line_height / 2.0);
+        assert!(bounds.contains(&position));
+        assert_eq!(input.offset_for_position(position), 7);
+        position
+    });
+    cx.update(|_window, app| {
+        let hotspot = input
+            .read(app)
+            .hotspot_range_index_at_position(position, &text_input_hotspot_ranges());
+        assert_eq!(hotspot, None);
+    });
+}
+
+#[gpui::test]
+fn hotspot_bounds_match_range_extent(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                read_only: true,
+                chromeless: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("deadbee target", cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let bounds = input
+            .hotspot_bounds(&(0..7))
+            .expect("expected hotspot bounds");
+        assert!(bounds.size.width > px(0.0));
+        assert!(bounds.size.height > px(0.0));
+        assert!(bounds.contains(&text_input_test_position(&input)));
     });
 }
 

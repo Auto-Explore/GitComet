@@ -49,6 +49,13 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                 view_fingerprint::hash_loadable_kind(&repo.open, &mut hasher);
             }
         }
+        PopoverKind::RepoTabMenu { .. } => {
+            state.active_repo.hash(&mut hasher);
+            state.repos.len().hash(&mut hasher);
+            for repo in &state.repos {
+                repo.id.hash(&mut hasher);
+            }
+        }
         PopoverKind::DiffContentModeSettings
         | PopoverKind::DiffActionMenu
         | PopoverKind::ChangeTrackingSettings
@@ -140,6 +147,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
+        | PopoverKind::RepoTabMenu { repo_id }
         | PopoverKind::CreateTagPrompt { repo_id, .. }
         | PopoverKind::Repo { repo_id, .. }
         | PopoverKind::FileHistory { repo_id, .. }
@@ -160,9 +168,12 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
+        | PopoverKind::FileBrowserFileMenu { repo_id, .. }
+        | PopoverKind::BrowseHistoryMenu { repo_id }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
         | PopoverKind::TerminalMenu { repo_id, .. }
+        | PopoverKind::TagRefMenu { repo_id, .. }
         | PopoverKind::HistoryBranchFilter { repo_id } => Some(*repo_id),
     }?;
 
@@ -264,6 +275,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.recent_commit_messages_rev.hash(hasher);
         }
 
+        PopoverKind::RepoTabMenu { .. } => {
+            repo.id.hash(hasher);
+        }
+
         PopoverKind::CommitOptionsMenu { .. } => {
             repo.log_rev.hash(hasher);
             repo.ops_rev.hash(hasher);
@@ -272,7 +287,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
         }
 
-        PopoverKind::TagMenu { .. } => {
+        PopoverKind::TagMenu { .. } | PopoverKind::TagRefMenu { .. } => {
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
             repo.remote_tags_rev.hash(hasher);
@@ -287,6 +302,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
+        | PopoverKind::FileBrowserFileMenu { .. }
+        | PopoverKind::BrowseHistoryMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::DiffContentModeSettings
@@ -371,6 +388,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::PreviousCommitMessagesMenu { repo_id } => {
             71u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::RepoTabMenu { repo_id } => {
+            72u8.hash(hasher);
             repo_id.hash(hasher);
         }
 
@@ -541,6 +562,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             commit_id.hash(hasher);
             path.hash(hasher);
         }
+        PopoverKind::FileBrowserFileMenu { repo_id, path } => {
+            62u8.hash(hasher);
+            repo_id.hash(hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::BrowseHistoryMenu { repo_id } => {
+            63u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
         PopoverKind::SubmoduleInnerDiffMenu {
             repo_id,
             submodule_repo_path,
@@ -555,6 +585,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             47u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
+        }
+        PopoverKind::TagRefMenu {
+            repo_id,
+            commit_id,
+            name,
+        } => {
+            72u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+            name.hash(hasher);
         }
         PopoverKind::HistoryBranchFilter { repo_id } => {
             48u8.hash(hasher);

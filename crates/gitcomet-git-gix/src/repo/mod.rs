@@ -2,9 +2,9 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry, Remote,
-    RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary,
-    Tag, UpstreamDivergence, Worktree,
+    FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry,
+    Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
+    SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -41,6 +41,7 @@ mod blame;
 mod conflict_stages;
 mod diff;
 mod discard;
+mod file_browser;
 mod git_ops;
 mod history;
 mod log;
@@ -773,6 +774,14 @@ impl GitRepository for GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<Vec<Submodule>> {
         self.list_submodules_cancellable_impl(cancellation)
+    }
+
+    fn list_tree_files(&self) -> Result<Vec<FileEntry>> {
+        self.list_tree_files_impl()
+    }
+
+    fn list_tree_files_at_commit(&self, commit_id: &CommitId) -> Result<Vec<FileEntry>> {
+        self.list_tree_files_at_commit_impl(commit_id)
     }
 
     fn submodule_diff_summary(&self, target: &DiffTarget) -> Result<SubmoduleDiffSummary> {

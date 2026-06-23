@@ -148,6 +148,53 @@ fn worker_command_prioritizes_close_repo_over_queued_open_error() {
 }
 
 #[test]
+fn worker_command_prioritizes_close_repos_over_queued_background_result() {
+    let repo_id = RepoId(7);
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+        crate::msg::InternalMsg::TagsLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        },
+    ))))
+    .expect("send background result");
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CloseRepos {
+        repo_ids: vec![repo_id],
+        activate_after: None,
+    })))
+    .expect("send close repos");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::CloseRepos {
+                    repo_ids,
+                    activate_after: None,
+                } if repo_ids == vec![repo_id]
+            ));
+        }
+        _ => panic!("expected close repos command first"),
+    }
+
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("deferred tags result");
+    match command {
+        StoreWorkerCommand::Msg(msg) => {
+            assert!(matches!(
+                *msg,
+                Msg::Internal(crate::msg::InternalMsg::TagsLoaded {
+                    repo_id: got,
+                    ..
+                }) if got == repo_id
+            ));
+        }
+        _ => panic!("expected deferred tags result"),
+    }
+}
+
+#[test]
 fn worker_command_prioritizes_tab_switch_over_queued_background_result() {
     let repo_id = RepoId(7);
     let (tx, rx) = std::sync::mpsc::channel();
@@ -1231,6 +1278,209 @@ fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
     );
     assert_eq!(state.repos.len(), 2);
     assert_eq!(state.active_repo, Some(RepoId(21)));
+}
+
+#[test]
+fn close_repos_ignores_unknown_ids_and_persists_once() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo3")),
+    );
+    let old_epoch = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == RepoId(1))
+        .expect("repo 1 exists")
+        .load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(999), RepoId(1), RepoId(1)],
+            activate_after: None,
+        },
+    );
+
+    assert!(has_cancel_repo_loads_effect(&effects, RepoId(1), old_epoch));
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![RepoId(2), RepoId(3)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(3)));
+}
+
+#[test]
+fn close_repos_selects_left_neighbor_when_active_repo_is_closed() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=3 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: RepoId(2) },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(2)],
+            activate_after: None,
+        },
+    );
+
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![RepoId(1), RepoId(3)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+}
+
+#[test]
+fn close_repos_uses_requested_active_repo_after_batch_close() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=3 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: RepoId(1) },
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(1), RepoId(3)],
+            activate_after: Some(RepoId(2)),
+        },
+    );
+
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        vec![RepoId(2)]
+    );
+    assert_eq!(state.active_repo, Some(RepoId(2)));
+}
+
+#[test]
+fn close_repos_noops_when_no_existing_repos_match() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=2 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    let original_repo_ids = state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>();
+    let original_active = state.active_repo;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(999)],
+            activate_after: Some(RepoId(1)),
+        },
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(
+        state.repos.iter().map(|repo| repo.id).collect::<Vec<_>>(),
+        original_repo_ids
+    );
+    assert_eq!(state.active_repo, original_active);
+}
+
+#[test]
+fn close_repos_closing_all_repos_clears_active_and_persists_once() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=2 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(1), RepoId(2)],
+            activate_after: Some(RepoId(1)),
+        },
+    );
+
+    assert!(state.repos.is_empty());
+    assert_eq!(state.active_repo, None);
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::PersistSession { .. }))
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -3525,6 +3775,401 @@ fn repo_action_finished_err_records_diagnostic() {
             .diagnostics
             .iter()
             .any(|d| d.message.contains("boom"))
+    );
+}
+
+#[test]
+fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale_in_flight() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS);
+    let old_epoch = state.repos[0].load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        state.repos[0].load_epoch > old_epoch,
+        "load_epoch should be bumped to invalidate stale load results"
+    );
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "a fresh status load should be dispatched even when a stale one was in-flight"
+    );
+    assert!(
+        has_cancel_repo_loads_effect(&effects, repo_id, old_epoch),
+        "the stale in-flight loads should be cancelled at the pre-bump epoch"
+    );
+}
+
+#[test]
+fn repo_action_finished_reissues_inflight_non_status_loads() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    // A primary refresh plus a branch refresh are in flight when the action completes. The epoch
+    // bump invalidates all of them, so they must be re-issued, not left stuck in `in_flight`.
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_STATUS);
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STAGED_STATUS);
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::HEAD_BRANCH);
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::BRANCHES);
+    state.repos[0].branches = Loadable::Loading;
+    let old_epoch = state.repos[0].load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(state.repos[0].load_epoch > old_epoch);
+    assert!(has_cancel_repo_loads_effect(&effects, repo_id, old_epoch));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadHeadBranch { repo_id: r } if *r == repo_id)),
+        "head branch should be re-loaded, not stranded in flight"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadBranches { repo_id: r } if *r == repo_id)),
+        "branch list should be re-loaded, not stranded in flight"
+    );
+    assert!(has_status_refresh_effects(&effects, repo_id));
+}
+
+#[test]
+fn repo_action_finished_reissues_inflight_sidebar_data_loads() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].open = Loadable::Ready(());
+
+    state.repos[0].set_sidebar_data_request(SidebarDataRequest {
+        worktrees: true,
+        submodules: true,
+        stashes: true,
+    });
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREES);
+    state.repos[0].worktrees = Loadable::Loading;
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::SUBMODULES);
+    state.repos[0].submodules = Loadable::Loading;
+
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::STASHES);
+    state.repos[0].stashes = Loadable::Loading;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        has_worktree_refresh_effect(&effects, repo_id),
+        "worktrees should be re-loaded after a repo action, not stranded in NotLoaded"
+    );
+    assert!(
+        has_submodule_load_effect(&effects, repo_id),
+        "submodules should be re-loaded after a repo action, not stranded in NotLoaded"
+    );
+    assert!(
+        has_stash_load_effect(&effects, repo_id),
+        "stashes should be re-loaded after a repo action, not stranded in NotLoaded"
+    );
+}
+
+#[test]
+fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    // The user has a blame and a commit-details view open and still loading.
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/main.rs"));
+    state.repos[0].history_state.blame = Loadable::Loading;
+    state.repos[0].history_state.selected_commit = Some(CommitId("abc123".into()));
+    state.repos[0].history_state.commit_details = Loadable::Loading;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        state.repos[0].history_state.blame.is_loading(),
+        "blame should be reset and re-loaded, not stranded on a spinner"
+    );
+    assert!(
+        state.repos[0].history_state.commit_details.is_loading(),
+        "commit details should be reset and re-loaded, not stranded on a spinner"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadBlame { repo_id: r, .. } if *r == repo_id)),
+        "a fresh blame load should be dispatched"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadCommitDetails { repo_id: r, .. } if *r == repo_id)),
+        "a fresh commit-details load should be dispatched"
+    );
+}
+
+#[test]
+fn repo_action_finished_reissues_selected_commit_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    // A historical commit's diff (a non-WorkingTree target) is open and loading. The old code only
+    // re-issued WorkingTree diffs, leaving this one stranded.
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: CommitId("abc123".into()),
+        path: Some(PathBuf::from("src/main.rs")),
+    });
+    state.repos[0].diff_state.diff = Loadable::Loading;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadDiff {
+                repo_id: r,
+                target: DiffTarget::Commit { .. }
+            } if *r == repo_id
+        )),
+        "a commit diff in flight should be re-loaded when its action completes"
+    );
+}
+
+#[test]
+fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_repo() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let background = RepoId(1);
+    let active = RepoId(2);
+    state.repos.push(RepoState::new_opening(
+        background,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/bg"),
+        },
+    ));
+    state.repos.push(RepoState::new_opening(
+        active,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/active"),
+        },
+    ));
+    state.active_repo = Some(active);
+
+    // The background repo had a branch load and a blame load in flight when its action completed.
+    state.repos[0]
+        .loads_in_flight
+        .request(RepoLoadsInFlight::BRANCHES);
+    state.repos[0].branches = Loadable::Loading;
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/main.rs"));
+    state.repos[0].history_state.blame = Loadable::Loading;
+    let old_epoch = state.repos[0].load_epoch;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: background,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    // The background repo's stale loads are still invalidated, so nothing is left stranded ...
+    assert!(state.repos[0].load_epoch > old_epoch);
+    assert!(has_cancel_repo_loads_effect(
+        &effects, background, old_epoch
+    ));
+    assert!(matches!(state.repos[0].branches, Loadable::NotLoaded));
+    assert!(matches!(
+        state.repos[0].history_state.blame,
+        Loadable::NotLoaded
+    ));
+    // ... but its view-specific data is not eagerly re-issued; it reloads when next activated.
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadBlame { repo_id: r, .. } if *r == background)),
+        "a non-active repo should not eagerly re-load blame"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadBranches { repo_id: r } if *r == background)),
+        "a non-active repo should not eagerly re-load its branch list"
+    );
+}
+
+#[test]
+fn stale_status_result_after_repo_action_finished_is_dropped() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo");
+    let repo_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo exists");
+    repo_state.set_status(Loadable::Loading);
+    assert!(
+        repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::WORKTREE_STATUS)
+    );
+    let old_epoch = repo_state.load_epoch;
+
+    // The action completes and bumps the epoch, invalidating the in-flight status load.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::StagePaths,
+            result: Ok(()),
+        }),
+    );
+
+    // The stale (pre-action) status result then arrives stamped with the old epoch.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
+            repo_id,
+            load_epoch: old_epoch,
+            message: Box::new(crate::msg::InternalMsg::StatusLoaded {
+                repo_id,
+                result: Ok(RepoStatus::default()),
+            }),
+        }),
+    );
+
+    let repo_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("repo exists");
+    // It is dropped by the epoch gate: no effects, and it does not clobber the reset status ...
+    assert!(effects.is_empty());
+    assert!(matches!(repo_state.status, Loadable::NotLoaded));
+    assert_ne!(repo_state.load_epoch, old_epoch);
+    // ... while the fresh post-action status load is live (its flag belongs to the new epoch).
+    assert!(
+        repo_state
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS)
     );
 }
 

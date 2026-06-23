@@ -231,11 +231,14 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
     let file_rel = std::path::PathBuf::from("fixtures/shared_conflict_arcs.html");
     let abs_path = workdir.join(&file_rel);
 
-    let base_text: Arc<str> = "<p>base</p>\n".into();
-    let ours_text: Arc<str> = "<p>ours</p>\n".into();
-    let theirs_text: Arc<str> = "<p>theirs</p>\n".into();
+    // `SharedString` is backed by `SmolStr`, which stores strings up to 23 bytes
+    // inline (copied, not `Arc`-shared). Each fixture must exceed that inline
+    // capacity so the zero-copy `Arc` path is actually exercised below.
+    let base_text: Arc<str> = "<p>base content paragraph</p>\n".into();
+    let ours_text: Arc<str> = "<p>ours content paragraph</p>\n".into();
+    let theirs_text: Arc<str> = "<p>theirs content paragraph</p>\n".into();
     let current_text: Arc<str> =
-        "<<<<<<< ours\n<p>ours</p>\n=======\n<p>theirs</p>\n>>>>>>> theirs\n".into();
+        "<<<<<<< ours\n<p>ours content paragraph</p>\n=======\n<p>theirs content paragraph</p>\n>>>>>>> theirs\n".into();
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("shared conflict fixture parent"))

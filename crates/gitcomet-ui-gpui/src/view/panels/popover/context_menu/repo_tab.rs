@@ -1,0 +1,252 @@
+use super::*;
+
+pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
+    model_for_state(host.state.as_ref(), repo_id)
+}
+
+fn model_for_state(state: &AppState, repo_id: RepoId) -> ContextMenuModel {
+    let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
+        return ContextMenuModel::new(Vec::new());
+    };
+
+    let close_to_right: Vec<RepoId> = state
+        .repos
+        .iter()
+        .skip(repo_ix + 1)
+        .map(|repo| repo.id)
+        .collect();
+    let close_others: Vec<RepoId> = state
+        .repos
+        .iter()
+        .filter_map(|repo| (repo.id != repo_id).then_some(repo.id))
+        .collect();
+    let activate_after_close_to_right = state
+        .active_repo
+        .filter(|active_repo| close_to_right.contains(active_repo))
+        .map(|_| repo_id);
+
+    ContextMenuModel::new(vec![
+        ContextMenuItem::Entry {
+            label: "Active".into(),
+            icon: Some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: state.active_repo == Some(repo_id),
+            action: Box::new(ContextMenuAction::ActivateRepo { repo_id }),
+        },
+        ContextMenuItem::Separator,
+        ContextMenuItem::Entry {
+            label: "Close".into(),
+            icon: Some("icons/repo_tab_close.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CloseRepo { repo_id }),
+        },
+        ContextMenuItem::Entry {
+            label: "Close repositories to the right".into(),
+            icon: Some("icons/arrow_right.svg".into()),
+            shortcut: None,
+            disabled: close_to_right.is_empty(),
+            action: Box::new(ContextMenuAction::CloseRepos {
+                repo_ids: close_to_right,
+                activate_after: activate_after_close_to_right,
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: "Close other repositories".into(),
+            icon: Some("icons/swap.svg".into()),
+            shortcut: None,
+            disabled: close_others.is_empty(),
+            action: Box::new(ContextMenuAction::CloseRepos {
+                repo_ids: close_others,
+                activate_after: Some(repo_id),
+            }),
+        },
+    ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::RepoSpec;
+    use gitcomet_state::model::RepoState;
+    use std::path::PathBuf;
+
+    fn state_with_repo_tabs(active_repo: RepoId, repo_count: u64) -> AppState {
+        let mut state = AppState {
+            active_repo: Some(active_repo),
+            ..AppState::default()
+        };
+        for ix in 1..=repo_count {
+            state.repos.push(RepoState::new_opening(
+                RepoId(ix),
+                RepoSpec {
+                    workdir: PathBuf::from(format!("/tmp/repo-tab-menu-{ix}")),
+                },
+            ));
+        }
+        state
+    }
+
+    fn entry_with_label<'a>(model: &'a ContextMenuModel, expected: &str) -> &'a ContextMenuItem {
+        model
+            .items
+            .iter()
+            .find(|item| {
+                matches!(
+                    item,
+                    ContextMenuItem::Entry { label, .. } if label.as_ref() == expected
+                )
+            })
+            .unwrap_or_else(|| panic!("expected {expected} menu item"))
+    }
+
+    fn entry_action<'a>(
+        model: &'a ContextMenuModel,
+        expected: &str,
+    ) -> (bool, &'a ContextMenuAction) {
+        let ContextMenuItem::Entry {
+            disabled, action, ..
+        } = entry_with_label(model, expected)
+        else {
+            panic!("expected {expected} menu item to be an entry");
+        };
+        (*disabled, action.as_ref())
+    }
+
+    #[test]
+    fn active_entry_activates_inactive_repo_tab() {
+        let state = state_with_repo_tabs(RepoId(1), 3);
+        let model = model_for_state(&state, RepoId(2));
+
+        let (disabled, action) = entry_action(&model, "Active");
+
+        assert!(!disabled);
+        assert!(matches!(
+            action,
+            ContextMenuAction::ActivateRepo { repo_id } if *repo_id == RepoId(2)
+        ));
+    }
+
+    #[test]
+    fn active_entry_is_disabled_for_active_repo_tab() {
+        let state = state_with_repo_tabs(RepoId(2), 3);
+        let model = model_for_state(&state, RepoId(2));
+
+        let (disabled, action) = entry_action(&model, "Active");
+
+        assert!(disabled);
+        assert!(matches!(
+            action,
+            ContextMenuAction::ActivateRepo { repo_id } if *repo_id == RepoId(2)
+        ));
+    }
+
+    #[test]
+    fn close_repo_entry_uses_repo_tab_close_icon() {
+        let state = state_with_repo_tabs(RepoId(1), 3);
+        let model = model_for_state(&state, RepoId(2));
+
+        let ContextMenuItem::Entry {
+            icon,
+            disabled,
+            action,
+            ..
+        } = entry_with_label(&model, "Close")
+        else {
+            panic!("expected Close menu item to be an entry");
+        };
+
+        assert_eq!(
+            icon.as_ref().map(|icon| icon.as_ref()),
+            Some("icons/repo_tab_close.svg")
+        );
+        assert!(!disabled);
+        assert!(matches!(
+            action.as_ref(),
+            ContextMenuAction::CloseRepo { repo_id } if *repo_id == RepoId(2)
+        ));
+    }
+
+    #[test]
+    fn close_right_entry_targets_only_repos_to_the_right() {
+        let state = state_with_repo_tabs(RepoId(3), 3);
+        let model = model_for_state(&state, RepoId(2));
+
+        let (disabled, action) = entry_action(&model, "Close repositories to the right");
+
+        assert!(!disabled);
+        let ContextMenuAction::CloseRepos {
+            repo_ids,
+            activate_after,
+        } = action
+        else {
+            panic!("expected Close repositories to the right to close multiple repos");
+        };
+        assert_eq!(repo_ids, &vec![RepoId(3)]);
+        assert_eq!(*activate_after, Some(RepoId(2)));
+    }
+
+    #[test]
+    fn close_right_entry_is_disabled_for_last_repo_tab() {
+        let state = state_with_repo_tabs(RepoId(2), 3);
+        let model = model_for_state(&state, RepoId(3));
+
+        let (disabled, action) = entry_action(&model, "Close repositories to the right");
+
+        assert!(disabled);
+        let ContextMenuAction::CloseRepos {
+            repo_ids,
+            activate_after,
+        } = action
+        else {
+            panic!("expected Close repositories to the right to close multiple repos");
+        };
+        assert!(repo_ids.is_empty());
+        assert_eq!(*activate_after, None);
+    }
+
+    #[test]
+    fn close_other_repositories_entry_targets_every_repo_except_selected() {
+        let state = state_with_repo_tabs(RepoId(1), 3);
+        let model = model_for_state(&state, RepoId(2));
+
+        let (disabled, action) = entry_action(&model, "Close other repositories");
+
+        assert!(!disabled);
+        let ContextMenuAction::CloseRepos {
+            repo_ids,
+            activate_after,
+        } = action
+        else {
+            panic!("expected Close other repositories to close multiple repos");
+        };
+        assert_eq!(repo_ids, &vec![RepoId(1), RepoId(3)]);
+        assert_eq!(*activate_after, Some(RepoId(2)));
+    }
+
+    #[test]
+    fn close_other_repositories_entry_is_disabled_for_single_repo_tab() {
+        let state = state_with_repo_tabs(RepoId(1), 1);
+        let model = model_for_state(&state, RepoId(1));
+
+        let (disabled, action) = entry_action(&model, "Close other repositories");
+
+        assert!(disabled);
+        let ContextMenuAction::CloseRepos {
+            repo_ids,
+            activate_after,
+        } = action
+        else {
+            panic!("expected Close other repositories to close multiple repos");
+        };
+        assert!(repo_ids.is_empty());
+        assert_eq!(*activate_after, Some(RepoId(1)));
+    }
+
+    #[test]
+    fn missing_repo_tab_returns_empty_menu_model() {
+        let state = state_with_repo_tabs(RepoId(1), 3);
+
+        assert!(model_for_state(&state, RepoId(99)).items.is_empty());
+    }
+}

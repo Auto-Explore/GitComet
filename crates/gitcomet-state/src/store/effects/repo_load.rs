@@ -925,6 +925,54 @@ pub(super) fn schedule_load_submodules(
     );
 }
 
+pub(super) fn schedule_load_file_browser(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    source: gitcomet_core::domain::FileSource,
+    _cancellation: CancellationToken,
+) {
+    let source_for_err = source.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = match &source {
+                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_tree_files(),
+                gitcomet_core::domain::FileSource::Commit(commit_id) => {
+                    repo.list_tree_files_at_commit(commit_id)
+                }
+                gitcomet_core::domain::FileSource::Branch(_name) => {
+                    Err(Error::new(gitcomet_core::error::ErrorKind::Backend(
+                        "branch file listing is not yet implemented".to_string(),
+                    )))
+                }
+            };
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    repo_id,
+                    source,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+                    repo_id,
+                    source: source_for_err,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_rebase_state(
     executor: &TaskExecutor,
     repos: &RepoMap,

@@ -10,7 +10,7 @@ use gitcomet_core::services::{
     BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -22,6 +22,13 @@ pub struct SidebarDataRequest {
     pub worktrees: bool,
     pub submodules: bool,
     pub stashes: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SidebarMode {
+    #[default]
+    Branches,
+    Files,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -276,6 +283,37 @@ pub enum ConflictFileLoadMode {
     Full,
 }
 
+// ── File browser ────────────────────────────────────────────────
+
+#[derive(Clone, Debug)]
+pub struct FileBrowserState {
+    pub source: FileSource,
+    pub entries: Loadable<Arc<Vec<FileEntry>>>,
+    pub expanded_dirs: HashSet<Arc<PathBuf>>,
+    pub search_query: String,
+    pub file_browser_rev: u64,
+}
+
+impl Default for FileBrowserState {
+    fn default() -> Self {
+        Self {
+            source: FileSource::default(),
+            entries: Loadable::NotLoaded,
+            expanded_dirs: HashSet::new(),
+            search_query: String::new(),
+            file_browser_rev: 0,
+        }
+    }
+}
+
+impl FileBrowserState {
+    pub fn bump_rev(&mut self) {
+        self.file_browser_rev = self.file_browser_rev.wrapping_add(1);
+    }
+}
+
+// ── App state ───────────────────────────────────────────────────
+
 #[derive(Clone, Debug, Default)]
 pub struct AppState {
     pub repos: Vec<RepoState>,
@@ -287,6 +325,7 @@ pub struct AppState {
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
+    pub sidebar_mode: SidebarMode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -479,6 +518,10 @@ impl Default for HistoryState {
 #[derive(Clone, Debug)]
 pub struct DiffState {
     pub diff_target: Option<DiffTarget>,
+    /// When true, the selected `diff_target` is rendered as a full-content file
+    /// preview (the same renderer used for added/removed files — syntax
+    /// highlighted, no green/red) rather than a diff. Set by `OpenFileContent`.
+    pub content_preview: bool,
     pub diff_target_rev: u64,
     pub diff_state_rev: u64,
     pub diff_rev: u64,
@@ -498,6 +541,7 @@ impl Default for DiffState {
     fn default() -> Self {
         Self {
             diff_target: None,
+            content_preview: false,
             diff_target_rev: 0,
             diff_state_rev: 0,
             diff_rev: 0,
@@ -650,6 +694,11 @@ pub struct RepoState {
     pub sidebar_data_request: SidebarDataRequest,
     /// Invalidates cached branch-sidebar rows when any sidebar-relevant source changes.
     pub branch_sidebar_rev: u64,
+    pub file_browser: FileBrowserState,
+    /// Commits the user has browsed this session (file directory pinned to a
+    /// historical point). The current point is `file_browser.source`; this is the
+    /// stack the badge dropdown lists. Cleared by "Go live".
+    pub browse_history: Vec<CommitId>,
 
     pub diff_state: DiffState,
     pub conflict_state: ConflictState,
@@ -724,6 +773,8 @@ impl RepoState {
             submodule_add_in_flight: None,
             sidebar_data_request: SidebarDataRequest::default(),
             branch_sidebar_rev: 0,
+            file_browser: FileBrowserState::default(),
+            browse_history: Vec::new(),
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
             open_rev: 0,
@@ -968,6 +1019,15 @@ impl RepoState {
         }
     }
 
+    /// The commit the user is browsing when the file directory is pinned to a
+    /// historical point (`file_browser.source == Commit`); `None` on live state.
+    pub fn browsing_commit(&self) -> Option<&CommitId> {
+        match &self.file_browser.source {
+            FileSource::Commit(id) => Some(id),
+            _ => None,
+        }
+    }
+
     pub fn status_entry_for_path(
         &self,
         area: DiffArea,
@@ -1193,6 +1253,23 @@ impl<T> Loadable<T> {
 mod tests {
     use super::*;
     use std::time::SystemTime;
+
+    #[test]
+    fn browsing_commit_reflects_file_browser_source() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        assert_eq!(repo.browsing_commit(), None);
+
+        repo.file_browser.source = FileSource::Commit(CommitId("abc123".into()));
+        assert_eq!(repo.browsing_commit(), Some(&CommitId("abc123".into())));
+
+        repo.file_browser.source = FileSource::WorkingDirectory;
+        assert_eq!(repo.browsing_commit(), None);
+    }
 
     #[test]
     fn app_state_clone_shares_heavy_repo_fields_via_arc() {

@@ -23,7 +23,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.13"
+version = "0.1.15"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
@@ -45,19 +45,20 @@ clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 futures = "0.3.32"
-gix = { version = "0.83.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { package = "gpui-ce", git = "https://github.com/Havunen/gpui-ce.git", rev = "6d8a02e2e75b629b32ea0491f35fbc99e68b53a2" }
+gix = { version = "0.84.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "886dce6254a187f641fce007b069774115500dcb" }
+gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "886dce6254a187f641fce007b069774115500dcb" }
 http_client = { package = "http-client-gpui-unofficial", version = "1.2.7" }
 image = "0.25.10"
 libc = "0.2"
 lru = "0.18"
-memchr = "2.8.0"
+memchr = "2.8.2"
 mimalloc = "0.1.52"
 parking_lot = "0.12"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
-regex = "1.12.3"
+regex = "1.12.4"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 rustc-hash = "2.1.2"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
@@ -65,7 +66,7 @@ semver = "1.0.28"
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-smallvec = "1.15.1"
+smallvec = "1.15.2"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
@@ -104,13 +105,13 @@ tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24.2"
 tree-sitter-scala = "0.26.0"
 tree-sitter-sequel = "0.3.11"
-tree-sitter-swift = "0.7.2"
+tree-sitter-swift = "0.7.3"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
-unicode-segmentation = "1.13.2"
+unicode-segmentation = "1.13.3"
 url = "2.5.8"
 windows = "0.62.2"
 wayland-client = "0.31.14"

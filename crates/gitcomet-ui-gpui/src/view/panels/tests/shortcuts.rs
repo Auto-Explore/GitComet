@@ -1290,7 +1290,10 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&unstaged_status_model, &["H", "S", "D", "C"]);
+    assert_declared_shortcuts(
+        &unstaged_status_model,
+        &["Ctrl+H", "Ctrl+S", "Ctrl+D", "Ctrl+Shift+C"],
+    );
     assert_shortcut_action!(
         unstaged_status_model,
         "Enter",
@@ -1301,14 +1304,14 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "H",
+        "Ctrl+H",
         ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory { repo_id: rid, path }
         } if *rid == repo_id && path == &unstaged_path
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "S",
+        "Ctrl+S",
         ContextMenuAction::StageSelectionOrPath {
             repo_id: rid,
             area,
@@ -1317,7 +1320,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "D",
+        "Ctrl+D",
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1326,7 +1329,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "C",
+        "Ctrl+Shift+C",
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &unstaged_path)
     );
 
@@ -1341,7 +1344,10 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&staged_status_model, &["H", "U", "D", "C"]);
+    assert_declared_shortcuts(
+        &staged_status_model,
+        &["Ctrl+H", "Ctrl+U", "Ctrl+D", "Ctrl+Shift+C"],
+    );
     assert_shortcut_action!(
         staged_status_model,
         "Enter",
@@ -1352,14 +1358,14 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         staged_status_model,
-        "H",
+        "Ctrl+H",
         ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory { repo_id: rid, path }
         } if *rid == repo_id && path == &staged_path
     );
     assert_shortcut_action!(
         staged_status_model,
-        "U",
+        "Ctrl+U",
         ContextMenuAction::UnstageSelectionOrPath {
             repo_id: rid,
             area,
@@ -1368,7 +1374,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         staged_status_model,
-        "D",
+        "Ctrl+D",
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1377,7 +1383,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         staged_status_model,
-        "C",
+        "Ctrl+Shift+C",
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &staged_path)
     );
 
@@ -1392,7 +1398,17 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&conflicted_status_model, &["H", "O", "T", "M", "D", "C"]);
+    assert_declared_shortcuts(
+        &conflicted_status_model,
+        &[
+            "Ctrl+H",
+            "Ctrl+O",
+            "Ctrl+T",
+            "Ctrl+M",
+            "Ctrl+D",
+            "Ctrl+Shift+C",
+        ],
+    );
     assert_shortcut_action!(
         conflicted_status_model,
         "Enter",
@@ -1403,14 +1419,14 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "H",
+        "Ctrl+H",
         ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory { repo_id: rid, path }
         } if *rid == repo_id && path == &conflicted_path
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "O",
+        "Ctrl+O",
         ContextMenuAction::CheckoutConflictSideSelectionOrPath {
             repo_id: rid,
             area,
@@ -1423,7 +1439,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "T",
+        "Ctrl+T",
         ContextMenuAction::CheckoutConflictSideSelectionOrPath {
             repo_id: rid,
             area,
@@ -1436,7 +1452,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "M",
+        "Ctrl+M",
         ContextMenuAction::SelectConflictDiff {
             repo_id: rid,
             path
@@ -1444,7 +1460,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "D",
+        "Ctrl+D",
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1453,7 +1469,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "C",
+        "Ctrl+Shift+C",
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &conflicted_path)
     );
 
@@ -1537,10 +1553,10 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     let diff_hunk_unstaged_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 })
     });
-    assert_declared_shortcuts(&diff_hunk_unstaged_model, &["S", "D"]);
+    assert_declared_shortcuts(&diff_hunk_unstaged_model, &["Ctrl+S", "Ctrl+D"]);
     assert_shortcut_action!(
         diff_hunk_unstaged_model,
-        "S",
+        "Ctrl+S",
         ContextMenuAction::StageHunk {
             repo_id: rid,
             src_ix
@@ -1548,7 +1564,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         diff_hunk_unstaged_model,
-        "D",
+        "Ctrl+D",
         ContextMenuAction::ApplyWorktreePatch {
             repo_id: rid,
             patch,
@@ -4952,6 +4968,112 @@ fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn history_horizontal_wheel_does_not_scroll_vertically(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(709);
+    let commit_id = CommitId("8877665544332211".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_horizontal_wheel",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    let commits = (0..160)
+        .map(|ix| gitcomet_core::domain::Commit {
+            id: CommitId(format!("{ix:040x}").into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: format!("Commit {ix:03}").into(),
+            author: "Alice".into(),
+            time: std::time::SystemTime::UNIX_EPOCH
+                + Duration::from_secs(ix.try_into().unwrap_or(0)),
+        })
+        .collect();
+    repo.log = Loadable::Ready(
+        gitcomet_core::domain::LogPage {
+            commits,
+            next_cursor: None,
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+
+    let (history_bounds, max_offset_y) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app).history_view.read(app);
+        let handle = pane.history_scroll.0.borrow().base_handle.clone();
+        (handle.bounds(), handle.max_offset().y)
+    });
+    let position = history_bounds.center();
+    assert!(
+        max_offset_y > px(0.0),
+        "expected history list to be vertically scrollable"
+    );
+
+    let offset_before = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(-120.0), px(0.0))),
+        ..Default::default()
+    });
+    draw_and_drain_test_window(cx);
+    let offset_after_horizontal = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    assert_eq!(
+        offset_after_horizontal.y, offset_before.y,
+        "expected horizontal-only wheel scroll not to move history vertically"
+    );
+
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(point(px(0.0), px(-120.0))),
+        ..Default::default()
+    });
+    draw_and_drain_test_window(cx);
+    let offset_after_vertical = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .history_view
+            .read(app)
+            .history_scroll
+            .0
+            .borrow()
+            .base_handle
+            .offset()
+    });
+    assert!(
+        offset_after_vertical.y < offset_before.y - px(0.5),
+        "expected vertical wheel scroll to continue moving history vertically"
+    );
+}
+
+#[gpui::test]
 fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -5003,5 +5125,310 @@ fn ui_scale_ctrl_scroll_wheel_changes_zoom(cx: &mut gpui::TestAppContext) {
     assert_eq!(
         zoomed_back_out, 100,
         "expected Ctrl/Cmd + wheel down to step the UI zoom back to the previous preset"
+    );
+}
+
+#[gpui::test]
+fn ctrl_s_stages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70600);
+    let commit_id = CommitId("abcdef00112233bb".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_s_stage",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-s");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected Ctrl+S to stage the active file and advance the diff target"
+    );
+}
+
+#[gpui::test]
+fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70601);
+    let commit_id = CommitId("abcdef00112233cc".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_s_last_file",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-s");
+    draw_and_drain_test_window(cx);
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        None,
+        "expected Ctrl+S on the last unstaged file to stage it and clear the diff target"
+    );
+}
+
+#[gpui::test]
+fn ctrl_shift_c_copies_current_file_path(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70602);
+    let commit_id = CommitId("abcdef00112233dd".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_shift_c",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-shift-c");
+    draw_and_drain_test_window(cx);
+
+    let clipboard_text = cx.read_from_clipboard().and_then(|item| item.text());
+    assert!(
+        clipboard_text
+            .as_ref()
+            .is_some_and(|text| text.contains("src/lib.rs")),
+        "expected Ctrl+Shift+C to copy the current file path to clipboard, got: {clipboard_text:?}"
+    );
+}
+
+#[gpui::test]
+fn ctrl_d_opens_discard_confirm_popover(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70603);
+    let commit_id = CommitId("abcdef00112233ee".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_d_discard",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-d");
+    draw_and_drain_test_window(cx);
+
+    let is_discard_confirm = cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        matches!(
+            host.popover_kind_for_tests(),
+            Some(PopoverKind::DiscardChangesConfirm { .. })
+        )
+    });
+    assert!(
+        is_discard_confirm,
+        "expected Ctrl+D to open the DiscardChangesConfirm popover"
+    );
+}
+
+#[gpui::test]
+fn ctrl_h_opens_file_history_popover(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70604);
+    let commit_id = CommitId("abcdef00112233ff".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_h_history",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-h");
+    draw_and_drain_test_window(cx);
+
+    let is_file_history = cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        matches!(
+            host.popover_kind_for_tests(),
+            Some(PopoverKind::FileHistory { .. })
+        )
+    });
+    assert!(
+        is_file_history,
+        "expected Ctrl+H to open the FileHistory popover"
+    );
+}
+
+#[gpui::test]
+fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70605);
+    let commit_id = CommitId("abcdef00112233gg".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_no_diff_target",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/lib.rs");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: path.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            }],
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-s ctrl-d ctrl-h ctrl-shift-c");
+    draw_and_drain_test_window(cx);
+
+    let clipboard_text = cx.read_from_clipboard().and_then(|item| item.text());
+
+    assert!(
+        clipboard_text.is_none(),
+        "expected Ctrl+Shift+C to not copy anything without a diff target, got: {clipboard_text:?}"
+    );
+}
+
+#[gpui::test]
+fn ctrl_u_unstages_current_file_and_advances_diff(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70606);
+    let commit_id = CommitId("abcdef00112233hh".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_u_unstage",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            unstaged: vec![],
+            staged: vec![
+                gitcomet_core::domain::FileStatus {
+                    path: first.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Added,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: second.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Added,
+                    conflict: None,
+                },
+            ],
+        }
+        .into(),
+    );
+    let target = DiffTarget::WorkingTree {
+        path: first.clone(),
+        area: DiffArea::Staged,
+    };
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    repo.diff_state.diff_rev = 1;
+    repo.diff_state.diff_state_rev = repo.diff_state.diff_state_rev.wrapping_add(1);
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-u");
+    draw_and_drain_test_window(cx);
+    wait_until_store_diff_target_path(cx, &view, second.as_path());
+    sync_store_snapshot(cx, &view);
+
+    assert_eq!(
+        active_worktree_diff_target_path(cx, &view),
+        Some(second),
+        "expected Ctrl+U to unstage the active file and advance the diff target"
     );
 }

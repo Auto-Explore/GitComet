@@ -299,7 +299,26 @@ pub(super) struct HistoryBaseRowVm {
 pub(super) struct HistoryDecorationRowVm {
     pub(super) branches_text: HistoryTextVm,
     pub(super) tag_names: Arc<[HistoryTextVm]>,
+    pub(super) ref_items: Arc<[HistoryRefListItem]>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct HistoryRefListItem {
+    pub(in crate::view) text: HistoryTextVm,
+    pub(in crate::view) kind: HistoryRefListItemKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryRefListItemKind {
+    Tag { name: String },
+    LocalBranch { name: String },
+    RemoteBranch { name: String },
+    AttachedHead { branch: String },
+    DetachedHead,
+}
+
+type HistoryRefItems = Arc<[HistoryRefListItem]>;
+type HistoryRefItemsByTarget<'a> = HashMap<&'a str, HistoryRefItems>;
 
 #[inline]
 pub(in crate::view) fn history_commit_is_probable_stash_tip(commit: &Commit) -> bool {
@@ -519,6 +538,109 @@ fn sort_and_dedup_history_branch_names(names: &mut HistoryBranchNameBucket<'_>) 
     names.dedup_by(|left, right| cmp_history_branch_display(*left, *right) == Ordering::Equal);
 }
 
+fn cmp_history_branch_ref_item(
+    left: HistoryBranchNameRef<'_>,
+    right: HistoryBranchNameRef<'_>,
+) -> Ordering {
+    cmp_history_branch_display(left, right).then_with(|| match (left, right) {
+        (HistoryBranchNameRef::Plain(left), HistoryBranchNameRef::Plain(right)) => left.cmp(right),
+        (HistoryBranchNameRef::Plain(_), HistoryBranchNameRef::Remote { .. }) => Ordering::Less,
+        (HistoryBranchNameRef::Remote { .. }, HistoryBranchNameRef::Plain(_)) => Ordering::Greater,
+        (
+            HistoryBranchNameRef::Remote {
+                remote: left_remote,
+                name: left_name,
+            },
+            HistoryBranchNameRef::Remote {
+                remote: right_remote,
+                name: right_name,
+            },
+        ) => left_remote
+            .cmp(right_remote)
+            .then(left_name.cmp(right_name)),
+    })
+}
+
+fn sort_and_dedup_history_branch_ref_names(names: &mut HistoryBranchNameBucket<'_>) {
+    if names.len() < 2 {
+        return;
+    }
+    names.sort_unstable_by(|left, right| cmp_history_branch_ref_item(*left, *right));
+    names.dedup_by(|left, right| cmp_history_branch_ref_item(*left, *right) == Ordering::Equal);
+}
+
+fn build_history_branch_names_by_target<'a>(
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    head_branch: Option<&str>,
+    head_target: Option<&str>,
+) -> HashMap<&'a str, HistoryBranchNameBucket<'a>> {
+    build_history_branch_names_by_target_with_dedup(
+        branches,
+        remote_branches,
+        head_branch,
+        head_target,
+        sort_and_dedup_history_branch_names,
+    )
+}
+
+fn build_history_branch_ref_names_by_target<'a>(
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    head_branch: Option<&str>,
+    head_target: Option<&str>,
+) -> HashMap<&'a str, HistoryBranchNameBucket<'a>> {
+    build_history_branch_names_by_target_with_dedup(
+        branches,
+        remote_branches,
+        head_branch,
+        head_target,
+        sort_and_dedup_history_branch_ref_names,
+    )
+}
+
+fn build_history_branch_names_by_target_with_dedup<'a>(
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    head_branch: Option<&str>,
+    head_target: Option<&str>,
+    dedup: fn(&mut HistoryBranchNameBucket<'a>),
+) -> HashMap<&'a str, HistoryBranchNameBucket<'a>> {
+    let mut branch_names_by_target: HashMap<&str, HistoryBranchNameBucket<'_>> =
+        HashMap::with_capacity_and_hasher(
+            branches.len() + remote_branches.len(),
+            Default::default(),
+        );
+
+    for branch in branches.iter() {
+        let should_skip = head_branch.is_some_and(|head| head != "HEAD" && branch.name == head)
+            && head_target == Some(branch.target.as_ref());
+        if should_skip {
+            continue;
+        }
+        branch_names_by_target
+            .entry(branch.target.as_ref())
+            .or_default()
+            .push(HistoryBranchNameRef::Plain(branch.name.as_str()));
+    }
+
+    for branch in remote_branches.iter() {
+        branch_names_by_target
+            .entry(branch.target.as_ref())
+            .or_default()
+            .push(HistoryBranchNameRef::Remote {
+                remote: branch.remote.as_str(),
+                name: branch.name.as_str(),
+            });
+    }
+
+    for names in branch_names_by_target.values_mut() {
+        dedup(names);
+    }
+
+    branch_names_by_target
+}
+
 fn shared_history_branch_text(names: &[HistoryBranchNameRef<'_>]) -> SharedString {
     match names {
         [] => return SharedString::default(),
@@ -598,37 +720,8 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
     head_branch: Option<&str>,
     head_target: Option<&str>,
 ) -> (HashMap<&'a str, HistoryTextVm>, Option<HistoryTextVm>) {
-    let mut branch_names_by_target: HashMap<&str, HistoryBranchNameBucket<'_>> =
-        HashMap::with_capacity_and_hasher(
-            branches.len() + remote_branches.len(),
-            Default::default(),
-        );
-
-    for branch in branches.iter() {
-        let should_skip = head_branch.is_some_and(|head| head != "HEAD" && branch.name == head)
-            && head_target == Some(branch.target.as_ref());
-        if should_skip {
-            continue;
-        }
-        branch_names_by_target
-            .entry(branch.target.as_ref())
-            .or_default()
-            .push(HistoryBranchNameRef::Plain(branch.name.as_str()));
-    }
-
-    for branch in remote_branches.iter() {
-        branch_names_by_target
-            .entry(branch.target.as_ref())
-            .or_default()
-            .push(HistoryBranchNameRef::Remote {
-                remote: branch.remote.as_str(),
-                name: branch.name.as_str(),
-            });
-    }
-
-    for names in branch_names_by_target.values_mut() {
-        sort_and_dedup_history_branch_names(names);
-    }
+    let branch_names_by_target =
+        build_history_branch_names_by_target(branches, remote_branches, head_branch, head_target);
 
     let head_branches_text = history_head_branch_label(head_branch).map(|head_label| {
         let names = head_target
@@ -654,6 +747,113 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
         branch_text_by_target,
         head_branches_text.map(HistoryTextVm::new),
     )
+}
+
+fn history_branch_ref_item(name: HistoryBranchNameRef<'_>) -> HistoryRefListItem {
+    let text = name.to_shared_string();
+    let kind = match name {
+        HistoryBranchNameRef::Plain(name) => HistoryRefListItemKind::LocalBranch {
+            name: name.to_string(),
+        },
+        HistoryBranchNameRef::Remote { remote, name } => HistoryRefListItemKind::RemoteBranch {
+            name: format!("{remote}/{name}"),
+        },
+    };
+
+    HistoryRefListItem {
+        text: HistoryTextVm::new(text),
+        kind,
+    }
+}
+
+fn history_head_ref_item(head_branch: &str) -> HistoryRefListItem {
+    let text = history_head_branch_label(Some(head_branch)).unwrap_or_default();
+    let kind = if head_branch == "HEAD" {
+        HistoryRefListItemKind::DetachedHead
+    } else {
+        HistoryRefListItemKind::AttachedHead {
+            branch: head_branch.to_string(),
+        }
+    };
+
+    HistoryRefListItem {
+        text: HistoryTextVm::new(SharedString::from(text)),
+        kind,
+    }
+}
+
+fn history_branch_ref_items(names: &[HistoryBranchNameRef<'_>]) -> Arc<[HistoryRefListItem]> {
+    names
+        .iter()
+        .copied()
+        .map(history_branch_ref_item)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn history_branch_ref_items_with_extra_head(
+    names: &[HistoryBranchNameRef<'_>],
+    head_branch: &str,
+) -> Arc<[HistoryRefListItem]> {
+    if names.is_empty() {
+        return vec![history_head_ref_item(head_branch)].into();
+    }
+
+    let head_label = history_head_branch_label(Some(head_branch)).unwrap_or_default();
+    let extra = HistoryBranchNameRef::Plain(head_label.as_str());
+    let include_extra = names
+        .iter()
+        .copied()
+        .all(|name| cmp_history_branch_display(name, extra) != Ordering::Equal);
+    let mut out = Vec::with_capacity(names.len() + usize::from(include_extra));
+    let mut extra_pending = include_extra;
+
+    for name in names.iter().copied() {
+        if extra_pending && cmp_history_branch_display(extra, name) == Ordering::Less {
+            out.push(history_head_ref_item(head_branch));
+            extra_pending = false;
+        }
+        out.push(history_branch_ref_item(name));
+    }
+
+    if extra_pending {
+        out.push(history_head_ref_item(head_branch));
+    }
+
+    out.into()
+}
+
+pub(in crate::view) fn build_history_branch_ref_items_by_target<'a>(
+    branches: &'a [Branch],
+    remote_branches: &'a [RemoteBranch],
+    head_branch: Option<&str>,
+    head_target: Option<&str>,
+) -> (HistoryRefItemsByTarget<'a>, Option<HistoryRefItems>) {
+    let branch_names_by_target = build_history_branch_ref_names_by_target(
+        branches,
+        remote_branches,
+        head_branch,
+        head_target,
+    );
+
+    let head_branch_ref_items = history_head_branch_label(head_branch).map(|_| {
+        let names = head_target
+            .and_then(|target| branch_names_by_target.get(target))
+            .map(|names| names.as_slice())
+            .unwrap_or(&[]);
+        history_branch_ref_items_with_extra_head(names, head_branch.unwrap_or_default())
+    });
+
+    let mut ref_items_by_target: HistoryRefItemsByTarget<'_> =
+        HashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
+    for (target, names) in branch_names_by_target {
+        if names.is_empty() {
+            continue;
+        }
+        ref_items_by_target.insert(target, history_branch_ref_items(&names));
+    }
+
+    (ref_items_by_target, head_branch_ref_items)
 }
 
 pub(in crate::view) fn build_history_tag_names_by_target(
@@ -691,6 +891,25 @@ pub(in crate::view) fn build_history_tag_names_by_target(
     }
 
     tag_text_by_target
+}
+
+pub(in crate::view) fn history_ref_items_from_displayed_refs(
+    tag_names: &Arc<[HistoryTextVm]>,
+    branch_items: Arc<[HistoryRefListItem]>,
+) -> Arc<[HistoryRefListItem]> {
+    if tag_names.is_empty() {
+        return branch_items;
+    }
+
+    let mut items = Vec::with_capacity(tag_names.len() + branch_items.len());
+    items.extend(tag_names.iter().map(|tag| HistoryRefListItem {
+        text: tag.clone(),
+        kind: HistoryRefListItemKind::Tag {
+            name: tag.as_ref().to_string(),
+        },
+    }));
+    items.extend(branch_items.iter().cloned());
+    items.into()
 }
 
 fn history_head_branch_label(head_branch: Option<&str>) -> Option<String> {
@@ -995,6 +1214,186 @@ mod tests {
     }
 
     #[test]
+    fn history_ref_items_preserve_display_order_and_ref_types_for_attached_head() {
+        let commit = commit_id("a");
+        let branches = vec![
+            Branch {
+                name: "main".to_string(),
+                target: commit.clone(),
+                upstream: None,
+                divergence: None,
+            },
+            Branch {
+                name: "feature".to_string(),
+                target: commit.clone(),
+                upstream: None,
+                divergence: None,
+            },
+            Branch {
+                name: "feature".to_string(),
+                target: commit.clone(),
+                upstream: None,
+                divergence: None,
+            },
+        ];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit.clone(),
+        }];
+        let tags = vec![
+            Tag {
+                name: "v2.0.0".to_string(),
+                target: commit.clone(),
+            },
+            Tag {
+                name: "v1.0.0".to_string(),
+                target: commit.clone(),
+            },
+        ];
+
+        let (_, head_branch_items) = build_history_branch_ref_items_by_target(
+            &branches,
+            &remote_branches,
+            Some("main"),
+            Some(commit.as_ref()),
+        );
+        let tag_names_by_target = build_history_tag_names_by_target(&tags);
+        let tag_names = tag_names_by_target
+            .get(commit.as_ref())
+            .expect("expected tag names");
+        let ref_items = history_ref_items_from_displayed_refs(
+            tag_names,
+            head_branch_items.expect("expected head branch items"),
+        );
+
+        let display = ref_items
+            .iter()
+            .map(|item| item.text.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            display,
+            vec!["v1.0.0", "v2.0.0", "HEAD → main", "feature", "origin/main"]
+        );
+        assert!(matches!(
+            ref_items[0].kind,
+            HistoryRefListItemKind::Tag { ref name } if name == "v1.0.0"
+        ));
+        assert!(matches!(
+            ref_items[2].kind,
+            HistoryRefListItemKind::AttachedHead { ref branch } if branch == "main"
+        ));
+        assert!(matches!(
+            ref_items[3].kind,
+            HistoryRefListItemKind::LocalBranch { ref name } if name == "feature"
+        ));
+        assert!(matches!(
+            ref_items[4].kind,
+            HistoryRefListItemKind::RemoteBranch { ref name } if name == "origin/main"
+        ));
+
+        let hidden_tags = Arc::<[HistoryTextVm]>::from([]);
+        let ref_items_without_tags = history_ref_items_from_displayed_refs(
+            &hidden_tags,
+            ref_items.iter().skip(2).cloned().collect::<Vec<_>>().into(),
+        );
+        let display = ref_items_without_tags
+            .iter()
+            .map(|item| item.text.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(display, vec!["HEAD → main", "feature", "origin/main"]);
+    }
+
+    #[test]
+    fn history_ref_items_preserve_detached_head_as_informational() {
+        let commit = commit_id("a");
+        let branches = vec![Branch {
+            name: "main".to_string(),
+            target: commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit.clone(),
+        }];
+
+        let (_, head_branch_items) = build_history_branch_ref_items_by_target(
+            &branches,
+            &remote_branches,
+            Some("HEAD"),
+            Some(commit.as_ref()),
+        );
+        let items = head_branch_items.expect("expected detached head item");
+        let display = items
+            .iter()
+            .map(|item| item.text.as_ref())
+            .collect::<Vec<_>>();
+
+        assert_eq!(display, vec!["HEAD", "main", "origin/main"]);
+        assert!(matches!(
+            items[0].kind,
+            HistoryRefListItemKind::DetachedHead
+        ));
+        assert!(matches!(
+            items[1].kind,
+            HistoryRefListItemKind::LocalBranch { ref name } if name == "main"
+        ));
+        assert!(matches!(
+            items[2].kind,
+            HistoryRefListItemKind::RemoteBranch { ref name } if name == "origin/main"
+        ));
+    }
+
+    #[test]
+    fn history_ref_items_keep_local_and_remote_refs_with_same_display_text() {
+        let commit = commit_id("a");
+        let branches = vec![Branch {
+            name: "origin/main".to_string(),
+            target: commit.clone(),
+            upstream: None,
+            divergence: None,
+        }];
+        let remote_branches = vec![RemoteBranch {
+            remote: "origin".to_string(),
+            name: "main".to_string(),
+            target: commit.clone(),
+        }];
+
+        let (text_by_target, _) =
+            build_history_branch_text_by_target(&branches, &remote_branches, None, None);
+        assert_eq!(
+            text_by_target
+                .get(commit.as_ref())
+                .expect("expected compact branch text")
+                .as_ref(),
+            "origin/main",
+            "history row text should still dedupe duplicate display labels"
+        );
+
+        let (items_by_target, _) =
+            build_history_branch_ref_items_by_target(&branches, &remote_branches, None, None);
+        let items = items_by_target
+            .get(commit.as_ref())
+            .expect("expected hover branch refs");
+        let display = items
+            .iter()
+            .map(|item| item.text.as_ref())
+            .collect::<Vec<_>>();
+
+        assert_eq!(display, vec!["origin/main", "origin/main"]);
+        assert!(matches!(
+            items[0].kind,
+            HistoryRefListItemKind::LocalBranch { ref name } if name == "origin/main"
+        ));
+        assert!(matches!(
+            items[1].kind,
+            HistoryRefListItemKind::RemoteBranch { ref name } if name == "origin/main"
+        ));
+    }
+
+    #[test]
     fn history_stash_analysis_ignores_stash_ids_absent_from_log() {
         let commits = vec![
             commit("a", &[], "Commit A"),
@@ -1240,5 +1639,59 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn branch_sidebar_cache_lookup_by_source_reuses_rows_after_worktrees_rev_bump() {
+        let mut repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        let (source_fingerprint, source_parts) =
+            branch_sidebar::branch_sidebar_source_fingerprint(&repo, None);
+        let rows: Rc<[BranchSidebarRow]> = vec![BranchSidebarRow::SectionSpacer].into();
+        let mut cache = None;
+
+        branch_sidebar_cache_store(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 1 },
+            source_fingerprint,
+            source_parts.clone(),
+            Rc::clone(&rows),
+        );
+
+        repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+
+        let hit = branch_sidebar_cache_lookup_by_source(
+            &mut cache,
+            repo.id,
+            BranchSidebarFingerprint { cache_rev: 2 },
+            source_fingerprint,
+            &source_parts,
+        )
+        .expect("matching source fingerprints should reuse cached rows after worktrees rev bump");
+
+        assert!(Rc::ptr_eq(&hit, &rows));
+    }
+
+    #[test]
+    fn branch_sidebar_cache_fingerprint_changes_when_worktrees_rev_bumps() {
+        let mut repo = RepoState::new_opening(
+            RepoId(7),
+            gitcomet_core::domain::RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+
+        let fingerprint_before = BranchSidebarFingerprint::from_repo(&repo);
+
+        repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1);
+
+        let fingerprint_after = BranchSidebarFingerprint::from_repo(&repo);
+
+        assert_ne!(fingerprint_before, fingerprint_after);
     }
 }

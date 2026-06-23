@@ -78,6 +78,8 @@ impl ActionBarView {
             repo.merge_message_rev.hash(&mut hasher);
             repo.ops_rev.hash(&mut hasher);
             repo.status_cache_rev().hash(&mut hasher);
+            // The historical-browse badge keys off the file browser source.
+            repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
         }
 
@@ -255,6 +257,55 @@ impl Render for ActionBarView {
                 Loadable::NotLoaded => "—".into(),
             })
             .unwrap_or_else(|| "—".into());
+
+        // Badge shown next to the selectors when the file directory is pinned to
+        // a historical commit (not the live state). Click → back to live.
+        let historical_badge = self
+            .active_repo()
+            .and_then(|repo| {
+                repo.browsing_commit().map(|commit_id| {
+                    let sha = commit_id.as_ref().to_string();
+                    let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
+                    (repo.id, sha, short)
+                })
+            })
+            .map(|(repo_id, sha, short)| {
+                let purple = crate::theme::historical_outline(theme.is_dark);
+                div()
+                    .id("historical_browse_badge")
+                    .debug_selector(|| "historical_browse_badge".to_string())
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .py_1()
+                    .rounded(px(theme.radii.pill))
+                    .bg(with_alpha(purple, 0.12))
+                    .border_1()
+                    .border_color(purple)
+                    .cursor_pointer()
+                    .child(icon("icons/history.svg", purple))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(purple)
+                            .child(short),
+                    )
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        this.activate_context_menu_invoker("historical_browse_badge".into(), cx);
+                        this.open_popover_at(
+                            PopoverKind::BrowseHistoryMenu { repo_id },
+                            e.position(),
+                            window,
+                            cx,
+                        );
+                    }))
+                    .gitcomet_tooltip(
+                        theme,
+                        format!("Browsing commit {sha} — click for history / go live").into(),
+                    )
+            });
 
         let is_merging = self
             .active_repo()
@@ -660,6 +711,7 @@ impl Render for ActionBarView {
                     .flex_1()
                     .child(repo_picker)
                     .child(branch_picker)
+                    .children(historical_badge)
                     .when(is_merging, |d| {
                         d.child(
                             div()

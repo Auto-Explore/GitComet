@@ -25,6 +25,44 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         None => None,
     }
     .unwrap_or(&[]);
+    let (remote_names, remote_tags) = remote_tag_context(repo);
+
+    let mut tag_names = tags
+        .iter()
+        .filter(|t| t.target == *commit_id)
+        .map(|t| t.name.clone())
+        .collect::<Vec<_>>();
+    tag_names.sort_unstable();
+
+    tag_names_model(
+        repo_id,
+        format!("Tags on {short}").into(),
+        tag_names,
+        remote_names,
+        remote_tags,
+    )
+}
+
+pub(super) fn model_for_tag(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+    name: &String,
+) -> ContextMenuModel {
+    let sha = commit_id.as_ref().to_string();
+    let short = sha.get(0..8).unwrap_or(&sha);
+    let repo = this.state.repos.iter().find(|r| r.id == repo_id);
+    let (remote_names, remote_tags) = remote_tag_context(repo);
+    tag_names_model(
+        repo_id,
+        format!("Tag {name} on {short}").into(),
+        vec![name.clone()],
+        remote_names,
+        remote_tags,
+    )
+}
+
+fn remote_tag_context(repo: Option<&RepoState>) -> (Vec<String>, HashSet<(&str, &str)>) {
     let mut remote_names = repo
         .and_then(|r| match &r.remotes {
             Loadable::Ready(remotes) => Some(
@@ -49,14 +87,17 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         })
         .unwrap_or_default();
 
-    let mut items = vec![ContextMenuItem::Header(format!("Tags on {short}").into())];
-    let mut tag_names = tags
-        .iter()
-        .filter(|t| t.target == *commit_id)
-        .map(|t| t.name.clone())
-        .collect::<Vec<_>>();
-    tag_names.sort_unstable();
+    (remote_names, remote_tags)
+}
 
+fn tag_names_model(
+    repo_id: RepoId,
+    title: SharedString,
+    tag_names: Vec<String>,
+    remote_names: Vec<String>,
+    remote_tags: HashSet<(&str, &str)>,
+) -> ContextMenuModel {
+    let mut items = vec![ContextMenuItem::Header(title.into())];
     if tag_names.is_empty() {
         items.push(ContextMenuItem::Label("No tags".into()));
         return ContextMenuModel::new(items);
