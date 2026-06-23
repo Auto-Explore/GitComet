@@ -101,7 +101,7 @@ impl PromptAuth {
     }
 }
 
-fn git_command_timeout() -> Duration {
+pub(crate) fn git_command_timeout() -> Duration {
     std::env::var(GIT_COMMAND_TIMEOUT_ENV)
         .ok()
         .and_then(|raw| raw.trim().parse::<u64>().ok())
@@ -590,6 +590,8 @@ pub(crate) fn run_git_with_stdin_capture(
     mut cmd: Command,
     input: Vec<u8>,
     label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
 ) -> Result<Vec<u8>> {
     use std::io::Write as _;
 
@@ -611,10 +613,56 @@ pub(crate) fn run_git_with_stdin_capture(
     let stdout_handle = spawn_read_pipe(child.stdout.take());
     let stderr_handle = spawn_read_pipe(child.stderr.take());
 
-    let status = child.wait().map_err(io_err)?;
+    let start = Instant::now();
+    let mut timed_out = false;
+    let mut cancelled = false;
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    cancelled = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(e) => return Err(io_err(e)),
+                    }
+                }
+                let elapsed = start.elapsed();
+                if elapsed >= timeout {
+                    timed_out = true;
+                    let _ = child.kill();
+                    match child.wait() {
+                        Ok(status) => break status,
+                        Err(e) => return Err(io_err(e)),
+                    }
+                }
+                if let Some(poll) = git_command_wait_poll(elapsed, timeout) {
+                    thread::sleep(poll);
+                }
+            }
+            Err(e) => return Err(io_err(e)),
+        }
+    };
+
     let _ = writer.join();
     let stdout = stdout_handle.join().unwrap_or_default();
     let stderr = stderr_handle.join().unwrap_or_default();
+
+    if cancelled {
+        return Err(Error::new(ErrorKind::Cancelled));
+    }
+
+    if timed_out {
+        return Err(git_timeout_error(
+            label,
+            timeout,
+            status.code(),
+            stdout,
+            stderr,
+        ));
+    }
 
     if !status.success() {
         return Err(git_command_failed_error(
@@ -1944,5 +1992,74 @@ mod tests {
         assert!(command_env_removed(&cmd, GITCOMET_AUTH_KIND_ENV));
         assert!(command_env_removed(&cmd, GITCOMET_AUTH_USERNAME_ENV));
         assert!(command_env_removed(&cmd, GITCOMET_AUTH_SECRET_ENV));
+    }
+
+    #[test]
+    fn run_git_with_stdin_capture_times_out_when_command_exceeds_timeout() {
+        let err = run_git_with_stdin_capture(
+            sleep_command(2),
+            vec![],
+            "git synthetic",
+            Duration::from_millis(50),
+            None,
+        )
+        .expect_err("expected timed out command");
+
+        match err.kind() {
+            ErrorKind::Git(failure) => {
+                assert_eq!(failure.command(), "git synthetic");
+                assert_eq!(failure.id(), GitFailureId::Timeout);
+            }
+            other => panic!("expected structured git timeout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_git_with_stdin_capture_respects_cancellation() {
+        let token = CancellationToken::new();
+        let child_token = token.clone();
+
+        let handle = thread::spawn(move || {
+            run_git_with_stdin_capture(
+                sleep_command(10),
+                vec![],
+                "git synthetic",
+                Duration::from_secs(30),
+                Some(&child_token),
+            )
+        });
+
+        thread::sleep(Duration::from_millis(50));
+        token.cancel();
+
+        let result = handle.join().expect("thread should not panic");
+        match result {
+            Err(err) => match err.kind() {
+                ErrorKind::Cancelled => {}
+                other => panic!("expected cancellation error, got {other:?}"),
+            },
+            Ok(_) => panic!("expected cancellation error, but command succeeded"),
+        }
+    }
+
+    #[test]
+    fn run_git_with_stdin_capture_forwards_stdin_and_captures_stdout() {
+        #[cfg(unix)]
+        let cmd = shell_command("cat");
+        #[cfg(windows)]
+        let mut cmd = shell_command("Get-Content -Raw");
+
+        let input = b"hello stdin\nline two\n".to_vec();
+
+        let output = run_git_with_stdin_capture(
+            cmd,
+            input.clone(),
+            "cat stdin",
+            Duration::from_secs(5),
+            None,
+        )
+        .expect("stdin forwarding should succeed");
+
+        assert_eq!(output, input);
     }
 }

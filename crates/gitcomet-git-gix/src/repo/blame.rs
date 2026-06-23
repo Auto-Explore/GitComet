@@ -4,8 +4,8 @@ use super::{
     oid_to_arc_str,
 };
 use crate::util::{
-    bytes_to_text_preserving_utf8, path_buf_from_git_bytes, run_git_capture_bytes,
-    run_git_with_output, run_git_with_stdin_capture,
+    bytes_to_text_preserving_utf8, git_command_timeout, path_buf_from_git_bytes,
+    run_git_capture_bytes, run_git_with_output, run_git_with_stdin_capture,
 };
 use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -501,7 +501,13 @@ impl GixRepo {
             DiffArea::Staged => {
                 let contents = staged_blob_for_blame(&repo, path)?;
                 cmd.arg("--contents").arg("-").arg("--").arg(path);
-                run_git_with_stdin_capture(cmd, contents, "git blame --contents")?
+                run_git_with_stdin_capture(
+                    cmd,
+                    contents,
+                    "git blame --contents",
+                    git_command_timeout(),
+                    None,
+                )?
             }
         };
 
