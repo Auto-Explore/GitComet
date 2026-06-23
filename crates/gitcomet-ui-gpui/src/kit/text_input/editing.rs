@@ -2081,8 +2081,7 @@ impl TextInput {
             return;
         }
 
-        if event.keystroke.modifiers.modified() {
-        }
+        if event.keystroke.modifiers.modified() {}
     }
 
     pub(super) fn on_mouse_down_right(

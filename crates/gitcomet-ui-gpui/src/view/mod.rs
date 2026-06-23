@@ -1229,37 +1229,35 @@ impl GitCometView {
             }
             "stage-all" => {
                 if let Some(repo_id) = self.active_repo_id()
-                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                        let paths: Vec<_> = repo
-                            .worktree_status_entries()
-                            .map(|entries| {
-                                entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        if !paths.is_empty() {
-                            self.store.dispatch(Msg::StagePaths {
-                                repo_id,
-                                paths: paths.into(),
-                            });
-                        }
+                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
+                {
+                    let paths: Vec<_> = repo
+                        .worktree_status_entries()
+                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if !paths.is_empty() {
+                        self.store.dispatch(Msg::StagePaths {
+                            repo_id,
+                            paths: paths.into(),
+                        });
                     }
+                }
             }
             "unstage-all" => {
                 if let Some(repo_id) = self.active_repo_id()
-                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
-                        let paths: Vec<_> = repo
-                            .staged_status_entries()
-                            .map(|entries| {
-                                entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        if !paths.is_empty() {
-                            self.store.dispatch(Msg::UnstagePaths {
-                                repo_id,
-                                paths: paths.into(),
-                            });
-                        }
+                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
+                {
+                    let paths: Vec<_> = repo
+                        .staged_status_entries()
+                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if !paths.is_empty() {
+                        self.store.dispatch(Msg::UnstagePaths {
+                            repo_id,
+                            paths: paths.into(),
+                        });
                     }
+                }
             }
             "discard-all" => {
                 // TODO: Implement discard all changes command
@@ -3791,10 +3789,7 @@ impl Render for GitCometView {
             self.hover_resize_edge = None;
         }
 
-        let framed_content = div()
-            .relative()
-            .size_full()
-            .child(body);
+        let framed_content = div().relative().size_full().child(body);
 
         let frame_overlay = div()
             .absolute()

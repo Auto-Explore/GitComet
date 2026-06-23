@@ -34,11 +34,9 @@ impl PopoverHost {
 
                     let repos = this.state.repos.clone();
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-                    let count = count_path_matches_by(
-                        &repos,
-                        &query,
-                        |r: &RepoState| r.spec.workdir.display().to_string(),
-                    );
+                    let count = count_path_matches_by(&repos, &query, |r: &RepoState| {
+                        r.spec.workdir.display().to_string()
+                    });
 
                     match handle_picker_nav(&keys, &mut this.repo_picker_selected_index, count) {
                         PickerNavOutcome::Escape => {
@@ -66,8 +64,7 @@ impl PopoverHost {
                                     })
                                     .collect();
                                 if let Some(repo) = matched.get(sel) {
-                                    this.store
-                                        .dispatch(Msg::SetActiveRepo { repo_id: repo.id });
+                                    this.store.dispatch(Msg::SetActiveRepo { repo_id: repo.id });
                                     this.close_popover(cx);
                                     return;
                                 }
@@ -122,11 +119,10 @@ impl PopoverHost {
 
                     let recent_repos = session::load().recent_repos;
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-                    let count = count_path_matches_by(
-                        &recent_repos,
-                        &query,
-                        |p: &std::path::PathBuf| recent_repo_display_text(p),
-                    );
+                    let count =
+                        count_path_matches_by(&recent_repos, &query, |p: &std::path::PathBuf| {
+                            recent_repo_display_text(p)
+                        });
 
                     match handle_picker_nav(
                         &keys,
@@ -259,8 +255,7 @@ impl PopoverHost {
                             }
                             _ => return,
                         };
-                        let query =
-                            input.read_with(cx, |i, _| i.text().trim().to_string());
+                        let query = input.read_with(cx, |i, _| i.text().trim().to_string());
                         let matches = match_branches(&branches, &query);
                         (repo.id, is_create_from_ref, matches)
                     };
@@ -293,11 +288,12 @@ impl PopoverHost {
                                     return;
                                 }
                             } else if let Some(sel) = this.branch_picker_selected_index
-                                && let Some(name) = matches.get(sel) {
-                                    let name = name.clone();
-                                    this.handle_inline_branch_picker_select(name, repo_id, cx);
-                                    return;
-                                }
+                                && let Some(name) = matches.get(sel)
+                            {
+                                let name = name.clone();
+                                this.handle_inline_branch_picker_select(name, repo_id, cx);
+                                return;
+                            }
                         }
                         PickerNavOutcome::Idle => {}
                     }
@@ -390,14 +386,10 @@ impl PopoverHost {
                         .collect();
 
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-                    let count =
-                        count_path_matches_by(&match_texts, &query, |s: &String| s.clone());
+                    let count = count_path_matches_by(&match_texts, &query, |s: &String| s.clone());
 
-                    match handle_picker_nav(
-                        &keys,
-                        &mut this.worktree_picker_selected_index,
-                        count,
-                    ) {
+                    match handle_picker_nav(&keys, &mut this.worktree_picker_selected_index, count)
+                    {
                         PickerNavOutcome::Escape => {
                             this.close_popover(cx);
                             return;
@@ -418,25 +410,26 @@ impl PopoverHost {
                                     .map(|(i, _)| i)
                                     .collect();
                                 if let Some(&item_ix) = matched.get(sel)
-                                    && let Some(path) = paths.get(item_ix).cloned() {
-                                        if is_remove {
-                                            this.open_popover_centered(
-                                                PopoverKind::worktree(
-                                                    repo_id,
-                                                    WorktreePopoverKind::RemoveConfirm {
-                                                        path,
-                                                        branch: None,
-                                                    },
-                                                ),
-                                                window,
-                                                cx,
-                                            );
-                                        } else {
-                                            this.store.dispatch(Msg::OpenRepo(path));
-                                            this.close_popover(cx);
-                                        }
-                                        return;
+                                    && let Some(path) = paths.get(item_ix).cloned()
+                                {
+                                    if is_remove {
+                                        this.open_popover_centered(
+                                            PopoverKind::worktree(
+                                                repo_id,
+                                                WorktreePopoverKind::RemoveConfirm {
+                                                    path,
+                                                    branch: None,
+                                                },
+                                            ),
+                                            window,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.store.dispatch(Msg::OpenRepo(path));
+                                        this.close_popover(cx);
                                     }
+                                    return;
+                                }
                             }
                         }
                         PickerNavOutcome::Idle => {}
@@ -514,20 +507,14 @@ impl PopoverHost {
                     let base = repo.spec.workdir.clone();
                     let rel_paths: Vec<std::path::PathBuf> =
                         submodules.iter().map(|s| s.path.clone()).collect();
-                    let match_texts: Vec<String> = rel_paths
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect();
+                    let match_texts: Vec<String> =
+                        rel_paths.iter().map(|p| p.display().to_string()).collect();
 
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-                    let count =
-                        count_path_matches_by(&match_texts, &query, |s: &String| s.clone());
+                    let count = count_path_matches_by(&match_texts, &query, |s: &String| s.clone());
 
-                    match handle_picker_nav(
-                        &keys,
-                        &mut this.submodule_picker_selected_index,
-                        count,
-                    ) {
+                    match handle_picker_nav(&keys, &mut this.submodule_picker_selected_index, count)
+                    {
                         PickerNavOutcome::Escape => {
                             this.close_popover(cx);
                             return;
@@ -548,25 +535,25 @@ impl PopoverHost {
                                     .map(|(i, _)| i)
                                     .collect();
                                 if let Some(&item_ix) = matched.get(sel)
-                                    && let Some(rel_path) = rel_paths.get(item_ix).cloned() {
-                                        if is_remove {
-                                            this.open_popover_centered(
-                                                PopoverKind::submodule(
-                                                    repo_id,
-                                                    SubmodulePopoverKind::RemoveConfirm {
-                                                        path: rel_path,
-                                                    },
-                                                ),
-                                                window,
-                                                cx,
-                                            );
-                                        } else {
-                                            this.store
-                                                .dispatch(Msg::OpenRepo(base.join(&rel_path)));
-                                            this.close_popover(cx);
-                                        }
-                                        return;
+                                    && let Some(rel_path) = rel_paths.get(item_ix).cloned()
+                                {
+                                    if is_remove {
+                                        this.open_popover_centered(
+                                            PopoverKind::submodule(
+                                                repo_id,
+                                                SubmodulePopoverKind::RemoveConfirm {
+                                                    path: rel_path,
+                                                },
+                                            ),
+                                            window,
+                                            cx,
+                                        );
+                                    } else {
+                                        this.store.dispatch(Msg::OpenRepo(base.join(&rel_path)));
+                                        this.close_popover(cx);
                                     }
+                                    return;
+                                }
                             }
                         }
                         PickerNavOutcome::Idle => {}
@@ -628,15 +615,10 @@ impl PopoverHost {
                     let commits = page.commits.clone();
 
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-                    let count = count_path_matches_by(&commits, &query, |c| {
-                        file_history_match_text(c)
-                    });
+                    let count =
+                        count_path_matches_by(&commits, &query, |c| file_history_match_text(c));
 
-                    match handle_picker_nav(
-                        &keys,
-                        &mut this.file_history_selected_index,
-                        count,
-                    ) {
+                    match handle_picker_nav(&keys, &mut this.file_history_selected_index, count) {
                         PickerNavOutcome::Escape => {
                             this.close_popover(cx);
                             return;
@@ -653,9 +635,7 @@ impl PopoverHost {
                                 let matched: Vec<_> = commits
                                     .iter()
                                     .filter(|c| {
-                                        file_history_match_text(c)
-                                            .to_ascii_lowercase()
-                                            .contains(&q)
+                                        file_history_match_text(c).to_ascii_lowercase().contains(&q)
                                     })
                                     .collect();
                                 if let Some(commit) = matched.get(sel) {
