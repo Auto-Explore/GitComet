@@ -2082,7 +2082,6 @@ impl TextInput {
         }
 
         if event.keystroke.modifiers.modified() {
-            return;
         }
     }
 

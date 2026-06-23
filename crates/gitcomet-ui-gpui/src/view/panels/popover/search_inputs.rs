@@ -292,13 +292,12 @@ impl PopoverHost {
                                     this.handle_inline_branch_picker_select(name, repo_id, cx);
                                     return;
                                 }
-                            } else if let Some(sel) = this.branch_picker_selected_index {
-                                if let Some(name) = matches.get(sel) {
+                            } else if let Some(sel) = this.branch_picker_selected_index
+                                && let Some(name) = matches.get(sel) {
                                     let name = name.clone();
                                     this.handle_inline_branch_picker_select(name, repo_id, cx);
                                     return;
                                 }
-                            }
                         }
                         PickerNavOutcome::Idle => {}
                     }
@@ -418,8 +417,8 @@ impl PopoverHost {
                                     .filter(|(_, t)| t.to_ascii_lowercase().contains(&q))
                                     .map(|(i, _)| i)
                                     .collect();
-                                if let Some(&item_ix) = matched.get(sel) {
-                                    if let Some(path) = paths.get(item_ix).cloned() {
+                                if let Some(&item_ix) = matched.get(sel)
+                                    && let Some(path) = paths.get(item_ix).cloned() {
                                         if is_remove {
                                             this.open_popover_centered(
                                                 PopoverKind::worktree(
@@ -438,7 +437,6 @@ impl PopoverHost {
                                         }
                                         return;
                                     }
-                                }
                             }
                         }
                         PickerNavOutcome::Idle => {}
@@ -549,8 +547,8 @@ impl PopoverHost {
                                     .filter(|(_, t)| t.to_ascii_lowercase().contains(&q))
                                     .map(|(i, _)| i)
                                     .collect();
-                                if let Some(&item_ix) = matched.get(sel) {
-                                    if let Some(rel_path) = rel_paths.get(item_ix).cloned() {
+                                if let Some(&item_ix) = matched.get(sel)
+                                    && let Some(rel_path) = rel_paths.get(item_ix).cloned() {
                                         if is_remove {
                                             this.open_popover_centered(
                                                 PopoverKind::submodule(
@@ -569,7 +567,6 @@ impl PopoverHost {
                                         }
                                         return;
                                     }
-                                }
                             }
                         }
                         PickerNavOutcome::Idle => {}

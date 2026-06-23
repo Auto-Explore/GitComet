@@ -1000,7 +1000,7 @@ impl GitCometView {
     ) {
         match command_id {
             "new-window" => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
-            "open-settings" => cx.defer(|cx| crate::view::open_settings_window(cx)),
+            "open-settings" => cx.defer(crate::view::open_settings_window),
             "quit" => cx.defer(|cx| cx.quit()),
             "minimize-window" => cx.defer(|cx| {
                 if let Some(win) = cx.active_window() {
@@ -1228,8 +1228,8 @@ impl GitCometView {
                 });
             }
             "stage-all" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
                         let paths: Vec<_> = repo
                             .worktree_status_entries()
                             .map(|entries| {
@@ -1243,11 +1243,10 @@ impl GitCometView {
                             });
                         }
                     }
-                }
             }
             "unstage-all" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    if let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) {
                         let paths: Vec<_> = repo
                             .staged_status_entries()
                             .map(|entries| {
@@ -1261,7 +1260,6 @@ impl GitCometView {
                             });
                         }
                     }
-                }
             }
             "discard-all" => {
                 // TODO: Implement discard all changes command
