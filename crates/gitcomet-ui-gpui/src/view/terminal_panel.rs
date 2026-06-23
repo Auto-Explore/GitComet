@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex};
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 const TERMINAL_FONT_SCALE: f32 = 0.92;
 const TERMINAL_LINE_HEIGHT_SCALE: f32 = 1.15;
-const TERMINAL_CELL_WIDTH_SAMPLE: &str = "0000000000";
 const TERMINAL_MIN_GRID_ROWS: u16 = 2;
 const TERMINAL_MIN_GRID_COLS: u16 = 8;
 const TERMINAL_CARET_WIDTH_RATIO: f32 = 0.12;
@@ -23,7 +22,10 @@ const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 #[derive(Default)]
 struct TerminalCanvasPaintState {
+    bounds: Bounds<Pixels>,
+    terminal_bg: gpui::Rgba,
     selection_rects: Vec<Bounds<Pixels>>,
+    background_rects: Vec<(Point<Pixels>, gpui::Size<Pixels>, gpui::Rgba)>,
     lines: Vec<(ShapedLine, Point<Pixels>, Pixels)>,
     cursor: Option<Bounds<Pixels>>,
     ime_bounds: Option<Bounds<Pixels>>,
@@ -67,6 +69,9 @@ impl TerminalViewportView {
             cursor_blink_seq: 0,
             content_epoch: 1,
             last_content: None,
+            viewport_bounds: None,
+            pressed_mouse_button: None,
+            mouse_mode_active: false,
         }
     }
 
@@ -269,6 +274,49 @@ impl TerminalViewportView {
         if self
             .last_content
             .as_ref()
+            .map(|c| c.mode.mouse_mode())
+            .unwrap_or(false)
+        {
+            if let Some(pos) = self.viewport_bounds.and_then(|b| {
+                terminal_grid_point(
+                    event.position,
+                    b,
+                    metrics.cell_width,
+                    metrics.line_height,
+                    self.last_content
+                        .as_ref()
+                        .map(|c| c.display_offset)
+                        .unwrap_or(0),
+                    self.last_content
+                        .as_ref()
+                        .map(|c| c.terminal_bounds.columns as u16)
+                        .unwrap_or(0),
+                )
+            }) {
+                let (grid_row, grid_col) = pos;
+                let mode = self
+                    .last_content
+                    .as_ref()
+                    .map(|c| c.mode)
+                    .unwrap_or_default();
+                let reports = terminal_scroll_report(
+                    grid_row,
+                    grid_col,
+                    event.modifiers,
+                    delta_y,
+                    step_rows,
+                    mode,
+                );
+                for report in reports {
+                    self.queue_input(report, cx);
+                }
+            }
+            return;
+        }
+
+        if self
+            .last_content
+            .as_ref()
             .map(|c| c.mode.contains(TerminalModes::ALT_SCREEN))
             .unwrap_or(false)
         {
@@ -298,6 +346,86 @@ impl TerminalViewportView {
             }
         }
         cx.notify();
+    }
+
+    fn handle_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+        button: gpui::MouseButton,
+    ) {
+        window.focus(&self.focus_handle, cx);
+        self.reset_cursor_blink(cx);
+
+        if self.mouse_mode_active {
+            self.queue_mouse_event(event.position, button, event.modifiers, true, cx);
+            self.pressed_mouse_button = Some(button);
+        }
+    }
+
+    fn handle_mouse_up(
+        &mut self,
+        event: &MouseUpEvent,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+        button: gpui::MouseButton,
+    ) {
+        if self.mouse_mode_active {
+            self.queue_mouse_event(event.position, button, event.modifiers, false, cx);
+        }
+        self.pressed_mouse_button = None;
+    }
+
+    fn handle_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.mouse_mode_active {
+            return;
+        }
+        let mode = self
+            .last_content
+            .as_ref()
+            .map(|c| c.mode)
+            .unwrap_or_default();
+        if !mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
+            return;
+        }
+        if let Some(report) = terminal_mouse_moved_report_at(
+            event.position,
+            self.viewport_bounds,
+            &self.layout_cache,
+            &self.last_content,
+            self.pressed_mouse_button,
+            event.modifiers,
+            mode,
+        ) {
+            self.queue_input(report, cx);
+        }
+    }
+
+    fn queue_mouse_event(
+        &mut self,
+        position: Point<Pixels>,
+        button: gpui::MouseButton,
+        modifiers: gpui::Modifiers,
+        pressed: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(report) = terminal_mouse_event_at(
+            position,
+            self.viewport_bounds,
+            &self.layout_cache,
+            &self.last_content,
+            button,
+            modifiers,
+            pressed,
+        ) {
+            self.queue_input(report, cx);
+        }
     }
 
     fn sync_terminal_grid_size(&mut self, next_size: TerminalGridSize) {
@@ -345,6 +473,7 @@ impl TerminalViewportView {
             let term = term_lock.lock();
             let content = make_terminal_content(&term);
             let display_offset = content.display_offset;
+            self.mouse_mode_active = content.mode.mouse_mode();
             self.last_content = Some(content.clone());
             drop(term);
 
@@ -373,12 +502,16 @@ impl TerminalViewportView {
             }
 
             let mut paint_state = TerminalCanvasPaintState::default();
+            paint_state.bounds = bounds;
+            paint_state.terminal_bg =
+                TerminalAnsiPalette::from_theme(self.theme).background;
+            self.viewport_bounds = Some(bounds);
 
             for row in 0..rows {
                 let cache_row = &mut self.render_cache.rows[usize::from(row)];
 
                 if rebuild || cache_row.shaped.is_none() {
-                    let (text, runs) = build_alacritty_row(
+                    let (text, runs, bg_rects) = build_alacritty_row(
                         &content.cells,
                         row as i32,
                         cols,
@@ -392,6 +525,7 @@ impl TerminalViewportView {
                         None,
                     );
                     cache_row.shaped = Some(shaped);
+                    cache_row.background_rects = bg_rects;
                 }
 
                 if let Some(ref shaped) = cache_row.shaped {
@@ -403,6 +537,20 @@ impl TerminalViewportView {
                         ),
                         layout.metrics.line_height,
                     ));
+                }
+
+                for rect in &cache_row.background_rects {
+                    let origin = point(
+                        bounds.left() + layout.metrics.cell_width * rect.col as f32,
+                        bounds.top() + layout.metrics.line_height * rect.row as f32,
+                    );
+                    let rect_size = size(
+                        layout.metrics.cell_width * rect.num_cells as f32,
+                        layout.metrics.line_height,
+                    );
+                    paint_state
+                        .background_rects
+                        .push((origin, rect_size, rect.color));
                 }
             }
 
@@ -459,13 +607,48 @@ impl Render for TerminalViewportView {
             .track_focus(&self.focus_handle)
             .w_full()
             .h_full()
+            .cursor(gpui::CursorStyle::IBeam)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus_handle, cx);
-                    this.reset_cursor_blink(cx);
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    this.handle_mouse_down(e, window, cx, gpui::MouseButton::Left);
                 }),
             )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    this.handle_mouse_down(e, window, cx, gpui::MouseButton::Middle);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    this.handle_mouse_down(e, window, cx, gpui::MouseButton::Right);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseUpEvent, window, cx| {
+                    this.handle_mouse_up(e, window, cx, gpui::MouseButton::Left);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, e: &MouseUpEvent, window, cx| {
+                    this.handle_mouse_up(e, window, cx, gpui::MouseButton::Middle);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, e: &MouseUpEvent, window, cx| {
+                    this.handle_mouse_up(e, window, cx, gpui::MouseButton::Right);
+                }),
+            )
+            .on_mouse_move(cx.listener(
+                |this, e: &MouseMoveEvent, window, cx| {
+                    this.handle_mouse_move(e, window, cx);
+                },
+            ))
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
                 this.handle_key_down(e, cx);
             }))
@@ -1056,7 +1239,7 @@ impl GitCometView {
             .flex_col()
             .h(self.terminal_panel_height)
             .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
-            .bg(gpui::black())
+            .bg(terminal_default_background(theme))
             .child(header)
             .child(viewport_element)
             .into_any_element();
@@ -1360,16 +1543,16 @@ fn terminal_launch_context_for_repo_state(
     }
 }
 
-fn terminal_text_style<C>(_theme: AppTheme, window: &Window, cx: &mut C) -> gpui::TextStyle
+fn terminal_text_style<C>(theme: AppTheme, window: &Window, cx: &mut C) -> gpui::TextStyle
 where
     C: gpui::BorrowAppContext,
 {
     let mut style = window.text_style();
     style.font_family = crate::font_preferences::current_editor_font_family(cx).into();
-    style.font_features = crate::font_preferences::current_font_features(cx);
+    style.font_features = gpui::FontFeatures::disable_ligatures();
     style.font_weight = FontWeight::NORMAL;
     style.font_style = gpui::FontStyle::Normal;
-    style.color = terminal_default_foreground().into();
+    style.color = terminal_default_foreground(theme).into();
     style.white_space = gpui::WhiteSpace::Nowrap;
     style.text_overflow = None;
     style
@@ -1393,17 +1576,13 @@ fn terminal_layout_cache(mut base_style: gpui::TextStyle, window: &Window) -> Te
     let font_size = base_style.font_size.to_pixels(rem_size) * TERMINAL_FONT_SCALE;
     let line_height = terminal_line_height(font_size);
     base_style.line_height = line_height.into();
-    let sample = window.text_system().shape_line(
-        TERMINAL_CELL_WIDTH_SAMPLE.into(),
-        font_size,
-        &[base_style.to_run(TERMINAL_CELL_WIDTH_SAMPLE.len())],
-        None,
-    );
-    let cell_width = if TERMINAL_CELL_WIDTH_SAMPLE.is_empty() {
-        px(8.0)
-    } else {
-        (sample.width / TERMINAL_CELL_WIDTH_SAMPLE.len() as f32).max(px(1.0))
-    };
+    let font_id = window.text_system().resolve_font(&base_style.font());
+    let cell_width = window
+        .text_system()
+        .advance(font_id, font_size, 'm')
+        .unwrap()
+        .width
+        .max(px(1.0));
     let metrics = TerminalTextMetrics {
         font_size,
         line_height,
@@ -1484,11 +1663,15 @@ fn paint_terminal_canvas_state(
     window: &mut Window,
     cx: &mut App,
 ) {
+    window.paint_quad(fill(paint_state.bounds, paint_state.terminal_bg));
     for rect in paint_state.selection_rects {
         window.paint_quad(fill(
             rect,
             with_alpha(theme.colors.accent, TERMINAL_SELECTION_ALPHA),
         ));
+    }
+    for (origin, rect_size, color) in paint_state.background_rects {
+        window.paint_quad(fill(Bounds::new(origin, rect_size), color));
     }
     for (line, origin, line_height) in paint_state.lines {
         let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
@@ -1496,7 +1679,7 @@ fn paint_terminal_canvas_state(
     if let Some(cursor) = paint_state.cursor {
         let caret = terminal_caret_bounds(cursor);
         window.paint_quad(
-            fill(caret, terminal_default_foreground()).corner_radii(px(TERMINAL_CARET_RADIUS_PX)),
+            fill(caret, terminal_default_foreground(theme)).corner_radii(px(TERMINAL_CARET_RADIUS_PX)),
         );
     }
 }

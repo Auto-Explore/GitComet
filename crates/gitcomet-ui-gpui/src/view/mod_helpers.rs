@@ -2977,6 +2977,7 @@ pub(super) struct TerminalCachedRow {
     pub(super) fingerprint: u64,
     pub(super) layout_key: TerminalLayoutKey,
     pub(super) shaped: Option<ShapedLine>,
+    pub(super) background_rects: Vec<super::terminal_alacritty::TerminalBackgroundRect>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3034,6 +3035,9 @@ pub(super) struct TerminalViewportView {
     pub(super) cursor_blink_seq: u64,
     pub(super) content_epoch: u64,
     pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
+    pub(super) viewport_bounds: Option<Bounds<Pixels>>,
+    pub(super) pressed_mouse_button: Option<gpui::MouseButton>,
+    pub(super) mouse_mode_active: bool,
 }
 
 pub(super) struct RepoTerminalSession {

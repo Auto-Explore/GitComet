@@ -16,8 +16,105 @@ const TERMINAL_INITIAL_ROWS: u16 = 24;
 const TERMINAL_INITIAL_COLS: u16 = 80;
 const TERMINAL_SCROLLBACK_ROWS: usize = 10_000;
 const TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS: usize = 24;
-const TERMINAL_DEFAULT_BG_HEX: u32 = 0x000000;
-const TERMINAL_DEFAULT_FG_HEX: u32 = 0xffffff;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TerminalAnsiPalette {
+    pub foreground: gpui::Rgba,
+    pub background: gpui::Rgba,
+    pub black: gpui::Rgba,
+    pub red: gpui::Rgba,
+    pub green: gpui::Rgba,
+    pub yellow: gpui::Rgba,
+    pub blue: gpui::Rgba,
+    pub magenta: gpui::Rgba,
+    pub cyan: gpui::Rgba,
+    pub white: gpui::Rgba,
+    pub bright_black: gpui::Rgba,
+    pub bright_red: gpui::Rgba,
+    pub bright_green: gpui::Rgba,
+    pub bright_yellow: gpui::Rgba,
+    pub bright_blue: gpui::Rgba,
+    pub bright_magenta: gpui::Rgba,
+    pub bright_cyan: gpui::Rgba,
+    pub bright_white: gpui::Rgba,
+    pub dim_black: gpui::Rgba,
+    pub dim_red: gpui::Rgba,
+    pub dim_green: gpui::Rgba,
+    pub dim_yellow: gpui::Rgba,
+    pub dim_blue: gpui::Rgba,
+    pub dim_magenta: gpui::Rgba,
+    pub dim_cyan: gpui::Rgba,
+    pub dim_white: gpui::Rgba,
+}
+
+impl TerminalAnsiPalette {
+    pub(super) fn from_theme(theme: AppTheme) -> Self {
+        let colors = theme.colors;
+        let fg = colors.text;
+        let bg = colors.window_bg;
+
+        let dark = theme.is_dark;
+        if dark {
+            Self {
+                foreground: fg,
+                background: bg,
+                black: gpui::rgb(0x0d1016),
+                red: gpui::rgb(0xef7177),
+                green: gpui::rgb(0xaad84c),
+                yellow: gpui::rgb(0xfeb454),
+                blue: gpui::rgb(0x5ac1fe),
+                magenta: gpui::rgb(0xde9fc1),
+                cyan: gpui::rgb(0x78cce2),
+                white: gpui::rgb(0xbfbdb6),
+                bright_black: gpui::rgb(0x575b66),
+                bright_red: gpui::rgb(0xff7777),
+                bright_green: gpui::rgb(0xc6ff68),
+                bright_yellow: gpui::rgb(0xffd56b),
+                bright_blue: gpui::rgb(0x6dcaff),
+                bright_magenta: gpui::rgb(0xf0b0d0),
+                bright_cyan: gpui::rgb(0x95e6ff),
+                bright_white: gpui::rgb(0xd9d7ce),
+                dim_black: gpui::rgb(0x0a0b10),
+                dim_red: gpui::rgb(0xb04b50),
+                dim_green: gpui::rgb(0x709a30),
+                dim_yellow: gpui::rgb(0xb07a35),
+                dim_blue: gpui::rgb(0x3d80b0),
+                dim_magenta: gpui::rgb(0x9b6a88),
+                dim_cyan: gpui::rgb(0x508e9a),
+                dim_white: gpui::rgb(0x808080),
+            }
+        } else {
+            Self {
+                foreground: fg,
+                background: bg,
+                black: gpui::rgb(0xfffffe),
+                red: gpui::rgb(0xc43d35),
+                green: gpui::rgb(0x2e7d32),
+                yellow: gpui::rgb(0xa97822),
+                blue: gpui::rgb(0x4f72dd),
+                magenta: gpui::rgb(0x8e4c6f),
+                cyan: gpui::rgb(0x1a7f82),
+                white: gpui::rgb(0x1d2330),
+                bright_black: gpui::rgb(0x9aa0b0),
+                bright_red: gpui::rgb(0xe06c75),
+                bright_green: gpui::rgb(0x4caf50),
+                bright_yellow: gpui::rgb(0xd4a03c),
+                bright_blue: gpui::rgb(0x6e8be0),
+                bright_magenta: gpui::rgb(0xae6e8c),
+                bright_cyan: gpui::rgb(0x35a0a3),
+                bright_white: gpui::rgb(0x383e4a),
+                dim_black: gpui::rgb(0xd0d4dd),
+                dim_red: gpui::rgb(0xa83b34),
+                dim_green: gpui::rgb(0x256c29),
+                dim_yellow: gpui::rgb(0x8d651c),
+                dim_blue: gpui::rgb(0x3f5eb8),
+                dim_magenta: gpui::rgb(0x73405b),
+                dim_cyan: gpui::rgb(0x16686c),
+                dim_white: gpui::rgb(0x808080),
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Type aliases
@@ -256,8 +353,27 @@ impl TerminalModes {
     pub const ALTERNATE_SCROLL: Self = Self(1 << 9);
     pub const SHOW_CURSOR: Self = Self(1 << 10);
 
+    pub const MOUSE_MODE: Self =
+        Self(Self::MOUSE_REPORT_CLICK.0 | Self::MOUSE_DRAG.0 | Self::MOUSE_MOTION.0);
+
     pub fn contains(self, other: Self) -> bool {
         (self.0 & other.0) == other.0
+    }
+
+    pub fn intersects(self, other: Self) -> bool {
+        (self.0 & other.0) != 0
+    }
+
+    pub fn mouse_mode(self) -> bool {
+        self.intersects(Self::MOUSE_MODE)
+    }
+}
+
+impl std::ops::BitOr for TerminalModes {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
     }
 }
 
@@ -344,39 +460,40 @@ pub(super) struct TerminalCellStyle {
     pub underline: bool,
 }
 
+impl TerminalCellStyle {
+    fn foreground(cell: &AlacCell, palette: &TerminalAnsiPalette) -> gpui::Rgba {
+        color_to_rgba(cell.fg, palette, palette.foreground)
+    }
+
+    fn background(cell: &AlacCell, palette: &TerminalAnsiPalette) -> gpui::Rgba {
+        color_to_rgba(cell.bg, palette, palette.background)
+    }
+}
+
 pub(super) fn alacritty_cell_style(
     cell: &AlacCell,
-    foreground: gpui::Rgba,
-    background: gpui::Rgba,
+    palette: &TerminalAnsiPalette,
 ) -> TerminalCellStyle {
-    let default_cell = AlacCell::default();
-    let is_default_bg = cell.bg == default_cell.bg;
-
-    let mut fg = color_to_rgba(cell.fg, foreground);
-    let bg = if is_default_bg {
-        None
-    } else {
-        Some(color_to_rgba(cell.bg, background))
-    };
+    let mut fg = TerminalCellStyle::foreground(cell, palette);
+    let mut bg = color_to_rgba(cell.bg, palette, palette.background);
     let flags = cell.flags;
 
     if flags.contains(Flags::INVERSE) {
-        fg = bg.unwrap_or(background);
+        std::mem::swap(&mut fg, &mut bg);
     }
 
     if flags.contains(Flags::DIM) {
-        fg = mix_rgba(fg, background, 0.35);
+        fg.a *= 0.7;
     }
+
+    let is_default_bg = cell.bg
+        == alacritty_terminal::vte::ansi::Color::Named(
+            alacritty_terminal::vte::ansi::NamedColor::Background,
+        );
 
     TerminalCellStyle {
         fg,
-        bg: if flags.contains(Flags::INVERSE) && is_default_bg {
-            Some(foreground)
-        } else if flags.contains(Flags::INVERSE) {
-            Some(foreground)
-        } else {
-            bg
-        },
+        bg: if is_default_bg { None } else { Some(bg) },
         bold: flags.contains(Flags::BOLD),
         italic: flags.contains(Flags::ITALIC),
         underline: flags.contains(Flags::UNDERLINE),
@@ -385,49 +502,113 @@ pub(super) fn alacritty_cell_style(
 
 fn color_to_rgba(
     color: alacritty_terminal::vte::ansi::Color,
-    default_val: gpui::Rgba,
+    palette: &TerminalAnsiPalette,
+    _default_val: gpui::Rgba,
 ) -> gpui::Rgba {
     use alacritty_terminal::vte::ansi::Color;
+    use alacritty_terminal::vte::ansi::NamedColor;
     match color {
-        Color::Named(_) => default_val,
+        Color::Named(name) => match name {
+            NamedColor::Black => palette.black,
+            NamedColor::Red => palette.red,
+            NamedColor::Green => palette.green,
+            NamedColor::Yellow => palette.yellow,
+            NamedColor::Blue => palette.blue,
+            NamedColor::Magenta => palette.magenta,
+            NamedColor::Cyan => palette.cyan,
+            NamedColor::White => palette.white,
+            NamedColor::BrightBlack => palette.bright_black,
+            NamedColor::BrightRed => palette.bright_red,
+            NamedColor::BrightGreen => palette.bright_green,
+            NamedColor::BrightYellow => palette.bright_yellow,
+            NamedColor::BrightBlue => palette.bright_blue,
+            NamedColor::BrightMagenta => palette.bright_magenta,
+            NamedColor::BrightCyan => palette.bright_cyan,
+            NamedColor::BrightWhite => palette.bright_white,
+            NamedColor::DimBlack => palette.dim_black,
+            NamedColor::DimRed => palette.dim_red,
+            NamedColor::DimGreen => palette.dim_green,
+            NamedColor::DimYellow => palette.dim_yellow,
+            NamedColor::DimBlue => palette.dim_blue,
+            NamedColor::DimMagenta => palette.dim_magenta,
+            NamedColor::DimCyan => palette.dim_cyan,
+            NamedColor::DimWhite => palette.dim_white,
+            NamedColor::Foreground => palette.foreground,
+            NamedColor::Background => palette.background,
+            NamedColor::Cursor => palette.foreground,
+            NamedColor::BrightForeground => palette.foreground,
+            NamedColor::DimForeground => palette.foreground,
+        },
         Color::Spec(rgb) => gpui::Rgba {
             r: rgb.r as f32 / 255.0,
             g: rgb.g as f32 / 255.0,
             b: rgb.b as f32 / 255.0,
             a: 1.0,
         },
-        Color::Indexed(_) => default_val,
+        Color::Indexed(i) => get_color_at_index(i as usize, palette),
     }
+}
+
+fn get_color_at_index(index: usize, palette: &TerminalAnsiPalette) -> gpui::Rgba {
+    match index {
+        0..=15 => match index {
+            0 => palette.black,
+            1 => palette.red,
+            2 => palette.green,
+            3 => palette.yellow,
+            4 => palette.blue,
+            5 => palette.magenta,
+            6 => palette.cyan,
+            7 => palette.white,
+            8 => palette.bright_black,
+            9 => palette.bright_red,
+            10 => palette.bright_green,
+            11 => palette.bright_yellow,
+            12 => palette.bright_blue,
+            13 => palette.bright_magenta,
+            14 => palette.bright_cyan,
+            15 => palette.bright_white,
+            _ => unreachable!(),
+        },
+        16..=231 => {
+            let (r, g, b) = rgb_for_index((index - 16) as u8);
+            gpui::Rgba {
+                r: if r == 0 { 0.0 } else { (r * 40 + 55) as f32 / 255.0 },
+                g: if g == 0 { 0.0 } else { (g * 40 + 55) as f32 / 255.0 },
+                b: if b == 0 { 0.0 } else { (b * 40 + 55) as f32 / 255.0 },
+                a: 1.0,
+            }
+        }
+        232..=255 => {
+            let i = (index - 232) as u8;
+            let v = (i as f32 * 10.0 + 8.0) / 255.0;
+            gpui::Rgba { r: v, g: v, b: v, a: 1.0 }
+        }
+        256 => palette.foreground,
+        257 => palette.background,
+        _ => palette.black,
+    }
+}
+
+fn rgb_for_index(i: u8) -> (u8, u8, u8) {
+    let r = (i - i % 36) / 36;
+    let g = ((i % 36) - (i % 6)) / 6;
+    let b = (i % 36) % 6;
+    (r, g, b)
 }
 
 // ---------------------------------------------------------------------------
 // Utility functions
 // ---------------------------------------------------------------------------
 
-pub(super) fn terminal_default_background() -> gpui::Rgba {
-    rgba_from_hex(TERMINAL_DEFAULT_BG_HEX)
+pub(super) fn terminal_default_background(theme: AppTheme) -> gpui::Rgba {
+    let palette = TerminalAnsiPalette::from_theme(theme);
+    palette.background
 }
 
-pub(super) fn terminal_default_foreground() -> gpui::Rgba {
-    rgba_from_hex(TERMINAL_DEFAULT_FG_HEX)
-}
-
-fn rgba_from_hex(hex: u32) -> gpui::Rgba {
-    gpui::Rgba {
-        r: ((hex >> 16) & 0xff) as f32 / 255.0,
-        g: ((hex >> 8) & 0xff) as f32 / 255.0,
-        b: (hex & 0xff) as f32 / 255.0,
-        a: 1.0,
-    }
-}
-
-fn mix_rgba(fg: gpui::Rgba, bg: gpui::Rgba, t: f32) -> gpui::Rgba {
-    gpui::Rgba {
-        r: fg.r * (1.0 - t) + bg.r * t,
-        g: fg.g * (1.0 - t) + bg.g * t,
-        b: fg.b * (1.0 - t) + bg.b * t,
-        a: fg.a,
-    }
+pub(super) fn terminal_default_foreground(theme: AppTheme) -> gpui::Rgba {
+    let palette = TerminalAnsiPalette::from_theme(theme);
+    palette.foreground
 }
 
 // ---------------------------------------------------------------------------
@@ -657,18 +838,26 @@ pub(super) fn encode_control_key(key: &str) -> Option<u8> {
 // Build terminal row for rendering
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Debug)]
+pub(super) struct TerminalBackgroundRect {
+    pub row: i32,
+    pub col: i32,
+    pub num_cells: usize,
+    pub color: gpui::Rgba,
+}
+
 pub(super) fn build_alacritty_row(
     cells: &[IndexedCell],
     row: i32,
     cols: usize,
     base_style: &gpui::TextStyle,
-    _theme: AppTheme,
-) -> (SharedString, Vec<TextRun>) {
-    let terminal_fg = terminal_default_foreground();
-    let terminal_bg = terminal_default_background();
+    theme: AppTheme,
+) -> (SharedString, Vec<TextRun>, Vec<TerminalBackgroundRect>) {
+    let palette = TerminalAnsiPalette::from_theme(theme);
 
     let mut text = String::new();
     let mut runs = Vec::new();
+    let mut background_rects: Vec<TerminalBackgroundRect> = Vec::new();
     let mut active_style: Option<TerminalCellStyle> = None;
     let mut active_len = 0usize;
 
@@ -676,6 +865,7 @@ pub(super) fn build_alacritty_row(
 
     let mut col = 0usize;
     let mut cell_idx = 0usize;
+    let mut prev_had_extras = false;
 
     while col < cols {
         let cell = if cell_idx < row_cells.len() && row_cells[cell_idx].point.column.0 == col {
@@ -693,26 +883,77 @@ pub(super) fn build_alacritty_row(
         }
 
         let ch = cell.cell.c;
-        let contents: SharedString = if ch == ' ' || ch == '\0' {
-            " ".into()
+
+        let had_extras = prev_had_extras;
+        prev_had_extras = matches!(cell.cell.zerowidth(), Some(chars) if !chars.is_empty());
+
+        let style = alacritty_cell_style(&cell.cell, &palette);
+
+        if let Some(ref bg_color) = style.bg {
+            if let Some(last) = background_rects.last_mut()
+                && last.row == row
+                && last.col + last.num_cells as i32 == col as i32
+                && last.color == *bg_color
+            {
+                last.num_cells += 1;
+            } else {
+                background_rects.push(TerminalBackgroundRect {
+                    row,
+                    col: col as i32,
+                    num_cells: 1,
+                    color: *bg_color,
+                });
+            }
+        }
+
+        // Skip spaces that follow cells with extras (emoji variation sequences),
+        // but still push a space to maintain grid alignment.
+        if ch == ' ' && had_extras {
+            text.push(' ');
+            if active_style.as_ref().is_some_and(|current| *current == style) {
+                active_len += 1;
+            } else {
+                if let Some(previous) = active_style.take() {
+                    runs.push(terminal_text_run(base_style, &previous, active_len));
+                }
+                active_style = Some(style.clone());
+                active_len = 1;
+            }
+            col += 1;
+            continue;
+        }
+
+        // Push cell content to text (always, including spaces for grid alignment)
+        if ch == ' ' || ch == '\0' {
+            text.push(' ');
         } else {
-            ch.to_string().into()
+            text.push(ch);
+            if let Some(zw_chars) = cell.cell.zerowidth() {
+                for &zc in zw_chars {
+                    text.push(zc);
+                }
+            }
+        }
+
+        let pushed_len = if ch == ' ' || ch == '\0' {
+            1
+        } else {
+            ch.len_utf8()
+                + cell
+                    .cell
+                    .zerowidth()
+                    .map(|zw| zw.iter().map(|c| c.len_utf8()).sum::<usize>())
+                    .unwrap_or(0)
         };
 
-        let style = alacritty_cell_style(&cell.cell, terminal_fg, terminal_bg);
-
-        text.push_str(&contents);
-        if active_style
-            .as_ref()
-            .is_some_and(|current| current == &style)
-        {
-            active_len += contents.len();
+        if active_style.as_ref().is_some_and(|current| *current == style) {
+            active_len += pushed_len;
         } else {
             if let Some(previous) = active_style.take() {
                 runs.push(terminal_text_run(base_style, &previous, active_len));
             }
             active_style = Some(style);
-            active_len = contents.len();
+            active_len = pushed_len;
         }
 
         col += 1;
@@ -726,7 +967,7 @@ pub(super) fn build_alacritty_row(
             runs.push(terminal_text_run(base_style, &previous, active_len));
         }
 
-    (text.into(), runs)
+    (text.into(), runs, background_rects)
 }
 
 pub(super) fn terminal_text_run(
@@ -736,9 +977,6 @@ pub(super) fn terminal_text_run(
 ) -> TextRun {
     let mut text_style = base_style.clone();
     text_style.color = style.fg.into();
-    if let Some(bg) = style.bg {
-        text_style.background_color = Some(bg.into());
-    }
     if style.bold {
         text_style.font_weight = gpui::FontWeight::BOLD;
     }
@@ -756,7 +994,7 @@ pub(super) fn terminal_text_run(
         len,
         font: text_style.font(),
         color: text_style.color,
-        background_color: text_style.background_color,
+        background_color: None,
         underline: text_style.underline,
         strikethrough: None,
     }
@@ -840,6 +1078,244 @@ pub(super) fn sanitize_bracketed_paste(text: &str) -> String {
     text.chars()
         .filter(|ch| *ch == '\n' || *ch == '\t' || !ch.is_control())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Mouse encoding (port of Alacritty/Zed mouse report protocol)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+enum MouseButtonCode {
+    LeftButton = 0,
+    MiddleButton = 1,
+    RightButton = 2,
+    LeftMove = 32,
+    MiddleMove = 33,
+    RightMove = 34,
+    NoneMove = 35,
+    ScrollUp = 64,
+    ScrollDown = 65,
+}
+
+impl MouseButtonCode {
+    fn from_button(e: gpui::MouseButton) -> Self {
+        match e {
+            gpui::MouseButton::Left => MouseButtonCode::LeftButton,
+            gpui::MouseButton::Right => MouseButtonCode::MiddleButton,
+            gpui::MouseButton::Middle => MouseButtonCode::RightButton,
+            gpui::MouseButton::Navigate(_) => MouseButtonCode::LeftButton,
+        }
+    }
+
+    fn from_move_button(e: Option<gpui::MouseButton>) -> Self {
+        match e {
+            Some(gpui::MouseButton::Left) => MouseButtonCode::LeftMove,
+            Some(gpui::MouseButton::Middle) => MouseButtonCode::MiddleMove,
+            Some(gpui::MouseButton::Right) => MouseButtonCode::RightMove,
+            Some(gpui::MouseButton::Navigate(_)) => MouseButtonCode::LeftMove,
+            None => MouseButtonCode::NoneMove,
+        }
+    }
+
+    fn from_scroll(delta_y: Pixels) -> Self {
+        if delta_y > px(0.0) {
+            MouseButtonCode::ScrollUp
+        } else {
+            MouseButtonCode::ScrollDown
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MouseFormat {
+    Sgr,
+    Normal(bool),
+}
+
+impl MouseFormat {
+    fn from_mode(mode: TerminalModes) -> Self {
+        if mode.contains(TerminalModes::SGR_MOUSE) {
+            MouseFormat::Sgr
+        } else {
+            MouseFormat::Normal(false)
+        }
+    }
+}
+
+pub(super) fn terminal_grid_point(
+    mouse_pos: gpui::Point<Pixels>,
+    bounds: Bounds<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+    display_offset: usize,
+    cols: u16,
+) -> Option<(i32, usize)> {
+    let rel_x = (mouse_pos.x - bounds.left()).max(px(0.0));
+    let rel_y = (mouse_pos.y - bounds.top()).max(px(0.0));
+    if rel_x < px(0.0) || rel_y < px(0.0) {
+        return None;
+    }
+    let col = ((rel_x / cell_width).floor() as usize).min(cols as usize - 1);
+    let row = (rel_y / line_height).floor() as i32;
+    let grid_row = row - display_offset as i32;
+    Some((grid_row, col))
+}
+
+pub(super) fn terminal_mouse_button_report(
+    grid_row: i32,
+    grid_col: usize,
+    button: gpui::MouseButton,
+    modifiers: gpui::Modifiers,
+    pressed: bool,
+    mode: TerminalModes,
+) -> Option<Vec<u8>> {
+    let code = MouseButtonCode::from_button(button);
+    mouse_report(grid_row, grid_col, code, pressed, modifiers, MouseFormat::from_mode(mode))
+}
+
+pub(super) fn terminal_mouse_moved_report(
+    grid_row: i32,
+    grid_col: usize,
+    held_button: Option<gpui::MouseButton>,
+    modifiers: gpui::Modifiers,
+    mode: TerminalModes,
+) -> Option<Vec<u8>> {
+    if !mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
+        return None;
+    }
+    let code = MouseButtonCode::from_move_button(held_button);
+    if mode.contains(TerminalModes::MOUSE_DRAG)
+        && matches!(code, MouseButtonCode::NoneMove)
+    {
+        return None;
+    }
+    mouse_report(grid_row, grid_col, code, true, modifiers, MouseFormat::from_mode(mode))
+}
+
+pub(super) fn terminal_scroll_report(
+    grid_row: i32,
+    grid_col: usize,
+    modifiers: gpui::Modifiers,
+    delta_y: Pixels,
+    step_rows: usize,
+    mode: TerminalModes,
+) -> Vec<Vec<u8>> {
+    let code = MouseButtonCode::from_scroll(delta_y);
+    let mut reports = Vec::with_capacity(step_rows);
+    if let Some(report) =
+        mouse_report(grid_row, grid_col, code, true, modifiers, MouseFormat::from_mode(mode))
+    {
+        for _ in 0..step_rows {
+            reports.push(report.clone());
+        }
+    }
+    reports
+}
+
+fn mouse_report(
+    grid_row: i32,
+    grid_col: usize,
+    button: MouseButtonCode,
+    pressed: bool,
+    modifiers: gpui::Modifiers,
+    format: MouseFormat,
+) -> Option<Vec<u8>> {
+    if grid_row < 0 {
+        return None;
+    }
+    let mut mods: u8 = 0;
+    if modifiers.shift {
+        mods += 4;
+    }
+    if modifiers.alt {
+        mods += 8;
+    }
+    if modifiers.control {
+        mods += 16;
+    }
+    match format {
+        MouseFormat::Sgr => {
+            let c = if pressed { 'M' } else { 'm' };
+            Some(
+                format!(
+                    "\x1b[<{};{};{}{}",
+                    button as u8 + mods,
+                    grid_col + 1,
+                    grid_row + 1,
+                    c
+                )
+                .into_bytes(),
+            )
+        }
+        MouseFormat::Normal(_utf8) => {
+            if pressed {
+                normal_mouse_report(grid_row, grid_col, button as u8 + mods)
+            } else {
+                normal_mouse_report(grid_row, grid_col, 3 + mods)
+            }
+        }
+    }
+}
+
+fn normal_mouse_report(grid_row: i32, grid_col: usize, button: u8) -> Option<Vec<u8>> {
+    let max_point = 223;
+    if grid_row >= max_point || grid_col >= max_point as usize {
+        return None;
+    }
+    let mut msg = vec![b'\x1b', b'[', b'M', 32 + button];
+    msg.push(32 + 1 + grid_col as u8);
+    msg.push(32 + 1 + grid_row as u8);
+    Some(msg)
+}
+
+pub(super) fn terminal_mouse_event_at(
+    position: gpui::Point<Pixels>,
+    viewport_bounds: Option<Bounds<Pixels>>,
+    layout_cache: &Option<TerminalLayoutCache>,
+    last_content: &Option<TerminalContent>,
+    button: gpui::MouseButton,
+    modifiers: gpui::Modifiers,
+    pressed: bool,
+) -> Option<Vec<u8>> {
+    let bounds = viewport_bounds?;
+    let cache = layout_cache.as_ref()?;
+    let content = last_content.as_ref()?;
+    let mode = content.mode;
+    if !mode.mouse_mode() {
+        return None;
+    }
+    let (grid_row, grid_col) = terminal_grid_point(
+        position,
+        bounds,
+        cache.metrics.cell_width,
+        cache.metrics.line_height,
+        content.display_offset,
+        content.terminal_bounds.columns as u16,
+    )?;
+    terminal_mouse_button_report(grid_row, grid_col, button, modifiers, pressed, mode)
+}
+
+pub(super) fn terminal_mouse_moved_report_at(
+    position: gpui::Point<Pixels>,
+    viewport_bounds: Option<Bounds<Pixels>>,
+    layout_cache: &Option<TerminalLayoutCache>,
+    last_content: &Option<TerminalContent>,
+    held_button: Option<gpui::MouseButton>,
+    modifiers: gpui::Modifiers,
+    mode: TerminalModes,
+) -> Option<Vec<u8>> {
+    let bounds = viewport_bounds?;
+    let cache = layout_cache.as_ref()?;
+    let content = last_content.as_ref()?;
+    let (grid_row, grid_col) = terminal_grid_point(
+        position,
+        bounds,
+        cache.metrics.cell_width,
+        cache.metrics.line_height,
+        content.display_offset,
+        content.terminal_bounds.columns as u16,
+    )?;
+    terminal_mouse_moved_report(grid_row, grid_col, held_button, modifiers, mode)
 }
 
 // ---------------------------------------------------------------------------
@@ -929,7 +1405,8 @@ mod tests {
             make_cell('l', 3),
             make_cell('o', 4),
         ];
-        let (text, runs) = build_alacritty_row(&cells, 0, 5, &base, AppTheme::gitcomet_dark());
+        let (text, runs, _bg_rects) =
+            build_alacritty_row(&cells, 0, 5, &base, AppTheme::gitcomet_dark());
         assert_eq!(text, "hello", "text must contain all same-style characters");
         assert_eq!(
             runs.len(),
@@ -947,7 +1424,8 @@ mod tests {
     fn build_row_handles_empty_cells() {
         let base = default_text_style();
         let cells: Vec<IndexedCell> = vec![];
-        let (text, runs) = build_alacritty_row(&cells, 0, 5, &base, AppTheme::gitcomet_dark());
+        let (text, runs, _bg_rects) =
+            build_alacritty_row(&cells, 0, 5, &base, AppTheme::gitcomet_dark());
         assert_eq!(text, "");
         assert!(runs.is_empty());
     }
@@ -972,7 +1450,545 @@ mod tests {
             },
             make_cell('a', 1),
         ];
-        let (text, _runs) = build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
+        let (text, _runs, _bg_rects) =
+            build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
         assert_eq!(text, "a", "wide char spacer at col 0 must be skipped");
+    }
+
+    #[test]
+    fn build_row_produces_background_rects() {
+        let base = default_text_style();
+        let cells = vec![IndexedCell {
+            point: AlacPoint::new(Line(0), Column(0_usize)),
+            cell: AlacCell {
+                c: 'X',
+                fg: alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                ),
+                bg: alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Red,
+                ),
+                flags: Flags::empty(),
+                extra: None,
+            },
+        }];
+        let (_text, _runs, bg_rects) =
+            build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
+        assert_eq!(bg_rects.len(), 1, "non-default background must produce a rect");
+        assert_eq!(bg_rects[0].col, 0);
+        assert_eq!(bg_rects[0].num_cells, 1);
+        assert_eq!(bg_rects[0].row, 0);
+    }
+
+    #[test]
+    fn build_row_no_background_rects_for_default_bg() {
+        let base = default_text_style();
+        let cells = vec![make_cell('X', 0)];
+        let (_text, _runs, bg_rects) =
+            build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
+        assert!(
+            bg_rects.is_empty(),
+            "cells with default background must not produce rects"
+        );
+    }
+
+    #[test]
+    fn build_row_adjacent_same_bg_merged() {
+        let base = default_text_style();
+        let make_red_cell = |ch, col| IndexedCell {
+            point: AlacPoint::new(Line(0), Column(col as usize)),
+            cell: AlacCell {
+                c: ch,
+                fg: alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                ),
+                bg: alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Red,
+                ),
+                flags: Flags::empty(),
+                extra: None,
+            },
+        };
+        let cells = vec![make_red_cell('a', 0), make_red_cell('b', 1)];
+        let (_text, _runs, bg_rects) =
+            build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
+        assert_eq!(bg_rects.len(), 1, "adjacent same-bg cells must merge");
+        assert_eq!(bg_rects[0].num_cells, 2);
+    }
+
+    #[test]
+    fn build_row_different_bg_not_merged() {
+        let base = default_text_style();
+        let cells = vec![
+            IndexedCell {
+                point: AlacPoint::new(Line(0), Column(0_usize)),
+                cell: AlacCell {
+                    c: 'a',
+                    fg: alacritty_terminal::vte::ansi::Color::Named(
+                        alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                    ),
+                    bg: alacritty_terminal::vte::ansi::Color::Named(
+                        alacritty_terminal::vte::ansi::NamedColor::Red,
+                    ),
+                    flags: Flags::empty(),
+                    extra: None,
+                },
+            },
+            IndexedCell {
+                point: AlacPoint::new(Line(0), Column(1_usize)),
+                cell: AlacCell {
+                    c: 'b',
+                    fg: alacritty_terminal::vte::ansi::Color::Named(
+                        alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                    ),
+                    bg: alacritty_terminal::vte::ansi::Color::Named(
+                        alacritty_terminal::vte::ansi::NamedColor::Blue,
+                    ),
+                    flags: Flags::empty(),
+                    extra: None,
+                },
+            },
+        ];
+        let (_text, _runs, bg_rects) =
+            build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
+        assert_eq!(bg_rects.len(), 2, "different bg colors must not merge");
+    }
+
+    #[test]
+    fn color_to_rgba_resolves_named_ansi_colors() {
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let fg = palette.foreground;
+        let bg = palette.background;
+
+        let red = color_to_rgba(
+            alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Red,
+            ),
+            &palette,
+            fg,
+        );
+        assert_eq!(red, palette.red);
+
+        let green = color_to_rgba(
+            alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Green,
+            ),
+            &palette,
+            fg,
+        );
+        assert_eq!(green, palette.green);
+
+        let foreground = color_to_rgba(
+            alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Foreground,
+            ),
+            &palette,
+            fg,
+        );
+        assert_eq!(foreground, palette.foreground);
+    }
+
+    #[test]
+    fn color_to_rgba_resolves_spec_colors() {
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let fg = palette.foreground;
+        let spec = color_to_rgba(
+            alacritty_terminal::vte::ansi::Color::Spec(alacritty_terminal::vte::ansi::Rgb {
+                r: 100,
+                g: 150,
+                b: 200,
+            }),
+            &palette,
+            fg,
+        );
+        assert!((spec.r - 100.0 / 255.0).abs() < 0.01);
+        assert!((spec.g - 150.0 / 255.0).abs() < 0.01);
+        assert!((spec.b - 200.0 / 255.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn get_color_at_index_maps_correctly() {
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        assert_eq!(get_color_at_index(0, &palette), palette.black);
+        assert_eq!(get_color_at_index(1, &palette), palette.red);
+        assert_eq!(get_color_at_index(7, &palette), palette.white);
+        assert_eq!(get_color_at_index(8, &palette), palette.bright_black);
+        assert_eq!(get_color_at_index(15, &palette), palette.bright_white);
+        // 256-color cube: index 16 is first entry
+        let cube_color = get_color_at_index(16, &palette);
+        assert_eq!(cube_color.r, 0.0);
+        assert_eq!(cube_color.g, 0.0);
+        assert_eq!(cube_color.b, 0.0);
+        // Index 232 is first grayscale
+        let gray = get_color_at_index(232, &palette);
+        assert!((gray.r - 8.0 / 255.0).abs() < 0.01);
+        assert_eq!(gray.r, gray.g);
+        assert_eq!(gray.g, gray.b);
+    }
+
+    #[test]
+    fn alacritty_cell_style_inverse_swaps_fg_bg() {
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let cell = AlacCell {
+            c: 'X',
+            fg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::White,
+            ),
+            bg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Red,
+            ),
+            flags: Flags::INVERSE,
+            extra: None,
+        };
+        let style = alacritty_cell_style(&cell, &palette);
+        assert_eq!(style.fg, palette.red, "inverse swaps fg to bg color");
+        assert_eq!(style.bg, Some(palette.white), "inverse swaps bg to fg color");
+    }
+
+    #[test]
+    fn alacritty_cell_style_dim_reduces_alpha() {
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let cell = AlacCell {
+            c: 'X',
+            fg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::White,
+            ),
+            bg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Background,
+            ),
+            flags: Flags::DIM,
+            extra: None,
+        };
+        let style = alacritty_cell_style(&cell, &palette);
+        assert!(
+            style.fg.a < 1.0,
+            "dim must reduce foreground alpha"
+        );
+    }
+
+    #[test]
+    fn alacritty_cell_style_default_bg_is_none() {
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let cell = AlacCell {
+            c: 'X',
+            fg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Foreground,
+            ),
+            bg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Background,
+            ),
+            flags: Flags::empty(),
+            extra: None,
+        };
+        let style = alacritty_cell_style(&cell, &palette);
+        assert!(style.bg.is_none(), "default background must produce None bg");
+    }
+
+    #[test]
+    fn terminal_text_run_no_background_color() {
+        let base = default_text_style();
+        let style = TerminalCellStyle {
+            fg: gpui::rgb(0xff0000),
+            bg: Some(gpui::rgb(0x00ff00)),
+            bold: false,
+            italic: false,
+            underline: false,
+        };
+        let run = terminal_text_run(&base, &style, 5);
+        assert!(run.background_color.is_none(), "TextRun must never set background_color");
+        assert_eq!(run.color, gpui::Hsla::from(style.fg));
+    }
+
+    #[test]
+    fn terminal_palette_dark_vs_light_differs() {
+        let dark = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let light = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_light());
+        assert_ne!(
+            dark.background, light.background,
+            "dark/light palettes must differ"
+        );
+    }
+
+    #[test]
+    fn rgb_for_index_computes_6x6x6_cube() {
+        assert_eq!(rgb_for_index(0), (0, 0, 0));
+        assert_eq!(rgb_for_index(1), (0, 0, 1));
+        assert_eq!(rgb_for_index(5), (0, 0, 5));
+        assert_eq!(rgb_for_index(6), (0, 1, 0));
+        assert_eq!(rgb_for_index(35), (0, 5, 5));
+        assert_eq!(rgb_for_index(36), (1, 0, 0));
+        assert_eq!(rgb_for_index(215), (5, 5, 5));
+    }
+
+    #[test]
+    fn build_row_includes_spaces_for_grid_alignment() {
+        let base = default_text_style();
+        let cells = vec![
+            make_cell('a', 0),
+            make_cell(' ', 1),
+            make_cell(' ', 2),
+            make_cell('b', 3),
+        ];
+        let (text, _runs, _bg_rects) =
+            build_alacritty_row(&cells, 0, 5, &base, AppTheme::gitcomet_dark());
+        assert_eq!(
+            text, "a  b",
+            "text must include spaces so shape_line positions glyphs at correct columns"
+        );
+    }
+
+    #[test]
+    fn build_row_handles_zero_width_chars() {
+        let base = default_text_style();
+        let combining = '\u{0301}';
+        let cell = IndexedCell {
+            point: AlacPoint::new(Line(0), Column(0_usize)),
+            cell: {
+                let mut c = AlacCell {
+                    c: 'e',
+                    fg: alacritty_terminal::vte::ansi::Color::Named(
+                        alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                    ),
+                    bg: alacritty_terminal::vte::ansi::Color::Named(
+                        alacritty_terminal::vte::ansi::NamedColor::Background,
+                    ),
+                    flags: Flags::empty(),
+                    extra: None,
+                };
+                c.push_zerowidth(combining);
+                c
+            },
+        };
+        let (text, runs, _bg_rects) =
+            build_alacritty_row(&[cell], 0, 2, &base, AppTheme::gitcomet_dark());
+        let expected = format!("e{}", combining);
+        assert_eq!(text, expected, "text must include zero-width combining char");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].len, expected.len());
+    }
+
+    // -----------------------------------------------------------------------
+    // Mouse encoding tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mouse_mode_composite_flag() {
+        let mut mode = TerminalModes::default();
+        assert!(!mode.mouse_mode());
+        mode = TerminalModes::MOUSE_REPORT_CLICK;
+        assert!(mode.mouse_mode());
+        mode = TerminalModes::MOUSE_REPORT_CLICK | TerminalModes::MOUSE_DRAG;
+        assert!(mode.mouse_mode());
+        mode = TerminalModes::MOUSE_MOTION;
+        assert!(mode.mouse_mode());
+    }
+
+    #[test]
+    fn sgr_mouse_button_press_report() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK | TerminalModes::SGR_MOUSE;
+        let report = terminal_mouse_button_report(
+            5, 10,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+            true,
+            mode,
+        )
+        .unwrap();
+        let s = String::from_utf8(report).unwrap();
+        assert_eq!(s, "\x1b[<0;11;6M");
+    }
+
+    #[test]
+    fn sgr_mouse_button_release_report() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK | TerminalModes::SGR_MOUSE;
+        let report = terminal_mouse_button_report(
+            3, 7,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+            false,
+            mode,
+        )
+        .unwrap();
+        let s = String::from_utf8(report).unwrap();
+        assert_eq!(s, "\x1b[<0;8;4m");
+    }
+
+    #[test]
+    fn sgr_mouse_report_with_modifiers() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK | TerminalModes::SGR_MOUSE;
+        let mods = gpui::Modifiers {
+            shift: true,
+            control: true,
+            ..Default::default()
+        };
+        let report = terminal_mouse_button_report(
+            0, 0,
+            gpui::MouseButton::Left,
+            mods,
+            true,
+            mode,
+        )
+        .unwrap();
+        let s = String::from_utf8(report).unwrap();
+        assert_eq!(s, "\x1b[<20;1;1M", "shift=4 + control=16 + button=0 = 20");
+    }
+
+    #[test]
+    fn normal_mouse_button_press_report() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK;
+        let report = terminal_mouse_button_report(
+            0, 0,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+            true,
+            mode,
+        )
+        .unwrap();
+        assert_eq!(report, vec![0x1b, b'[', b'M', 32 + 0, 32 + 1 + 0, 32 + 1 + 0]);
+    }
+
+    #[test]
+    fn normal_mouse_button_release_report() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK;
+        let report = terminal_mouse_button_report(
+            0, 0,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+            false,
+            mode,
+        )
+        .unwrap();
+        assert_eq!(report, vec![0x1b, b'[', b'M', 32 + 3, 32 + 1 + 0, 32 + 1 + 0]);
+    }
+
+    #[test]
+    fn mouse_event_at_returns_none_without_mouse_mode() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let layout_cache = TerminalLayoutCache {
+            rem_size: px(16.0),
+            key: TerminalLayoutKey::default(),
+            base_style: default_text_style(),
+            metrics: TerminalTextMetrics {
+                font_size: px(14.0),
+                line_height: px(20.0),
+                cell_width: px(8.0),
+            },
+        };
+        let content = TerminalContent {
+            cells: vec![],
+            mode: TerminalModes::default(),
+            display_offset: 0,
+            cursor: TerminalCursor {
+                point: AlacPoint::new(Line(0), Column(0)),
+                shape: TerminalCursorShape::Beam,
+            },
+            cursor_char: ' ',
+            terminal_bounds: AlacTerminalBounds::new(80, 24),
+        };
+        let report = terminal_mouse_event_at(
+            point(px(40.0), px(80.0)),
+            Some(bounds),
+            &Some(layout_cache),
+            &Some(content),
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+            true,
+        );
+        assert!(report.is_none(), "no report when mouse mode is off");
+    }
+
+    #[test]
+    fn mouse_moved_report_with_motion_mode() {
+        let mode = TerminalModes::MOUSE_MOTION | TerminalModes::SGR_MOUSE;
+        let report = terminal_mouse_moved_report(
+            2, 5,
+            Some(gpui::MouseButton::Left),
+            gpui::Modifiers::default(),
+            mode,
+        )
+        .unwrap();
+        let s = String::from_utf8(report).unwrap();
+        assert_eq!(s, "\x1b[<32;6;3M");
+    }
+
+    #[test]
+    fn mouse_moved_report_none_move_blocked_in_drag_only_mode() {
+        let mode = TerminalModes::MOUSE_DRAG;
+        let report = terminal_mouse_moved_report(
+            0, 0,
+            None,
+            gpui::Modifiers::default(),
+            mode,
+        );
+        assert!(report.is_none(), "NoneMove blocked when only MOUSE_DRAG is set");
+    }
+
+    #[test]
+    fn scroll_report_generates_reports() {
+        let mode = TerminalModes::MOUSE_MODE | TerminalModes::SGR_MOUSE;
+        let reports = terminal_scroll_report(
+            10, 20,
+            gpui::Modifiers::default(),
+            px(-1.0),
+            2,
+            mode,
+        );
+        assert_eq!(reports.len(), 2);
+        let s0 = String::from_utf8(reports[0].clone()).unwrap();
+        assert_eq!(s0, "\x1b[<65;21;11M", "scroll down = 65");
+    }
+
+    #[test]
+    fn grid_point_computes_correctly() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let cell_width = px(8.0);
+        let line_height = px(16.0);
+        let display_offset = 0;
+        let cols = 100u16;
+
+        let (row, col) = terminal_grid_point(
+            point(px(40.0), px(80.0)),
+            bounds,
+            cell_width,
+            line_height,
+            display_offset,
+            cols,
+        )
+        .unwrap();
+        assert_eq!(col, 5);
+        assert_eq!(row, 5);
+    }
+
+    #[test]
+    fn grid_point_with_display_offset() {
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let cell_width = px(8.0);
+        let line_height = px(16.0);
+        let display_offset = 5;
+        let cols = 100u16;
+
+        let (row, _col) = terminal_grid_point(
+            point(px(0.0), px(0.0)),
+            bounds,
+            cell_width,
+            line_height,
+            display_offset,
+            cols,
+        )
+        .unwrap();
+        assert_eq!(row, -5, "viewport row 0 with offset 5 = grid row -5");
+    }
+
+    #[test]
+    fn mouse_report_rejects_negative_grid_rows() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK | TerminalModes::SGR_MOUSE;
+        let report = terminal_mouse_button_report(
+            -1, 0,
+            gpui::MouseButton::Left,
+            gpui::Modifiers::default(),
+            true,
+            mode,
+        );
+        assert!(report.is_none(), "negative grid row must not produce report");
     }
 }
