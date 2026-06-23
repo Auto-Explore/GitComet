@@ -256,7 +256,10 @@ fn blame_worktree_synthesizes_local_blame_for_newly_added_file() {
 
     std::fs::write(repo.join("seed.txt"), "seed\n").unwrap();
     run_git(repo, &["add", "seed.txt"]);
-    run_git(repo, &["-c", "commit.gpgsign=false", "commit", "-m", "base"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
@@ -269,14 +272,14 @@ fn blame_worktree_synthesizes_local_blame_for_newly_added_file() {
         .blame_worktree_file(Path::new("gaps.md"), DiffArea::Unstaged)
         .unwrap();
     assert_eq!(
-        untracked.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(),
+        untracked
+            .iter()
+            .map(|l| l.line.as_str())
+            .collect::<Vec<_>>(),
         vec!["alpha", "beta"]
     );
     for line in &untracked {
-        assert_eq!(
-            &*line.commit_id,
-            "0000000000000000000000000000000000000000"
-        );
+        assert_eq!(&*line.commit_id, "0000000000000000000000000000000000000000");
         assert!(!line.prior_exists);
         assert_eq!(line.prior_commit, None);
     }
@@ -394,4 +397,129 @@ fn resolve_file_path_at_commit_follows_renames_both_directions() {
             .unwrap(),
         None
     );
+}
+
+#[test]
+fn blame_worktree_staged_succeeds_for_conflicted_file() {
+    use gitcomet_core::domain::DiffArea;
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    std::fs::write(repo.join("file.txt"), "line1\nline2\nline3\n").unwrap();
+    run_git(repo, &["add", "file.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    // Two divergent edits to the same line conflict on merge, leaving the file
+    // unmerged with stages 1/2/3 and no stage-0 entry.
+    run_git(repo, &["checkout", "-b", "theirs"]);
+    std::fs::write(repo.join("file.txt"), "line1\ntheirs\nline3\n").unwrap();
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "theirs edit"],
+    );
+    run_git(repo, &["checkout", "main"]);
+    std::fs::write(repo.join("file.txt"), "line1\nours\nline3\n").unwrap();
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "ours edit"],
+    );
+
+    // The merge conflicts; do not assert success.
+    let mut merge = Command::new("git");
+    test_git_env::apply(&mut merge);
+    let _ = merge
+        .arg("-C")
+        .arg(repo)
+        .args(["merge", "theirs"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .status()
+        .expect("git merge to run");
+
+    let opened = GixBackend.open(repo).unwrap();
+    // Regression: the staged side has no stage-0 entry for a conflicted file, so
+    // blame must fall back to the "ours" stage rather than erroring with
+    // "no staged content".
+    let staged = opened
+        .blame_worktree_file(Path::new("file.txt"), DiffArea::Staged)
+        .expect("staged blame on a conflicted file must not error");
+    assert_eq!(
+        staged.iter().map(|l| l.line.as_str()).collect::<Vec<_>>(),
+        vec!["line1", "ours", "line3"],
+        "staged blame falls back to the 'ours' stage content"
+    );
+}
+
+#[test]
+fn blame_file_folds_multiline_subject_and_preserves_body() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    // A commit whose subject paragraph spans two physical lines before the blank
+    // separator, plus a body. Committed verbatim so the message is stored exactly.
+    std::fs::write(repo.join("a.txt"), "content\n").unwrap();
+    run_git(repo, &["add", "a.txt"]);
+    let lf_msg = repo.join("LF_MSG");
+    std::fs::write(
+        &lf_msg,
+        "subject one\nsubject two\n\nbody line A\nbody line B\n",
+    )
+    .unwrap();
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--cleanup=verbatim",
+            "-F",
+            lf_msg.to_str().unwrap(),
+        ],
+    );
+
+    // A commit using CRLF paragraph separators — the old hand-rolled `\n\n` scan
+    // never matched `\r\n\r\n` and dropped the body entirely.
+    std::fs::write(repo.join("b.txt"), "x\n").unwrap();
+    run_git(repo, &["add", "b.txt"]);
+    let crlf_msg = repo.join("CRLF_MSG");
+    std::fs::write(&crlf_msg, "subject crlf\r\n\r\nbody crlf line\r\n").unwrap();
+    run_git(
+        repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--cleanup=verbatim",
+            "-F",
+            crlf_msg.to_str().unwrap(),
+        ],
+    );
+
+    let opened = GixBackend.open(repo).unwrap();
+
+    // git folds a multi-line subject into one summary line; the middle line must
+    // survive (the old split lost it), and the body is the text after the blank.
+    let blame_a = opened.blame_file(Path::new("a.txt"), None).unwrap();
+    assert_eq!(blame_a.len(), 1);
+    assert_eq!(blame_a[0].summary.as_ref(), "subject one subject two");
+    assert_eq!(blame_a[0].body.as_deref(), Some("body line A\nbody line B"));
+
+    // CRLF separators are recognized, so the body is preserved rather than lost.
+    let blame_b = opened.blame_file(Path::new("b.txt"), None).unwrap();
+    assert_eq!(blame_b.len(), 1);
+    assert_eq!(blame_b[0].summary.as_ref(), "subject crlf");
+    assert_eq!(blame_b[0].body.as_deref(), Some("body crlf line"));
 }

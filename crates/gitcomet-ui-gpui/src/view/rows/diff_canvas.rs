@@ -227,8 +227,7 @@ fn paint_truncated_text(
 /// those have no commit to open, so their action icons and click handlers are
 /// suppressed.
 fn blame_commit_is_navigable(commit_id: &gitcomet_core::domain::CommitId) -> bool {
-    let id = commit_id.0.as_ref();
-    !id.is_empty() && !id.bytes().all(|b| b == b'0')
+    !commit_id.is_uncommitted()
 }
 
 /// Paint the annotation column for one row: a recency border bar and, on run

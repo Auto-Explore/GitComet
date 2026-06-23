@@ -1792,6 +1792,114 @@ fn repo_command_finished_stage_hunk_triggers_diff_reload_effects() {
     )));
 }
 
+fn ready_working_tree_blame() -> Loadable<std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>> {
+    Loadable::Ready(std::sync::Arc::new(vec![
+        gitcomet_core::services::BlameLine {
+            commit_id: Arc::from("1111111111111111111111111111111111111111"),
+            author: Arc::from("Ada"),
+            author_time_unix: Some(1_700_000_000),
+            summary: Arc::from("initial"),
+            body: None,
+            line: "let x = 1;".to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
+        },
+    ]))
+}
+
+#[test]
+fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
+    // Regression: staging recomputes the diff, and the blame annotation column is
+    // derived from the same content. Leaving blame `Ready` would make the view
+    // skip a reload (same target, already attempted) and paint stale attribution.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].history_state.blame_source = Some(
+        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
+    );
+    state.repos[0].history_state.blame = ready_working_tree_blame();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::StageHunk,
+            result: Ok(CommandOutput::empty_success("git apply --cached")),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        "blame must be invalidated so the annotation column reloads after staging"
+    );
+    // The target is preserved so the reload re-blames the same file/source.
+    assert_eq!(
+        state.repos[0].history_state.blame_path.as_deref(),
+        Some(std::path::Path::new("src/lib.rs"))
+    );
+    assert_eq!(
+        state.repos[0].history_state.blame_source,
+        Some(gitcomet_core::domain::BlameSource::WorkingTree(
+            DiffArea::Unstaged
+        ))
+    );
+}
+
+#[test]
+fn commit_finished_invalidates_loaded_blame() {
+    // Regression: committing changes which lines are committed, so a stale blame
+    // would mislabel them. Blame must be dropped along with the diff.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].history_state.blame_source = Some(
+        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Staged),
+    );
+    state.repos[0].history_state.blame = ready_working_tree_blame();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        "blame must be invalidated after a commit so the annotation column reloads"
+    );
+}
+
 #[test]
 fn repo_command_finished_stage_hunk_with_svg_diff_triggers_text_and_image_reload_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();

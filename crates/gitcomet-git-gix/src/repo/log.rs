@@ -864,6 +864,15 @@ impl GixRepo {
         }
     }
 
+    /// The hex object id of `commit`'s first parent, or `None` for a root commit
+    /// (or any lookup failure).
+    fn first_parent_id(&self, commit: &CommitId) -> Option<String> {
+        let repo = self._repo.to_thread_local();
+        let id = repo.rev_parse_single(commit.as_ref()).ok()?.detach();
+        let commit = repo.find_commit(id).ok()?;
+        commit.parent_ids().next().map(|parent| parent.to_string())
+    }
+
     /// The destination path of a rename of `old_path` introduced by `commit`,
     /// using rename detection against its parent.
     fn rename_destination_at_commit(
@@ -871,6 +880,15 @@ impl GixRepo {
         commit: &CommitId,
         old_path: &Path,
     ) -> Result<Option<PathBuf>> {
+        // Diff against the first parent explicitly. A bare `git diff-tree <merge>`
+        // emits no per-file rows for a merge commit (it needs -m/-c/--cc), which
+        // would silently fail to resolve a rename introduced at a merge; passing
+        // both endpoints makes diff-tree produce a normal first-parent diff. For a
+        // non-merge commit this is identical to the implicit single-arg form, and
+        // for a root commit (no parent) there is no rename to find.
+        let Some(parent) = self.first_parent_id(commit) else {
+            return Ok(None);
+        };
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("-c")
             .arg("core.quotePath=false")
@@ -879,6 +897,7 @@ impl GixRepo {
             .arg("-r")
             .arg("--name-status")
             .arg("--no-commit-id")
+            .arg(&parent)
             .arg(commit.as_ref());
         let output = run_git_capture(cmd, "git diff-tree -M")?;
 
@@ -1365,6 +1384,16 @@ mod tests {
         );
     }
 
+    fn git_stdout(workdir: &Path, args: &[&str]) -> String {
+        let mut cmd = crate::util::git_workdir_cmd_for(workdir);
+        let output = cmd.args(args).output().expect("spawn git");
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("utf8 stdout")
+            .trim()
+            .to_string()
+    }
+
     fn init_test_repo(workdir: &Path) {
         git_success(workdir, &["init"]);
         for args in [
@@ -1415,6 +1444,46 @@ mod tests {
     #[test]
     fn object_id_from_commit_id_rejects_invalid_hex() {
         assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    }
+
+    #[test]
+    fn rename_destination_at_commit_resolves_rename_introduced_at_merge() {
+        // Regression: a bare `git diff-tree <merge>` prints nothing (it needs
+        // -m/-c/--cc), so resolving a rename introduced at a merge commit used to
+        // fail and the followed file fell back to a now-nonexistent path. The fix
+        // diffs against the first parent explicitly, which works for merges too.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        commit_file(repo, "src/old.txt", "alpha\nbeta\ngamma\n", "base");
+        let main = git_stdout(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+        // A side branch edits the file so the merge is a real (non-ff) merge.
+        git_success(repo, &["checkout", "-b", "feature"]);
+        commit_file(
+            repo,
+            "src/old.txt",
+            "alpha\nbeta two\ngamma\n",
+            "edit on feature",
+        );
+
+        // Back on the mainline, advance unrelated history, then merge feature but
+        // resolve it by renaming the file — a rename that exists only at the merge
+        // commit relative to its first parent.
+        git_success(repo, &["checkout", &main]);
+        commit_file(repo, "other.txt", "x\n", "main advance");
+        git_success(repo, &["merge", "--no-commit", "--no-ff", "feature"]);
+        fs::create_dir_all(repo.join("lib")).expect("create lib dir");
+        git_success(repo, &["mv", "src/old.txt", "lib/new.txt"]);
+        git_success(repo, &["commit", "-m", "evil merge rename"]);
+        let merge = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+        let opened = open_repo(repo);
+        let resolved = opened
+            .rename_destination_at_commit(&CommitId(merge.into()), Path::new("src/old.txt"))
+            .expect("rename resolution should not error");
+        assert_eq!(resolved, Some(PathBuf::from("lib/new.txt")));
     }
 
     #[test]

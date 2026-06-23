@@ -651,7 +651,7 @@ fn build_row_blame_paint_inner(
     // all-zero object id. These render as a distinct local-change row: a
     // staged/unstaged-colored bar, the matching label, no author initials, no
     // summary, and no action icons.
-    let uncommitted = line.commit_id.is_empty() || line.commit_id.bytes().all(|b| b == b'0');
+    let uncommitted = gitcomet_core::domain::is_uncommitted_commit_id(&line.commit_id);
     let group = if uncommitted {
         BlameGroup::Local(ctx.area.map(|area| classify_local_change(area, is_context)))
     } else {
@@ -766,7 +766,8 @@ fn build_row_blame_paint_tracked(
     theme: AppTheme,
 ) -> Option<diff_canvas::RowBlamePaint> {
     let prev_state = prev.get();
-    let result = build_row_blame_paint_inner(ctx, is_context, old_line, new_line, prev_state, theme);
+    let result =
+        build_row_blame_paint_inner(ctx, is_context, old_line, new_line, prev_state, theme);
     prev.set(BlamePrev {
         new_line: new_line.or(prev_state.new_line),
         group: match &result {
@@ -806,13 +807,15 @@ impl MainPaneView {
         };
         let lines = std::sync::Arc::clone(lines);
         // The time range never changes for a given loaded blame, so memoize it by
-        // the blame Arc's identity instead of rescanning every frame.
-        let key = std::sync::Arc::as_ptr(&lines) as usize;
-        let range = match self.blame_time_range_cache {
-            Some((cached_key, range)) if cached_key == key => range,
+        // the blame Arc's identity instead of rescanning every frame. Compare by
+        // `ptr_eq` against a held Arc clone: keeping the cached allocation alive
+        // means a reloaded blame can't reuse the same address and alias a stale
+        // range (an ABA hazard a bare pointer key would have).
+        let range = match &self.blame_time_range_cache {
+            Some((cached, range)) if std::sync::Arc::ptr_eq(cached, &lines) => *range,
             _ => {
                 let range = super::blame::blame_time_range(&lines);
-                self.blame_time_range_cache = Some((key, range));
+                self.blame_time_range_cache = Some((std::sync::Arc::clone(&lines), range));
                 range
             }
         };
@@ -1583,7 +1586,14 @@ impl MainPaneView {
                     wrap,
                     annotation_width,
                     blame_ctx.as_ref().and_then(|ctx| {
-                        build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, theme)
+                        build_row_blame_paint_tracked(
+                            ctx,
+                            matches!(visual_kind, DiffLineKind::Context),
+                            line.old_line,
+                            line.new_line,
+                            &blame_prev_nl,
+                            theme,
+                        )
                     }),
                     annot_hover,
                     cx,

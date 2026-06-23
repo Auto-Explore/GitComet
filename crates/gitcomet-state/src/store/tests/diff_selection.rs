@@ -1987,6 +1987,101 @@ fn open_file_content_sets_diff_target_and_content_preview() {
 }
 
 #[test]
+fn global_nav_realigns_viewer_history_onto_restored_file_view() {
+    // Regression: a global (mouse) navigation that lands on a file-content view
+    // must reposition the in-viewer file-version history (`view_history`) onto
+    // the file now shown, so the viewer's prev/next-version buttons step relative
+    // to it rather than a stale cursor left behind by earlier file opens.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    // Open three files in the viewer: view_history = [a, b, c], cursor = 2.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            path: PathBuf::from("a.rs"),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::Commit(CommitId("c1".into())),
+            path: PathBuf::from("b.rs"),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::Commit(CommitId("c2".into())),
+            path: PathBuf::from("c.rs"),
+        },
+    );
+    assert_eq!(state.repos[0].view_history.cursor, 2);
+
+    // Leave the viewer for a full-tree commit diff (not a file-content view): the
+    // global stack records it, but view_history stops tracking and stays at c.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::Commit {
+                commit_id: CommitId("c3".into()),
+                path: None,
+            },
+        },
+    );
+    assert_eq!(
+        state.repos[0].view_history.cursor, 2,
+        "a non-content diff view must not record viewer history"
+    );
+
+    // Mouse-back twice: lands on c's content view, then b's content view.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+
+    // The viewer-history cursor now points at b (the file shown), not stale c, so
+    // "previous version" would step to a and "next version" to c.
+    let view_history = &state.repos[0].view_history;
+    assert_eq!(view_history.cursor, 1);
+    let current = &view_history.entries[view_history.cursor];
+    assert_eq!(current.source, FileSource::Commit(CommitId("c1".into())));
+    assert_eq!(current.path, PathBuf::from("b.rs"));
+    assert!(view_history.can_back());
+    assert!(view_history.can_forward());
+}
+
+#[test]
 fn open_file_content_skips_conflict_path_during_browse() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);

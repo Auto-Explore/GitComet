@@ -222,6 +222,30 @@ fn content_view_target(
     }
 }
 
+/// Reverse of [`content_view_target`]: the [`ViewHistoryEntry`] a file-content
+/// `target` corresponds to, or `None` when `target` is not a file-content view
+/// (range/full-tree diffs). Used to realign the viewer's file-version history
+/// when a global navigation restores a file-content view.
+fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry> {
+    match target {
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => Some(ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::Commit(commit_id.clone()),
+            path: path.clone(),
+        }),
+        DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        } => Some(ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::WorkingDirectory,
+            path: path.clone(),
+        }),
+        _ => None,
+    }
+}
+
 /// Step the viewer's back/forward history and replay the resulting view without
 /// recording it (so navigation doesn't mutate the stack).
 pub(super) fn viewer_nav(
@@ -300,6 +324,16 @@ pub(super) fn global_nav(
     // Restore the main content target: a diff/file view, or the history log.
     match snapshot.diff_target {
         Some(target) => {
+            // When this global step lands on a file-content view, realign the
+            // viewer's file-version history (a separate stack) onto the file now
+            // shown, so its prev/next-version buttons step relative to it instead
+            // of a stale cursor left from earlier file opens.
+            if snapshot.content_preview
+                && let Some(entry) = view_history_entry_for_target(&target)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.view_history.seek_or_record(entry);
+            }
             let mut inline = SelectDiffEffects::new();
             fill_select_diff_inline(
                 state,

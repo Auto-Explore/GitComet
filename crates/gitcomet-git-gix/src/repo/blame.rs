@@ -7,7 +7,7 @@ use crate::util::{
     bytes_to_text_preserving_utf8, path_buf_from_git_bytes, run_git_capture_bytes,
     run_git_with_output, run_git_with_stdin_capture,
 };
-use gitcomet_core::domain::DiffArea;
+use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
 use gix::bstr::ByteSlice as _;
@@ -61,6 +61,23 @@ fn path_exists_at_head(repo: &gix::Repository, path: &Path) -> bool {
         return false;
     };
     matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
+}
+
+/// Read the staged (index) content for `path` to blame. This is normally the
+/// stage-0 blob, but a merge-conflicted file has no stage-0 entry — only the
+/// base/ours/theirs stages (1/2/3). In that case fall back to "ours" (stage 2),
+/// then "theirs" (stage 3), so toggling blame on the staged side of a conflicted
+/// file still produces a blame instead of erroring with "no staged content".
+fn staged_blob_for_blame(repo: &gix::Repository, path: &Path) -> Result<Vec<u8>> {
+    for stage in [0u8, 2, 3] {
+        if let Some(bytes) = gix_index_stage_blob_bytes_optional(repo, path, stage)? {
+            return Ok(bytes);
+        }
+    }
+    Err(Error::new(ErrorKind::Backend(format!(
+        "no staged content for {}",
+        path.display()
+    ))))
 }
 
 /// Build an all-"Not Committed Yet" blame for `contents`, used for a file with no
@@ -155,33 +172,26 @@ fn blame_commit_metadata<'a>(
                 ),
                 Err(_) => (Arc::<str>::default(), None),
             };
-            let raw_message = commit.message_raw_sloppy();
-            let summary_bytes = raw_message.lines().next().unwrap_or_default();
-            let summary = bstr_to_arc_str(summary_bytes);
-            let body = {
-                let bytes: &[u8] = raw_message.as_ref();
-                if let Some(body_idx) = bytes.windows(2).position(|w| w == b"\n\n") {
-                    let body_bytes = &bytes[body_idx + 2..];
-                    let body_bytes = if body_bytes.first() == Some(&b'\n') {
-                        &body_bytes[1..]
-                    } else {
-                        body_bytes
-                    };
-                    let body_bytes = if body_bytes.last() == Some(&b'\n') {
-                        &body_bytes[..body_bytes.len() - 1]
-                    } else {
-                        body_bytes
-                    };
-                    if body_bytes.is_empty() {
-                        None
-                    } else {
-                        let text = bstr_to_arc_str(body_bytes);
-                        Some(text)
-                    }
-                } else {
-                    None
-                }
-            };
+            // Split subject from body the way git itself does, via gix's message
+            // parser: the subject is the whole first paragraph (folded into one
+            // line, so a multi-line subject keeps every line) and the body is
+            // everything after the blank-line separator. Hand-rolling this with a
+            // `\n\n` scan dropped middle subject lines and missed CRLF separators.
+            let message = commit.message().ok();
+            let summary = message
+                .as_ref()
+                .map(|m| {
+                    let folded = m.summary();
+                    let bytes: &[u8] = &folded;
+                    bstr_to_arc_str(bytes)
+                })
+                .unwrap_or_default();
+            let body = message.as_ref().and_then(|m| m.body).and_then(|b| {
+                let bytes: &[u8] = b;
+                let bytes = bytes.strip_suffix(b"\n").unwrap_or(bytes);
+                let bytes = bytes.strip_suffix(b"\r").unwrap_or(bytes);
+                (!bytes.is_empty()).then(|| bstr_to_arc_str(bytes))
+            });
 
             Ok(entry.insert(BlameCommitMetadata {
                 commit_id_text: oid_to_arc_str(&commit_id),
@@ -235,7 +245,9 @@ fn blame_blob_lines(blob: &[u8]) -> BlameBlobLines<'_> {
 }
 
 fn is_hex_object_id(token: &str) -> bool {
-    token.len() == 40 && token.bytes().all(|b| b.is_ascii_hexdigit())
+    // SHA-1 ids are 40 hex chars, SHA-256 ids are 64. Accept both so blame
+    // parsing works on repositories using either object format.
+    matches!(token.len(), 40 | 64) && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Parse `git blame --line-porcelain` output into per-line blame entries.
@@ -266,7 +278,7 @@ fn parse_blame_porcelain(output: &[u8], blamed_path: &Path) -> Vec<BlameLine> {
         if raw_line.first() == Some(&b'\t') {
             let text = blame_line_text(&raw_line[1..]);
             let sha = commit_id.clone().unwrap_or_default();
-            let uncommitted = !sha.is_empty() && sha.bytes().all(|b| b == b'0');
+            let uncommitted = is_uncommitted_commit_id(&sha);
             let (author_text, summary_text, time, prior) = if uncommitted {
                 (
                     NOT_COMMITTED.to_string(),
@@ -461,13 +473,7 @@ impl GixRepo {
                     let abs_path = self.spec.workdir.join(path);
                     fs::read(&abs_path).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?
                 }
-                DiffArea::Staged => gix_index_stage_blob_bytes_optional(&repo, path, 0)?
-                    .ok_or_else(|| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "no staged content for {}",
-                            path.display()
-                        )))
-                    })?,
+                DiffArea::Staged => staged_blob_for_blame(&repo, path)?,
             };
             return Ok(synthesize_uncommitted_blame(&contents));
         }
@@ -486,13 +492,7 @@ impl GixRepo {
                 run_git_capture_bytes(cmd, "git blame --line-porcelain")?
             }
             DiffArea::Staged => {
-                let contents =
-                    gix_index_stage_blob_bytes_optional(&repo, path, 0)?.ok_or_else(|| {
-                        Error::new(ErrorKind::Backend(format!(
-                            "no staged content for {}",
-                            path.display()
-                        )))
-                    })?;
+                let contents = staged_blob_for_blame(&repo, path)?;
                 cmd.arg("--contents").arg("-").arg("--").arg(path);
                 run_git_with_stdin_capture(cmd, contents, "git blame --contents")?
             }
@@ -674,6 +674,44 @@ mod tests {
     }
 
     #[test]
+    fn is_hex_object_id_accepts_sha1_and_sha256_widths() {
+        assert!(is_hex_object_id(&"a".repeat(40))); // SHA-1
+        assert!(is_hex_object_id(&"a".repeat(64))); // SHA-256
+        // Other lengths and non-hex tokens are not object ids.
+        assert!(!is_hex_object_id(&"a".repeat(39)));
+        assert!(!is_hex_object_id(&"a".repeat(41)));
+        assert!(!is_hex_object_id(&"a".repeat(63)));
+        assert!(!is_hex_object_id("author"));
+        assert!(!is_hex_object_id(&"g".repeat(40)));
+    }
+
+    #[test]
+    fn parse_blame_porcelain_recognizes_sha256_commit_ids() {
+        // On a SHA-256 repository the per-line commit-id header is 64 hex chars;
+        // it must be recognized so the committed line keeps its attribution
+        // instead of falling through with an empty commit id.
+        let sha256 = "a".repeat(64);
+        let output = format!(
+            concat!(
+                "{sha} 1 1 1\n",
+                "author Ada Lovelace\n",
+                "author-time 1700000000\n",
+                "summary initial commit\n",
+                "filename src/lib.rs\n",
+                "\tcommitted line\n",
+            ),
+            sha = sha256
+        );
+
+        let lines = parse_blame_porcelain(output.as_bytes(), std::path::Path::new("src/lib.rs"));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].commit_id.as_ref(), sha256);
+        assert_eq!(lines[0].author.as_ref(), "Ada Lovelace");
+        assert_eq!(lines[0].summary.as_ref(), "initial commit");
+        assert_eq!(lines[0].author_time_unix, Some(1700000000));
+    }
+
+    #[test]
     fn synthesize_uncommitted_blame_marks_every_line_local() {
         // A newly added file with no committed history: every line is surfaced as
         // an uncommitted ("Not Committed Yet") entry with the all-zero object id
@@ -730,7 +768,8 @@ mod tests {
             "\tuncommitted line\n",
         );
 
-        let lines = parse_blame_porcelain(output.as_bytes(), std::path::Path::new("new/dir/lib.rs"));
+        let lines =
+            parse_blame_porcelain(output.as_bytes(), std::path::Path::new("new/dir/lib.rs"));
         assert_eq!(lines.len(), 3);
         assert_eq!(
             lines[0].source_path.as_deref(),
@@ -758,7 +797,10 @@ mod tests {
         let lines = parse_blame_porcelain(&output, std::path::Path::new("docs/new.md"));
         assert_eq!(lines.len(), 1);
         assert_eq!(
-            lines[0].source_path.as_deref().map(|p| p.as_os_str().as_bytes()),
+            lines[0]
+                .source_path
+                .as_deref()
+                .map(|p| p.as_os_str().as_bytes()),
             Some(&b"docs/\xff-old.md"[..])
         );
     }

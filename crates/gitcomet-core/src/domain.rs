@@ -36,6 +36,24 @@ impl std::fmt::Display for CommitId {
     }
 }
 
+impl CommitId {
+    /// Whether this id is git's "not committed yet" marker rather than a real
+    /// commit. See [`is_uncommitted_commit_id`].
+    pub fn is_uncommitted(&self) -> bool {
+        is_uncommitted_commit_id(&self.0)
+    }
+}
+
+/// Whether `id` is git's all-zero "not committed yet" object id, emitted by
+/// `git blame`/`git diff` for working-tree lines that have no commit. Works for
+/// any hash length (40-char SHA-1, 64-char SHA-256). An empty id is also treated
+/// as uncommitted: it never names a real commit (it only arises from an
+/// unparsed/unknown id), so callers that gate navigation or commit attribution
+/// on a real commit must exclude it the same way.
+pub fn is_uncommitted_commit_id(id: &str) -> bool {
+    id.is_empty() || id.bytes().all(|b| b == b'0')
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
     pub id: CommitId,
@@ -840,6 +858,22 @@ mod tests {
     use std::io::Cursor;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn uncommitted_commit_id_detects_zero_and_empty_for_any_hash_length() {
+        // git's all-zero sentinel, SHA-1 (40) and SHA-256 (64) widths.
+        assert!(is_uncommitted_commit_id(&"0".repeat(40)));
+        assert!(is_uncommitted_commit_id(&"0".repeat(64)));
+        // An empty/unparsed id is treated as uncommitted (names no real commit).
+        assert!(is_uncommitted_commit_id(""));
+        // Real commit ids of either width are committed.
+        assert!(!is_uncommitted_commit_id("deadbeef"));
+        assert!(!is_uncommitted_commit_id(&format!("{}1", "0".repeat(63))));
+        // CommitId delegates to the same rule.
+        assert!(CommitId("0".repeat(40).into()).is_uncommitted());
+        assert!(CommitId("".into()).is_uncommitted());
+        assert!(!CommitId("abc123".into()).is_uncommitted());
+    }
 
     #[test]
     fn submodule_status_maps_known_git_markers() {

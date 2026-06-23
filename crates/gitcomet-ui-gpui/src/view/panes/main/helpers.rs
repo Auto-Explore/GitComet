@@ -2290,6 +2290,13 @@ pub(in crate::view) struct DiffHorizontalScrollState {
     pub(in crate::view) content_widths: [Pixels; 2],
 }
 
+/// Memoized blame author-time range, keyed by a clone of the blame `Arc`. See
+/// [`MainPaneView::blame_time_range_cache`].
+pub(in crate::view) type BlameTimeRangeCache = Option<(
+    std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>,
+    Option<(i64, i64)>,
+)>;
+
 impl DiffHorizontalScrollState {
     pub(in crate::view) fn new() -> Self {
         Self {
@@ -2347,9 +2354,12 @@ pub(crate) struct MainPaneView {
     /// accent highlight and tooltip for the annotation column on the next paint.
     pub(in crate::view) blame_annot_hover: Option<(usize, crate::view::rows::AnnotArea)>,
     /// Memoized `(min, max)` author-time range for the currently loaded blame,
-    /// keyed by the blame `Arc`'s pointer. The range never changes after load, so
-    /// this avoids rescanning all blame lines on every render frame.
-    pub(in crate::view) blame_time_range_cache: Option<(usize, Option<(i64, i64)>)>,
+    /// keyed by a clone of the blame `Arc`. The range never changes after load,
+    /// so this avoids rescanning all blame lines on every render frame. Holding
+    /// the `Arc` (rather than a bare pointer) keeps the allocation alive while
+    /// cached, so a reloaded blame can never alias the same address and return a
+    /// stale range.
+    pub(in crate::view) blame_time_range_cache: BlameTimeRangeCache,
     pub(in crate::view) rendered_preview_modes: RenderedPreviewModes,
     pub(in crate::view) diff_word_wrap: bool,
     pub(in crate::view) diff_show_line_numbers: bool,

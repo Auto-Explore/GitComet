@@ -422,6 +422,18 @@ impl<T: Clone + PartialEq> NavStack<T> {
         self.entries.get(self.cursor).cloned()
     }
 
+    /// Align the cursor with an entry restored by a *different* navigation
+    /// stack. If `entry` is already present, move the cursor onto it without
+    /// mutating the stack; otherwise record it as a fresh entry. Used so the
+    /// in-viewer file-version history follows along when the global (mouse)
+    /// back/forward navigation lands on a file-content view.
+    pub fn seek_or_record(&mut self, entry: T) {
+        match self.entries.iter().position(|e| *e == entry) {
+            Some(idx) => self.cursor = idx,
+            None => self.record(entry),
+        }
+    }
+
     pub fn can_back(&self) -> bool {
         self.cursor > 0
     }
@@ -1494,6 +1506,30 @@ mod tests {
         );
         assert_eq!(h.cursor, 1);
         assert!(!h.can_forward());
+    }
+
+    #[test]
+    fn seek_or_record_moves_cursor_to_existing_entry_without_mutating() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.record(entry("c"));
+        // Realign onto an entry already present: only the cursor moves.
+        h.seek_or_record(entry("a"));
+        assert_eq!(h.cursor, 0);
+        assert_eq!(h.entries, vec![entry("a"), entry("b"), entry("c")]);
+        assert!(h.can_forward());
+    }
+
+    #[test]
+    fn seek_or_record_appends_when_entry_absent() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        // An entry not in the stack is recorded as a fresh destination.
+        h.seek_or_record(entry("z"));
+        assert_eq!(h.entries, vec![entry("a"), entry("b"), entry("z")]);
+        assert_eq!(h.cursor, 2);
     }
 
     #[test]
