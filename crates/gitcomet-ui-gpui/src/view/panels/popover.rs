@@ -1327,7 +1327,7 @@ impl PopoverHost {
         ) || self
             .popover
             .as_ref()
-            .map_or(false, popover_is_confirm_dialog)
+            .is_some_and(popover_is_confirm_dialog)
     }
 
     fn wrap_prompt_focus(
@@ -1393,7 +1393,7 @@ impl PopoverHost {
         if self
             .popover
             .as_ref()
-            .map_or(false, popover_is_confirm_dialog)
+            .is_some_and(popover_is_confirm_dialog)
         {
             self.close_popover(cx);
             return;

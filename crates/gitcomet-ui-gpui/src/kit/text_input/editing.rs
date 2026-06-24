@@ -2082,7 +2082,6 @@ impl TextInput {
                 self.interaction.tab_pressed = true;
             }
             cx.notify();
-            return;
         }
     }
 
