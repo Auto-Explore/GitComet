@@ -615,8 +615,7 @@ impl PopoverHost {
                     let commits = page.commits.clone();
 
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
-                    let count =
-                        count_path_matches_by(&commits, &query, file_history_match_text);
+                    let count = count_path_matches_by(&commits, &query, file_history_match_text);
 
                     match handle_picker_nav(&keys, &mut this.file_history_selected_index, count) {
                         PickerNavOutcome::Escape => {
