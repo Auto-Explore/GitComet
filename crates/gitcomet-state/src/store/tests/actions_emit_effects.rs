@@ -2032,24 +2032,6 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::ExportPatch {
-            repo_id,
-            commit_id: CommitId("cafebabe".into()),
-            dest: PathBuf::from("out.patch"),
-        },
-    );
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::ExportPatch {
-            repo_id: RepoId(1),
-            ..
-        }]
-    ));
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
         Msg::ApplyPatch {
             repo_id,
             patch: PathBuf::from("input.patch"),
@@ -2370,13 +2352,6 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
             "Save file",
         ),
         (
-            RepoCommandKind::ExportPatch {
-                commit_id: CommitId("deadbeef".into()),
-                dest: PathBuf::from("out.patch"),
-            },
-            "Patch",
-        ),
-        (
             RepoCommandKind::ApplyPatch {
                 patch: PathBuf::from("in.patch"),
             },
@@ -2483,13 +2458,6 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
                 stage: false,
             },
             "Saved → a.txt",
-        ),
-        (
-            RepoCommandKind::ExportPatch {
-                commit_id: CommitId("deadbeef".into()),
-                dest: PathBuf::from("out.patch"),
-            },
-            "Patch exported → out.patch",
         ),
         (
             RepoCommandKind::ApplyPatch {

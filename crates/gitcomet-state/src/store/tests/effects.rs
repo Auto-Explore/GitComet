@@ -4956,14 +4956,6 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
-            Effect::ExportPatch {
-                repo_id,
-                commit_id: commit_id.clone(),
-                dest: PathBuf::from("out.patch"),
-            },
-            1,
-        ),
-        (
             Effect::ApplyPatch {
                 repo_id,
                 patch: PathBuf::from("change.patch"),
