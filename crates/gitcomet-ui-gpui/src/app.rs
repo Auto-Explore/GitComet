@@ -531,12 +531,12 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
                 update_active_normal_gitcomet_window(cx, |view, cx| view.close_active_repo_tab(cx))
                     .unwrap_or(false);
             if !handled {
-                close_active_window(cx);
+                close_active_window_or_warn(cx);
             }
         });
     });
     cx.on_action(|_: &CloseWindow, cx| {
-        cx.defer(close_active_window);
+        cx.defer(close_active_window_or_warn);
     });
     cx.on_action(|_: &PreviousRepository, cx| {
         cx.defer(|cx| {
@@ -599,7 +599,7 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
-    cx.on_action(|_: &Quit, cx| cx.defer(|cx| cx.quit()));
+    cx.on_action(|_: &Quit, cx| cx.defer(quit_app_or_warn));
 }
 
 fn install_global_diff_shortcut_fallback(cx: &mut App) {
@@ -914,6 +914,15 @@ fn active_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
     (entry.view_mode == GitCometViewMode::Normal).then_some(entry)
 }
 
+fn normal_gitcomet_window_by_id(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+) -> Option<GitCometWindowEntry> {
+    gitcomet_window_entries(cx).into_iter().find(|entry| {
+        entry.handle.window_id() == window_id && entry.view_mode == GitCometViewMode::Normal
+    })
+}
+
 fn update_active_normal_gitcomet_window<R>(
     cx: &mut App,
     f: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) -> R,
@@ -932,6 +941,85 @@ fn close_active_window(cx: &mut App) {
         let _ = window.update(cx, |_root, window, _cx| {
             window.remove_window();
         });
+    }
+}
+
+pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
+    let window_id = window.window_handle().window_id();
+    let handled = normal_gitcomet_window_by_id(cx, window_id)
+        .and_then(|entry| {
+            entry
+                .view
+                .update(cx, |view, cx| view.request_close_window_or_warn(cx))
+                .ok()
+        })
+        .unwrap_or(false);
+    if !handled {
+        window.remove_window();
+    }
+}
+
+pub(crate) fn close_active_window_or_warn(cx: &mut App) {
+    let handled =
+        update_active_normal_gitcomet_window(cx, |view, cx| view.request_close_window_or_warn(cx))
+            .unwrap_or(false);
+    if !handled {
+        close_active_window(cx);
+    }
+}
+
+pub(crate) fn quit_app_or_warn(cx: &mut App) {
+    let entries: Vec<_> = gitcomet_window_entries(cx)
+        .into_iter()
+        .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
+        .collect();
+    if entries.is_empty() {
+        cx.quit();
+        return;
+    }
+
+    let mut terminal_count = 0usize;
+    let mut running_command_count = 0usize;
+    let mut repo_names: Vec<String> = Vec::new();
+    for entry in &entries {
+        if let Ok(summary) = entry
+            .view
+            .read_with(cx, |view, _cx| view.running_terminal_summary())
+        {
+            terminal_count += summary.terminal_count;
+            running_command_count += summary.running_command_count;
+            repo_names.extend(summary.repo_names);
+        }
+    }
+
+    if running_command_count == 0 {
+        cx.quit();
+        return;
+    }
+
+    let active_window_id = cx.active_window().map(|window| window.window_id());
+    let prompt_entry = active_window_id
+        .and_then(|active_window_id| {
+            entries
+                .iter()
+                .find(|entry| entry.handle.window_id() == active_window_id)
+                .cloned()
+        })
+        .or_else(|| entries.first().cloned());
+
+    if let Some(entry) = prompt_entry {
+        let all_views: Vec<_> = entries.iter().map(|e| e.view.clone()).collect();
+        let _ = entry.view.update(cx, |view, cx| {
+            view.request_quit_or_warn(
+                terminal_count,
+                running_command_count,
+                repo_names,
+                all_views,
+                cx,
+            );
+        });
+    } else {
+        cx.quit();
     }
 }
 

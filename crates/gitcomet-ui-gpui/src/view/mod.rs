@@ -1158,6 +1158,8 @@ impl GitCometView {
             details_width_animating: false,
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
+            pending_terminal_shutdown_prompt: None,
+            pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             pending_force_remove_worktree_prompt: None,
@@ -2386,6 +2388,19 @@ impl Render for GitCometView {
             self.open_popover_at(
                 PopoverKind::PullReconcilePrompt { repo_id },
                 self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(prompt) = self.pending_terminal_shutdown_prompt.take() {
+            let anchor = point(
+                self.last_window_size.width / 2.0,
+                self.last_window_size.height / 2.0,
+            );
+            self.open_popover_at(
+                PopoverKind::TerminalShutdownConfirm(prompt),
+                anchor,
                 window,
                 cx,
             );

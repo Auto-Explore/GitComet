@@ -137,6 +137,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
+        | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -314,6 +315,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
+        | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
@@ -460,6 +462,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::PullPicker => 36u8.hash(hasher),
         PopoverKind::PushPicker => 37u8.hash(hasher),
         PopoverKind::AppMenu => 38u8.hash(hasher),
+        PopoverKind::TerminalShutdownConfirm(prompt) => {
+            67u8.hash(hasher);
+            prompt.action.hash(hasher);
+            prompt.summary.terminal_count.hash(hasher);
+            prompt.summary.running_command_count.hash(hasher);
+            prompt.summary.repo_names.hash(hasher);
+        }
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
             40u8.hash(hasher);
             repo_id.hash(hasher);

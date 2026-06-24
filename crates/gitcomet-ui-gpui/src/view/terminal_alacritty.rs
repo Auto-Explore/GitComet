@@ -179,6 +179,7 @@ pub(super) struct SpawnedAlacTerminal {
     pub term_lock: AlacrittyTermLock,
     pub events_rx: smol::channel::Receiver<TerminalBackendEvent>,
     pub pty_sender: PtySender,
+    pub child_pid: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -249,6 +250,7 @@ pub(super) fn spawn_alacritty_terminal(
         window_id,
     )
     .map_err(|e| format!("failed to open PTY: {e}"))?;
+    let child_pid = pty_child_pid(&pty);
 
     let config = terminal_config(TERMINAL_SCROLLBACK_ROWS);
     let term_lock = new_term(&config, &initial_bounds, events_tx.clone());
@@ -271,6 +273,7 @@ pub(super) fn spawn_alacritty_terminal(
         term_lock,
         events_rx,
         pty_sender: PtySender { event_loop_tx },
+        child_pid,
     })
 }
 
@@ -314,6 +317,17 @@ fn new_term(
 ) -> AlacrittyTermLock {
     let term = Term::new(config.clone(), bounds, GitCometListener { events_tx });
     Arc::new(FairMutex::new(term))
+}
+
+fn pty_child_pid(pty: &tty::Pty) -> Option<u32> {
+    #[cfg(not(windows))]
+    {
+        Some(pty.child().id())
+    }
+    #[cfg(windows)]
+    {
+        pty.child_watcher().pid().map(std::num::NonZeroU32::get)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +442,7 @@ pub(super) enum TerminalCursorShape {
     Underline,
     Beam,
     Hollow,
+    Hidden,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -655,7 +670,7 @@ pub(super) fn make_terminal_content(term: &Term<GitCometListener>) -> TerminalCo
         display_offset: content.display_offset,
         cursor: TerminalCursor {
             point: cursor_point,
-            shape: TerminalCursorShape::Beam,
+            shape: terminal_cursor_shape(content.cursor.shape),
         },
         cursor_char,
         terminal_bounds: AlacTerminalBounds::new(columns, screen_lines),
@@ -747,6 +762,38 @@ pub(super) fn encode_alacritty_key_input(
             "right" => return Some(b"\x1b[1;2C".to_vec()),
             "left" => return Some(b"\x1b[1;2D".to_vec()),
             _ => {}
+        }
+    }
+
+    let modifier_code = terminal_modifier_code(keystroke);
+    if modifier_code > 1 {
+        let modified = match key {
+            "up" => Some(format!("\x1b[1;{modifier_code}A")),
+            "down" => Some(format!("\x1b[1;{modifier_code}B")),
+            "right" => Some(format!("\x1b[1;{modifier_code}C")),
+            "left" => Some(format!("\x1b[1;{modifier_code}D")),
+            "home" => Some(format!("\x1b[1;{modifier_code}H")),
+            "end" => Some(format!("\x1b[1;{modifier_code}F")),
+            "insert" => Some(format!("\x1b[2;{modifier_code}~")),
+            "delete" => Some(format!("\x1b[3;{modifier_code}~")),
+            "pageup" => Some(format!("\x1b[5;{modifier_code}~")),
+            "pagedown" => Some(format!("\x1b[6;{modifier_code}~")),
+            "f1" => Some(format!("\x1b[1;{modifier_code}P")),
+            "f2" => Some(format!("\x1b[1;{modifier_code}Q")),
+            "f3" => Some(format!("\x1b[1;{modifier_code}R")),
+            "f4" => Some(format!("\x1b[1;{modifier_code}S")),
+            "f5" => Some(format!("\x1b[15;{modifier_code}~")),
+            "f6" => Some(format!("\x1b[17;{modifier_code}~")),
+            "f7" => Some(format!("\x1b[18;{modifier_code}~")),
+            "f8" => Some(format!("\x1b[19;{modifier_code}~")),
+            "f9" => Some(format!("\x1b[20;{modifier_code}~")),
+            "f10" => Some(format!("\x1b[21;{modifier_code}~")),
+            "f11" => Some(format!("\x1b[23;{modifier_code}~")),
+            "f12" => Some(format!("\x1b[24;{modifier_code}~")),
+            _ => None,
+        };
+        if let Some(bytes) = modified {
+            return Some(bytes.into_bytes());
         }
     }
 
@@ -851,6 +898,32 @@ pub(super) fn encode_control_key(key: &str) -> Option<u8> {
         "^" => Some(0x1e),
         "_" => Some(0x1f),
         _ => None,
+    }
+}
+
+fn terminal_modifier_code(keystroke: &gpui::Keystroke) -> u32 {
+    let mut modifier_code = 0;
+    if keystroke.modifiers.shift {
+        modifier_code |= 1;
+    }
+    if keystroke.modifiers.alt {
+        modifier_code |= 1 << 1;
+    }
+    if keystroke.modifiers.control {
+        modifier_code |= 1 << 2;
+    }
+    modifier_code + 1
+}
+
+fn terminal_cursor_shape(shape: alacritty_terminal::vte::ansi::CursorShape) -> TerminalCursorShape {
+    use alacritty_terminal::vte::ansi::CursorShape;
+
+    match shape {
+        CursorShape::Block => TerminalCursorShape::Block,
+        CursorShape::Underline => TerminalCursorShape::Underline,
+        CursorShape::Beam => TerminalCursorShape::Beam,
+        CursorShape::HollowBlock => TerminalCursorShape::Hollow,
+        CursorShape::Hidden => TerminalCursorShape::Hidden,
     }
 }
 
@@ -2468,6 +2541,59 @@ mod tests {
         };
         let result = encode_alacritty_key_input(&ks, false, true);
         assert_eq!(result, Some(b" ".to_vec()));
+    }
+
+    #[test]
+    fn encode_tab_produces_tab_byte() {
+        let ks = gpui::Keystroke {
+            key: "tab".into(),
+            modifiers: gpui::Modifiers::default(),
+            key_char: None,
+        };
+        let result = encode_alacritty_key_input(&ks, false, true);
+        assert_eq!(result, Some(b"\t".to_vec()));
+    }
+
+    #[test]
+    fn encode_shift_tab_produces_backtab_escape_sequence() {
+        let ks = gpui::Keystroke {
+            key: "tab".into(),
+            modifiers: gpui::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            key_char: None,
+        };
+        let result = encode_alacritty_key_input(&ks, false, true);
+        assert_eq!(result, Some(b"\x1b[Z".to_vec()));
+    }
+
+    #[test]
+    fn encode_ctrl_left_produces_modified_escape_sequence() {
+        let ks = gpui::Keystroke {
+            key: "left".into(),
+            modifiers: gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            key_char: None,
+        };
+        let result = encode_alacritty_key_input(&ks, false, true);
+        assert_eq!(result, Some(b"\x1b[1;5D".to_vec()));
+    }
+
+    #[test]
+    fn encode_ctrl_right_produces_modified_escape_sequence() {
+        let ks = gpui::Keystroke {
+            key: "right".into(),
+            modifiers: gpui::Modifiers {
+                control: true,
+                ..Default::default()
+            },
+            key_char: None,
+        };
+        let result = encode_alacritty_key_input(&ks, false, true);
+        assert_eq!(result, Some(b"\x1b[1;5C".to_vec()));
     }
 
     // -----------------------------------------------------------------------

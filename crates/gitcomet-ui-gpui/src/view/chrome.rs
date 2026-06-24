@@ -554,7 +554,7 @@ impl Render for TitleBarView {
         .gitcomet_tooltip(theme, close_tooltip)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
-            window.remove_window();
+            crate::app::close_window_or_warn(window, cx);
         }));
 
         let free_badge_bg = with_alpha(

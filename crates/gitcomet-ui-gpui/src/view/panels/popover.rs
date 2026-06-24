@@ -34,6 +34,7 @@ mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
 mod submodule_trust_confirm;
+mod terminal_shutdown_confirm;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -443,6 +444,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
+        PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         PopoverKind::PullPicker
@@ -2545,6 +2547,9 @@ impl PopoverHost {
                 cx,
             ),
             PopoverKind::AppMenu => app_menu::panel(self, cx),
+            PopoverKind::TerminalShutdownConfirm(prompt) => {
+                terminal_shutdown_confirm::panel(self, prompt, cx)
+            }
         };
 
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);

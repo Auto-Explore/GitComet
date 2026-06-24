@@ -2536,6 +2536,7 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     AppMenu,
+    TerminalShutdownConfirm(TerminalShutdownPrompt),
     TerminalMenu {
         repo_id: RepoId,
         context: TerminalMenuContext,
@@ -3013,6 +3014,7 @@ pub(super) struct TerminalViewportView {
     pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
     pub(super) search_matches: Vec<(usize, usize)>,
     pub(super) active_match_index: Option<usize>,
+    pub(super) scrollbar_dragging: bool,
 }
 
 /// A single terminal (one PTY + alacritty + rendered viewport). A repo can hold
@@ -3020,6 +3022,7 @@ pub(super) struct TerminalViewportView {
 pub(super) struct TerminalInstance {
     pub(super) focus_handle: FocusHandle,
     pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(super) child_pid: Option<u32>,
     pub(super) events_rx:
         Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
     pub(super) connected: bool,
@@ -3044,6 +3047,39 @@ impl RepoTerminalSession {
     pub(super) fn instance_by_seq_mut(&mut self, seq: u64) -> Option<&mut TerminalInstance> {
         self.instances.iter_mut().find(|i| i.session_seq == seq)
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TerminalShutdownSummary {
+    pub(crate) terminal_count: usize,
+    pub(crate) running_command_count: usize,
+    pub(crate) repo_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum TerminalShutdownAction {
+    CloseRepo { repo_id: RepoId },
+    CloseTerminalForRepo { repo_id: RepoId },
+    CloseTerminalTab { repo_id: RepoId, index: usize },
+    CloseWindow,
+    QuitApp,
+}
+
+impl TerminalShutdownAction {
+    pub(in crate::view) fn repo_id(&self) -> Option<RepoId> {
+        match self {
+            Self::CloseRepo { repo_id }
+            | Self::CloseTerminalForRepo { repo_id }
+            | Self::CloseTerminalTab { repo_id, .. } => Some(*repo_id),
+            Self::CloseWindow | Self::QuitApp => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct TerminalShutdownPrompt {
+    pub(in crate::view) action: TerminalShutdownAction,
+    pub(in crate::view) summary: TerminalShutdownSummary,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3476,6 +3512,8 @@ pub struct GitCometView {
     pub(super) pane_resize: Option<PaneResizeState>,
 
     pub(super) last_mouse_pos: Point<Pixels>,
+    pub(super) pending_terminal_shutdown_prompt: Option<TerminalShutdownPrompt>,
+    pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_remove_worktree_prompt:

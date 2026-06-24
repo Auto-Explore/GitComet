@@ -1,7 +1,13 @@
 use super::terminal_alacritty::*;
 use super::*;
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
+use gpui::prelude::*;
+use rustc_hash::FxHasher;
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process_group};
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
@@ -28,10 +34,18 @@ struct TerminalCanvasPaintState {
     selection_rects: Vec<Bounds<Pixels>>,
     background_rects: Vec<(Point<Pixels>, gpui::Size<Pixels>, gpui::Rgba)>,
     lines: Vec<(ShapedLine, Point<Pixels>, Pixels)>,
-    cursor: Option<Bounds<Pixels>>,
+    cursor: Option<TerminalPaintCursor>,
     ime_bounds: Option<Bounds<Pixels>>,
     ime_marked_text: Option<String>,
     ime_base_style: Option<gpui::TextStyle>,
+    scrollbar_track: Option<Bounds<Pixels>>,
+    scrollbar_thumb: Option<Bounds<Pixels>>,
+}
+
+#[derive(Clone)]
+struct TerminalPaintCursor {
+    bounds: Bounds<Pixels>,
+    shape: TerminalCursorShape,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,6 +95,7 @@ impl TerminalViewportView {
             ime_state: None,
             search_matches: Vec::new(),
             active_match_index: None,
+            scrollbar_dragging: false,
         }
     }
 
@@ -241,7 +256,77 @@ impl TerminalViewportView {
         if let Some(ref pty) = self.pty_sender {
             pty.write(bytes);
             self.reset_cursor_blink(cx);
+            cx.notify();
         }
+    }
+
+    fn scrollbar_scroll_to_pos(&mut self, mouse_y: Pixels, cx: &mut gpui::Context<Self>) {
+        let Some(term_lock) = &self.term_lock else {
+            return;
+        };
+        let Some(bounds) = self.viewport_bounds else {
+            return;
+        };
+        let _track_width = px(8.0);
+        let margin = px(2.0);
+        let track_top = bounds.top() + margin;
+        let track_height = bounds.bottom() - track_top - margin;
+        if track_height <= px(0.0) {
+            return;
+        }
+
+        let term = term_lock.lock();
+        let grid = term.grid();
+        let _screen_lines = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.screen_lines)
+            .unwrap_or(0);
+        let history_size = grid.history_size();
+        if history_size == 0 {
+            drop(grid);
+            drop(term);
+            return;
+        }
+
+        let fraction_scrolled = ((mouse_y - track_top) / track_height).clamp(0.0, 1.0) as f32;
+        let new_display_offset =
+            (fraction_scrolled * history_size.saturating_sub(1) as f32) as usize;
+        let current_offset = self
+            .last_content
+            .as_ref()
+            .map(|c| c.display_offset)
+            .unwrap_or(0);
+        let delta = new_display_offset as i32 - current_offset as i32;
+        drop(grid);
+        if delta == 0 {
+            drop(term);
+            return;
+        }
+        {
+            let mut term = term_lock.lock();
+            let scroll_lines = delta.abs();
+            if delta > 0 {
+                for _ in 0..scroll_lines {
+                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
+                }
+            } else {
+                for _ in 0..scroll_lines {
+                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(-1));
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn is_in_scrollbar_area(&self, position: gpui::Point<Pixels>) -> bool {
+        let Some(bounds) = self.viewport_bounds else {
+            return false;
+        };
+        let scrollbar_width = px(10.0);
+        position.x >= bounds.right() - scrollbar_width
+            && position.y >= bounds.top()
+            && position.y <= bounds.bottom()
     }
 
     fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<Self>) {
@@ -649,6 +734,12 @@ impl TerminalViewportView {
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
 
+        if button == gpui::MouseButton::Left && self.is_in_scrollbar_area(event.position) {
+            self.scrollbar_dragging = true;
+            self.scrollbar_scroll_to_pos(event.position.y, cx);
+            return;
+        }
+
         if self.mouse_mode_active {
             self.queue_mouse_event(event.position, button, event.modifiers, true, cx);
             self.pressed_mouse_button = Some(button);
@@ -707,6 +798,10 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
         button: gpui::MouseButton,
     ) {
+        if self.scrollbar_dragging {
+            self.scrollbar_dragging = false;
+            return;
+        }
         if self.mouse_mode_active {
             self.queue_mouse_event(event.position, button, event.modifiers, false, cx);
         } else if button == gpui::MouseButton::Left && self.selection_end.is_none() {
@@ -724,6 +819,10 @@ impl TerminalViewportView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.scrollbar_dragging {
+            self.scrollbar_scroll_to_pos(event.position.y, cx);
+            return;
+        }
         if self.mouse_mode_active {
             let mode = self
                 .last_content
@@ -775,10 +874,11 @@ impl TerminalViewportView {
                 }
             }
             if let Some(new_end) = self.viewport_to_grid_point(event.position)
-                && self.selection_end != Some(new_end) {
-                    self.selection_end = Some(new_end);
-                    cx.notify();
-                }
+                && self.selection_end != Some(new_end)
+            {
+                self.selection_end = Some(new_end);
+                cx.notify();
+            }
         }
     }
 
@@ -942,9 +1042,14 @@ impl TerminalViewportView {
             let disp_off = content.display_offset as i32;
             for row in 0..rows {
                 let cache_row = &mut self.render_cache.rows[usize::from(row)];
+                let grid_row = row as i32 - disp_off;
+                let row_fingerprint = terminal_row_fingerprint(&content.cells, grid_row, cols);
 
-                if rebuild || cache_row.shaped.is_none() {
-                    let grid_row = row as i32 - disp_off;
+                if rebuild
+                    || cache_row.shaped.is_none()
+                    || cache_row.fingerprint != row_fingerprint
+                    || cache_row.layout_key != layout.key
+                {
                     let (text, runs, bg_rects) = build_alacritty_row(
                         &content.cells,
                         grid_row,
@@ -956,8 +1061,10 @@ impl TerminalViewportView {
                         text,
                         layout.metrics.font_size,
                         &runs,
-                        None,
+                        Some(layout.metrics.cell_width),
                     );
+                    cache_row.fingerprint = row_fingerprint;
+                    cache_row.layout_key = layout.key;
                     cache_row.shaped = Some(shaped);
                     cache_row.background_rects = bg_rects;
                 }
@@ -966,15 +1073,20 @@ impl TerminalViewportView {
                     paint_state.lines.push((
                         shaped.clone(),
                         point(
-                            bounds.left(),
-                            bounds.top() + layout.metrics.line_height * row as f32,
+                            terminal_snap_to_device_pixels(window, bounds.left()),
+                            terminal_snap_to_device_pixels(
+                                window,
+                                bounds.top() + layout.metrics.line_height * row as f32,
+                            ),
                         ),
                         layout.metrics.line_height,
                     ));
                 }
 
                 for rect in &cache_row.background_rects {
-                    all_bg_rects.push(rect.clone());
+                    let mut screen_rect = rect.clone();
+                    screen_rect.row += disp_off;
+                    all_bg_rects.push(screen_rect);
                 }
             }
 
@@ -982,12 +1094,24 @@ impl TerminalViewportView {
             let merged = merge_background_rects(&all_bg_rects);
             for rect in &merged {
                 let origin = point(
-                    bounds.left() + layout.metrics.cell_width * rect.col as f32,
-                    bounds.top() + layout.metrics.line_height * rect.row as f32,
+                    terminal_snap_to_device_pixels(
+                        window,
+                        bounds.left() + layout.metrics.cell_width * rect.col as f32,
+                    ),
+                    terminal_snap_to_device_pixels(
+                        window,
+                        bounds.top() + layout.metrics.line_height * rect.row as f32,
+                    ),
                 );
                 let rect_size = size(
-                    layout.metrics.cell_width * rect.num_cells as f32,
-                    layout.metrics.line_height * rect.num_rows as f32,
+                    terminal_snap_to_device_pixels(
+                        window,
+                        layout.metrics.cell_width * rect.num_cells as f32,
+                    ),
+                    terminal_snap_to_device_pixels(
+                        window,
+                        layout.metrics.line_height * rect.num_rows as f32,
+                    ),
                 );
                 paint_state
                     .background_rects
@@ -1013,12 +1137,21 @@ impl TerminalViewportView {
                     };
                     if sel_start_col < sel_end_col {
                         let sel_origin = point(
-                            bounds.left() + layout.metrics.cell_width * sel_start_col as f32,
-                            bounds.top() + layout.metrics.line_height * sel_row as f32,
+                            terminal_snap_to_device_pixels(
+                                window,
+                                bounds.left() + layout.metrics.cell_width * sel_start_col as f32,
+                            ),
+                            terminal_snap_to_device_pixels(
+                                window,
+                                bounds.top() + layout.metrics.line_height * sel_row as f32,
+                            ),
                         );
                         let sel_size = size(
-                            layout.metrics.cell_width * (sel_end_col - sel_start_col) as f32,
-                            layout.metrics.line_height,
+                            terminal_snap_to_device_pixels(
+                                window,
+                                layout.metrics.cell_width * (sel_end_col - sel_start_col) as f32,
+                            ),
+                            terminal_snap_to_device_pixels(window, layout.metrics.line_height),
                         );
                         paint_state
                             .selection_rects
@@ -1033,6 +1166,7 @@ impl TerminalViewportView {
                     .ime_state
                     .as_ref()
                     .is_none_or(|s| s.marked_text.is_empty())
+                && content.cursor.shape != TerminalCursorShape::Hidden
             {
                 let cursor_row = content.cursor.point.line.0 as f32;
                 let cursor_col = content.cursor.point.column.0 as f32;
@@ -1041,14 +1175,33 @@ impl TerminalViewportView {
                     && cursor_col >= 0.0
                     && cursor_col < cols as f32
                 {
+                    let cursor_width = terminal_cursor_width(
+                        content.cursor_char,
+                        &layout.base_style,
+                        layout.metrics.font_size,
+                        layout.metrics.cell_width,
+                        window,
+                    );
                     let cursor_bounds = Bounds::new(
                         point(
-                            bounds.left() + layout.metrics.cell_width * cursor_col,
-                            bounds.top() + layout.metrics.line_height * cursor_row,
+                            terminal_snap_to_device_pixels(
+                                window,
+                                bounds.left() + layout.metrics.cell_width * cursor_col,
+                            ),
+                            terminal_snap_to_device_pixels(
+                                window,
+                                bounds.top() + layout.metrics.line_height * cursor_row,
+                            ),
                         ),
-                        size(layout.metrics.cell_width, layout.metrics.line_height),
+                        size(
+                            terminal_snap_to_device_pixels(window, cursor_width),
+                            terminal_snap_to_device_pixels(window, layout.metrics.line_height),
+                        ),
                     );
-                    paint_state.cursor = Some(cursor_bounds);
+                    paint_state.cursor = Some(TerminalPaintCursor {
+                        bounds: cursor_bounds,
+                        shape: content.cursor.shape,
+                    });
                     paint_state.ime_bounds = Some(cursor_bounds);
                 }
             }
@@ -1171,6 +1324,45 @@ impl TerminalViewportView {
                     );
                     paint_state.ime_bounds = Some(cb);
                 }
+            }
+
+            {
+                let term = term_lock.lock();
+                let grid = term.grid();
+                let screen_lines = content.terminal_bounds.screen_lines;
+                let history_size = grid.history_size();
+                let total_lines = history_size + screen_lines;
+                if total_lines > screen_lines {
+                    let track_width = px(8.0);
+                    let margin = px(2.0);
+                    let track_left = bounds.right() - track_width - margin;
+                    let track_top = bounds.top() + margin;
+                    let track_height = bounds.bottom() - track_top - margin;
+                    let track = Bounds::new(
+                        point(track_left, track_top),
+                        size(track_width, track_height),
+                    );
+
+                    let display_offset = content.display_offset;
+                    let fraction_scrolled = display_offset as f32 / history_size.max(1) as f32;
+                    let fraction_visible = screen_lines as f32 / total_lines.max(1) as f32;
+                    let min_thumb_h = px(16.0);
+                    let thumb_height = (track_height * fraction_visible)
+                        .max(min_thumb_h)
+                        .min(track_height);
+                    let thumb_travel = track_height - thumb_height;
+                    let thumb_offset = thumb_travel * fraction_scrolled;
+
+                    let thumb = Bounds::new(
+                        point(track_left, track_top + thumb_offset),
+                        size(track_width, thumb_height),
+                    );
+
+                    paint_state.scrollbar_track = Some(track);
+                    paint_state.scrollbar_thumb = Some(thumb);
+                }
+                drop(grid);
+                drop(term);
             }
 
             paint_state
@@ -1406,7 +1598,9 @@ impl GitCometView {
         let repo_name = terminal_repo_name(&repo.spec.workdir);
 
         if self.terminal_sessions.contains_key(&repo_id) {
-            self.close_terminal_for_repo(repo_id, cx);
+            if !self.request_close_terminal_for_repo(repo_id, cx) {
+                self.close_terminal_for_repo(repo_id, cx);
+            }
             return;
         }
         self.open_terminal_for_repo(repo_id, workdir, repo_name, window, cx);
@@ -1605,6 +1799,7 @@ impl GitCometView {
         Some(TerminalInstance {
             focus_handle,
             pty_sender: Some(pty_sender),
+            child_pid: spawned.child_pid,
             events_rx: Some(events_rx),
             connected: true,
             exit_status: None,
@@ -1671,8 +1866,9 @@ impl GitCometView {
                             }
                             TerminalBackendEvent::Wakeup
                             | TerminalBackendEvent::CursorBlinkingChange => {
-                                instance.viewport.update(cx, |viewport, _cx| {
+                                instance.viewport.update(cx, |viewport, cx| {
                                     viewport.content_epoch = viewport.content_epoch.wrapping_add(1);
+                                    cx.notify();
                                 });
                                 cx.notify();
                             }
@@ -1691,9 +1887,7 @@ impl GitCometView {
     fn close_terminal_for_repo(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         if let Some(session) = self.terminal_sessions.remove(&repo_id) {
             for instance in &session.instances {
-                if let Some(ref pty) = instance.pty_sender {
-                    pty.shutdown();
-                }
+                shutdown_terminal_instance(instance, false);
             }
         }
         if !self.active_repo_has_open_terminal() {
@@ -1718,9 +1912,7 @@ impl GitCometView {
                     return;
                 }
                 let instance = session.instances.remove(index);
-                if let Some(ref pty) = instance.pty_sender {
-                    pty.shutdown();
-                }
+                shutdown_terminal_instance(&instance, false);
                 if session.instances.is_empty() {
                     session_emptied = true;
                 } else {
@@ -1780,6 +1972,193 @@ impl GitCometView {
         };
         window.focus(&focus_handle, cx);
         self.reset_terminal_cursor_blink(cx);
+    }
+
+    pub(crate) fn running_terminal_summary(&self) -> TerminalShutdownSummary {
+        let mut summary = terminal_shutdown_summary_for_instances(
+            self.terminal_sessions
+                .values()
+                .flat_map(|session| session.instances.iter()),
+        );
+        summary.repo_names = self.repo_names_with_running_terminals();
+        summary
+    }
+
+    fn repo_names_with_running_terminals(&self) -> Vec<String> {
+        self.terminal_sessions
+            .iter()
+            .filter(|(_, session)| {
+                session
+                    .instances
+                    .iter()
+                    .any(|i| i.connected && terminal_instance_has_running_command(i))
+            })
+            .map(|(_, session)| session.repo_name.clone())
+            .collect()
+    }
+
+    fn terminal_shutdown_summary_for_action(
+        &self,
+        action: &TerminalShutdownAction,
+    ) -> TerminalShutdownSummary {
+        match action {
+            TerminalShutdownAction::CloseRepo { repo_id }
+            | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+                let mut summary = self
+                    .terminal_sessions
+                    .get(repo_id)
+                    .map(|session| {
+                        terminal_shutdown_summary_for_instances(session.instances.iter())
+                    })
+                    .unwrap_or_default();
+                if summary.running_command_count > 0
+                    && let Some(session) = self.terminal_sessions.get(repo_id)
+                {
+                    summary.repo_names = vec![session.repo_name.clone()];
+                }
+                summary
+            }
+            TerminalShutdownAction::CloseTerminalTab { repo_id, index } => {
+                let mut summary = self
+                    .terminal_sessions
+                    .get(repo_id)
+                    .and_then(|session| session.instances.get(*index))
+                    .map(|instance| {
+                        terminal_shutdown_summary_for_instances(std::iter::once(instance))
+                    })
+                    .unwrap_or_default();
+                if summary.running_command_count > 0
+                    && let Some(session) = self.terminal_sessions.get(repo_id)
+                {
+                    summary.repo_names = vec![session.repo_name.clone()];
+                }
+                summary
+            }
+            TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
+                self.running_terminal_summary()
+            }
+        }
+    }
+
+    fn queue_terminal_shutdown_prompt(
+        &mut self,
+        action: TerminalShutdownAction,
+        summary: TerminalShutdownSummary,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.pending_terminal_shutdown_prompt = Some(TerminalShutdownPrompt { action, summary });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn request_terminal_shutdown_action(
+        &mut self,
+        action: TerminalShutdownAction,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let summary = self.terminal_shutdown_summary_for_action(&action);
+        if summary.running_command_count == 0 {
+            return false;
+        }
+        self.queue_terminal_shutdown_prompt(action, summary, cx);
+        true
+    }
+
+    pub(crate) fn request_close_window_or_warn(&mut self, cx: &mut gpui::Context<Self>) -> bool {
+        self.request_terminal_shutdown_action(TerminalShutdownAction::CloseWindow, cx)
+    }
+
+    pub(crate) fn request_quit_or_warn(
+        &mut self,
+        terminal_count: usize,
+        running_command_count: usize,
+        repo_names: Vec<String>,
+        other_window_views: Vec<gpui::WeakEntity<Self>>,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let summary = TerminalShutdownSummary {
+            terminal_count,
+            running_command_count,
+            repo_names,
+        };
+        if summary.running_command_count == 0 {
+            return false;
+        }
+        self.pending_quit_other_views = other_window_views;
+        self.queue_terminal_shutdown_prompt(TerminalShutdownAction::QuitApp, summary, cx);
+        true
+    }
+
+    pub(in crate::view) fn clear_pending_terminal_shutdown_prompt(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.pending_terminal_shutdown_prompt = None;
+        cx.notify();
+    }
+
+    pub(in crate::view) fn confirm_terminal_shutdown(
+        &mut self,
+        prompt: TerminalShutdownPrompt,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.pending_terminal_shutdown_prompt = None;
+        terminate_terminals_for_action(self, &prompt.action);
+        match prompt.action {
+            TerminalShutdownAction::CloseRepo { repo_id } => {
+                self.store.dispatch(Msg::CloseRepo { repo_id });
+                cx.notify();
+            }
+            TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+                self.close_terminal_for_repo(repo_id, cx);
+            }
+            TerminalShutdownAction::CloseTerminalTab { repo_id, index } => {
+                self.close_terminal_tab(repo_id, index, window, cx);
+            }
+            TerminalShutdownAction::CloseWindow => {
+                window.remove_window();
+            }
+            TerminalShutdownAction::QuitApp => {
+                for weak in self.pending_quit_other_views.drain(..) {
+                    if let Some(view) = weak.upgrade() {
+                        view.update(cx, |v, _cx| {
+                            for session in v.terminal_sessions.values() {
+                                for instance in &session.instances {
+                                    shutdown_terminal_instance(instance, true);
+                                }
+                            }
+                        });
+                    }
+                }
+                cx.quit();
+            }
+        }
+    }
+
+    fn request_close_terminal_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        self.request_terminal_shutdown_action(
+            TerminalShutdownAction::CloseTerminalForRepo { repo_id },
+            cx,
+        )
+    }
+
+    fn request_close_terminal_tab(
+        &mut self,
+        repo_id: RepoId,
+        index: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.request_terminal_shutdown_action(
+            TerminalShutdownAction::CloseTerminalTab { repo_id, index },
+            cx,
+        ) {
+            self.close_terminal_tab(repo_id, index, window, cx);
+        }
     }
 
     pub(super) fn send_terminal_bytes_for_repo(&mut self, repo_id: RepoId, bytes: Vec<u8>) {
@@ -1898,9 +2277,16 @@ impl GitCometView {
         };
         let has_selection = viewport_entity.read(cx).has_selection();
 
-        let header =
-            self.render_terminal_header(theme, active_repo, has_selection, connected, window, cx);
-        let tab_strip = self.render_terminal_tab_strip(theme, active_repo, &tabs, active_index, cx);
+        let header = self.render_terminal_header(
+            theme,
+            active_repo,
+            &tabs,
+            active_index,
+            has_selection,
+            connected,
+            window,
+            cx,
+        );
         let viewport_element = div()
             .flex_1()
             .min_h(px(0.0))
@@ -1915,7 +2301,6 @@ impl GitCometView {
             .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
             .bg(terminal_default_background(theme))
             .child(header)
-            .child(tab_strip)
             .child(viewport_element)
             .into_any_element();
 
@@ -1938,24 +2323,46 @@ impl GitCometView {
         Some(panel.into_any())
     }
 
-    fn render_terminal_tab_strip(
+    fn render_terminal_header(
         &mut self,
         theme: AppTheme,
-        repo_id: RepoId,
+        active_repo: RepoId,
         tabs: &[SharedString],
         active_index: usize,
+        _has_selection: bool,
+        _connected: bool,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let mut row = div()
+        let external_repo = active_repo;
+        let clear_repo = active_repo;
+        let close_repo = active_repo;
+        let repo_id = active_repo;
+
+        let icon_btn = move |id: &'static str, icon: &'static str, tip: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(22.0))
+                .rounded(px(theme.radii.row))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(theme.colors.hover))
+                .child(svg_icon(icon, theme.colors.text, px(14.0)))
+                .gitcomet_tooltip(theme, tip.into())
+        };
+
+        let mut tabs_row = div()
+            .id("terminal_tabs_scroll")
             .flex()
             .flex_row()
             .items_center()
             .gap(px(2.0))
-            .px(px(6.0))
-            .py(px(3.0))
-            .bg(theme.colors.surface_bg)
-            .border_b_1()
-            .border_color(theme.colors.border);
+            .flex_1()
+            .min_w(px(0.0))
+            .overflow_x_scroll()
+            .scrollbar_width(px(0.0));
 
         for (i, title) in tabs.iter().enumerate() {
             let is_active = i == active_index;
@@ -1984,7 +2391,7 @@ impl GitCometView {
                     MouseButton::Left,
                     cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.close_terminal_tab(repo_id, i, window, cx);
+                        this.request_close_terminal_tab(repo_id, i, window, cx);
                     }),
                 );
 
@@ -2000,11 +2407,13 @@ impl GitCometView {
                 .bg(tab_bg)
                 .text_color(text_color)
                 .text_size(px(12.0))
+                .flex_none()
                 .cursor(CursorStyle::PointingHand)
                 .when(!is_active, |d| d.hover(move |s| s.bg(theme.colors.hover)))
                 .child(svg_icon("icons/terminal.svg", text_color, px(12.0)))
                 .child(title.clone())
                 .child(close)
+                .gitcomet_tooltip(theme, title.clone())
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
@@ -2012,12 +2421,13 @@ impl GitCometView {
                     }),
                 );
 
-            row = row.child(tab);
+            tabs_row = tabs_row.child(tab);
         }
 
         let new_tab = div()
             .id("terminal_new_tab")
             .flex()
+            .flex_none()
             .items_center()
             .justify_center()
             .size(px(20.0))
@@ -2033,92 +2443,67 @@ impl GitCometView {
                 }),
             );
 
-        row.child(new_tab).into_any()
-    }
-
-    fn render_terminal_header(
-        &mut self,
-        theme: AppTheme,
-        active_repo: RepoId,
-        _has_selection: bool,
-        _connected: bool,
-        _window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let external_repo = active_repo;
-        let clear_repo = active_repo;
-        let close_repo = active_repo;
-
-        // Shared style for the small icon buttons in the terminal header.
-        let icon_btn = move |id: &'static str, icon: &'static str, tip: &'static str| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(22.0))
-                .rounded(px(theme.radii.row))
-                .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(theme.colors.hover))
-                .child(svg_icon(icon, theme.colors.text, px(14.0)))
-                .gitcomet_tooltip(theme, tip.into())
-        };
+        tabs_row = tabs_row.child(new_tab);
 
         div()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(2.0))
-            .px(px(8.0))
+            .px(px(4.0))
             .py(px(4.0))
             .bg(theme.colors.surface_bg)
             .border_b_1()
             .border_color(theme.colors.border)
+            .child(tabs_row)
             .child(
                 div()
-                    .flex_1()
-                    .text_color(theme.colors.text)
-                    .text_size(px(12.0))
-                    .child("Terminal"),
-            )
-            .child(
-                icon_btn(
-                    "terminal_open_external",
-                    "icons/open_external.svg",
-                    "Open in external terminal",
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                        this.open_external_terminal_for_repo(external_repo, cx);
-                    }),
-                ),
-            )
-            .child(
-                icon_btn(
-                    "terminal_clear",
-                    "icons/broom.svg",
-                    "Clear terminal (Ctrl+L)",
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
-                        this.clear_terminal_for_repo(clear_repo, window, cx);
-                    }),
-                ),
-            )
-            .child(
-                icon_btn(
-                    "terminal_close",
-                    "icons/generic_close.svg",
-                    "Close terminal",
-                )
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                        this.close_terminal_for_repo(close_repo, cx);
-                    }),
-                ),
+                    .flex()
+                    .flex_none()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(
+                        icon_btn(
+                            "terminal_open_external",
+                            "icons/open_external.svg",
+                            "Open in external terminal",
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                this.open_external_terminal_for_repo(external_repo, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        icon_btn(
+                            "terminal_clear",
+                            "icons/broom.svg",
+                            "Clear terminal (Ctrl+L)",
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                                this.clear_terminal_for_repo(clear_repo, window, cx);
+                            }),
+                        ),
+                    )
+                    .child(
+                        icon_btn(
+                            "terminal_close",
+                            "icons/generic_close.svg",
+                            "Close terminal",
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                if !this.request_close_terminal_for_repo(close_repo, cx) {
+                                    this.close_terminal_for_repo(close_repo, cx);
+                                }
+                            }),
+                        ),
+                    ),
             )
             .into_any()
     }
@@ -2413,11 +2798,7 @@ fn paint_terminal_canvas_state(
         let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
     }
     if let Some(cursor) = paint_state.cursor {
-        let caret = terminal_caret_bounds(cursor);
-        window.paint_quad(
-            fill(caret, terminal_default_foreground(theme))
-                .corner_radii(px(TERMINAL_CARET_RADIUS_PX)),
-        );
+        paint_terminal_cursor(cursor, theme, window);
     }
 
     // IME preedit (marked) text
@@ -2457,6 +2838,17 @@ fn paint_terminal_canvas_state(
             cx,
         );
     }
+
+    if let Some(track) = paint_state.scrollbar_track
+        && let Some(thumb) = paint_state.scrollbar_thumb
+    {
+        let track_color = with_alpha(theme.colors.text_muted, 0.08);
+        window.paint_quad(fill(track, track_color));
+
+        let thumb_color = with_alpha(theme.colors.text_muted, 0.28);
+        let thumb_radius = px(4.0);
+        window.paint_quad(fill(thumb, thumb_color).corner_radii(thumb_radius));
+    }
 }
 
 fn terminal_caret_bounds(cell_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
@@ -2473,6 +2865,219 @@ fn terminal_caret_bounds(cell_bounds: Bounds<Pixels>) -> Bounds<Pixels> {
         size(width, height),
     )
 }
+
+fn paint_terminal_cursor(cursor: TerminalPaintCursor, theme: AppTheme, window: &mut Window) {
+    let cursor_color = terminal_default_foreground(theme);
+    match cursor.shape {
+        TerminalCursorShape::Beam => {
+            let caret = terminal_caret_bounds(cursor.bounds);
+            window.paint_quad(fill(caret, cursor_color).corner_radii(px(TERMINAL_CARET_RADIUS_PX)));
+        }
+        TerminalCursorShape::Underline => {
+            let height = (cursor.bounds.size.height * 0.12).max(px(1.0));
+            let underline = Bounds::new(
+                point(cursor.bounds.left(), cursor.bounds.bottom() - height),
+                size(cursor.bounds.size.width.max(px(1.0)), height),
+            );
+            window.paint_quad(fill(underline, cursor_color));
+        }
+        TerminalCursorShape::Block => {
+            window.paint_quad(fill(cursor.bounds, cursor_color));
+        }
+        TerminalCursorShape::Hollow => {
+            let thickness = px(1.0)
+                .min(cursor.bounds.size.width / 2.0)
+                .min(cursor.bounds.size.height / 2.0)
+                .max(px(1.0));
+            let top = Bounds::new(
+                cursor.bounds.origin,
+                size(cursor.bounds.size.width, thickness),
+            );
+            let bottom = Bounds::new(
+                point(cursor.bounds.left(), cursor.bounds.bottom() - thickness),
+                size(cursor.bounds.size.width, thickness),
+            );
+            let left = Bounds::new(
+                cursor.bounds.origin,
+                size(thickness, cursor.bounds.size.height),
+            );
+            let right = Bounds::new(
+                point(cursor.bounds.right() - thickness, cursor.bounds.top()),
+                size(thickness, cursor.bounds.size.height),
+            );
+            for edge in [top, bottom, left, right] {
+                window.paint_quad(fill(edge, cursor_color));
+            }
+        }
+        TerminalCursorShape::Hidden => {}
+    }
+}
+
+fn terminal_cursor_width(
+    cursor_char: char,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    cell_width: Pixels,
+    window: &Window,
+) -> Pixels {
+    if cursor_char.is_whitespace() {
+        return cell_width;
+    }
+    let cursor_text = cursor_char.to_string();
+    let shaped = window.text_system().shape_line(
+        cursor_text.clone().into(),
+        font_size,
+        &[TextRun {
+            len: cursor_text.len(),
+            font: base_style.font(),
+            color: base_style.color,
+            ..Default::default()
+        }],
+        None,
+    );
+    shaped.width.max(cell_width).ceil()
+}
+
+fn terminal_snap_to_device_pixels(window: &Window, value: Pixels) -> Pixels {
+    let scale_factor = window.scale_factor().max(1.0);
+    Pixels::from((f32::from(value) * scale_factor).floor() / scale_factor)
+}
+
+fn terminal_row_fingerprint(cells: &[IndexedCell], row: i32, cols: usize) -> u64 {
+    let mut hasher = FxHasher::default();
+    row.hash(&mut hasher);
+    cols.hash(&mut hasher);
+
+    for cell in cells.iter().filter(|cell| cell.point.line.0 == row) {
+        cell.point.column.0.hash(&mut hasher);
+        cell.cell.c.hash(&mut hasher);
+        cell.cell.flags.hash(&mut hasher);
+        hash_terminal_color(cell.cell.fg, &mut hasher);
+        hash_terminal_color(cell.cell.bg, &mut hasher);
+        if let Some(zw_chars) = cell.cell.zerowidth() {
+            zw_chars.len().hash(&mut hasher);
+            for ch in zw_chars {
+                ch.hash(&mut hasher);
+            }
+        }
+    }
+
+    hasher.finish()
+}
+
+fn hash_terminal_color<H: Hasher>(color: alacritty_terminal::vte::ansi::Color, hasher: &mut H) {
+    use alacritty_terminal::vte::ansi::Color;
+
+    match color {
+        Color::Named(name) => {
+            0u8.hash(hasher);
+            std::mem::discriminant(&name).hash(hasher);
+        }
+        Color::Spec(rgb) => {
+            1u8.hash(hasher);
+            rgb.r.hash(hasher);
+            rgb.g.hash(hasher);
+            rgb.b.hash(hasher);
+        }
+        Color::Indexed(index) => {
+            2u8.hash(hasher);
+            index.hash(hasher);
+        }
+    }
+}
+
+fn terminal_shutdown_summary_for_instances<'a>(
+    instances: impl IntoIterator<Item = &'a TerminalInstance>,
+) -> TerminalShutdownSummary {
+    let mut summary = TerminalShutdownSummary::default();
+    for instance in instances {
+        if !instance.connected {
+            continue;
+        }
+        summary.terminal_count += 1;
+        if terminal_instance_has_running_command(instance) {
+            summary.running_command_count += 1;
+        }
+    }
+    summary
+}
+
+fn terminal_instance_has_running_command(instance: &TerminalInstance) -> bool {
+    if !instance.connected {
+        return false;
+    }
+    if let Some(child_pid) = instance.child_pid
+        && terminal_process_has_running_child_command(child_pid)
+    {
+        return true;
+    }
+    cfg!(not(target_os = "linux"))
+}
+
+fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShutdownAction) {
+    match action {
+        TerminalShutdownAction::CloseRepo { repo_id }
+        | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+            if let Some(session) = view.terminal_sessions.get(repo_id) {
+                for instance in &session.instances {
+                    terminate_terminal_process_group(instance.child_pid);
+                }
+            }
+        }
+        TerminalShutdownAction::CloseTerminalTab { repo_id, index } => {
+            if let Some(instance) = view
+                .terminal_sessions
+                .get(repo_id)
+                .and_then(|session| session.instances.get(*index))
+            {
+                terminate_terminal_process_group(instance.child_pid);
+            }
+        }
+        TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp => {
+            for session in view.terminal_sessions.values() {
+                for instance in &session.instances {
+                    shutdown_terminal_instance(instance, true);
+                }
+            }
+        }
+    }
+}
+
+fn shutdown_terminal_instance(instance: &TerminalInstance, terminate: bool) {
+    if terminate {
+        terminate_terminal_process_group(instance.child_pid);
+    }
+    if let Some(ref pty) = instance.pty_sender {
+        pty.shutdown();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn terminal_process_has_running_child_command(pid: u32) -> bool {
+    let children_path = format!("/proc/{pid}/task/{pid}/children");
+    std::fs::read_to_string(children_path)
+        .ok()
+        .is_some_and(|children| children.split_whitespace().next().is_some())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn terminal_process_has_running_child_command(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn terminate_terminal_process_group(child_pid: Option<u32>) {
+    let Some(child_pid) = child_pid else {
+        return;
+    };
+    let Some(pid) = Pid::from_raw(child_pid as i32) else {
+        return;
+    };
+    let _ = kill_process_group(pid, Signal::TERM);
+}
+
+#[cfg(not(unix))]
+fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
 fn terminal_clipboard_shortcut_action(
     keystroke: &gpui::Keystroke,
