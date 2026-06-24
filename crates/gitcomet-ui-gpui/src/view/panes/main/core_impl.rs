@@ -2850,7 +2850,9 @@ impl MainPaneView {
         // column counts and wrapped-row projection must be recomputed.
         self.invalidate_diff_wrap_visible_cache();
         if next {
-            self.request_blame_for_current_target(cx);
+            // An explicit toggle on: retry a previously failed blame for the same
+            // target (force = true). The per-frame Render path never forces.
+            self.request_blame_for_current_target(true, cx);
         }
         cx.notify();
     }
@@ -2912,6 +2914,7 @@ impl MainPaneView {
     /// dispatches `LoadBlame`, skipping redundant loads.
     pub(in crate::view) fn request_blame_for_current_target(
         &mut self,
+        force: bool,
         _cx: &mut gpui::Context<Self>,
     ) {
         let Some(repo_id) = self.active_repo_id() else {
@@ -2928,11 +2931,7 @@ impl MainPaneView {
             let history = &repo.history_state;
             let same_target = history.blame_path.as_deref() == Some(path.as_path())
                 && history.blame_source.as_ref() == Some(&source);
-            // For an already-attempted target, don't re-dispatch — including on
-            // error, to avoid a per-frame retry loop. Only `NotLoaded` (a fresh
-            // or changed target) triggers a load.
-            let attempted = !matches!(history.blame, gitcomet_state::model::Loadable::NotLoaded);
-            if same_target && attempted {
+            if !should_request_blame(same_target, &history.blame, force) {
                 return;
             }
         }
@@ -4796,9 +4795,76 @@ impl MainPaneView {
     }
 }
 
+/// Decide whether a blame (re)load should be dispatched for the rendered target.
+///
+/// `same_target` is whether the currently loaded blame is for the same
+/// file/source. `force` requests a retry of a previous failure (an explicit user
+/// toggle); the per-frame Render path passes `false` so a persistent error does
+/// not cause a dispatch-every-frame loop.
+fn should_request_blame<T>(
+    same_target: bool,
+    blame: &gitcomet_state::model::Loadable<T>,
+    force: bool,
+) -> bool {
+    use gitcomet_state::model::Loadable;
+    if !same_target {
+        // A new or changed target always (re)loads.
+        return true;
+    }
+    match blame {
+        // Already loaded or in flight for this target: nothing to do.
+        Loadable::Ready(_) | Loadable::Loading => false,
+        // A previous attempt failed: retry only on an explicit user toggle.
+        Loadable::Error(_) => force,
+        Loadable::NotLoaded => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn should_request_blame_retries_failure_only_when_forced() {
+        use gitcomet_state::model::Loadable;
+        // A new/changed target always loads, regardless of state or force.
+        assert!(should_request_blame(
+            false,
+            &Loadable::<()>::Ready(()),
+            false
+        ));
+        assert!(should_request_blame(
+            false,
+            &Loadable::<()>::Error("x".into()),
+            false
+        ));
+        // Same target, healthy or in flight: never reload (even when forced), so a
+        // toggle-on doesn't re-blame an already-loaded file.
+        assert!(!should_request_blame(
+            true,
+            &Loadable::<()>::Ready(()),
+            true
+        ));
+        assert!(!should_request_blame(true, &Loadable::<()>::Loading, true));
+        // Same target, not yet loaded: load.
+        assert!(should_request_blame(
+            true,
+            &Loadable::<()>::NotLoaded,
+            false
+        ));
+        // Same target, failed: never retry from the per-frame Render path
+        // (force=false), but retry on an explicit toggle (force=true).
+        assert!(!should_request_blame(
+            true,
+            &Loadable::<()>::Error("e".into()),
+            false
+        ));
+        assert!(should_request_blame(
+            true,
+            &Loadable::<()>::Error("e".into()),
+            true
+        ));
+    }
 
     #[test]
     fn clamp_raw_scroll_y_limits_scroll_without_flipping_direction() {

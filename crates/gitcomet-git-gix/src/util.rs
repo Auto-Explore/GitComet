@@ -488,33 +488,32 @@ fn git_failure_looks_like_missing_gpg(detail: &str) -> bool {
     lower.contains("cannot run") && lower.contains("gpg")
 }
 
-fn run_command_with_timeout(
-    mut cmd: Command,
-    label: &str,
+/// The result of waiting on a spawned child process with a timeout.
+struct ChildWaitOutcome {
+    status: std::process::ExitStatus,
+    /// The wait ended because the cancellation token was tripped (child killed).
+    cancelled: bool,
+    /// The wait ended because `timeout` elapsed (child killed).
+    timed_out: bool,
+}
+
+/// Block until `child` exits, the `cancellation` token is tripped, or `timeout`
+/// elapses, polling with [`git_command_wait_poll`] backoff. On cancellation or
+/// timeout the child is killed and reaped before returning. Callers drain
+/// stdout/stderr (typically via reader threads) *after* this returns and map
+/// `cancelled`/`timed_out` to their own error.
+///
+/// Single source of truth for the kill-then-wait / poll loop shared by every
+/// long-running git invocation, so the cancellation and timeout semantics can't
+/// drift between call sites.
+fn wait_for_child_with_timeout(
+    child: &mut std::process::Child,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
-) -> Result<Output> {
-    configure_background_command(&mut cmd);
-    configure_non_interactive_git(&mut cmd);
-    let askpass_context = if command_may_require_auth(&cmd) {
-        let auth = take_pending_git_auth();
-        let script = create_askpass_script()?;
-        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
-        Some((script, auth))
-    } else {
-        None
-    };
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-
-    let mut child = cmd.spawn().map_err(io_err)?;
-
-    let stdout_handle = spawn_read_pipe(child.stdout.take());
-    let stderr_handle = spawn_read_pipe(child.stderr.take());
-
+) -> Result<ChildWaitOutcome> {
     let start = Instant::now();
     let mut timed_out = false;
     let mut cancelled = false;
-
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -543,6 +542,41 @@ fn run_command_with_timeout(
             Err(e) => return Err(io_err(e)),
         }
     };
+    Ok(ChildWaitOutcome {
+        status,
+        cancelled,
+        timed_out,
+    })
+}
+
+fn run_command_with_timeout(
+    mut cmd: Command,
+    label: &str,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+) -> Result<Output> {
+    configure_background_command(&mut cmd);
+    configure_non_interactive_git(&mut cmd);
+    let askpass_context = if command_may_require_auth(&cmd) {
+        let auth = take_pending_git_auth();
+        let script = create_askpass_script()?;
+        configure_git_auth_prompt(&mut cmd, auth.as_ref(), &script);
+        Some((script, auth))
+    } else {
+        None
+    };
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(io_err)?;
+
+    let stdout_handle = spawn_read_pipe(child.stdout.take());
+    let stderr_handle = spawn_read_pipe(child.stderr.take());
+
+    let ChildWaitOutcome {
+        status,
+        cancelled,
+        timed_out,
+    } = wait_for_child_with_timeout(&mut child, timeout, cancellation)?;
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
@@ -613,38 +647,11 @@ pub(crate) fn run_git_with_stdin_capture(
     let stdout_handle = spawn_read_pipe(child.stdout.take());
     let stderr_handle = spawn_read_pipe(child.stderr.take());
 
-    let start = Instant::now();
-    let mut timed_out = false;
-    let mut cancelled = false;
-
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if cancellation.is_some_and(CancellationToken::is_cancelled) {
-                    cancelled = true;
-                    let _ = child.kill();
-                    match child.wait() {
-                        Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
-                    }
-                }
-                let elapsed = start.elapsed();
-                if elapsed >= timeout {
-                    timed_out = true;
-                    let _ = child.kill();
-                    match child.wait() {
-                        Ok(status) => break status,
-                        Err(e) => return Err(io_err(e)),
-                    }
-                }
-                if let Some(poll) = git_command_wait_poll(elapsed, timeout) {
-                    thread::sleep(poll);
-                }
-            }
-            Err(e) => return Err(io_err(e)),
-        }
-    };
+    let ChildWaitOutcome {
+        status,
+        cancelled,
+        timed_out,
+    } = wait_for_child_with_timeout(&mut child, timeout, cancellation)?;
 
     let _ = writer.join();
     let stdout = stdout_handle.join().unwrap_or_default();
@@ -743,38 +750,11 @@ where
     let stdout_handle = thread::spawn(move || parse_stdout(stdout));
 
     let timeout = git_command_timeout();
-    let start = Instant::now();
-    let mut timed_out = false;
-    let mut cancelled = false;
-
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if cancellation.is_some_and(CancellationToken::is_cancelled) {
-                    cancelled = true;
-                    let _ = child.kill();
-                    match child.wait() {
-                        Ok(status) => break status,
-                        Err(err) => return Err(io_err(err)),
-                    }
-                }
-                let elapsed = start.elapsed();
-                if elapsed >= timeout {
-                    timed_out = true;
-                    let _ = child.kill();
-                    match child.wait() {
-                        Ok(status) => break status,
-                        Err(err) => return Err(io_err(err)),
-                    }
-                }
-                if let Some(poll) = git_command_wait_poll(elapsed, timeout) {
-                    thread::sleep(poll);
-                }
-            }
-            Err(err) => return Err(io_err(err)),
-        }
-    };
+    let ChildWaitOutcome {
+        status,
+        cancelled,
+        timed_out,
+    } = wait_for_child_with_timeout(&mut child, timeout, cancellation)?;
 
     let parsed_result = stdout_handle
         .join()

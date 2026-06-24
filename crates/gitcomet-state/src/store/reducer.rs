@@ -693,6 +693,16 @@ fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
     let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return;
     };
+    // Hot path: most messages don't move the main view, so the snapshot still
+    // matches the current entry and `reconcile` would no-op. Compare by borrow
+    // first and bail before cloning a `MainViewSnapshot` (which owns a `PathBuf`)
+    // — this runs twice per dispatched message.
+    let cursor = repo.nav_history.cursor;
+    if let Some(current) = repo.nav_history.entries.get(cursor)
+        && repo.main_view_snapshot_matches(current)
+    {
+        return;
+    }
     let cur = repo.main_view_snapshot();
     repo.nav_history.reconcile(cur, push);
 }

@@ -296,8 +296,13 @@ pub(super) fn global_nav(
             let sel_effects = super::effects::select_commit(state, repo_id, commit_id.clone());
             // `select_commit` no-ops when this commit is already selected, but a
             // prior nav step or a cancelled load may have left its details
-            // unloaded. In that case (and only when no load is already pending)
-            // reload them so navigating back does not leave the pane blank.
+            // unloaded. Reload unless the details already shown are for this
+            // exact commit. We deliberately do NOT skip merely because a load is
+            // in flight: that load may be for a *different* commit (a stale or
+            // cancelled select) whose result the id-guard will drop, which would
+            // otherwise leave the details pane stuck Loading forever. A redundant
+            // load for the same commit is cheap — this runs once per nav step —
+            // and idempotent.
             let select_was_noop = sel_effects.is_empty();
             effects.extend(sel_effects);
             if select_was_noop
@@ -306,7 +311,7 @@ pub(super) fn global_nav(
                 let needs_load = !matches!(
                     &repo_state.history_state.commit_details,
                     Loadable::Ready(details) if details.id == commit_id
-                ) && !repo_state.history_state.commit_details.is_loading();
+                );
                 if needs_load {
                     repo_state.set_commit_details(Loadable::NotLoaded);
                     effects.push(Effect::LoadCommitDetails { repo_id, commit_id });

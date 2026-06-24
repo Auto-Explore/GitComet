@@ -763,11 +763,15 @@ fn build_row_blame_paint_tracked(
     old_line: Option<u32>,
     new_line: Option<u32>,
     prev: &std::cell::Cell<BlamePrev>,
+    wrap: Option<diff_canvas::DiffTextWrapSlice>,
     theme: AppTheme,
 ) -> Option<diff_canvas::RowBlamePaint> {
     let prev_state = prev.get();
     let result =
         build_row_blame_paint_inner(ctx, is_context, old_line, new_line, prev_state, theme);
+    // Advancing `prev` on a wrapped continuation row is harmless: it carries the
+    // same `new_line`, so the threaded previous-rendered-line stays put for the
+    // next logical line. The run tracker therefore needs no special-casing here.
     prev.set(BlamePrev {
         new_line: new_line.or(prev_state.new_line),
         group: match &result {
@@ -775,7 +779,19 @@ fn build_row_blame_paint_tracked(
             None => prev_state.group,
         },
     });
-    result.map(|(paint, _)| paint)
+    result.map(|(mut paint, _)| {
+        // A wrapped continuation row (wrap_ix > 0) is an extra visual row for the
+        // same logical line. It keeps the recency border so the bar stays
+        // continuous, but must not repeat the run-start time/author/summary label:
+        // `is_run_start` is recomputed as true for every continuation row (the
+        // previous rendered line equals this one), so without this guard the
+        // annotation text is duplicated down each wrapped line. The gutter line
+        // numbers suppress wrap continuations the same way (see `show_row_numbers`).
+        if wrap.is_some_and(|w| w.wrap_ix > 0) {
+            paint.show_text = false;
+        }
+        paint
+    })
 }
 
 impl MainPaneView {
@@ -1120,7 +1136,7 @@ impl MainPaneView {
                                 annotation_width,
                                 blame_ctx
                                     .as_ref()
-                                    .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, theme)),
+                                    .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, wrap, theme)),
                                 annot_hover,
                                 cx,
                             )
@@ -1438,7 +1454,7 @@ impl MainPaneView {
                         annotation_width,
                         blame_ctx
                             .as_ref()
-                            .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, theme)),
+                            .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, wrap, theme)),
                         annot_hover,
                         cx,
                     )
@@ -1592,6 +1608,7 @@ impl MainPaneView {
                             line.old_line,
                             line.new_line,
                             &blame_prev_nl,
+                            wrap,
                             theme,
                         )
                     }),
@@ -1860,7 +1877,7 @@ impl MainPaneView {
                                 annotation_width,
                                 if is_left {
                                     blame_ctx.as_ref().and_then(|ctx| {
-                                        build_row_blame_paint_tracked(ctx, matches!(visual_kind, FileDiffRowKind::Context), row.old_line, row.new_line, &blame_prev_nl, theme)
+                                        build_row_blame_paint_tracked(ctx, matches!(visual_kind, FileDiffRowKind::Context), row.old_line, row.new_line, &blame_prev_nl, wrap, theme)
                                     })
                                 } else {
                                     None
@@ -1999,7 +2016,7 @@ impl MainPaneView {
                         if is_left {
                             blame_ctx
                                 .as_ref()
-                                .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, FileDiffRowKind::Context), row.old_line, row.new_line, &blame_prev_nl, theme))
+                                .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, FileDiffRowKind::Context), row.old_line, row.new_line, &blame_prev_nl, wrap, theme))
                         } else {
                         None
                     },
@@ -2141,6 +2158,7 @@ impl MainPaneView {
                                         row.old_line,
                                         row.new_line,
                                         &blame_prev_nl,
+                                        wrap,
                                         theme,
                                     )
                                 })
@@ -3497,17 +3515,70 @@ mod tests {
         );
         let prev = std::cell::Cell::new(BlamePrev::default());
         // Line 1: staged context -> run start, label shown.
-        let p1 = build_row_blame_paint_tracked(&ctx, true, Some(1), Some(1), &prev, theme).unwrap();
+        let p1 = build_row_blame_paint_tracked(&ctx, true, Some(1), Some(1), &prev, None, theme)
+            .unwrap();
         assert!(p1.show_text);
         assert_eq!(p1.when.as_ref(), "Staged");
         // Line 2: staged context, contiguous -> not a run start (label not repeated).
-        let p2 = build_row_blame_paint_tracked(&ctx, true, Some(2), Some(2), &prev, theme).unwrap();
+        let p2 = build_row_blame_paint_tracked(&ctx, true, Some(2), Some(2), &prev, None, theme)
+            .unwrap();
         assert!(!p2.show_text);
         // Line 3: unstaged add. The new-side line is still contiguous, but the
         // staged->unstaged group change must start a new run with its label.
-        let p3 = build_row_blame_paint_tracked(&ctx, false, None, Some(3), &prev, theme).unwrap();
+        let p3 =
+            build_row_blame_paint_tracked(&ctx, false, None, Some(3), &prev, None, theme).unwrap();
         assert!(p3.show_text);
         assert_eq!(p3.when.as_ref(), "Unstaged");
+    }
+
+    #[test]
+    fn wrapped_continuation_rows_do_not_repeat_annotation_text() {
+        // Regression: when a long line wraps, each wrapped visual row carries the
+        // same logical new-side line, so `is_run_start` is recomputed as true for
+        // the continuation rows. Without the wrap_ix gate the time/author/summary
+        // label is duplicated down every wrapped line. Continuation rows must keep
+        // their recency border but suppress the repeated text.
+        let theme = AppTheme::gitcomet_dark();
+        let sha = "1111111111111111111111111111111111111111";
+        let ctx = blame_ctx(
+            vec![committed_blame_line(sha)],
+            Some(gitcomet_core::domain::DiffArea::Unstaged),
+        );
+        let prev = std::cell::Cell::new(BlamePrev::default());
+        let wrap = |wrap_ix: usize| {
+            Some(diff_canvas::DiffTextWrapSlice {
+                wrap_ix,
+                wrap_columns: 80,
+                primary_range: diff_canvas::DiffWrapByteRange::default(),
+                secondary_range: diff_canvas::DiffWrapByteRange::default(),
+            })
+        };
+
+        // First visual row of the wrapped line (wrap_ix == 0): run start, label shown.
+        let first =
+            build_row_blame_paint_tracked(&ctx, false, None, Some(1), &prev, wrap(0), theme)
+                .unwrap();
+        assert!(first.show_text, "the wrap_ix == 0 row shows the annotation");
+        let border = first.border;
+
+        // Continuation rows (wrap_ix > 0) of the SAME line: border kept, text hidden.
+        for wrap_ix in 1..=2 {
+            let cont = build_row_blame_paint_tracked(
+                &ctx,
+                false,
+                None,
+                Some(1),
+                &prev,
+                wrap(wrap_ix),
+                theme,
+            )
+            .unwrap();
+            assert!(
+                !cont.show_text,
+                "wrap_ix == {wrap_ix} continuation row must not repeat the annotation text"
+            );
+            assert_eq!(cont.border, border, "the recency bar stays continuous");
+        }
     }
 
     #[test]
@@ -3541,14 +3612,14 @@ mod tests {
         let ctx = blame_ctx(Vec::new(), Some(DiffArea::Unstaged));
         let prev = std::cell::Cell::new(BlamePrev::default());
         let removal =
-            build_row_blame_paint_tracked(&ctx, false, Some(5), None, &prev, theme).unwrap();
+            build_row_blame_paint_tracked(&ctx, false, Some(5), None, &prev, None, theme).unwrap();
         assert_eq!(removal.border, theme.colors.diff_remove_text);
         assert_eq!(removal.when.as_ref(), "Unstaged");
         // Revision blame has no staged/unstaged concept, so removals get no bar.
         let ctx_rev = blame_ctx(Vec::new(), None);
         let prev_rev = std::cell::Cell::new(BlamePrev::default());
         assert!(
-            build_row_blame_paint_tracked(&ctx_rev, false, Some(5), None, &prev_rev, theme)
+            build_row_blame_paint_tracked(&ctx_rev, false, Some(5), None, &prev_rev, None, theme)
                 .is_none()
         );
     }

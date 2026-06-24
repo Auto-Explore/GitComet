@@ -257,7 +257,7 @@ pub(super) fn format_datetime_into(
 
     // Howard Hinnant's `civil_from_days` algorithm.
     fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
-        let z = days_since_epoch + 719_468;
+        let z = days_since_epoch.saturating_add(719_468);
         let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
         let doe = z - era * 146_097; // [0, 146096]
         let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
@@ -291,8 +291,12 @@ pub(super) fn format_datetime_into(
 
     #[inline(always)]
     fn write4_year(arr: &mut [u8; 19], pos: usize, y: i32) {
-        let y = y.unsigned_abs();
-        let hi = (y / 100) % 100;
+        // The fixed 4-digit field can only represent years 0..=9999; clamp so a
+        // corrupt or extreme timestamp shows a boundary value rather than
+        // silently dropping the sign or high digits (e.g. 12025 -> "2025",
+        // -44 -> "0044").
+        let y = y.clamp(0, 9999) as u32;
+        let hi = y / 100;
         let lo = y % 100;
         let p1 = DEC_PAIR[hi as usize];
         let p2 = DEC_PAIR[lo as usize];
@@ -305,7 +309,7 @@ pub(super) fn format_datetime_into(
     buf.clear();
 
     let offset = timezone.offset_seconds();
-    let secs = unix_seconds(time) + offset;
+    let secs = unix_seconds(time).saturating_add(offset);
     let days = floor_div(secs, 86_400);
     let sec_of_day = secs - days * 86_400;
     let sec_of_day: i64 = if sec_of_day < 0 {
@@ -407,7 +411,11 @@ pub(super) fn format_relative_time(unix_secs: i64, now: std::time::SystemTime) -
         Err(e) => -(e.duration().as_secs() as i64),
     };
 
-    let delta = now_secs - unix_secs;
+    // `unix_secs` is an untrusted i64 straight from a git author timestamp; a
+    // corrupt/crafted commit near i64::MIN would overflow a plain subtraction
+    // (debug-build panic, release wrap). Saturate so the worst case is a
+    // clamped-but-finite delta.
+    let delta = now_secs.saturating_sub(unix_secs);
     if delta < 10 {
         return "just now".to_string();
     }
@@ -566,5 +574,35 @@ mod tests {
     fn format_relative_time_treats_future_as_just_now() {
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         assert_eq!(format_relative_time(5_000, now), "just now");
+    }
+
+    #[test]
+    fn format_relative_time_saturates_on_extreme_timestamps() {
+        // `unix_secs` is an untrusted git author timestamp. A plain
+        // `now_secs - unix_secs` would overflow i64 at the extremes (debug panic
+        // / release wrap); saturating arithmetic must keep it finite.
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        // i64::MIN in the past -> enormous positive delta -> "years ago".
+        assert!(
+            format_relative_time(i64::MIN, now).ends_with("years ago"),
+            "extreme-past timestamp must not panic and reads as long ago"
+        );
+        // i64::MAX in the future -> negative delta saturates -> "just now".
+        assert_eq!(format_relative_time(i64::MAX, now), "just now");
+    }
+
+    #[test]
+    fn format_datetime_clamps_out_of_range_years() {
+        // ~year 11476 — past the 4-digit field. Must clamp to 9999 rather than
+        // render a misleading truncated year (e.g. 11476 -> "1476") or panic.
+        let far_future = UNIX_EPOCH + Duration::from_secs(300_000_000_000);
+        let s = format_datetime(far_future, DateTimeFormat::YmdHm, Timezone::Utc, false);
+        assert!(s.starts_with("9999-"), "got {s:?}");
+
+        // A negative civil year (pre-year-1) must clamp to 0000, not drop its
+        // sign via unsigned_abs (e.g. -44 -> "0044").
+        let far_past = UNIX_EPOCH - Duration::from_secs(100_000_000_000);
+        let s = format_datetime(far_past, DateTimeFormat::YmdHm, Timezone::Utc, false);
+        assert!(s.starts_with("0000-"), "got {s:?}");
     }
 }

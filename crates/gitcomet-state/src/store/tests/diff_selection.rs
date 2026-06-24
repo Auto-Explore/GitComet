@@ -2082,6 +2082,74 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
 }
 
 #[test]
+fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
+    // Regression: navigating back to a snapshot whose commit is already selected
+    // makes `select_commit` no-op. If commit_details is still `Loading` for a
+    // *different* (stale/cancelled) commit, the result will be dropped by the
+    // id-guard, so trusting `is_loading()` would leave the details pane stuck
+    // forever. global_nav must reload because the details shown are not for this
+    // commit.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let commit_y = CommitId("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy".into());
+    // Two back/forward entries for the SAME commit (full diff, then one file), so
+    // stepping back keeps `selected_commit` == Y and `select_commit` no-ops.
+    let snap = |path: Option<PathBuf>| crate::model::MainViewSnapshot {
+        diff_target: Some(DiffTarget::Commit {
+            commit_id: commit_y.clone(),
+            path,
+        }),
+        content_preview: false,
+        selected_commit: Some(commit_y.clone()),
+    };
+    state.repos[0].nav_history.record(snap(None));
+    state.repos[0]
+        .nav_history
+        .record(snap(Some(PathBuf::from("src/lib.rs"))));
+    // Live view matches the nav tail; commit Y is selected but its details are
+    // stuck Loading (the relevant load was cancelled / is for another commit).
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: commit_y.clone(),
+        path: Some(PathBuf::from("src/lib.rs")),
+    });
+    state.repos[0].set_selected_commit(Some(commit_y.clone()));
+    state.repos[0].set_commit_details(Loadable::Loading);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadCommitDetails { repo_id: id, commit_id }
+                if *id == repo_id && *commit_id == commit_y
+        )),
+        "stuck-Loading details for the restored commit must be reloaded, not skipped"
+    );
+    assert!(
+        matches!(
+            state.repos[0].history_state.commit_details,
+            Loadable::NotLoaded
+        ),
+        "details are reset to NotLoaded before the reload"
+    );
+}
+
+#[test]
 fn open_file_content_skips_conflict_path_during_browse() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);

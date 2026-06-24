@@ -1066,6 +1066,11 @@ pub(super) fn repo_opened_ok(
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
             repo_state.last_error = None;
+            // Reopening resets the whole repo view; saved back/forward snapshots
+            // may reference commits or file revisions from before the reopen, so
+            // start the navigation stacks fresh.
+            repo_state.nav_history.clear();
+            repo_state.view_history.clear();
             clear_banner = true;
         }
     }

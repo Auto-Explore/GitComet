@@ -37,10 +37,16 @@ fn file_exists_at_first_parent(
     let Some(parent_id) = commit.parent_ids().next() else {
         return false;
     };
-    let Ok(parent) = repo.find_object(parent_id) else {
+    tree_contains_path(repo, parent_id.detach(), path)
+}
+
+/// Whether `path` resolves to an entry in the tree of object `id`. Returns
+/// `false` if the object can't be found, isn't tree-ish, or lacks the path.
+fn tree_contains_path(repo: &gix::Repository, id: gix::ObjectId, path: &Path) -> bool {
+    let Ok(object) = repo.find_object(id) else {
         return false;
     };
-    let Ok(tree) = parent.peel_to_tree() else {
+    let Ok(tree) = object.peel_to_tree() else {
         return false;
     };
     matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
@@ -54,13 +60,7 @@ fn path_exists_at_head(repo: &gix::Repository, path: &Path) -> bool {
     let Ok(id) = repo.head_id() else {
         return false;
     };
-    let Ok(object) = repo.find_object(id) else {
-        return false;
-    };
-    let Ok(tree) = object.peel_to_tree() else {
-        return false;
-    };
-    matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
+    tree_contains_path(repo, id.detach(), path)
 }
 
 /// Read the staged (index) content for `path` to blame. This is normally the

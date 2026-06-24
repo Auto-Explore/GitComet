@@ -82,9 +82,10 @@ impl Render for MainPaneView {
             .and_then(|r| r.diff_state.diff_target.as_ref())
             .is_some();
         // Keep blame in sync with the displayed file/revision while annotate is
-        // on; the request is a no-op when the target is unchanged.
+        // on; the request is a no-op when the target is unchanged. Render must not
+        // force a retry — a persistent error would re-dispatch every frame.
         if self.annotate_enabled && show_diff {
-            self.request_blame_for_current_target(cx);
+            self.request_blame_for_current_target(false, cx);
         }
         let inner = if show_diff {
             self.diff_view(window, cx).into_any_element()

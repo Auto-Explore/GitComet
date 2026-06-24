@@ -67,7 +67,12 @@ pub(in crate::view) fn blame_recency_t(ts: i64, range: (i64, i64)) -> f32 {
     if max <= min {
         return 1.0;
     }
-    ((ts - min) as f32 / (max - min) as f32).clamp(0.0, 1.0)
+    // `min`/`max` are untrusted git author timestamps; a full-i64-range spread
+    // (e.g. one line near i64::MIN, another near i64::MAX) would overflow plain
+    // subtraction. Saturate — the ratio still lands in [0, 1] after the clamp.
+    let span = max.saturating_sub(min);
+    let offset = ts.saturating_sub(min);
+    (offset as f32 / span as f32).clamp(0.0, 1.0)
 }
 
 /// Up to two uppercase initials derived from an author string. Handles
@@ -160,6 +165,17 @@ mod tests {
         assert!((blame_recency_t(200, range) - 0.5).abs() < 1e-6);
         // Degenerate range -> newest.
         assert_eq!(blame_recency_t(5, (5, 5)), 1.0);
+    }
+
+    #[test]
+    fn recency_normalization_saturates_on_extreme_range() {
+        // Crafted timestamps spanning the full i64 range would overflow a plain
+        // `max - min`; saturating arithmetic must keep the result in [0, 1]
+        // without panicking.
+        for ts in [i64::MIN, 0, i64::MAX] {
+            let t = blame_recency_t(ts, (i64::MIN, i64::MAX));
+            assert!((0.0..=1.0).contains(&t), "t={t} out of range for ts={ts}");
+        }
     }
 
     #[test]

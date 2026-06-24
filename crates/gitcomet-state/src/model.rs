@@ -381,8 +381,14 @@ impl<T: Clone + PartialEq> NavStack<T> {
     /// This is called after every reduce so the cursor never goes stale: when
     /// the view changed since the last entry, a `push` navigation appends it as
     /// a new destination (truncating any forward history), while a non-`push`
-    /// (background) change rewrites the current entry in place — keeping
+    /// (background) change rewrites the *live tail* entry in place — keeping
     /// back/forward consistent without recording a spurious step.
+    ///
+    /// When the cursor is parked on a historical entry (the user has navigated
+    /// Back/Forward and is sitting mid-stack), a non-`push` change must not
+    /// touch the saved stack at all: rewriting or truncating it there would
+    /// silently drop forward history or corrupt a snapshot the user navigated
+    /// to. The next user navigation branches cleanly from the current cursor.
     pub fn reconcile(&mut self, cur: T, push: bool) {
         if self.entries.get(self.cursor) == Some(&cur) {
             return;
@@ -400,7 +406,14 @@ impl<T: Clone + PartialEq> NavStack<T> {
                 self.entries.drain(0..overflow);
             }
             self.cursor = self.entries.len() - 1;
-        } else if self.cursor > 0 && self.entries.get(self.cursor - 1) == Some(&cur) {
+            return;
+        }
+        // Non-`push` (background) change. Only fold it into the live tail; when
+        // parked mid-stack leave saved history untouched.
+        if self.cursor + 1 < self.entries.len() {
+            return;
+        }
+        if self.cursor > 0 && self.entries.get(self.cursor - 1) == Some(&cur) {
             // Folding in-place made this entry match the previous one;
             // collapse to avoid a consecutive duplicate that would require
             // two back clicks to step past a closed/cleared view.
@@ -409,6 +422,14 @@ impl<T: Clone + PartialEq> NavStack<T> {
         } else {
             self.entries[self.cursor] = cur;
         }
+    }
+
+    /// Reset to an empty stack. Used when the repo's history becomes invalid
+    /// (full reload / reopen): saved snapshots may reference commits or file
+    /// revisions that no longer resolve, so back/forward must start fresh.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.cursor = 0;
     }
 
     /// Move the cursor one step in `dir` and return the entry to replay, or
@@ -1338,6 +1359,15 @@ impl RepoState {
         }
     }
 
+    /// Whether the current main view equals `other`, compared by borrow so the
+    /// nav-history reconcile can skip cloning a `MainViewSnapshot` (which owns a
+    /// `PathBuf`) on the common path where the view did not move.
+    pub(crate) fn main_view_snapshot_matches(&self, other: &MainViewSnapshot) -> bool {
+        self.diff_state.diff_target == other.diff_target
+            && self.diff_state.content_preview == other.content_preview
+            && self.history_state.selected_commit == other.selected_commit
+    }
+
     pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
         if self.diff_state.diff_target != target {
             self.diff_state.diff_target_rev = self.diff_state.diff_target_rev.wrapping_add(1);
@@ -1554,6 +1584,52 @@ mod tests {
             h.entries.last(),
             Some(&entry(&format!("c{}", NAV_HISTORY_CAP + 4)))
         );
+    }
+
+    #[test]
+    fn reconcile_leaves_history_intact_when_parked_mid_stack() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.record(entry("c"));
+        // Navigate back to the middle entry "b".
+        assert_eq!(h.step(ViewNavDir::Back), Some(entry("b")));
+        assert_eq!(h.cursor, 1);
+
+        // A background (non-push) change to a different snapshot must not rewrite
+        // the historical entry nor drop the forward entry "c".
+        h.reconcile(entry("x"), false);
+        assert_eq!(
+            h.entries,
+            vec![entry("a"), entry("b"), entry("c")],
+            "background change while parked mid-stack must not mutate saved history"
+        );
+        assert_eq!(h.cursor, 1);
+        assert!(h.can_forward());
+        assert_eq!(h.step(ViewNavDir::Forward), Some(entry("c")));
+    }
+
+    #[test]
+    fn reconcile_folds_background_change_into_live_tail() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        // At the live tail a background change still folds in place (no new step).
+        h.reconcile(entry("b2"), false);
+        assert_eq!(h.entries, vec![entry("a"), entry("b2")]);
+        assert_eq!(h.cursor, 1);
+    }
+
+    #[test]
+    fn clear_resets_stack() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.clear();
+        assert!(h.entries.is_empty());
+        assert_eq!(h.cursor, 0);
+        assert!(!h.can_back());
+        assert!(!h.can_forward());
     }
 
     #[test]

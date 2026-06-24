@@ -601,7 +601,7 @@ pub(super) fn drop_stash(repo_id: RepoId, index: usize) -> Vec<Effect> {
 /// keep painting stale attribution and staged/unstaged labels. `blame_path` and
 /// `blame_source` are intentionally preserved so the view reloads the same
 /// target's blame against the new content.
-fn invalidate_loaded_blame(repo_state: &mut RepoState) {
+pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
     if !matches!(repo_state.history_state.blame, Loadable::NotLoaded) {
         repo_state.history_state.blame = Loadable::NotLoaded;
     }

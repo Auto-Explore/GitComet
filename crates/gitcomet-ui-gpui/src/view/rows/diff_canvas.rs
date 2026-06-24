@@ -167,10 +167,13 @@ fn mix_blame_revision(
     if let Some(blame) = blame {
         hash_rgba(&mut hasher, blame.border);
         blame.show_text.hash(&mut hasher);
+        // `when` is time-relative ("3 days ago") so it changes for the same commit
+        // as time passes — it must stay in the key. `initials`, `summary` and
+        // `body` are NOT hashed: they are pure functions of `commit_id` (a given
+        // commit always yields the same author/summary/body), so the commit id
+        // hashed below already covers them. This avoids re-hashing a potentially
+        // multi-KB commit body for every annotated row on every frame.
         hash_shared_string(&mut hasher, &blame.when);
-        hash_shared_string(&mut hasher, &blame.initials);
-        hash_shared_string(&mut hasher, &blame.summary);
-        blame.body.hash(&mut hasher);
         blame.commit_id.0.as_ref().hash(&mut hasher);
         blame.prior_exists.hash(&mut hasher);
         blame
@@ -2732,8 +2735,14 @@ fn diff_text_style(window: &Window) -> TextStyle {
 }
 
 fn line_metrics(window: &Window) -> LineMetrics {
+    line_metrics_scaled(window, 1.0)
+}
+
+/// Diff-text metrics at `extra_scale` times the base diff font size (1.0 = the
+/// regular row text; the annotation "when" column uses a slightly smaller scale).
+fn line_metrics_scaled(window: &Window, extra_scale: f32) -> LineMetrics {
     let style = diff_text_style(window);
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
+    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE * extra_scale;
     let line_height = style
         .line_height
         .to_pixels(font_size.into(), window.rem_size());
@@ -2745,15 +2754,7 @@ fn line_metrics(window: &Window) -> LineMetrics {
 
 /// Smaller font metrics for the "X ago" sub-column in the annotation panel.
 fn line_metrics_annot_when(window: &Window) -> LineMetrics {
-    let style = diff_text_style(window);
-    let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE * 0.85;
-    let line_height = style
-        .line_height
-        .to_pixels(font_size.into(), window.rem_size());
-    LineMetrics {
-        font_size,
-        line_height,
-    }
+    line_metrics_scaled(window, 0.85)
 }
 
 pub(in crate::view) fn diff_text_wrap_char_width(window: &mut Window) -> Pixels {

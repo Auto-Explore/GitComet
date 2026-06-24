@@ -801,6 +801,28 @@ impl MainPaneView {
         selected_bg: gpui::Rgba,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
+        use gitcomet_state::model::Loadable;
+        // Reflect blame load status on the toggle so a failed or slow blame is not
+        // a silently blank annotation column: the column is only drawn from `blame`
+        // Ready, so when it is Loading/Error this control is the user-facing
+        // feedback. Toggling off then on retries (see request_blame_for_current_target).
+        let blame_status = self
+            .annotate_enabled
+            .then(|| self.active_repo().map(|repo| &repo.history_state.blame))
+            .flatten();
+        let (tooltip, errored): (SharedString, bool) = match blame_status {
+            Some(Loadable::Loading) => ("Loading blame…".into(), false),
+            Some(Loadable::Error(message)) => (
+                format!("Blame failed: {message}\nToggle off and on to retry").into(),
+                true,
+            ),
+            _ => ("Toggle blame annotations (Alt+B)".into(), false),
+        };
+        let selected_bg = if errored {
+            with_alpha(theme.colors.danger, if theme.is_dark { 0.30 } else { 0.20 })
+        } else {
+            selected_bg
+        };
         components::Button::new("diff_annotate", "Blame")
             .borderless()
             .style(components::ButtonStyle::Subtle)
@@ -820,7 +842,7 @@ impl MainPaneView {
                 cx.notify();
             })
             .debug_selector(|| "diff_annotate".to_string())
-            .gitcomet_tooltip(theme, "Toggle blame annotations (Alt+B)".into())
+            .gitcomet_tooltip(theme, tooltip)
     }
 
     pub(in crate::view) fn open_search_for_active_view(
