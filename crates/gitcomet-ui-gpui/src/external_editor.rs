@@ -76,6 +76,7 @@ pub(crate) struct ExternalEditorDetectionEnv {
     pub(crate) path_dirs: Vec<PathBuf>,
     pub(crate) application_dirs: Vec<PathBuf>,
     pub(crate) jetbrains_toolbox_dirs: Vec<PathBuf>,
+    pub(crate) jetbrains_install_dirs: Vec<PathBuf>,
     pub(crate) visual_studio_roots: Vec<PathBuf>,
 }
 
@@ -87,6 +88,8 @@ impl ExternalEditorDetectionEnv {
 
         let mut application_dirs = Vec::new();
         let mut jetbrains_toolbox_dirs = Vec::new();
+        #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+        let mut jetbrains_install_dirs = Vec::new();
         #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
         let mut visual_studio_roots = Vec::new();
 
@@ -117,12 +120,15 @@ impl ExternalEditorDetectionEnv {
             if let Some(program_files) = env::var_os("ProgramFiles").filter(|v| !v.is_empty()) {
                 let program_files = PathBuf::from(program_files);
                 application_dirs.push(program_files.clone());
+                jetbrains_install_dirs.push(program_files.join("JetBrains"));
                 visual_studio_roots.push(program_files);
             }
             if let Some(program_files_x86) =
                 env::var_os("ProgramFiles(x86)").filter(|v| !v.is_empty())
             {
-                visual_studio_roots.push(PathBuf::from(program_files_x86));
+                let program_files_x86 = PathBuf::from(program_files_x86);
+                jetbrains_install_dirs.push(program_files_x86.join("JetBrains"));
+                visual_studio_roots.push(program_files_x86);
             }
             if let Some(local_app_data) = env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty()) {
                 jetbrains_toolbox_dirs
@@ -134,6 +140,7 @@ impl ExternalEditorDetectionEnv {
             path_dirs,
             application_dirs,
             jetbrains_toolbox_dirs,
+            jetbrains_install_dirs,
             visual_studio_roots,
         }
     }
@@ -941,13 +948,31 @@ fn find_first_program(path_dirs: &[PathBuf], names: &[&str]) -> Option<PathBuf> 
 }
 
 fn program_candidates(dir: &Path, name: &str) -> Vec<PathBuf> {
-    let mut candidates = vec![dir.join(name)];
-    if Path::new(name).extension().is_none() {
-        candidates.push(dir.join(format!("{name}.exe")));
-        candidates.push(dir.join(format!("{name}.cmd")));
-        candidates.push(dir.join(format!("{name}.bat")));
+    if Path::new(name).extension().is_some() {
+        return vec![dir.join(name)];
     }
-    candidates
+
+    // Windows cannot execute extensionless files, so the bare launcher (e.g. a
+    // unix shell script shipped alongside the real `.exe`) must be ignored,
+    // otherwise the same editor is detected twice.
+    #[cfg(windows)]
+    {
+        vec![
+            dir.join(format!("{name}.exe")),
+            dir.join(format!("{name}.cmd")),
+            dir.join(format!("{name}.bat")),
+        ]
+    }
+
+    #[cfg(not(windows))]
+    {
+        vec![
+            dir.join(name),
+            dir.join(format!("{name}.exe")),
+            dir.join(format!("{name}.cmd")),
+            dir.join(format!("{name}.bat")),
+        ]
+    }
 }
 
 fn detect_terminal_launcher(env: &ExternalEditorDetectionEnv) -> Option<PathBuf> {
@@ -1048,6 +1073,7 @@ fn detect_linux_desktop_editors(
 ) {
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn parse_desktop_file_exec(path: &std::path::Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     let mut in_desktop_entry = false;
@@ -1070,6 +1096,7 @@ fn parse_desktop_file_exec(path: &std::path::Path) -> Option<String> {
     None
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn desktop_exec_first_token(raw: &str) -> String {
     let mut result = String::new();
     let mut chars = raw.chars().peekable();
@@ -1111,7 +1138,11 @@ fn detect_jetbrains_toolbox(
     editors: &mut Vec<DetectedExternalEditor>,
     seen: &mut BTreeSet<(String, PathBuf)>,
 ) {
-    for root in &env.jetbrains_toolbox_dirs {
+    for root in env
+        .jetbrains_toolbox_dirs
+        .iter()
+        .chain(env.jetbrains_install_dirs.iter())
+    {
         if !root.is_dir() {
             continue;
         }
@@ -1246,6 +1277,23 @@ mod tests {
         dir
     }
 
+    // On Windows the detector only considers files with an executable
+    // extension, so tests must create the platform-appropriate launcher name.
+    fn executable_name(name: &str) -> String {
+        #[cfg(windows)]
+        {
+            if Path::new(name).extension().is_some() {
+                name.to_string()
+            } else {
+                format!("{name}.exe")
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            name.to_string()
+        }
+    }
+
     fn touch(path: &Path) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).expect("create parent");
@@ -1274,7 +1322,7 @@ mod tests {
     #[test]
     fn detects_editors_from_path_and_dedupes_by_id_and_path() {
         let dir = temp_dir("path");
-        let code = dir.join("code");
+        let code = dir.join(executable_name("code"));
         touch_executable(&code);
         let env = ExternalEditorDetectionEnv {
             path_dirs: vec![dir.clone(), dir],
@@ -1347,6 +1395,46 @@ mod tests {
     }
 
     #[test]
+    fn detects_jetbrains_standalone_install_paths() {
+        let root = temp_dir("jetbrains-standalone");
+        let rustrover = root.join("RustRover 2026.1.2/bin/rustrover64.exe");
+        touch(&rustrover);
+        let env = ExternalEditorDetectionEnv {
+            jetbrains_install_dirs: vec![root],
+            ..ExternalEditorDetectionEnv::default()
+        };
+
+        let editors = detect_external_editors_with_env(&env);
+
+        assert!(editors.iter().any(|editor| {
+            editor.id == "jetbrains-rustrover"
+                && editor.label == "RustRover"
+                && editor.path == rustrover
+        }));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_ignores_extensionless_launcher_next_to_exe() {
+        let dir = temp_dir("windows-extensionless");
+        touch(&dir.join("zed"));
+        touch(&dir.join("zed.exe"));
+        let env = ExternalEditorDetectionEnv {
+            path_dirs: vec![dir.clone()],
+            ..ExternalEditorDetectionEnv::default()
+        };
+
+        let editors = detect_external_editors_with_env(&env);
+
+        let zed_paths: Vec<_> = editors
+            .iter()
+            .filter(|editor| editor.id == "zed")
+            .map(|editor| editor.path.clone())
+            .collect();
+        assert_eq!(zed_paths, vec![dir.join("zed.exe")]);
+    }
+
+    #[test]
     fn detects_macos_app_bundle_fallbacks_from_configured_roots() {
         let apps = temp_dir("apps");
         let xcode = apps.join("Xcode.app");
@@ -1385,7 +1473,7 @@ mod tests {
     #[test]
     fn terminal_vim_is_gated_by_terminal_launcher_and_shadowed_by_gui() {
         let dir = temp_dir("terminal");
-        touch_executable(&dir.join("vim"));
+        touch_executable(&dir.join(executable_name("vim")));
         let no_terminal = ExternalEditorDetectionEnv {
             path_dirs: vec![dir.clone()],
             ..ExternalEditorDetectionEnv::default()
@@ -1396,7 +1484,7 @@ mod tests {
                 .all(|editor| editor.id != "vim-terminal")
         );
 
-        touch_executable(&dir.join("xterm"));
+        touch_executable(&dir.join(executable_name("xterm")));
         let with_terminal = ExternalEditorDetectionEnv {
             path_dirs: vec![dir.clone()],
             ..ExternalEditorDetectionEnv::default()
@@ -1407,7 +1495,7 @@ mod tests {
                 .any(|editor| editor.id == "vim-terminal")
         );
 
-        touch_executable(&dir.join("gvim"));
+        touch_executable(&dir.join(executable_name("gvim")));
         let with_gui = ExternalEditorDetectionEnv {
             path_dirs: vec![dir],
             ..ExternalEditorDetectionEnv::default()
@@ -1417,6 +1505,7 @@ mod tests {
         assert!(editors.iter().all(|editor| editor.id != "vim-terminal"));
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn terminal_vim_launch_command_uses_terminal_specific_argv() {
         let target = Path::new("/tmp/repo");
