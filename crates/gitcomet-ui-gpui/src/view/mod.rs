@@ -560,8 +560,9 @@ impl GitCometView {
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.command_palette_open = true;
         self.command_palette_subscription = None;
-        self.command_palette.restore_focus =
-            window.focused(cx).or_else(|| self.pre_palette_focus.clone());
+        self.command_palette.restore_focus = window
+            .focused(cx)
+            .or_else(|| self.pre_palette_focus.clone());
 
         let query_input = cx.new(|cx| {
             components::TextInput::new(

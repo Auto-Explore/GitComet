@@ -1,6 +1,5 @@
 use super::*;
 
-
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,

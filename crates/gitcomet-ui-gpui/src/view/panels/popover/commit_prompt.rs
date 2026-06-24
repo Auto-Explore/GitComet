@@ -1,6 +1,5 @@
 use super::*;
 
-
 pub(super) fn panel(
     this: &mut PopoverHost,
     _repo_id: RepoId,
@@ -65,7 +64,11 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("commit_prompt_cancel", "Cancel")
                         .focus_handle(this.commit_prompt_cancel_focus_handle.clone())
-                        .separated_end_slot(super::hotkey_hint(theme, "commit_prompt_cancel_hint", "Esc"))
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "commit_prompt_cancel_hint",
+                            "Esc",
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);

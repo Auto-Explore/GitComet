@@ -612,15 +612,13 @@ impl PopoverHost {
                         return;
                     };
 
-                    let stashes = match this
-                        .active_repo()
-                        .and_then(|r| {
-                            if let Loadable::Ready(s) = &r.stashes {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        }) {
+                    let stashes = match this.active_repo().and_then(|r| {
+                        if let Loadable::Ready(s) = &r.stashes {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    }) {
                         Some(s) => s,
                         None => return,
                     };

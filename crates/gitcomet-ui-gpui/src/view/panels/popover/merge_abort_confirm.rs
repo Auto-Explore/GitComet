@@ -87,7 +87,11 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("merge_abort_cancel", "Cancel")
-                        .separated_end_slot(super::hotkey_hint(theme, "merge_abort_cancel_hint", "Esc"))
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "merge_abort_cancel_hint",
+                            "Esc",
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;

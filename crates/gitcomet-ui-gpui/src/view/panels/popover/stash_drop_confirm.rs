@@ -65,7 +65,11 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("stash_drop_confirm_cancel", "Cancel")
-                        .separated_end_slot(super::hotkey_hint(theme, "stash_drop_cancel_hint", "Esc"))
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "stash_drop_cancel_hint",
+                            "Esc",
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             this.store.dispatch(Msg::LoadStashes { repo_id });

@@ -2084,7 +2084,6 @@ impl TextInput {
             cx.notify();
             return;
         }
-
     }
 
     pub(super) fn on_mouse_down_right(

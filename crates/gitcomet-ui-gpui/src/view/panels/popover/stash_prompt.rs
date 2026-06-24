@@ -1,6 +1,5 @@
 use super::*;
 
-
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let can_stash = this.can_submit_stash(cx);

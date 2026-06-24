@@ -72,7 +72,11 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("force_remove_worktree_cancel", "Cancel")
-                        .separated_end_slot(super::hotkey_hint(theme, "force_remove_worktree_cancel_hint", "Esc"))
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "force_remove_worktree_cancel_hint",
+                            "Esc",
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;

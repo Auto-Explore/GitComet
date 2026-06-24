@@ -31,15 +31,13 @@ pub(super) fn panel(
         .child(div().border_t_1().border_color(theme.colors.border));
 
     if let Some(search) = this.stash_picker_search_input.clone() {
-        match this
-            .active_repo()
-            .and_then(|r| {
-                if let Loadable::Ready(s) = &r.stashes {
-                    Some(s.clone())
-                } else {
-                    None
-                }
-            }) {
+        match this.active_repo().and_then(|r| {
+            if let Loadable::Ready(s) = &r.stashes {
+                Some(s.clone())
+            } else {
+                None
+            }
+        }) {
             Some(stashes) => {
                 let query = search.read_with(cx, |i, _| i.text().trim().to_ascii_lowercase());
                 let filtered: Vec<(usize, SharedString)> = stashes
@@ -53,11 +51,9 @@ pub(super) fn panel(
                         }
                     })
                     .collect();
-                let items: Vec<SharedString> =
-                    filtered.iter().map(|(_, l)| l.clone()).collect();
+                let items: Vec<SharedString> = filtered.iter().map(|(_, l)| l.clone()).collect();
                 let git_indices: Vec<usize> = filtered.iter().map(|(idx, _)| *idx).collect();
-                let messages: Vec<String> =
-                    filtered.iter().map(|(_, m)| m.to_string()).collect();
+                let messages: Vec<String> = filtered.iter().map(|(_, m)| m.to_string()).collect();
 
                 menu = menu.child(
                     components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
@@ -66,41 +62,46 @@ pub(super) fn panel(
                         .empty_text("No stashes")
                         .max_height(scaled_px(240.0))
                         .selected_index(this.stash_picker_prompt_selected_index)
-                        .render(theme, ui_scale_percent, cx, move |this, ix, _e, window, cx| {
-                            if let Some(&git_index) = git_indices.get(ix) {
-                                match purpose {
-                                    StashPickerPurpose::Pop => {
-                                        this.store.dispatch(Msg::PopStash {
-                                            repo_id,
-                                            index: git_index,
-                                        });
-                                        this.store.dispatch(Msg::LoadStashes { repo_id });
-                                        this.close_popover(cx);
-                                    }
-                                    StashPickerPurpose::Apply => {
-                                        this.store.dispatch(Msg::ApplyStash {
-                                            repo_id,
-                                            index: git_index,
-                                        });
-                                        this.store.dispatch(Msg::LoadStashes { repo_id });
-                                        this.close_popover(cx);
-                                    }
-                                    StashPickerPurpose::Drop => {
-                                        let message =
-                                            messages.get(ix).cloned().unwrap_or_default();
-                                        this.open_popover_centered(
-                                            PopoverKind::StashDropConfirm {
+                        .render(
+                            theme,
+                            ui_scale_percent,
+                            cx,
+                            move |this, ix, _e, window, cx| {
+                                if let Some(&git_index) = git_indices.get(ix) {
+                                    match purpose {
+                                        StashPickerPurpose::Pop => {
+                                            this.store.dispatch(Msg::PopStash {
                                                 repo_id,
                                                 index: git_index,
-                                                message,
-                                            },
-                                            window,
-                                            cx,
-                                        );
+                                            });
+                                            this.store.dispatch(Msg::LoadStashes { repo_id });
+                                            this.close_popover(cx);
+                                        }
+                                        StashPickerPurpose::Apply => {
+                                            this.store.dispatch(Msg::ApplyStash {
+                                                repo_id,
+                                                index: git_index,
+                                            });
+                                            this.store.dispatch(Msg::LoadStashes { repo_id });
+                                            this.close_popover(cx);
+                                        }
+                                        StashPickerPurpose::Drop => {
+                                            let message =
+                                                messages.get(ix).cloned().unwrap_or_default();
+                                            this.open_popover_centered(
+                                                PopoverKind::StashDropConfirm {
+                                                    repo_id,
+                                                    index: git_index,
+                                                    message,
+                                                },
+                                                window,
+                                                cx,
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                        }),
+                            },
+                        ),
                 );
             }
             None => {
@@ -108,7 +109,11 @@ pub(super) fn panel(
                     .active_repo()
                     .map(|r| matches!(&r.stashes, Loadable::Loading))
                     .unwrap_or(false);
-                let text = if is_loading { "Loading…" } else { "No stashes" };
+                let text = if is_loading {
+                    "Loading…"
+                } else {
+                    "No stashes"
+                };
                 menu = menu.child(components::context_menu_label(
                     theme,
                     ui_scale_percent,
