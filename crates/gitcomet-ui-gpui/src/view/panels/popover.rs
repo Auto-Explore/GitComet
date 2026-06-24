@@ -1324,10 +1324,7 @@ impl PopoverHost {
                     kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
                     ..
                 })
-        ) || self
-            .popover
-            .as_ref()
-            .is_some_and(popover_is_confirm_dialog)
+        ) || self.popover.as_ref().is_some_and(popover_is_confirm_dialog)
     }
 
     fn wrap_prompt_focus(
@@ -1390,11 +1387,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self
-            .popover
-            .as_ref()
-            .is_some_and(popover_is_confirm_dialog)
-        {
+        if self.popover.as_ref().is_some_and(popover_is_confirm_dialog) {
             self.close_popover(cx);
             return;
         }
