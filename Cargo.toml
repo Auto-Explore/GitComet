@@ -45,10 +45,9 @@ clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 futures = "0.3.32"
-gix = { version = "0.85.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "886dce6254a187f641fce007b069774115500dcb" }
-gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "886dce6254a187f641fce007b069774115500dcb" }
-http_client = { package = "http-client-gpui-unofficial", version = "1.7.2" }
+gix = { version = "0.84.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "a4776784d6ffa19803516e45c610a1ea18933ba9" }
+gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "a4776784d6ffa19803516e45c610a1ea18933ba9" }
 image = "0.25.10"
 libc = "0.2"
 lru = "0.18"
