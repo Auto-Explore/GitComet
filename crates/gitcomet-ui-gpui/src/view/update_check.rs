@@ -1,8 +1,8 @@
 use super::*;
 #[cfg(not(test))]
-use futures::{AsyncReadExt, future};
+use futures::future;
 #[cfg(not(test))]
-use http_client::{AsyncBody, HttpClient, HttpRequestExt, RedirectPolicy, Request};
+use gpui::http_client::HttpClient;
 use semver::Version;
 #[cfg(not(test))]
 use serde::Deserialize;
@@ -113,25 +113,15 @@ async fn fetch_update_notice_with_client(
     repo: GitHubRepo,
     http_client: Arc<dyn HttpClient>,
 ) -> Option<UpdateNotice> {
-    let user_agent = format!(
-        "GitComet/{current_version} (+{})",
-        env!("CARGO_PKG_REPOSITORY")
-    );
-    let request = Request::get(repo.releases_latest_api_url())
-        .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", user_agent)
-        .follow_redirects(RedirectPolicy::FollowAll)
-        .body(AsyncBody::empty())
+    let response = http_client
+        .get(&repo.releases_latest_api_url(), true)
+        .await
         .ok()?;
-
-    let mut response = http_client.send(request).await.ok()?;
-    if !response.status().is_success() {
+    if !response.status.is_success() {
         return None;
     }
 
-    let mut body = Vec::new();
-    response.body_mut().read_to_end(&mut body).await.ok()?;
-    let release = serde_json::from_slice::<GitHubRelease>(&body).ok()?;
+    let release = serde_json::from_slice::<GitHubRelease>(&response.body).ok()?;
 
     build_update_notice(current_version, &release, &repo)
 }
