@@ -29,7 +29,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
-    let recent_repos = session::load().recent_repos;
+    let recent_repos = this.recent_repo_picker_cached_repos.clone();
     let labels = recent_repos
         .iter()
         .map(|path| crate::app::recent_repository_label(path).into())

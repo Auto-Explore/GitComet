@@ -126,7 +126,6 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DeleteBranch { .. }
             | Msg::ForceDeleteBranch { .. }
             | Msg::CloneRepo { .. }
-            | Msg::ExportPatch { .. }
             | Msg::ApplyPatch { .. }
             | Msg::AddWorktree { .. }
             | Msg::RemoveWorktree { .. }
@@ -406,11 +405,6 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             Msg::CheckoutConflictBase { repo_id, path }
         }
         RepoCommandKind::LaunchMergetool { path } => Msg::LaunchMergetool { repo_id, path },
-        RepoCommandKind::ExportPatch { commit_id, dest } => Msg::ExportPatch {
-            repo_id,
-            commit_id,
-            dest,
-        },
         RepoCommandKind::ApplyPatch { patch } => Msg::ApplyPatch { repo_id, patch },
         RepoCommandKind::AddWorktree { path, reference } => Msg::AddWorktree {
             repo_id,
@@ -887,14 +881,6 @@ pub(super) fn reduce(
                 state.auth_prompt = Some(prompt);
             }
             effects
-        }
-        Msg::ExportPatch {
-            repo_id,
-            commit_id,
-            dest,
-        } => {
-            begin_local_action(state, repo_id);
-            actions_emit_effects::export_patch(repo_id, commit_id, dest)
         }
         Msg::ApplyPatch { repo_id, patch } => {
             begin_local_action(state, repo_id);

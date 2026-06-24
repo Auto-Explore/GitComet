@@ -117,19 +117,6 @@ pub(super) fn panel(
                             .max_height(scaled_px(240.0))
                             .selected_index(this.branch_picker_selected_index)
                             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
-                                let branches: Vec<String> = this
-                                    .active_repo()
-                                    .map(|repo| {
-                                        let mut names: Vec<String> = vec!["HEAD".to_string()];
-                                        if let Loadable::Ready(branches) = &repo.branches {
-                                            names.extend(branches.iter().map(|b| b.name.clone()));
-                                        }
-                                        if let Loadable::Ready(tags) = &repo.tags {
-                                            names.extend(tags.iter().map(|t| t.name.clone()));
-                                        }
-                                        names
-                                    })
-                                    .unwrap_or_default();
                                 if let Some(name) = branches.get(ix).cloned() {
                                     let repo_id = this.active_repo_id().unwrap_or(RepoId(0));
                                     this.handle_inline_branch_picker_select(name, repo_id, cx);

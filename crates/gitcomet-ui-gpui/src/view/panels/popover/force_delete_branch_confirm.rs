@@ -1,5 +1,6 @@
 use super::*;
 
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -56,6 +57,11 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("force_delete_branch_cancel", "Cancel")
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "force_delete_branch_cancel_hint",
+                            "Esc",
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;

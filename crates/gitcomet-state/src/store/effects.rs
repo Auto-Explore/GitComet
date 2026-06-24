@@ -652,17 +652,6 @@ fn send_unavailable_git_effect_result(
             }))
         }
         Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx.clone(), dest),
-        Effect::ExportPatch {
-            repo_id,
-            commit_id,
-            dest,
-        } => send(Msg::Internal(
-            crate::msg::InternalMsg::RepoCommandFinished {
-                repo_id,
-                command: RepoCommandKind::ExportPatch { commit_id, dest },
-                result: Err(git_unavailable_error(runtime)),
-            },
-        )),
         Effect::ApplyPatch { repo_id, patch } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -1748,13 +1737,6 @@ pub(super) fn schedule_effect(
             clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
         }
         Effect::AbortCloneRepo { dest } => clone::schedule_abort_clone_repo(msg_tx, dest),
-        Effect::ExportPatch {
-            repo_id,
-            commit_id,
-            dest,
-        } => {
-            repo_commands::schedule_export_patch(executor, repos, msg_tx, repo_id, commit_id, dest)
-        }
         Effect::ApplyPatch { repo_id, patch } => {
             repo_commands::schedule_apply_patch(executor, repos, msg_tx, repo_id, patch);
         }

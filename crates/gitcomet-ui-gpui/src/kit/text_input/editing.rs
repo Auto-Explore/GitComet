@@ -2047,6 +2047,10 @@ impl TextInput {
     ) {
         let key = event.keystroke.key.as_str();
 
+        if event.keystroke.modifiers.modified() {
+            return;
+        }
+
         if key == "escape" {
             self.interaction.escape_pressed = true;
             cx.notify();
@@ -2081,7 +2085,6 @@ impl TextInput {
             return;
         }
 
-        if event.keystroke.modifiers.modified() {}
     }
 
     pub(super) fn on_mouse_down_right(

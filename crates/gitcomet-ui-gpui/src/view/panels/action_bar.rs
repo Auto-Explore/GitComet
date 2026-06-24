@@ -637,10 +637,20 @@ impl Render for ActionBarView {
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                 this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
                 if let Some(repo_id) = this.state.active_repo {
+                    let target = this
+                        .active_repo()
+                        .and_then(|repo| {
+                            if let Loadable::Ready(head) = &repo.head_branch {
+                                Some(head.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| "HEAD".to_string());
                     this.open_popover_for_bounds(
                         PopoverKind::CreateBranchFromRefPrompt {
                             repo_id,
-                            target: "HEAD".to_string(),
+                            target,
                             source_selectable: true,
                         },
                         bounds,

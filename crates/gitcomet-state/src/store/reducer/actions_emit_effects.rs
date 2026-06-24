@@ -84,18 +84,6 @@ pub(super) fn force_delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> 
     vec![Effect::ForceDeleteBranch { repo_id, name }]
 }
 
-pub(super) fn export_patch(
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-    dest: PathBuf,
-) -> Vec<Effect> {
-    vec![Effect::ExportPatch {
-        repo_id,
-        commit_id,
-        dest,
-    }]
-}
-
 pub(super) fn apply_patch(repo_id: RepoId, patch: PathBuf) -> Vec<Effect> {
     vec![Effect::ApplyPatch { repo_id, patch }]
 }
@@ -779,7 +767,6 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::CheckoutConflictBase { .. }
             | RepoCommandKind::LaunchMergetool { .. }
             | RepoCommandKind::SaveWorktreeFile { .. }
-            | RepoCommandKind::ExportPatch { .. }
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }
             | RepoCommandKind::UpdateSubmodules { .. }

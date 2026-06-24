@@ -2444,6 +2444,13 @@ pub(super) enum BranchPickerPurpose {
     Delete,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StashPickerPurpose {
+    Pop,
+    Apply,
+    Drop,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
@@ -2461,11 +2468,18 @@ pub(super) enum PopoverKind {
         remote: String,
         branch: String,
     },
+    CommitPrompt {
+        repo_id: RepoId,
+    },
     StashPrompt,
     StashDropConfirm {
         repo_id: RepoId,
         index: usize,
         message: String,
+    },
+    StashPickerPrompt {
+        repo_id: RepoId,
+        purpose: StashPickerPurpose,
     },
     StashMenu {
         repo_id: RepoId,
@@ -3291,6 +3305,7 @@ pub struct GitCometView {
     pub(super) command_palette_open: bool,
     #[allow(dead_code)]
     pub(super) command_palette_subscription: Option<gpui::Subscription>,
+    pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
@@ -3338,6 +3353,7 @@ pub struct GitCometView {
     pub(super) last_mouse_pos: Point<Pixels>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
+    pub(super) pending_force_delete_branch_centered: bool,
     pub(super) pending_force_remove_worktree_prompt:
         Option<(RepoId, std::path::PathBuf, Option<String>)>,
     pub(super) pending_submodule_trust_prompt:

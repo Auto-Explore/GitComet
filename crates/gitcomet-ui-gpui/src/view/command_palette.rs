@@ -17,27 +17,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "commit-amend",
-        label: "Amend Last Commit",
-        shortcut: "",
-        category: "Commit",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "export-patch",
-        label: "Export Patch",
-        shortcut: "",
-        category: "Commit",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "apply-patch",
-        label: "Apply Patch",
-        shortcut: "",
-        category: "Commit",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "stage-all",
         label: "Stage All Changes",
         shortcut: "",
@@ -164,48 +143,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "rebase-continue",
-        label: "Continue Rebase",
-        shortcut: "",
-        category: "Merge/Rebase",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "rebase-abort",
-        label: "Abort Rebase",
-        shortcut: "",
-        category: "Merge/Rebase",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "merge-abort",
-        label: "Abort Merge",
-        shortcut: "",
-        category: "Merge/Rebase",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "reset-soft",
-        label: "Reset (Soft)",
-        shortcut: "",
-        category: "Reset",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "reset-mixed",
-        label: "Reset (Mixed)",
-        shortcut: "",
-        category: "Reset",
-        requires_repo: true,
-    },
-    CommandEntry {
-        id: "reset-hard",
-        label: "Reset (Hard)",
-        shortcut: "",
-        category: "Reset",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "toggle-sidebar",
         label: "Toggle Sidebar",
         shortcut: "",
@@ -299,7 +236,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "minimize-window",
         label: "Minimize Window",
-        shortcut: "Ctrl+M",
+        shortcut: "",
         category: "Window",
         requires_repo: false,
     },
@@ -386,6 +323,8 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "delete-remote-branch"   - Delete Remote Branch
     // TODO: "merge"                  - Merge Branch/Ref
     // TODO: "rebase"                 - Rebase Onto
+    // TODO: "rebase-continue"        - Continue Rebase (Merge/Rebase)
+    // TODO: "rebase-abort"           - Abort Rebase (Merge/Rebase)
     // TODO: "delete-tag"             - Delete Tag
     // TODO: "remove-remote"          - Remove Remote
     // TODO: "edit-remote-url"        - Edit Remote URL

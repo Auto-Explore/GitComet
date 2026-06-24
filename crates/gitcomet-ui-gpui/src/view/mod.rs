@@ -560,7 +560,8 @@ impl GitCometView {
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.command_palette_open = true;
         self.command_palette_subscription = None;
-        self.command_palette.restore_focus = window.focused(cx);
+        self.command_palette.restore_focus =
+            window.focused(cx).or_else(|| self.pre_palette_focus.clone());
 
         let query_input = cx.new(|cx| {
             components::TextInput::new(
@@ -589,12 +590,12 @@ impl GitCometView {
                     }
 
                     let query = input.read_with(cx, |input, _| input.text().trim().to_string());
+                    let has_repo = this.active_repo_id().is_some();
+                    let matches = this.command_palette.filtered_commands(has_repo, &query);
 
                     let arrow_up = input.update(cx, |input, _| input.take_arrow_up_pressed());
                     let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
                     if arrow_up || shift_tab {
-                        let has_repo = this.active_repo_id().is_some();
-                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         if matches.is_empty() {
                             this.command_palette.selected_index = None;
                         } else {
@@ -625,8 +626,6 @@ impl GitCometView {
                     let arrow_down = input.update(cx, |input, _| input.take_arrow_down_pressed());
                     let tab = input.update(cx, |input, _| input.take_tab_pressed());
                     if arrow_down || tab {
-                        let has_repo = this.active_repo_id().is_some();
-                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         if matches.is_empty() {
                             this.command_palette.selected_index = None;
                         } else {
@@ -656,8 +655,6 @@ impl GitCometView {
 
                     let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
                     if enter_pressed {
-                        let has_repo = this.active_repo_id().is_some();
-                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         let cmd_to_execute = this
                             .command_palette
                             .selected_index
@@ -674,8 +671,6 @@ impl GitCometView {
                     }
 
                     if query != this.command_palette.previous_query.as_ref() {
-                        let has_repo = this.active_repo_id().is_some();
-                        let matches = this.command_palette.filtered_commands(has_repo, &query);
                         this.command_palette.selected_index =
                             if matches.is_empty() { None } else { Some(0) };
                         this.command_palette.previous_query = query.into();
@@ -1074,10 +1069,23 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
+                    let target = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == repo_id)
+                        .and_then(|repo| {
+                            if let Loadable::Ready(head) = &repo.head_branch {
+                                Some(head.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| "HEAD".to_string());
                     self.open_popover_centered(
                         PopoverKind::CreateBranchFromRefPrompt {
                             repo_id,
-                            target: "HEAD".to_string(),
+                            target,
                             source_selectable: true,
                         },
                         window,
@@ -1138,66 +1146,11 @@ impl GitCometView {
                 // TODO: Implement delete remote branch
             }
             "commit" => {
-                if let Some(window) = window {
-                    self.details_pane.update(cx, |pane, cx| {
-                        pane.handle_commit_submit_shortcut(window, cx);
-                    });
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(PopoverKind::CommitPrompt { repo_id }, window, cx);
                 }
-            }
-            "commit-amend" => {
-                let currently_enabled = self.details_pane.read(cx).commit_amend_enabled;
-                self.set_commit_amend_enabled(!currently_enabled, cx);
-            }
-            "export-patch" => {
-                let Some(repo_id) = self.active_repo_id() else {
-                    return;
-                };
-                let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
-                    return;
-                };
-                let commit_id = match &repo.head_branch {
-                    Loadable::Ready(head_name) => match &repo.branches {
-                        Loadable::Ready(branches) => branches
-                            .iter()
-                            .find(|b| b.name == *head_name)
-                            .map(|b| b.target.clone()),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let Some(commit_id) = commit_id else {
-                    return;
-                };
-                let sha = commit_id.as_ref();
-                let short = sha.get(0..8).unwrap_or(sha).to_string();
-                let view = cx.weak_entity();
-                cx.defer(move |cx| {
-                    let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-                        files: false,
-                        directories: true,
-                        multiple: false,
-                        prompt: Some("Export patch to folder".into()),
-                    });
-                    cx.spawn(async move |cx| {
-                        let result = rx.await;
-                        let paths = match result {
-                            Ok(Ok(Some(paths))) => paths,
-                            _ => return,
-                        };
-                        let Some(folder) = paths.into_iter().next() else {
-                            return;
-                        };
-                        let dest = folder.join(format!("commit-{short}.patch"));
-                        let _ = view.update(cx, |this, _cx| {
-                            this.store.dispatch(Msg::ExportPatch {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                                dest,
-                            });
-                        });
-                    })
-                    .detach();
-                });
             }
             "apply-patch" => {
                 let Some(repo_id) = self.active_repo_id() else {
@@ -1267,22 +1220,20 @@ impl GitCometView {
                     self.open_popover_centered(PopoverKind::StashPrompt, window, cx);
                 }
             }
-            "stash-pop" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::PopStash { repo_id, index: 0 });
-                    self.store.dispatch(Msg::LoadStashes { repo_id });
-                }
-            }
-            "stash-apply" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::ApplyStash { repo_id, index: 0 });
-                    self.store.dispatch(Msg::LoadStashes { repo_id });
-                }
-            }
-            "stash-drop" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::DropStash { repo_id, index: 0 });
-                    self.store.dispatch(Msg::LoadStashes { repo_id });
+            "stash-pop" | "stash-apply" | "stash-drop" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    let purpose = match command_id {
+                        "stash-pop" => StashPickerPurpose::Pop,
+                        "stash-apply" => StashPickerPurpose::Apply,
+                        _ => StashPickerPurpose::Drop,
+                    };
+                    self.open_popover_centered(
+                        PopoverKind::StashPickerPrompt { repo_id, purpose },
+                        window,
+                        cx,
+                    );
                 }
             }
             "merge" => {
@@ -1292,45 +1243,10 @@ impl GitCometView {
                 // TODO: Implement rebase onto
             }
             "rebase-continue" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::RebaseContinue { repo_id });
-                }
+                // TODO: Continue rebase
             }
             "rebase-abort" => {
-                if let Some(repo_id) = self.active_repo_id() {
-                    self.store.dispatch(Msg::RebaseAbort { repo_id });
-                }
-            }
-            "merge-abort" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(window) = window
-                {
-                    self.open_popover_centered(
-                        PopoverKind::MergeAbortConfirm { repo_id },
-                        window,
-                        cx,
-                    );
-                }
-            }
-            "reset-soft" | "reset-mixed" | "reset-hard" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(window) = window
-                {
-                    let mode = match command_id {
-                        "reset-soft" => ResetMode::Soft,
-                        "reset-mixed" => ResetMode::Mixed,
-                        _ => ResetMode::Hard,
-                    };
-                    self.open_popover_centered(
-                        PopoverKind::ResetPrompt {
-                            repo_id,
-                            target: "HEAD".into(),
-                            mode,
-                        },
-                        window,
-                        cx,
-                    );
-                }
+                // TODO: Abort rebase
             }
             "create-tag" => {
                 if let Some(repo_id) = self.active_repo_id()
@@ -1350,10 +1266,12 @@ impl GitCometView {
                 // TODO: Implement delete tag
             }
             "add-remote" => {
-                if let Some(window) = window {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
                     self.open_popover_centered(
                         PopoverKind::Repo {
-                            repo_id: self.active_repo_id().unwrap_or(RepoId(0)),
+                            repo_id,
                             kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
                         },
                         window,
@@ -1847,8 +1765,12 @@ impl GitCometView {
             previous_query: SharedString::default(),
         };
 
-        let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
+        let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                // Capture the focused element before the platform blur() fires and clears it.
+                // This is the restore target when opening the palette via a global hotkey while
+                // this window is in the background.
+                this.pre_palette_focus = window.focused(cx);
                 return;
             }
             let runtime = refresh_git_runtime();
@@ -1983,6 +1905,7 @@ impl GitCometView {
             command_palette,
             command_palette_open: false,
             command_palette_subscription: None,
+            pre_palette_focus: None,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
@@ -2024,6 +1947,7 @@ impl GitCometView {
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
+            pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
             pending_worktree_branch_removals: HashMap::default(),
@@ -3235,12 +3159,20 @@ impl Render for GitCometView {
         if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take()
             && self.active_repo_id() == Some(repo_id)
         {
-            self.open_popover_at(
-                PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
-                self.last_mouse_pos,
-                window,
-                cx,
-            );
+            if self.pending_force_delete_branch_centered {
+                self.open_popover_centered(
+                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    window,
+                    cx,
+                );
+            } else {
+                self.open_popover_at(
+                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    self.last_mouse_pos,
+                    window,
+                    cx,
+                );
+            }
         }
 
         if let Some((repo_id, path, branch)) = self.pending_force_remove_worktree_prompt.take()
@@ -3796,8 +3728,7 @@ impl Render for GitCometView {
             .top_0()
             .left_0()
             .size_full()
-            .child(self.render_command_palette(cx))
-            .child(stable_overlay_view(self.popover_host.clone()));
+            .child(self.render_command_palette(cx));
 
         root = root.child(chrome::window_frame(
             theme,
@@ -3806,6 +3737,8 @@ impl Render for GitCometView {
             Some(frame_overlay.into_any_element()),
             self.ui_scale_percent,
         ));
+
+        root = root.child(stable_overlay_view(self.popover_host.clone()));
 
         root = root.child(stable_overlay_view(self.toast_host.clone()));
 

@@ -1,4 +1,3 @@
-use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
     ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
     SubmoduleTrustTarget,
@@ -100,10 +99,6 @@ pub enum RepoCommandKind {
     SaveWorktreeFile {
         path: PathBuf,
         stage: bool,
-    },
-    ExportPatch {
-        commit_id: CommitId,
-        dest: PathBuf,
     },
     ApplyPatch {
         patch: PathBuf,

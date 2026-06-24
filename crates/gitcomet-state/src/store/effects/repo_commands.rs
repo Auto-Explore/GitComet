@@ -134,29 +134,6 @@ pub(super) fn schedule_save_worktree_file(
     );
 }
 
-pub(super) fn schedule_export_patch(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-    dest: PathBuf,
-) {
-    let command_commit_id = commit_id.clone();
-    let command_dest = dest.clone();
-    schedule_repo_command(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoCommandKind::ExportPatch {
-            commit_id: command_commit_id,
-            dest: command_dest,
-        },
-        move |repo| repo.export_patch_with_output(&commit_id, &dest),
-    );
-}
-
 pub(super) fn schedule_apply_patch(
     executor: &TaskExecutor,
     repos: &RepoMap,

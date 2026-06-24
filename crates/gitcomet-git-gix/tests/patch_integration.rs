@@ -1,4 +1,3 @@
-use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::GitBackend;
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
@@ -41,7 +40,7 @@ fn run_git_capture(repo: &Path, args: &[&str]) -> String {
 }
 
 #[test]
-fn export_patch_and_apply_patch_round_trip() {
+fn apply_patch_round_trip() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path();
 
@@ -67,23 +66,10 @@ fn export_patch_and_apply_patch_round_trip() {
         &["-c", "commit.gpgsign=false", "commit", "-m", "add line"],
     );
 
-    let head = run_git_capture(repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    // Generate patch via git format-patch directly.
     let patch_path = dir.path().join("change.patch");
-
-    let backend = GixBackend;
-    let opened = backend.open(repo).expect("open repository");
-
-    let export_output = opened
-        .export_patch_with_output(&CommitId(head.into()), &patch_path)
-        .expect("export patch");
-    assert_eq!(export_output.exit_code, Some(0));
-    assert!(patch_path.exists(), "expected patch file to exist");
-
-    let patch_text = fs::read_to_string(&patch_path).expect("read patch file");
-    assert!(patch_text.contains("Subject: [PATCH] add line"));
-    assert!(patch_text.contains("+two"));
+    let patch_text = run_git_capture(repo, &["format-patch", "-1", "--stdout", "--binary"]);
+    fs::write(&patch_path, patch_text.as_bytes()).expect("write patch file");
 
     run_git(repo, &["reset", "--hard", "HEAD~1"]);
     assert_eq!(
@@ -91,6 +77,9 @@ fn export_patch_and_apply_patch_round_trip() {
         "one\n",
         "reset should remove second line"
     );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).expect("open repository");
 
     let apply_output = opened
         .apply_patch_with_output(&patch_path)

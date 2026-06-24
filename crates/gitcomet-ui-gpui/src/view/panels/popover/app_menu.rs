@@ -88,12 +88,47 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .min_w(scaled_px(200.0))
         .child(section_label("app_menu_app_section", "Application"))
         .child(
-            entry("app_menu_settings", "Settings…".into(), false).on_click(cx.listener(
-                |this, _e: &ClickEvent, _window, cx| {
+            div()
+                .id("app_menu_command_palette")
+                .debug_selector(|| "app_menu_command_palette".to_string())
+                .min_h(components::control_height_md(ui_scale_percent))
+                .px(scaled_px(8.0))
+                .py(scaled_px(4.0))
+                .flex()
+                .items_center()
+                .justify_between()
+                .text_sm()
+                .line_height(scaled_px(18.0))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(theme.colors.hover))
+                .active(move |s| s.bg(theme.colors.active))
+                .child("Command Palette")
+                .child(
+                    div()
+                        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("Ctrl+P"),
+                )
+                .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                    this.close_popover(cx);
+                    window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+                })),
+        )
+        .child(
+            entry("app_menu_settings", "Settings…".into(), false)
+                .justify_between()
+                .child(
+                    div()
+                        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("Ctrl+,"),
+                )
+                .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                     cx.defer(crate::view::open_settings_window);
                     this.close_popover(cx);
-                },
-            )),
+                })),
         )
         .child(separator())
         .child(section_label("app_menu_patches_section", "Patches"))

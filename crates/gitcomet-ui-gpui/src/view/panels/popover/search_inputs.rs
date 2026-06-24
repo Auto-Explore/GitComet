@@ -117,7 +117,7 @@ impl PopoverHost {
                         return;
                     }
 
-                    let recent_repos = session::load().recent_repos;
+                    let recent_repos = this.recent_repo_picker_cached_repos.clone();
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
                     let count =
                         count_path_matches_by(&recent_repos, &query, |p: &std::path::PathBuf| {
@@ -229,6 +229,13 @@ impl PopoverHost {
                             this.popover,
                             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                         );
+                        let is_worktree_ref = matches!(
+                            this.popover,
+                            Some(PopoverKind::Repo {
+                                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                                ..
+                            })
+                        );
                         let branches: Vec<String> = match &repo.branches {
                             Loadable::Ready(branches) => {
                                 let head_branch = match &repo.head_branch {
@@ -245,7 +252,7 @@ impl PopoverHost {
                                         }
                                     })
                                     .collect();
-                                if is_create_from_ref {
+                                if is_create_from_ref || is_worktree_ref {
                                     names.insert(0, "HEAD".to_string());
                                     if let Loadable::Ready(tags) = &repo.tags {
                                         names.extend(tags.iter().map(|t| t.name.clone()));
@@ -257,7 +264,7 @@ impl PopoverHost {
                         };
                         let query = input.read_with(cx, |i, _| i.text().trim().to_string());
                         let matches = match_branches(&branches, &query);
-                        (repo.id, is_create_from_ref, matches)
+                        (repo.id, is_create_from_ref || is_worktree_ref, matches)
                     };
 
                     let query = input.read_with(cx, |i, _| i.text().trim().to_string());
@@ -554,6 +561,127 @@ impl PopoverHost {
                                     }
                                     return;
                                 }
+                            }
+                        }
+                        PickerNavOutcome::Idle => {}
+                    }
+                    cx.notify();
+                }));
+        }
+        input.update(cx, |input, cx| {
+            input.clear_transient_key_presses();
+            input.set_theme(theme, cx);
+            input.set_text("", cx);
+        });
+        self.picker_prompt_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        let focus_handle = input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle, cx);
+        input.clone()
+    }
+
+    pub(super) fn ensure_stash_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let theme = self.theme;
+        let input = self.stash_picker_search_input.get_or_insert_with(|| {
+            cx.new(|cx| {
+                components::TextInput::new(
+                    components::TextInputOptions {
+                        placeholder: "Filter stashes".into(),
+                        multiline: false,
+                        read_only: false,
+                        chromeless: false,
+                        soft_wrap: false,
+                    },
+                    window,
+                    cx,
+                )
+            })
+        });
+        if self._stash_picker_search_input_subscription.is_none() {
+            self._stash_picker_search_input_subscription =
+                Some(cx.observe(input, |this, input, cx| {
+                    let keys = input.update(cx, |i, _| PickerNavKeys::take(i));
+
+                    let Some(PopoverKind::StashPickerPrompt { repo_id, purpose }) =
+                        this.popover.clone()
+                    else {
+                        return;
+                    };
+
+                    let stashes = match this
+                        .active_repo()
+                        .and_then(|r| {
+                            if let Loadable::Ready(s) = &r.stashes {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        }) {
+                        Some(s) => s,
+                        None => return,
+                    };
+
+                    let query = input.read_with(cx, |i, _| i.text().trim().to_string());
+                    let q = query.to_ascii_lowercase();
+                    let filtered: Vec<(usize, String)> = stashes
+                        .iter()
+                        .filter_map(|s| {
+                            let label = s.message.to_string();
+                            if q.is_empty() || label.to_ascii_lowercase().contains(&q) {
+                                Some((s.index, label))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let count = filtered.len();
+
+                    match handle_picker_nav(
+                        &keys,
+                        &mut this.stash_picker_prompt_selected_index,
+                        count,
+                    ) {
+                        PickerNavOutcome::Escape => {
+                            this.close_popover(cx);
+                            return;
+                        }
+                        PickerNavOutcome::Navigated => {
+                            this.picker_prompt_scroll
+                                .scroll_to_item(this.stash_picker_prompt_selected_index.unwrap());
+                            cx.notify();
+                            return;
+                        }
+                        PickerNavOutcome::Enter => {
+                            if let Some(sel) = this.stash_picker_prompt_selected_index
+                                && let Some(git_index) = filtered.get(sel).map(|(idx, _)| *idx)
+                            {
+                                match purpose {
+                                    StashPickerPurpose::Pop => {
+                                        this.store.dispatch(Msg::PopStash {
+                                            repo_id,
+                                            index: git_index,
+                                        });
+                                    }
+                                    StashPickerPurpose::Apply => {
+                                        this.store.dispatch(Msg::ApplyStash {
+                                            repo_id,
+                                            index: git_index,
+                                        });
+                                    }
+                                    StashPickerPurpose::Drop => {
+                                        this.store.dispatch(Msg::DropStash {
+                                            repo_id,
+                                            index: git_index,
+                                        });
+                                    }
+                                }
+                                this.store.dispatch(Msg::LoadStashes { repo_id });
+                                this.close_popover(cx);
+                                return;
                             }
                         }
                         PickerNavOutcome::Idle => {}

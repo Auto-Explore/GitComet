@@ -322,11 +322,6 @@ pub enum Msg {
     AbortCloneRepo {
         dest: PathBuf,
     },
-    ExportPatch {
-        repo_id: RepoId,
-        commit_id: CommitId,
-        dest: PathBuf,
-    },
     ApplyPatch {
         repo_id: RepoId,
         patch: PathBuf,

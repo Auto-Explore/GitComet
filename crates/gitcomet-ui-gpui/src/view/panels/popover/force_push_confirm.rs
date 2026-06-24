@@ -76,6 +76,7 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     components::Button::new("force_push_cancel", "Cancel")
+                        .separated_end_slot(super::hotkey_hint(theme, "force_push_cancel_hint", "Esc"))
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;
