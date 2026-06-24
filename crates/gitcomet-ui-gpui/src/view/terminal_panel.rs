@@ -1,7 +1,8 @@
 use super::terminal_alacritty::*;
 use super::*;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::cell::Flags;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 const TERMINAL_FONT_SCALE: f32 = 0.92;
@@ -29,6 +30,8 @@ struct TerminalCanvasPaintState {
     lines: Vec<(ShapedLine, Point<Pixels>, Pixels)>,
     cursor: Option<Bounds<Pixels>>,
     ime_bounds: Option<Bounds<Pixels>>,
+    ime_marked_text: Option<String>,
+    ime_base_style: Option<gpui::TextStyle>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +75,12 @@ impl TerminalViewportView {
             viewport_bounds: None,
             pressed_mouse_button: None,
             mouse_mode_active: false,
+            was_focused: false,
+            selection_start: None,
+            selection_end: None,
+            ime_state: None,
+            search_matches: Vec::new(),
+            active_match_index: None,
         }
     }
 
@@ -140,6 +149,14 @@ impl TerminalViewportView {
     }
 
     fn sync_cursor_blink_activity(&mut self, window: &Window, cx: &mut gpui::Context<Self>) {
+        let is_focused = self.focus_handle.is_focused(window);
+        if is_focused && !self.was_focused {
+            self.handle_focus_gained(cx);
+        } else if !is_focused && self.was_focused {
+            self.handle_focus_lost(cx);
+        }
+        self.was_focused = is_focused;
+
         if !crate::ui_runtime::current().uses_cursor_blink() {
             if self.cursor_blink_active
                 || self.cursor_blink_task_scheduled
@@ -157,6 +174,28 @@ impl TerminalViewportView {
             self.schedule_cursor_blink_tick(cx);
         } else if self.cursor_blink_active || !self.cursor_blink_visible {
             self.deactivate_cursor_blink();
+        }
+    }
+
+    fn handle_focus_gained(&mut self, cx: &mut gpui::Context<Self>) {
+        let has_focus_mode = self
+            .last_content
+            .as_ref()
+            .map(|c| c.mode.contains(TerminalModes::FOCUS_IN_OUT))
+            .unwrap_or(false);
+        if has_focus_mode {
+            self.queue_input(b"\x1b[I".to_vec(), cx);
+        }
+    }
+
+    fn handle_focus_lost(&mut self, cx: &mut gpui::Context<Self>) {
+        let has_focus_mode = self
+            .last_content
+            .as_ref()
+            .map(|c| c.mode.contains(TerminalModes::FOCUS_IN_OUT))
+            .unwrap_or(false);
+        if has_focus_mode {
+            self.queue_input(b"\x1b[O".to_vec(), cx);
         }
     }
 
@@ -206,6 +245,11 @@ impl TerminalViewportView {
     }
 
     fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<Self>) {
+        if let Some(action) = terminal_clipboard_shortcut_action(&event.keystroke) {
+            self.perform_clipboard_action(action, cx);
+            cx.stop_propagation();
+            return;
+        }
         if self.handle_scrollback_key(event, cx) {
             cx.stop_propagation();
             return;
@@ -220,8 +264,173 @@ impl TerminalViewportView {
             encode_alacritty_key_input(&event.keystroke, app_cursor, option_as_meta)
         {
             self.queue_input(bytes, cx);
+            cx.stop_propagation();
         }
-        cx.stop_propagation();
+    }
+
+    fn perform_clipboard_action(
+        &mut self,
+        action: TerminalShortcutAction,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match action {
+            TerminalShortcutAction::Copy => {
+                let text = if let Some((start, end)) = self.selection_start.zip(self.selection_end)
+                {
+                    self.copy_grid_range(start, end)
+                } else {
+                    // Fallback: copy visible screen content when no selection
+                    self.copy_visible_screen()
+                };
+                if !text.is_empty() {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+            }
+            TerminalShortcutAction::Paste => {
+                let bracketed = self
+                    .last_content
+                    .as_ref()
+                    .map(|c| c.mode.contains(TerminalModes::BRACKETED_PASTE))
+                    .unwrap_or(false);
+                if let Some(item) = cx.read_from_clipboard()
+                    && let Some(text) = item.text()
+                {
+                    let bytes = terminal_paste_bytes(&text, bracketed);
+                    self.queue_input(bytes, cx);
+                }
+            }
+            TerminalShortcutAction::SelectAll => self.select_all(cx),
+        }
+    }
+
+    fn copy_grid_range(&self, start: TerminalGridPoint, end: TerminalGridPoint) -> String {
+        let norm = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let Some(term_lock) = &self.term_lock else {
+            return String::new();
+        };
+        let term = term_lock.lock();
+        let grid = term.grid();
+        let cols = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.columns)
+            .unwrap_or(80);
+        let mut text = String::new();
+        for row in norm.0.row..=norm.1.row {
+            if row > norm.0.row {
+                text.push('\n');
+            }
+            let sc = if row == norm.0.row {
+                norm.0.col as usize
+            } else {
+                0
+            };
+            let ec = if row == norm.1.row {
+                (norm.1.col as usize + 1).min(cols)
+            } else {
+                cols
+            };
+            for c in sc..ec {
+                let cell = &grid[Line(row as i32)][Column(c)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let ch = cell.c;
+                if ch == ' ' || ch == '\0' {
+                    text.push(' ');
+                } else {
+                    text.push(ch);
+                }
+            }
+        }
+        drop(term);
+        text
+    }
+
+    fn copy_visible_screen(&self) -> String {
+        let Some(term_lock) = &self.term_lock else {
+            return String::new();
+        };
+        let term = term_lock.lock();
+        let grid = term.grid();
+        let display_offset = term.grid().display_offset();
+        let cols = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.columns)
+            .unwrap_or(80);
+        let rows = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.screen_lines)
+            .unwrap_or(0);
+        let mut text = String::new();
+        for row in 0..rows {
+            if row > 0 {
+                text.push('\n');
+            }
+            let grid_row = row as i32 - display_offset as i32;
+            for c in 0..cols {
+                let cell = &grid[Line(grid_row)][Column(c)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let ch = cell.c;
+                if ch == ' ' || ch == '\0' {
+                    text.push(' ');
+                } else {
+                    text.push(ch);
+                }
+            }
+        }
+        drop(term);
+        // Trim trailing empty lines
+        while text.ends_with('\n') {
+            text.pop();
+        }
+        text
+    }
+
+    pub(super) fn has_selection(&self) -> bool {
+        self.selection_start.zip(self.selection_end).is_some()
+    }
+
+    pub(super) fn selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection_start.zip(self.selection_end)?;
+        let text = self.copy_grid_range(start, end);
+        if text.is_empty() { None } else { Some(text) }
+    }
+
+    pub(super) fn select_all(&mut self, cx: &mut gpui::Context<Self>) {
+        let cols = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.columns)
+            .unwrap_or(0);
+        let rows = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.screen_lines)
+            .unwrap_or(0);
+        if rows > 0 && cols > 0 {
+            self.selection_start = Some(TerminalGridPoint::new(0, 0));
+            self.selection_end = Some(TerminalGridPoint::new(rows as u16 - 1, cols as u16 - 1));
+            cx.notify();
+        }
+    }
+
+    pub(super) fn paste_text(&mut self, text: &str, cx: &mut gpui::Context<Self>) {
+        let bracketed = self
+            .last_content
+            .as_ref()
+            .map(|c| c.mode.contains(TerminalModes::BRACKETED_PASTE))
+            .unwrap_or(false);
+        let bytes = terminal_paste_bytes(text, bracketed);
+        self.queue_input(bytes, cx);
     }
 
     fn handle_scrollback_key(
@@ -256,6 +465,88 @@ impl TerminalViewportView {
         drop(term);
         cx.notify();
         true
+    }
+
+    pub(super) fn find_text(&mut self, query: &str, cx: &mut gpui::Context<Self>) {
+        self.search_matches.clear();
+        self.active_match_index = None;
+        if query.is_empty() {
+            self.clear_search_matches(cx);
+            return;
+        }
+        let Some(term_lock) = &self.term_lock else {
+            return;
+        };
+        let (text, _line_starts) = {
+            let term = term_lock.lock();
+            let text = terminal_full_buffer_text(&term);
+            let mut line_starts = Vec::new();
+            let mut pos = 0;
+            for line in text.lines() {
+                line_starts.push(pos);
+                pos += line.len() + 1;
+            }
+            drop(term);
+            (text, line_starts)
+        };
+        let re = match regex::Regex::new(query) {
+            Ok(r) => r,
+            Err(_) => {
+                cx.notify();
+                return;
+            }
+        };
+        for m in re.find_iter(&text) {
+            let byte_start = m.start();
+            let byte_end = m.end();
+            self.search_matches.push((byte_start, byte_end));
+        }
+        if !self.search_matches.is_empty() {
+            self.active_match_index = Some(0);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn find_next(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let current = self.active_match_index.unwrap_or(0);
+        let next = if current + 1 < self.search_matches.len() {
+            current + 1
+        } else {
+            0
+        };
+        self.active_match_index = Some(next);
+        // Scroll to make match visible
+        if let Some(term_lock) = &self.term_lock
+            && let Some((_start, _)) = self.search_matches.get(next)
+        {
+            let mut term = term_lock.lock();
+            term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+            drop(term);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn find_prev(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let current = self.active_match_index.unwrap_or(0);
+        let prev = if current > 0 {
+            current - 1
+        } else {
+            self.search_matches.len() - 1
+        };
+        self.active_match_index = Some(prev);
+        cx.notify();
+    }
+
+    pub(super) fn clear_search_matches(&mut self, cx: &mut gpui::Context<Self>) {
+        self.search_matches.clear();
+        self.active_match_index = None;
+        cx.notify();
     }
 
     fn handle_scroll_wheel(
@@ -361,6 +652,51 @@ impl TerminalViewportView {
         if self.mouse_mode_active {
             self.queue_mouse_event(event.position, button, event.modifiers, true, cx);
             self.pressed_mouse_button = Some(button);
+        } else if button == gpui::MouseButton::Left {
+            let anchor = self.viewport_to_grid_point(event.position);
+            match event.click_count {
+                2 => {
+                    // Double click: select the word under the cursor.
+                    match anchor.and_then(|p| self.word_range_at(p)) {
+                        Some((start, end)) => {
+                            self.selection_start = Some(start);
+                            self.selection_end = Some(end);
+                        }
+                        None => {
+                            self.selection_start = anchor;
+                            self.selection_end = None;
+                        }
+                    }
+                }
+                n if n >= 3 => {
+                    // Triple (or more) click: select the whole line.
+                    let cols = self
+                        .last_content
+                        .as_ref()
+                        .map(|c| c.terminal_bounds.columns)
+                        .unwrap_or(0);
+                    match anchor {
+                        Some(p) if cols > 0 => {
+                            self.selection_start = Some(TerminalGridPoint::new(p.row, 0));
+                            self.selection_end =
+                                Some(TerminalGridPoint::new(p.row, cols as u16 - 1));
+                        }
+                        _ => {
+                            self.selection_start = anchor;
+                            self.selection_end = None;
+                        }
+                    }
+                }
+                _ => {
+                    // Single click: set the anchor but leave the selection
+                    // "pending" (end = None) so nothing is painted until a drag
+                    // occurs. A click without a drag clears any prior selection
+                    // on mouse up (the painter requires both endpoints to be set).
+                    self.selection_start = anchor;
+                    self.selection_end = None;
+                }
+            }
+            cx.notify();
         }
     }
 
@@ -373,6 +709,11 @@ impl TerminalViewportView {
     ) {
         if self.mouse_mode_active {
             self.queue_mouse_event(event.position, button, event.modifiers, false, cx);
+        } else if button == gpui::MouseButton::Left && self.selection_end.is_none() {
+            // A left click that never dragged (no end point) clears the selection.
+            if self.selection_start.take().is_some() {
+                cx.notify();
+            }
         }
         self.pressed_mouse_button = None;
     }
@@ -383,28 +724,117 @@ impl TerminalViewportView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !self.mouse_mode_active {
-            return;
+        if self.mouse_mode_active {
+            let mode = self
+                .last_content
+                .as_ref()
+                .map(|c| c.mode)
+                .unwrap_or_default();
+            if mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG)
+                && let Some(report) = terminal_mouse_moved_report_at(
+                    event.position,
+                    self.viewport_bounds,
+                    &self.layout_cache,
+                    &self.last_content,
+                    self.pressed_mouse_button,
+                    event.modifiers,
+                    mode,
+                )
+            {
+                self.queue_input(report, cx);
+            }
+        } else if event.pressed_button == Some(gpui::MouseButton::Left)
+            && self.selection_start.is_some()
+        {
+            // Auto-scroll when mouse is dragged outside viewport bounds
+            if let (Some(bounds), Some(term_lock), Some(cache)) =
+                (self.viewport_bounds, &self.term_lock, &self.layout_cache)
+            {
+                let line_h: f32 = cache.metrics.line_height.into();
+                let mouse_y: f32 = event.position.y.into();
+                let min_y: f32 = bounds.top().into();
+                let max_y: f32 = bounds.bottom().into();
+                if mouse_y < min_y || mouse_y > max_y {
+                    let dist = if mouse_y < min_y {
+                        ((min_y - mouse_y) / line_h).ceil()
+                    } else {
+                        ((mouse_y - max_y) / line_h).ceil()
+                    };
+                    let lines = (1.1_f32.powf(dist) as i32).min(3);
+                    if lines > 0 {
+                        let scroll_dir = if mouse_y < min_y {
+                            alacritty_terminal::grid::Scroll::Delta(-lines)
+                        } else {
+                            alacritty_terminal::grid::Scroll::Delta(lines)
+                        };
+                        let mut term = term_lock.lock();
+                        term.scroll_display(scroll_dir);
+                        drop(term);
+                        cx.notify();
+                    }
+                }
+            }
+            if let Some(new_end) = self.viewport_to_grid_point(event.position)
+                && self.selection_end != Some(new_end) {
+                    self.selection_end = Some(new_end);
+                    cx.notify();
+                }
         }
-        let mode = self
+    }
+
+    fn viewport_to_grid_point(&self, position: Point<Pixels>) -> Option<TerminalGridPoint> {
+        let bounds = self.viewport_bounds?;
+        let cache = self.layout_cache.as_ref()?;
+        let content = self.last_content.as_ref()?;
+        let (grid_row, grid_col) = terminal_grid_point(
+            position,
+            bounds,
+            cache.metrics.cell_width,
+            cache.metrics.line_height,
+            content.display_offset,
+            content.terminal_bounds.columns as u16,
+        )?;
+        Some(TerminalGridPoint::new(
+            grid_row.max(0) as u16,
+            grid_col as u16,
+        ))
+    }
+
+    /// Word boundaries (inclusive) for the cell at `point`, or `None` when the
+    /// cell is whitespace. Operates in viewport/grid coordinates.
+    fn word_range_at(
+        &self,
+        point: TerminalGridPoint,
+    ) -> Option<(TerminalGridPoint, TerminalGridPoint)> {
+        let term_lock = self.term_lock.as_ref()?;
+        let cols = self
             .last_content
             .as_ref()
-            .map(|c| c.mode)
-            .unwrap_or_default();
-        if !mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
-            return;
+            .map(|c| c.terminal_bounds.columns)
+            .unwrap_or(0);
+        if cols == 0 || point.col as usize >= cols {
+            return None;
         }
-        if let Some(report) = terminal_mouse_moved_report_at(
-            event.position,
-            self.viewport_bounds,
-            &self.layout_cache,
-            &self.last_content,
-            self.pressed_mouse_button,
-            event.modifiers,
-            mode,
-        ) {
-            self.queue_input(report, cx);
-        }
+        let chars: Vec<char> = {
+            let term = term_lock.lock();
+            let grid = term.grid();
+            let line = Line(point.row as i32);
+            (0..cols)
+                .map(|c| {
+                    let cell = &grid[line][Column(c)];
+                    if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                        ' '
+                    } else {
+                        cell.c
+                    }
+                })
+                .collect()
+        };
+        let (left, right) = terminal_word_bounds(&chars, point.col as usize)?;
+        Some((
+            TerminalGridPoint::new(point.row, left as u16),
+            TerminalGridPoint::new(point.row, right as u16),
+        ))
     }
 
     fn queue_mouse_event(
@@ -503,17 +933,21 @@ impl TerminalViewportView {
 
             let mut paint_state = TerminalCanvasPaintState::default();
             paint_state.bounds = bounds;
-            paint_state.terminal_bg =
-                TerminalAnsiPalette::from_theme(self.theme).background;
+            paint_state.terminal_bg = TerminalAnsiPalette::from_theme(self.theme).background;
             self.viewport_bounds = Some(bounds);
 
+            // Merge background rects across rows after building all rows
+            let mut all_bg_rects: Vec<TerminalBackgroundRect> = Vec::new();
+
+            let disp_off = content.display_offset as i32;
             for row in 0..rows {
                 let cache_row = &mut self.render_cache.rows[usize::from(row)];
 
                 if rebuild || cache_row.shaped.is_none() {
+                    let grid_row = row as i32 - disp_off;
                     let (text, runs, bg_rects) = build_alacritty_row(
                         &content.cells,
-                        row as i32,
+                        grid_row,
                         cols,
                         &layout.base_style,
                         self.theme,
@@ -540,22 +974,66 @@ impl TerminalViewportView {
                 }
 
                 for rect in &cache_row.background_rects {
-                    let origin = point(
-                        bounds.left() + layout.metrics.cell_width * rect.col as f32,
-                        bounds.top() + layout.metrics.line_height * rect.row as f32,
-                    );
-                    let rect_size = size(
-                        layout.metrics.cell_width * rect.num_cells as f32,
-                        layout.metrics.line_height,
-                    );
-                    paint_state
-                        .background_rects
-                        .push((origin, rect_size, rect.color));
+                    all_bg_rects.push(rect.clone());
+                }
+            }
+
+            // Merge background rects across rows
+            let merged = merge_background_rects(&all_bg_rects);
+            for rect in &merged {
+                let origin = point(
+                    bounds.left() + layout.metrics.cell_width * rect.col as f32,
+                    bounds.top() + layout.metrics.line_height * rect.row as f32,
+                );
+                let rect_size = size(
+                    layout.metrics.cell_width * rect.num_cells as f32,
+                    layout.metrics.line_height * rect.num_rows as f32,
+                );
+                paint_state
+                    .background_rects
+                    .push((origin, rect_size, rect.color));
+            }
+
+            // Selection rects
+            if let Some((start, end)) = self
+                .selection_start
+                .zip(self.selection_end)
+                .map(|(s, e)| if s <= e { (s, e) } else { (e, s) })
+            {
+                for sel_row in start.row..=end.row.min(rows - 1) {
+                    let sel_start_col = if sel_row == start.row {
+                        start.col as usize
+                    } else {
+                        0
+                    };
+                    let sel_end_col = if sel_row == end.row {
+                        (end.col as usize + 1).min(cols)
+                    } else {
+                        cols
+                    };
+                    if sel_start_col < sel_end_col {
+                        let sel_origin = point(
+                            bounds.left() + layout.metrics.cell_width * sel_start_col as f32,
+                            bounds.top() + layout.metrics.line_height * sel_row as f32,
+                        );
+                        let sel_size = size(
+                            layout.metrics.cell_width * (sel_end_col - sel_start_col) as f32,
+                            layout.metrics.line_height,
+                        );
+                        paint_state
+                            .selection_rects
+                            .push(Bounds::new(sel_origin, sel_size));
+                    }
                 }
             }
 
             // Cursor
-            if self.cursor_blink_visible {
+            if self.cursor_blink_visible
+                && self
+                    .ime_state
+                    .as_ref()
+                    .is_none_or(|s| s.marked_text.is_empty())
+            {
                 let cursor_row = content.cursor.point.line.0 as f32;
                 let cursor_col = content.cursor.point.column.0 as f32;
                 if cursor_row >= 0.0
@@ -571,6 +1049,127 @@ impl TerminalViewportView {
                         size(layout.metrics.cell_width, layout.metrics.line_height),
                     );
                     paint_state.cursor = Some(cursor_bounds);
+                    paint_state.ime_bounds = Some(cursor_bounds);
+                }
+            }
+
+            // Search match highlights
+            if let Some(term_lock) = &self.term_lock
+                && self.active_match_index.is_some()
+            {
+                let (_full_text, byte_to_grid) = {
+                    let term = term_lock.lock();
+                    let text = terminal_full_buffer_text(&term);
+                    let grid = term.grid();
+                    let total_lines = self
+                        .last_content
+                        .as_ref()
+                        .map(|c| c.terminal_bounds.screen_lines + c.display_offset)
+                        .unwrap_or(0);
+                    let cols = self
+                        .last_content
+                        .as_ref()
+                        .map(|c| c.terminal_bounds.columns)
+                        .unwrap_or(0);
+                    let history = total_lines
+                        - self
+                            .last_content
+                            .as_ref()
+                            .map(|c| c.terminal_bounds.screen_lines)
+                            .unwrap_or(0);
+                    let mut map: Vec<Option<(i32, usize)>> = vec![None; text.len() + 1];
+                    let mut byte_pos = 0usize;
+                    for line_idx in 0..total_lines {
+                        let grid_row = line_idx as i32 - history as i32;
+                        for col in 0..cols {
+                            if byte_pos < map.len() {
+                                map[byte_pos] = Some((grid_row, col));
+                            }
+                            let cell = &grid[Line(grid_row)][Column(col)];
+                            let ch = cell.c;
+                            if ch == ' ' || ch == '\0' {
+                                byte_pos += 1;
+                            } else {
+                                byte_pos += ch.len_utf8();
+                            }
+                        }
+                        if line_idx < total_lines - 1 {
+                            if byte_pos < map.len() {
+                                map[byte_pos] = Some((grid_row, cols));
+                            }
+                            byte_pos += 1;
+                        }
+                    }
+                    drop(grid);
+                    drop(term);
+                    (text, map)
+                };
+                let active_idx = self.active_match_index.unwrap_or(0);
+                for (i, (start, end)) in self.search_matches.iter().enumerate() {
+                    let _color = if i == active_idx {
+                        with_alpha(self.theme.colors.accent, 0.48)
+                    } else {
+                        with_alpha(self.theme.colors.accent, 0.24)
+                    };
+                    if let Some(grid_start) = byte_to_grid.get(*start).copied().flatten()
+                        && let Some(grid_end) = byte_to_grid.get(*end).copied().flatten()
+                    {
+                        let disp_off = self
+                            .last_content
+                            .as_ref()
+                            .map(|c| c.display_offset as i32)
+                            .unwrap_or(0);
+                        for gr in grid_start.0..=grid_end.0 {
+                            let vr = gr + disp_off;
+                            if vr < 0 || vr >= rows as i32 {
+                                continue;
+                            }
+                            let sc = if gr == grid_start.0 { grid_start.1 } else { 0 };
+                            let ec = if gr == grid_end.0 {
+                                grid_end.1.min(cols)
+                            } else {
+                                cols
+                            };
+                            if sc < ec {
+                                let origin = point(
+                                    bounds.left() + layout.metrics.cell_width * sc as f32,
+                                    bounds.top() + layout.metrics.line_height * vr as f32,
+                                );
+                                let rect_size = size(
+                                    layout.metrics.cell_width * (ec - sc) as f32,
+                                    layout.metrics.line_height,
+                                );
+                                paint_state
+                                    .selection_rects
+                                    .push(Bounds::new(origin, rect_size));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // IME marked text
+            if let Some(ref ime) = self.ime_state
+                && !ime.marked_text.is_empty()
+            {
+                paint_state.ime_marked_text = Some(ime.marked_text.clone());
+                paint_state.ime_base_style = Some(layout.base_style.clone());
+                // Compute IME bounds from cursor position
+                let cursor_row = content.cursor.point.line.0 as f32;
+                let cursor_col = content.cursor.point.column.0 as f32;
+                if cursor_row >= 0.0
+                    && cursor_row < rows as f32
+                    && cursor_col >= 0.0
+                    && cursor_col < cols as f32
+                {
+                    let cb = Bounds::new(
+                        point(
+                            bounds.left() + layout.metrics.cell_width * cursor_col,
+                            bounds.top() + layout.metrics.line_height * cursor_row,
+                        ),
+                        size(layout.metrics.cell_width, layout.metrics.line_height),
+                    );
+                    paint_state.ime_bounds = Some(cb);
                 }
             }
 
@@ -605,6 +1204,7 @@ impl Render for TerminalViewportView {
         let theme = self.theme;
         div()
             .track_focus(&self.focus_handle)
+            .key_context("Terminal")
             .w_full()
             .h_full()
             .cursor(gpui::CursorStyle::IBeam)
@@ -644,18 +1244,18 @@ impl Render for TerminalViewportView {
                     this.handle_mouse_up(e, window, cx, gpui::MouseButton::Right);
                 }),
             )
-            .on_mouse_move(cx.listener(
-                |this, e: &MouseMoveEvent, window, cx| {
-                    this.handle_mouse_move(e, window, cx);
-                },
-            ))
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+                this.handle_mouse_move(e, window, cx);
+            }))
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
                 this.handle_key_down(e, cx);
             }))
             .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, window, cx| {
                 this.handle_scroll_wheel(e, window, cx);
             }))
-            .child(
+            .child({
+                let focus_handle = self.focus_handle.clone();
+                let pty_sender = self.pty_sender.clone();
                 gpui::canvas(
                     move |bounds, window, cx| {
                         view.update(cx, |this, cx| {
@@ -663,12 +1263,21 @@ impl Render for TerminalViewportView {
                         })
                     },
                     move |_bounds, paint_state, window, cx| {
+                        let ime_handler = TerminalTextInputHandler {
+                            pty_sender: pty_sender.clone(),
+                            ime_state: paint_state.ime_marked_text.as_ref().map(|t| {
+                                TerminalImeState {
+                                    marked_text: t.clone(),
+                                }
+                            }),
+                        };
+                        window.handle_input(&focus_handle, ime_handler, cx);
                         paint_terminal_canvas_state(paint_state, theme, window, cx);
                     },
                 )
                 .w_full()
-                .h_full(),
-            )
+                .h_full()
+            })
     }
 }
 
@@ -744,7 +1353,8 @@ impl GitCometView {
     fn terminal_cursor_blink_should_run(&self, repo_id: RepoId, window: &Window) -> bool {
         self.terminal_sessions
             .get(&repo_id)
-            .is_some_and(|session| session.connected && session.focus_handle.is_focused(window))
+            .and_then(|session| session.active_instance())
+            .is_some_and(|inst| inst.connected && inst.focus_handle.is_focused(window))
     }
 
     fn advance_terminal_cursor_blink(&mut self, blink_seq: u64, cx: &mut gpui::Context<Self>) {
@@ -878,10 +1488,13 @@ impl GitCometView {
             return;
         }
         for repo_id in removed_repo_ids {
-            if let Some(session) = self.terminal_sessions.remove(&repo_id)
-                && let Some(pty) = &session.pty_sender {
-                    pty.shutdown();
+            if let Some(session) = self.terminal_sessions.remove(&repo_id) {
+                for instance in &session.instances {
+                    if let Some(pty) = &instance.pty_sender {
+                        pty.shutdown();
+                    }
                 }
+            }
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
@@ -903,11 +1516,68 @@ impl GitCometView {
             return;
         }
 
-        let workdir2 = workdir.clone();
-        let window_id = 0u64;
-
         // Do PTY spawning synchronously (non-blocking on Linux - openpty is fast)
-        let spawned = match spawn_alacritty_terminal(&workdir2, window_id) {
+        let Some(instance) = self.spawn_terminal_instance(&workdir, cx) else {
+            return;
+        };
+        let session_seq = instance.session_seq;
+        self.terminal_sessions.insert(
+            repo_id,
+            RepoTerminalSession {
+                workdir,
+                repo_name,
+                instances: vec![instance],
+                active_index: 0,
+            },
+        );
+
+        self.spawn_terminal_event_task(repo_id, session_seq, cx);
+        self.reset_terminal_cursor_blink(cx);
+        self.sync_terminal_indicator_views(cx);
+        self.focus_terminal_view(repo_id, window, cx);
+        cx.notify();
+    }
+
+    /// Spawn a new terminal tab in the existing session for `repo_id`.
+    pub(in crate::view) fn add_terminal_tab_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(workdir) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .map(|s| s.workdir.clone())
+        else {
+            return;
+        };
+        let Some(instance) = self.spawn_terminal_instance(&workdir, cx) else {
+            return;
+        };
+        let session_seq = instance.session_seq;
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        session.instances.push(instance);
+        session.active_index = session.instances.len() - 1;
+
+        self.spawn_terminal_event_task(repo_id, session_seq, cx);
+        self.reset_terminal_cursor_blink(cx);
+        self.sync_terminal_indicator_views(cx);
+        self.focus_terminal_view(repo_id, window, cx);
+        cx.notify();
+    }
+
+    /// Spawn a PTY + alacritty terminal and wrap it in a `TerminalInstance`.
+    /// Returns `None` (after surfacing a toast) when spawning fails.
+    fn spawn_terminal_instance(
+        &mut self,
+        workdir: &std::path::Path,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<TerminalInstance> {
+        let window_id = 0u64;
+        let spawned = match spawn_alacritty_terminal(workdir, window_id) {
             Ok(spawned) => spawned,
             Err(err) => {
                 self.push_toast(
@@ -915,79 +1585,33 @@ impl GitCometView {
                     format!("Failed to start embedded terminal: {err}"),
                     cx,
                 );
-                return;
+                return None;
             }
         };
 
-        self.finish_open_terminal_for_repo(repo_id, workdir, repo_name, spawned, window, cx);
-    }
-
-    fn finish_open_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        workdir: PathBuf,
-        repo_name: String,
-        spawned: SpawnedAlacTerminal,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
         let session_seq = self.next_terminal_session_seq;
         self.next_terminal_session_seq = self.next_terminal_session_seq.wrapping_add(1).max(1);
         let focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let theme = self.theme;
 
-        let term_lock = spawned.term_lock.clone();
+        let term_lock = spawned.term_lock;
         let pty_sender = spawned.pty_sender.clone();
         let events_rx = spawned.events_rx;
 
         let viewport = cx.new(|_cx| {
-            TerminalViewportView::new(
-                theme,
-                focus_handle.clone(),
-                term_lock.clone(),
-                pty_sender.clone(),
-            )
+            TerminalViewportView::new(theme, focus_handle.clone(), term_lock, pty_sender.clone())
         });
 
-        self.terminal_sessions.insert(
-            repo_id,
-            RepoTerminalSession {
-                workdir,
-                repo_name,
-                focus_handle,
-                io: Arc::new(Mutex::new(TerminalIo {
-                    pty_sender: Some(pty_sender.clone()),
-                    events_rx: None,
-                })),
-                term_lock: Some(term_lock),
-                last_content: None,
-                pty_sender: Some(pty_sender),
-                events_rx: Some(events_rx),
-                grid_size: TerminalGridSize {
-                    rows: 24,
-                    cols: 80,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                },
-                content_epoch: 0,
-                render_cache: TerminalRenderCache::default(),
-                connected: true,
-                exit_status: None,
-                viewport,
-                session_seq,
-                selection: None,
-                selection_drag_anchor: None,
-                viewport_bounds: None,
-                ime_state: None,
-            },
-        );
-
-        // Spawn event processing task
-        self.spawn_terminal_event_task(repo_id, session_seq, cx);
-        self.reset_terminal_cursor_blink(cx);
-        self.sync_terminal_indicator_views(cx);
-        self.focus_terminal_view(repo_id, window, cx);
-        cx.notify();
+        Some(TerminalInstance {
+            focus_handle,
+            pty_sender: Some(pty_sender),
+            events_rx: Some(events_rx),
+            connected: true,
+            exit_status: None,
+            viewport,
+            session_seq,
+            title: terminal_tab_default_title(),
+        })
     }
 
     fn spawn_terminal_event_task(
@@ -999,7 +1623,8 @@ impl GitCometView {
         let events_rx = self
             .terminal_sessions
             .get_mut(&repo_id)
-            .and_then(|s| s.events_rx.take());
+            .and_then(|s| s.instance_by_seq_mut(session_seq))
+            .and_then(|i| i.events_rx.take());
         let Some(events_rx) = events_rx else {
             return;
         };
@@ -1012,31 +1637,41 @@ impl GitCometView {
                         let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                             return;
                         };
-                        if session.session_seq != session_seq {
+                        let Some(instance) = session.instance_by_seq_mut(session_seq) else {
                             return;
-                        }
+                        };
 
                         match event {
-                            TerminalBackendEvent::Title(_title) => {}
+                            TerminalBackendEvent::Title(title) => {
+                                if !title.is_empty() {
+                                    instance.title = title;
+                                    cx.notify();
+                                }
+                            }
                             TerminalBackendEvent::ClipboardStore(data) => {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(data));
                             }
                             TerminalBackendEvent::ClipboardLoad => {
                                 if let Some(item) = cx.read_from_clipboard()
                                     && let Some(text) = item.text()
-                                        && let Some(ref pty) = session.pty_sender {
-                                            pty.write(text.into_bytes());
-                                        }
+                                    && let Some(ref pty) = instance.pty_sender
+                                {
+                                    pty.write(text.into_bytes());
+                                }
                             }
                             TerminalBackendEvent::Bell => {}
                             TerminalBackendEvent::Exit | TerminalBackendEvent::ChildExit(_) => {
-                                session.connected = false;
-                                session.exit_status = Some("Shell exited.".to_string());
+                                instance.connected = false;
+                                instance.exit_status = Some("Shell exited.".to_string());
+                                instance.viewport.update(cx, |viewport, _cx| {
+                                    viewport.pty_sender = None;
+                                    viewport.term_lock = None;
+                                });
                                 cx.notify();
                             }
                             TerminalBackendEvent::Wakeup
                             | TerminalBackendEvent::CursorBlinkingChange => {
-                                session.viewport.update(cx, |viewport, _cx| {
+                                instance.viewport.update(cx, |viewport, _cx| {
                                     viewport.content_epoch = viewport.content_epoch.wrapping_add(1);
                                 });
                                 cx.notify();
@@ -1054,14 +1689,78 @@ impl GitCometView {
     }
 
     fn close_terminal_for_repo(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
-        if let Some(session) = self.terminal_sessions.remove(&repo_id)
-            && let Some(ref pty) = session.pty_sender {
-                pty.shutdown();
+        if let Some(session) = self.terminal_sessions.remove(&repo_id) {
+            for instance in &session.instances {
+                if let Some(ref pty) = instance.pty_sender {
+                    pty.shutdown();
+                }
             }
+        }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
         }
         self.sync_terminal_indicator_views(cx);
+        cx.notify();
+    }
+
+    /// Close a single terminal tab. Closing the last tab closes the panel.
+    pub(in crate::view) fn close_terminal_tab(
+        &mut self,
+        repo_id: RepoId,
+        index: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let mut session_emptied = false;
+        match self.terminal_sessions.get_mut(&repo_id) {
+            Some(session) => {
+                if index >= session.instances.len() {
+                    return;
+                }
+                let instance = session.instances.remove(index);
+                if let Some(ref pty) = instance.pty_sender {
+                    pty.shutdown();
+                }
+                if session.instances.is_empty() {
+                    session_emptied = true;
+                } else {
+                    if session.active_index > index {
+                        session.active_index -= 1;
+                    }
+                    if session.active_index >= session.instances.len() {
+                        session.active_index = session.instances.len() - 1;
+                    }
+                }
+            }
+            None => return,
+        }
+
+        if session_emptied {
+            self.terminal_sessions.remove(&repo_id);
+        }
+        if !self.active_repo_has_open_terminal() {
+            self.deactivate_terminal_cursor_blink();
+        } else {
+            self.focus_terminal_view(repo_id, window, cx);
+        }
+        self.sync_terminal_indicator_views(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn select_terminal_tab(
+        &mut self,
+        repo_id: RepoId,
+        index: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match self.terminal_sessions.get_mut(&repo_id) {
+            Some(session) if index < session.instances.len() => {
+                session.active_index = index;
+            }
+            _ => return,
+        }
+        self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
 
@@ -1074,7 +1773,8 @@ impl GitCometView {
         let Some(focus_handle) = self
             .terminal_sessions
             .get(&repo_id)
-            .map(|s| s.focus_handle.clone())
+            .and_then(|s| s.active_instance())
+            .map(|i| i.focus_handle.clone())
         else {
             return;
         };
@@ -1083,10 +1783,14 @@ impl GitCometView {
     }
 
     pub(super) fn send_terminal_bytes_for_repo(&mut self, repo_id: RepoId, bytes: Vec<u8>) {
-        if let Some(session) = self.terminal_sessions.get(&repo_id)
-            && let Some(ref pty) = session.pty_sender {
-                pty.write(bytes);
-            }
+        if let Some(pty) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|s| s.active_instance())
+            .and_then(|i| i.pty_sender.as_ref())
+        {
+            pty.write(bytes);
+        }
     }
 
     pub(super) fn copy_terminal_selection_for_repo(
@@ -1095,41 +1799,17 @@ impl GitCometView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+        let Some(viewport) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|s| s.active_instance())
+            .map(|i| i.viewport.clone())
+        else {
             return false;
         };
-        let selection = match session.selection {
-            Some(sel) => sel,
-            None => return false,
-        };
-
-        let text = if let Some(term_lock) = &session.term_lock {
-            let term = term_lock.lock();
-            match selection {
-                TerminalSelection::AllBuffer => terminal_full_buffer_text(&term),
-                TerminalSelection::Visible { start, end } => {
-                    let content = make_terminal_content(&term);
-                    let (s, e) = TerminalSelection::visible(start, end)
-                        .normalized_visible()
-                        .unwrap_or((start, end));
-                    let mut result = String::new();
-                    for row in s.row..=e.row.min(content.terminal_bounds.screen_lines as u16 - 1) {
-                        if !result.is_empty() {
-                            result.push('\n');
-                        }
-                        result.push_str(&row_cell_text(
-                            &content.cells,
-                            row as i32,
-                            content.terminal_bounds.columns,
-                        ));
-                    }
-                    result
-                }
-            }
-        } else {
+        let Some(text) = viewport.read(cx).selected_text() else {
             return false;
         };
-
         crate::clipboard::write_text(cx, text);
         true
     }
@@ -1143,18 +1823,15 @@ impl GitCometView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return false;
         };
-        let Some(session) = self.terminal_sessions.get(&repo_id) else {
+        let Some(viewport) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|s| s.active_instance())
+            .map(|i| i.viewport.clone())
+        else {
             return false;
         };
-        let bracketed = session
-            .last_content
-            .as_ref()
-            .map(|c| c.mode.contains(TerminalModes::BRACKETED_PASTE))
-            .unwrap_or(false);
-        let bytes = terminal_paste_bytes(&text, bracketed);
-        if let Some(ref pty) = session.pty_sender {
-            pty.write(bytes);
-        }
+        viewport.update(cx, |v, cx| v.paste_text(&text, cx));
         true
     }
 
@@ -1164,9 +1841,13 @@ impl GitCometView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(session) = self.terminal_sessions.get_mut(&repo_id) {
-            session.selection = Some(TerminalSelection::AllBuffer);
-            cx.notify();
+        if let Some(viewport) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|s| s.active_instance())
+            .map(|i| i.viewport.clone())
+        {
+            viewport.update(cx, |v, cx| v.select_all(cx));
         }
     }
 
@@ -1198,41 +1879,34 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let active_repo = self.active_repo_id()?;
-        if !self.terminal_sessions.contains_key(&active_repo) {
-            return None;
-        }
 
-        let has_selection = self
-            .terminal_sessions
-            .get(&active_repo)
-            .map(|s| s.selection.is_some())
-            .unwrap_or(false);
-        let connected = self
-            .terminal_sessions
-            .get(&active_repo)
-            .map(|s| s.connected)
-            .unwrap_or(false);
-        let viewport_entity = self
-            .terminal_sessions
-            .get(&active_repo)
-            .map(|s| s.viewport.clone());
-        let exit_status = self
-            .terminal_sessions
-            .get(&active_repo)
-            .and_then(|s| s.exit_status.clone());
+        let (viewport_entity, exit_status, connected, tabs, active_index) = {
+            let session = self.terminal_sessions.get(&active_repo)?;
+            let active = session.active_instance()?;
+            let tabs: Vec<SharedString> = session
+                .instances
+                .iter()
+                .map(|inst| SharedString::from(inst.title.clone()))
+                .collect();
+            (
+                active.viewport.clone(),
+                active.exit_status.clone(),
+                active.connected,
+                tabs,
+                session.active_index,
+            )
+        };
+        let has_selection = viewport_entity.read(cx).has_selection();
 
         let header =
             self.render_terminal_header(theme, active_repo, has_selection, connected, window, cx);
-        let viewport_element = viewport_entity
-            .map(|e| {
-                div()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .key_context("Terminal")
-                    .child(e)
-                    .into_any_element()
-            })
-            .unwrap_or_else(|| div().flex_1().into_any_element());
+        let tab_strip = self.render_terminal_tab_strip(theme, active_repo, &tabs, active_index, cx);
+        let viewport_element = div()
+            .flex_1()
+            .min_h(px(0.0))
+            .key_context("Terminal")
+            .child(viewport_entity)
+            .into_any_element();
 
         let panel = div()
             .flex()
@@ -1241,6 +1915,7 @@ impl GitCometView {
             .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
             .bg(terminal_default_background(theme))
             .child(header)
+            .child(tab_strip)
             .child(viewport_element)
             .into_any_element();
 
@@ -1263,6 +1938,104 @@ impl GitCometView {
         Some(panel.into_any())
     }
 
+    fn render_terminal_tab_strip(
+        &mut self,
+        theme: AppTheme,
+        repo_id: RepoId,
+        tabs: &[SharedString],
+        active_index: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(2.0))
+            .px(px(6.0))
+            .py(px(3.0))
+            .bg(theme.colors.surface_bg)
+            .border_b_1()
+            .border_color(theme.colors.border);
+
+        for (i, title) in tabs.iter().enumerate() {
+            let is_active = i == active_index;
+            let tab_bg = if is_active {
+                theme.colors.active_section
+            } else {
+                theme.colors.surface_bg
+            };
+            let text_color = if is_active {
+                theme.colors.text
+            } else {
+                theme.colors.text_muted
+            };
+
+            let close = div()
+                .id(("terminal_tab_close", i))
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(14.0))
+                .rounded(px(theme.radii.row))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
+                .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                        cx.stop_propagation();
+                        this.close_terminal_tab(repo_id, i, window, cx);
+                    }),
+                );
+
+            let tab = div()
+                .id(("terminal_tab", i))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(8.0))
+                .py(px(3.0))
+                .rounded(px(theme.radii.row))
+                .bg(tab_bg)
+                .text_color(text_color)
+                .text_size(px(12.0))
+                .cursor(CursorStyle::PointingHand)
+                .when(!is_active, |d| d.hover(move |s| s.bg(theme.colors.hover)))
+                .child(svg_icon("icons/terminal.svg", text_color, px(12.0)))
+                .child(title.clone())
+                .child(close)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                        this.select_terminal_tab(repo_id, i, window, cx);
+                    }),
+                );
+
+            row = row.child(tab);
+        }
+
+        let new_tab = div()
+            .id("terminal_new_tab")
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(20.0))
+            .rounded(px(theme.radii.row))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(theme.colors.hover))
+            .child(svg_icon("icons/plus.svg", theme.colors.text, px(12.0)))
+            .gitcomet_tooltip(theme, "New terminal".into())
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                    this.add_terminal_tab_for_repo(repo_id, window, cx);
+                }),
+            );
+
+        row.child(new_tab).into_any()
+    }
+
     fn render_terminal_header(
         &mut self,
         theme: AppTheme,
@@ -1272,13 +2045,30 @@ impl GitCometView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
-        let close_repo = active_repo;
         let external_repo = active_repo;
         let clear_repo = active_repo;
+        let close_repo = active_repo;
+
+        // Shared style for the small icon buttons in the terminal header.
+        let icon_btn = move |id: &'static str, icon: &'static str, tip: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(px(22.0))
+                .rounded(px(theme.radii.row))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| s.bg(theme.colors.hover))
+                .child(svg_icon(icon, theme.colors.text, px(14.0)))
+                .gitcomet_tooltip(theme, tip.into())
+        };
+
         div()
             .flex()
             .flex_row()
             .items_center()
+            .gap(px(2.0))
             .px(px(8.0))
             .py(px(4.0))
             .bg(theme.colors.surface_bg)
@@ -1292,113 +2082,44 @@ impl GitCometView {
                     .child("Terminal"),
             )
             .child(
-                div()
-                    .px(px(4.0))
-                    .py(px(2.0))
-                    .cursor(CursorStyle::PointingHand)
-                    .text_color(theme.colors.text)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                            this.open_external_terminal_for_repo(external_repo, cx);
-                        }),
-                    )
-                    .child("\u{26A1}"),
+                icon_btn(
+                    "terminal_open_external",
+                    "icons/open_external.svg",
+                    "Open in external terminal",
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        this.open_external_terminal_for_repo(external_repo, cx);
+                    }),
+                ),
             )
             .child(
-                div()
-                    .px(px(4.0))
-                    .py(px(2.0))
-                    .cursor(CursorStyle::PointingHand)
-                    .text_color(theme.colors.text)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _e: &MouseDownEvent, _window, _cx| {
-                            this.clear_terminal_for_repo(clear_repo, _window, _cx);
-                        }),
-                    )
-                    .child("Clear"),
+                icon_btn(
+                    "terminal_clear",
+                    "icons/broom.svg",
+                    "Clear terminal (Ctrl+L)",
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, window, cx| {
+                        this.clear_terminal_for_repo(clear_repo, window, cx);
+                    }),
+                ),
             )
             .child(
-                div()
-                    .px(px(4.0))
-                    .py(px(2.0))
-                    .cursor(CursorStyle::PointingHand)
-                    .text_color(theme.colors.text)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                            this.close_terminal_for_repo(close_repo, cx);
-                        }),
-                    )
-                    .child("\u{2715}"),
+                icon_btn(
+                    "terminal_close",
+                    "icons/generic_close.svg",
+                    "Close terminal",
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        this.close_terminal_for_repo(close_repo, cx);
+                    }),
+                ),
             )
-            .into_any()
-    }
-
-    fn terminal_header_external_button(
-        &self,
-        repo_id: RepoId,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let repo_id = repo_id;
-        gpui::div()
-            .px(px(4.0))
-            .py(px(2.0))
-            .cursor(CursorStyle::PointingHand)
-            .text_color(theme.colors.text)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                    this.open_external_terminal_for_repo(repo_id, cx);
-                }),
-            )
-            .child("\u{26A1}")
-            .into_any()
-    }
-
-    fn terminal_header_clear_button(
-        &self,
-        repo_id: RepoId,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let repo_id = repo_id;
-        gpui::div()
-            .px(px(4.0))
-            .py(px(2.0))
-            .cursor(CursorStyle::PointingHand)
-            .text_color(theme.colors.text)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, _window, _cx| {
-                    this.clear_terminal_for_repo(repo_id, _window, _cx);
-                }),
-            )
-            .child("Clear")
-            .into_any()
-    }
-
-    fn terminal_header_close_button(
-        &self,
-        repo_id: RepoId,
-        theme: AppTheme,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let repo_id = repo_id;
-        gpui::div()
-            .px(px(4.0))
-            .py(px(2.0))
-            .cursor(CursorStyle::PointingHand)
-            .text_color(theme.colors.text)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                    this.close_terminal_for_repo(repo_id, cx);
-                }),
-            )
-            .child("\u{2715}")
             .into_any()
     }
 
@@ -1506,8 +2227,10 @@ impl GitCometView {
 impl Drop for GitCometView {
     fn drop(&mut self) {
         for session in self.terminal_sessions.values() {
-            if let Some(ref pty) = session.pty_sender {
-                pty.shutdown();
+            for instance in &session.instances {
+                if let Some(ref pty) = instance.pty_sender {
+                    pty.shutdown();
+                }
             }
         }
     }
@@ -1516,6 +2239,19 @@ impl Drop for GitCometView {
 // ============================================================================
 // Helper functions
 // ============================================================================
+
+/// Default tab title for a freshly-spawned terminal: the shell program's base
+/// name (e.g. "zsh"), falling back to "Terminal".
+fn terminal_tab_default_title() -> String {
+    resolve_embedded_shell_program()
+        .ok()
+        .and_then(|p| {
+            p.file_stem()
+                .and_then(|s| s.to_str())
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "Terminal".to_string())
+}
 
 fn terminal_repo_name(workdir: &std::path::Path) -> String {
     workdir
@@ -1679,7 +2415,46 @@ fn paint_terminal_canvas_state(
     if let Some(cursor) = paint_state.cursor {
         let caret = terminal_caret_bounds(cursor);
         window.paint_quad(
-            fill(caret, terminal_default_foreground(theme)).corner_radii(px(TERMINAL_CARET_RADIUS_PX)),
+            fill(caret, terminal_default_foreground(theme))
+                .corner_radii(px(TERMINAL_CARET_RADIUS_PX)),
+        );
+    }
+
+    // IME preedit (marked) text
+    if let Some(ref marked_text) = paint_state.ime_marked_text
+        && let Some(ime_bounds) = paint_state.ime_bounds
+        && let Some(ref base_style) = paint_state.ime_base_style
+    {
+        let mut ime_style = base_style.clone();
+        ime_style.underline = Some(gpui::UnderlineStyle {
+            color: Some(ime_style.color),
+            thickness: px(1.0),
+            wavy: false,
+        });
+        let shaped = window.text_system().shape_line(
+            marked_text.clone().into(),
+            ime_style.font_size.to_pixels(window.rem_size()),
+            &[TextRun {
+                len: marked_text.len(),
+                font: ime_style.font(),
+                color: ime_style.color,
+                underline: ime_style.underline,
+                ..Default::default()
+            }],
+            None,
+        );
+        let ime_bg = Bounds::new(
+            ime_bounds.origin,
+            size(shaped.width, ime_bounds.size.height),
+        );
+        window.paint_quad(fill(ime_bg, paint_state.terminal_bg));
+        let _ = shaped.paint(
+            ime_bounds.origin,
+            ime_bounds.size.height,
+            gpui::TextAlign::Left,
+            None,
+            window,
+            cx,
         );
     }
 }
@@ -1703,9 +2478,9 @@ fn terminal_clipboard_shortcut_action(
     keystroke: &gpui::Keystroke,
 ) -> Option<TerminalShortcutAction> {
     let action = match keystroke.key.as_str() {
-        "c" => TerminalShortcutAction::Copy,
-        "v" => TerminalShortcutAction::Paste,
-        "a" => TerminalShortcutAction::SelectAll,
+        "c" | "C" => TerminalShortcutAction::Copy,
+        "v" | "V" => TerminalShortcutAction::Paste,
+        "a" | "A" => TerminalShortcutAction::SelectAll,
         _ => return None,
     };
     let mods = keystroke.modifiers;

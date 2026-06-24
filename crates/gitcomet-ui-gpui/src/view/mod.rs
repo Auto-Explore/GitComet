@@ -197,8 +197,8 @@ use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
-pub(crate) use mod_helpers::TerminalPanelResizeState;
 use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
+pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
@@ -1203,9 +1203,11 @@ impl GitCometView {
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         for session in self.terminal_sessions.values() {
-            session.viewport.update(cx, |viewport, cx| {
-                viewport.set_theme(theme, cx);
-            });
+            for instance in &session.instances {
+                instance.viewport.update(cx, |viewport, cx| {
+                    viewport.set_theme(theme, cx);
+                });
+            }
         }
         self.title_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
@@ -1242,9 +1244,11 @@ impl GitCometView {
 
     fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
         for session in self.terminal_sessions.values() {
-            session.viewport.update(cx, |viewport, cx| {
-                viewport.invalidate_layout(cx);
-            });
+            for instance in &session.instances {
+                instance.viewport.update(cx, |viewport, cx| {
+                    viewport.invalidate_layout(cx);
+                });
+            }
         }
         self.title_bar.update(cx, |_bar, cx| cx.notify());
         self.sidebar_pane.update(cx, |_pane, cx| cx.notify());

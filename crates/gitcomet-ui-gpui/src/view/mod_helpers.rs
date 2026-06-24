@@ -1,6 +1,5 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
-use std::sync::Mutex;
 
 type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
 
@@ -2936,12 +2935,6 @@ pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf 
     canonicalize_or_original(path)
 }
 
-pub(super) struct TerminalIo {
-    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
-    pub(super) events_rx:
-        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
-}
-
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TerminalTextMetrics {
     pub(super) font_size: Pixels,
@@ -2997,30 +2990,6 @@ pub(super) struct TerminalRenderCache {
     pub(super) rebuilt_rows: usize,
 }
 
-#[derive(Clone)]
-pub(super) struct TerminalSessionHandle {
-    pub(super) state: Arc<Mutex<TerminalSessionState>>,
-    pub(super) writer_tx: smol::channel::Sender<TerminalWriteRequest>,
-}
-
-pub(super) struct TerminalSessionState {
-    pub(super) term_lock: Option<AlacrittyTermLock>,
-    pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
-    pub(super) grid_size: TerminalGridSize,
-    pub(super) connected: bool,
-    pub(super) exit_status: Option<String>,
-    pub(super) row_fingerprints: Vec<u64>,
-    pub(super) dirty_rows: Vec<u16>,
-    pub(super) selection: Option<TerminalSelection>,
-    pub(super) selection_drag_anchor: Option<TerminalGridPoint>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum TerminalWriteRequest {
-    Bytes(Vec<u8>),
-    Shutdown,
-}
-
 pub(super) struct TerminalViewportView {
     pub(super) theme: AppTheme,
     pub(super) focus_handle: FocusHandle,
@@ -3038,29 +3007,43 @@ pub(super) struct TerminalViewportView {
     pub(super) viewport_bounds: Option<Bounds<Pixels>>,
     pub(super) pressed_mouse_button: Option<gpui::MouseButton>,
     pub(super) mouse_mode_active: bool,
+    pub(super) was_focused: bool,
+    pub(super) selection_start: Option<TerminalGridPoint>,
+    pub(super) selection_end: Option<TerminalGridPoint>,
+    pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
+    pub(super) search_matches: Vec<(usize, usize)>,
+    pub(super) active_match_index: Option<usize>,
+}
+
+/// A single terminal (one PTY + alacritty + rendered viewport). A repo can hold
+/// several of these as tabs.
+pub(super) struct TerminalInstance {
+    pub(super) focus_handle: FocusHandle,
+    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(super) events_rx:
+        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
+    pub(super) connected: bool,
+    pub(super) exit_status: Option<String>,
+    pub(super) viewport: Entity<TerminalViewportView>,
+    pub(super) session_seq: u64,
+    pub(super) title: String,
 }
 
 pub(super) struct RepoTerminalSession {
     pub(super) workdir: std::path::PathBuf,
     pub(super) repo_name: String,
-    pub(super) focus_handle: FocusHandle,
-    pub(super) io: std::sync::Arc<std::sync::Mutex<TerminalIo>>,
-    pub(super) term_lock: Option<AlacrittyTermLock>,
-    pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
-    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
-    pub(super) events_rx:
-        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
-    pub(super) grid_size: TerminalGridSize,
-    pub(super) content_epoch: u64,
-    pub(super) render_cache: TerminalRenderCache,
-    pub(super) connected: bool,
-    pub(super) exit_status: Option<String>,
-    pub(super) viewport: Entity<TerminalViewportView>,
-    pub(super) session_seq: u64,
-    pub(super) selection: Option<TerminalSelection>,
-    pub(super) selection_drag_anchor: Option<TerminalGridPoint>,
-    pub(super) viewport_bounds: Option<Bounds<Pixels>>,
-    pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
+    pub(super) instances: Vec<TerminalInstance>,
+    pub(super) active_index: usize,
+}
+
+impl RepoTerminalSession {
+    pub(super) fn active_instance(&self) -> Option<&TerminalInstance> {
+        self.instances.get(self.active_index)
+    }
+
+    pub(super) fn instance_by_seq_mut(&mut self, seq: u64) -> Option<&mut TerminalInstance> {
+        self.instances.iter_mut().find(|i| i.session_seq == seq)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3078,36 +3061,6 @@ pub(super) struct TerminalGridPoint {
 impl TerminalGridPoint {
     pub(super) fn new(row: u16, col: u16) -> Self {
         Self { row, col }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum TerminalSelection {
-    Visible {
-        start: TerminalGridPoint,
-        end: TerminalGridPoint,
-    },
-    AllBuffer,
-}
-
-impl TerminalSelection {
-    pub(super) fn visible(start: TerminalGridPoint, end: TerminalGridPoint) -> Self {
-        Self::Visible { start, end }
-    }
-
-    pub(super) fn normalized_visible(self) -> Option<(TerminalGridPoint, TerminalGridPoint)> {
-        match self {
-            Self::Visible { start, end } if start <= end => Some((start, end)),
-            Self::Visible { start, end } => Some((end, start)),
-            Self::AllBuffer => None,
-        }
-    }
-
-    pub(super) fn is_empty(self) -> bool {
-        matches!(
-            self,
-            Self::Visible { start, end } if start == end
-        )
     }
 }
 
