@@ -94,6 +94,15 @@ fn external_editor_preference_settings(
     }
 }
 
+fn custom_external_editor_path_prompt_options() -> gpui::PathPromptOptions {
+    gpui::PathPromptOptions {
+        files: true,
+        directories: true,
+        multiple: false,
+        prompt: Some("Select external code editor".into()),
+    }
+}
+
 const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
     (
         "settings_window_change_tracking_combined",
@@ -3221,12 +3230,7 @@ impl Render for SettingsWindowView {
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |_this, _e, window, cx| {
                             let view = cx.weak_entity();
-                            let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
-                                files: true,
-                                directories: false,
-                                multiple: false,
-                                prompt: Some("Select external code editor".into()),
-                            });
+                            let rx = cx.prompt_for_paths(custom_external_editor_path_prompt_options());
 
                             window
                                 .spawn(cx, async move |cx| {
@@ -5288,6 +5292,28 @@ mod tests {
             );
             assert_eq!(settings.external_editor_browse_notify_count, 1);
         });
+    }
+
+    #[test]
+    fn custom_external_editor_browse_prompt_allows_app_bundle_directories() {
+        let options = custom_external_editor_path_prompt_options();
+
+        assert!(
+            options.files,
+            "custom external editor browsing should still allow executable files"
+        );
+        assert!(
+            options.directories,
+            "custom external editor browsing should allow macOS .app bundle directories"
+        );
+        assert!(
+            !options.multiple,
+            "custom external editor browsing should remain a single-selection prompt"
+        );
+        assert_eq!(
+            options.prompt.as_ref().map(ToString::to_string),
+            Some("Select external code editor".to_string())
+        );
     }
 
     #[gpui::test]
