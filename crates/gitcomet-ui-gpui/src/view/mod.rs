@@ -3728,7 +3728,11 @@ impl Render for GitCometView {
             .top_0()
             .left_0()
             .size_full()
-            .child(self.render_command_palette(cx));
+            .child(self.render_command_palette(cx))
+            .child(stable_overlay_view(self.popover_host.clone()))
+            .child(stable_overlay_view(self.toast_host.clone()))
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
+            .child(stable_overlay_view(self.tooltip_host.clone()));
 
         root = root.child(chrome::window_frame(
             theme,
@@ -3737,14 +3741,6 @@ impl Render for GitCometView {
             Some(frame_overlay.into_any_element()),
             self.ui_scale_percent,
         ));
-
-        root = root.child(stable_overlay_view(self.popover_host.clone()));
-
-        root = root.child(stable_overlay_view(self.toast_host.clone()));
-
-        root = root.child(stable_overlay_view(self.history_refs_hover_host.clone()));
-
-        root = root.child(stable_overlay_view(self.tooltip_host.clone()));
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {
