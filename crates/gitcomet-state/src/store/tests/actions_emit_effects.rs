@@ -1114,7 +1114,7 @@ fn create_and_delete_tag_emit_effects() {
 }
 
 #[test]
-fn apply_pop_and_drop_stash_emit_effects() {
+fn apply_pop_drop_and_create_branch_from_stash_emit_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1175,6 +1175,25 @@ fn apply_pop_and_drop_stash_emit_effects() {
             repo_id: RepoId(1),
             index: 0
         }]
+    ));
+
+    let create_branch = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateBranchFromStash {
+            repo_id: RepoId(1),
+            name: "from-stash".to_string(),
+            index: 0,
+        },
+    );
+    assert!(matches!(
+        create_branch.as_slice(),
+        [Effect::CreateBranchFromStash {
+            repo_id: RepoId(1),
+            name,
+            index: 0
+        }] if name == "from-stash"
     ));
 }
 

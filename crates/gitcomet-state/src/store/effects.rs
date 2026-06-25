@@ -602,6 +602,12 @@ fn send_unavailable_git_effect_result(
             runtime,
             &send,
         ),
+        Effect::CreateBranchFromStash { repo_id, .. } => send_repo_action_unavailable(
+            repo_id,
+            RepoActionKind::CreateBranchFromStash,
+            runtime,
+            &send,
+        ),
         Effect::DeleteBranch { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::DeleteBranch, runtime, &send)
         }
@@ -1736,6 +1742,15 @@ pub(super) fn schedule_effect(
         } => {
             repo_actions::schedule_create_branch_and_checkout(
                 executor, repos, msg_tx, repo_id, name, target,
+            );
+        }
+        Effect::CreateBranchFromStash {
+            repo_id,
+            name,
+            index,
+        } => {
+            repo_actions::schedule_create_branch_from_stash(
+                executor, repos, msg_tx, repo_id, name, index,
             );
         }
         Effect::DeleteBranch { repo_id, name } => {

@@ -76,6 +76,14 @@ pub(super) fn create_branch_and_checkout(
     }]
 }
 
+pub(super) fn create_branch_from_stash(repo_id: RepoId, name: String, index: usize) -> Vec<Effect> {
+    vec![Effect::CreateBranchFromStash {
+        repo_id,
+        name,
+        index,
+    }]
+}
+
 pub(super) fn delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> {
     vec![Effect::DeleteBranch { repo_id, name }]
 }

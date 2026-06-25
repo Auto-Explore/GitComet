@@ -123,6 +123,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RevertCommit { .. }
             | Msg::CreateBranch { .. }
             | Msg::CreateBranchAndCheckout { .. }
+            | Msg::CreateBranchFromStash { .. }
             | Msg::DeleteBranch { .. }
             | Msg::ForceDeleteBranch { .. }
             | Msg::CloneRepo { .. }
@@ -862,6 +863,17 @@ pub(super) fn reduce(
             }
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
+        }
+        Msg::CreateBranchFromStash {
+            repo_id,
+            name,
+            index,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.set_detached_head_commit(None);
+            }
+            begin_head_changing_local_action(state, repo_id);
+            actions_emit_effects::create_branch_from_stash(repo_id, name, index)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);

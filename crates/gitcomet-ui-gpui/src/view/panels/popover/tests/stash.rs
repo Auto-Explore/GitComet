@@ -40,6 +40,25 @@ fn stash_menu_has_apply_pop_and_drop_entries(cx: &mut gpui::TestAppContext) {
             }) if rid == repo_id && ix == index
         ));
 
+        let create_branch_action = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Create branch from stash" =>
+            {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        assert!(matches!(
+            create_branch_action,
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::CreateBranchFromStashPrompt {
+                    repo_id: rid,
+                    index: ix,
+                    message: ref msg,
+                },
+            }) if rid == repo_id && ix == index && msg == &message
+        ));
+
         let pop_action = model.items.iter().find_map(|item| match item {
             ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Pop stash" => {
                 Some((**action).clone())
@@ -68,6 +87,103 @@ fn stash_menu_has_apply_pop_and_drop_entries(cx: &mut gpui::TestAppContext) {
                 message: ref msg
             }) if rid == repo_id && ix == index && msg == &message
         ));
+    });
+}
+
+#[gpui::test]
+fn stash_menu_create_branch_action_opens_prompt(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(10);
+    let index = 2usize;
+    let message = "Saved work".to_string();
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.popover_anchor = Some(PopoverAnchor::Point(point(px(32.0), px(48.0))));
+                host.context_menu_activate_action(
+                    ContextMenuAction::OpenPopover {
+                        kind: PopoverKind::CreateBranchFromStashPrompt {
+                            repo_id,
+                            index,
+                            message: message.clone(),
+                        },
+                    },
+                    window,
+                    cx,
+                );
+
+                match host.popover.as_ref() {
+                    Some(PopoverKind::CreateBranchFromStashPrompt {
+                        repo_id: rid,
+                        index: ix,
+                        message: msg,
+                    }) => {
+                        assert_eq!(*rid, repo_id);
+                        assert_eq!(*ix, index);
+                        assert_eq!(msg, &message);
+                    }
+                    _ => panic!("expected create branch from stash prompt to open"),
+                }
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn create_branch_from_stash_prompt_enter_dispatches_and_closes(cx: &mut gpui::TestAppContext) {
+    let (store, events, repo, _workdir) = create_tracking_store("stash-branch-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateBranchFromStashPrompt {
+                        repo_id,
+                        index: 4,
+                        message: "Saved work".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("stash-work", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(
+        !is_open,
+        "expected Enter to close create branch from stash popover"
+    );
+    wait_until("create branch from stash action", || {
+        repo.actions() == vec!["create_from_stash:stash-work:4".to_string()]
     });
 }
 

@@ -3758,6 +3758,14 @@ impl GitRepository for RecordingCheckoutRepo {
         unsupported_repo_result()
     }
 
+    fn create_branch_from_stash(&self, name: &str, index: usize) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!("create_from_stash {name} {index}"));
+        Ok(())
+    }
+
     fn stage(&self, _paths: &[&Path]) -> Result<()> {
         unsupported_repo_result()
     }
@@ -3994,6 +4002,238 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
             "create feature HEAD".to_string(),
             "checkout feature".to_string()
         ]
+    );
+}
+
+#[test]
+fn create_branch_from_stash_effect_requests_branch_and_worktree_reload_on_success() {
+    let repo_id = RepoId(704);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-create-branch-from-stash-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CreateBranchFromStash {
+            repo_id,
+            name: "feature".to_string(),
+            index: 2,
+        },
+    );
+
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec!["create_from_stash feature 2".to_string()]
+    );
+}
+
+#[test]
+fn create_branch_from_stash_effect_requests_branch_and_worktree_reload_on_error() {
+    struct FailingCreateBranchFromStashRepo {
+        spec: RepoSpec,
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl GitRepository for FailingCreateBranchFromStashRepo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unsupported_repo_result()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unsupported_repo_result()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unsupported_repo_result()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unsupported_repo_result()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unsupported_repo_result()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unsupported_repo_result()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unsupported_repo_result()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unsupported_repo_result()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unsupported_repo_result()
+        }
+
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn checkout_remote_branch(
+            &self,
+            _remote: &str,
+            _branch: &str,
+            _local_branch: &str,
+        ) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unsupported_repo_result()
+        }
+
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unsupported_repo_result()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unsupported_repo_result()
+        }
+
+        fn create_branch_from_stash(&self, name: &str, index: usize) -> Result<()> {
+            self.calls
+                .lock()
+                .expect("checkout recording mutex")
+                .push(format!("create_from_stash {name} {index}"));
+            Err(Error::new(ErrorKind::Backend("apply failed".to_string())))
+        }
+
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn push(&self) -> Result<()> {
+            unsupported_repo_result()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unsupported_repo_result()
+        }
+    }
+
+    let repo_id = RepoId(705);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(FailingCreateBranchFromStashRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-create-branch-from-stash-effect-error"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CreateBranchFromStash {
+            repo_id,
+            name: "feature".to_string(),
+            index: 2,
+        },
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut saw_refresh_branches = false;
+    let mut saw_load_worktrees = false;
+    let mut saw_finished_err = false;
+
+    while Instant::now() < deadline {
+        let msg = match msg_rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(msg) => msg,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(err) => panic!("channel closed: {err:?}"),
+        };
+
+        match msg {
+            Msg::RefreshBranches { repo_id: rid } if rid == repo_id => {
+                saw_refresh_branches = true;
+            }
+            Msg::LoadWorktrees { repo_id: rid } if rid == repo_id => {
+                saw_load_worktrees = true;
+            }
+            Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+                repo_id: rid,
+                action: RepoActionKind::CreateBranchFromStash,
+                result: Err(_),
+            }) if rid == repo_id => {
+                saw_finished_err = true;
+            }
+            _ => {}
+        }
+
+        if saw_refresh_branches && saw_load_worktrees && saw_finished_err {
+            break;
+        }
+    }
+
+    assert!(
+        saw_refresh_branches,
+        "expected create-branch-from-stash error to refresh branches"
+    );
+    assert!(
+        saw_load_worktrees,
+        "expected create-branch-from-stash error to reload worktrees"
+    );
+    assert!(
+        saw_finished_err,
+        "expected create-branch-from-stash error completion"
+    );
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec!["create_from_stash feature 2".to_string()]
     );
 }
 
@@ -4938,6 +5178,14 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 name: "topic2".to_string(),
                 target: "HEAD".to_string(),
+            },
+            1,
+        ),
+        (
+            Effect::CreateBranchFromStash {
+                repo_id,
+                name: "topic3".to_string(),
+                index: 0,
             },
             1,
         ),

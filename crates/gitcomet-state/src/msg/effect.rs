@@ -210,6 +210,11 @@ pub enum Effect {
         name: String,
         target: String,
     },
+    CreateBranchFromStash {
+        repo_id: RepoId,
+        name: String,
+        index: usize,
+    },
     DeleteBranch {
         repo_id: RepoId,
         name: String,

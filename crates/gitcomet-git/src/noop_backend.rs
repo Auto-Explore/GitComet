@@ -103,6 +103,10 @@ impl GitRepository for NoopRepo {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
 
+    fn create_branch_from_stash(&self, _name: &str, _index: usize) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
+    }
+
     fn stage(&self, _paths: &[&Path]) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported("No Git backend enabled")))
     }
@@ -208,6 +212,7 @@ mod tests {
         assert_unsupported(repo.stash_list());
         assert_unsupported(repo.stash_apply(0));
         assert_unsupported(repo.stash_drop(0));
+        assert_unsupported(repo.create_branch_from_stash("feature", 0));
         assert_unsupported(repo.stage(&paths));
         assert_unsupported(repo.unstage(&paths));
         assert_unsupported(repo.commit("message"));
