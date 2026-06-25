@@ -52,6 +52,7 @@ pub(super) fn panel(
                             .tooltip_host(this.tooltip_host.clone())
                             .empty_text("No submodules")
                             .max_height(scaled_px(260.0))
+                            .selected_index(this.submodule_picker_selected_index)
                             .render(
                                 theme,
                                 ui_scale_percent,

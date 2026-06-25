@@ -399,7 +399,14 @@ impl Render for ActionBarView {
                     .child(branch),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(PopoverKind::BranchPicker, e.position(), window, cx);
+                this.open_popover_at(
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    },
+                    e.position(),
+                    window,
+                    cx,
+                );
             }))
             .gitcomet_tooltip(theme, "Select branch".into());
 
@@ -629,7 +636,28 @@ impl Render for ActionBarView {
             .selected_bg(menu_selected_bg)
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                 this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
-                this.open_popover_for_bounds(PopoverKind::CreateBranch, bounds, window, cx);
+                if let Some(repo_id) = this.state.active_repo {
+                    let target = this
+                        .active_repo()
+                        .and_then(|repo| {
+                            if let Loadable::Ready(head) = &repo.head_branch {
+                                Some(head.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| "HEAD".to_string());
+                    this.open_popover_for_bounds(
+                        PopoverKind::CreateBranchFromRefPrompt {
+                            repo_id,
+                            target,
+                            source_selectable: true,
+                        },
+                        bounds,
+                        window,
+                        cx,
+                    );
+                }
             })
             .gitcomet_tooltip(theme, "Create branch".into());
 

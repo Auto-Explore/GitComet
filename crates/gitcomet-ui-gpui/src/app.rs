@@ -8,7 +8,7 @@ use crate::view::{
     PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
     StartupCrashReport, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
     TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, is_diff_shortcut_candidate,
+    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -533,6 +533,9 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             open_recent_repository_picker_in_existing_or_new_window(cx, backend);
         });
     });
+    cx.on_action(|_: &ToggleCommandPalette, cx| {
+        cx.defer(toggle_command_palette_in_active_or_existing_window);
+    });
 
     cx.on_action(|_: &Close, cx| {
         cx.defer(|cx| {
@@ -679,6 +682,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
+        KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
@@ -1133,6 +1137,28 @@ fn open_recent_repository_picker_in_existing_or_new_window(
     cx.activate(true);
 }
 
+fn toggle_command_palette_in_window(cx: &mut App, window: &GitCometWindowEntry) {
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.toggle_command_palette(window, cx);
+        });
+    });
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+}
+
+fn toggle_command_palette_in_active_or_existing_window(cx: &mut App) {
+    if let Some(window) =
+        active_normal_gitcomet_window(cx).or_else(|| find_normal_gitcomet_window(cx))
+    {
+        toggle_command_palette_in_window(cx, &window);
+    }
+}
+
 fn show_open_repository_manual_entry_in_window(
     cx: &mut App,
     window: &GitCometWindowEntry,
@@ -1440,6 +1466,12 @@ pub(crate) fn bind_app_keys_for_test(cx: &mut App) {
 }
 
 #[cfg(test)]
+pub(crate) fn install_app_shortcuts_for_test(app: &mut App, backend: Arc<dyn GitBackend>) {
+    bind_app_keys(app);
+    install_app_actions(app, backend);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use gpui::{
@@ -1613,6 +1645,7 @@ mod tests {
                     crate::view::TextInputDiffNextChange
                 ))
                 .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
+                .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenInCodeEditor))
@@ -1988,11 +2021,6 @@ mod tests {
         assert_eq!(recent_repository_label(&path), path.display().to_string());
     }
 
-    fn install_app_shortcuts_for_test(app: &mut App, backend: Arc<dyn GitBackend>) {
-        bind_app_keys(app);
-        install_app_actions(app, backend);
-    }
-
     #[gpui::test]
     fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         let _external_editor_guard =
@@ -2017,6 +2045,7 @@ mod tests {
             ("secondary-o", OpenRepository.name()),
             ("secondary-shift-o", OpenRecentPicker.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
+            ("secondary-p", crate::view::ToggleCommandPalette.name()),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),

@@ -585,6 +585,9 @@ impl PopoverHost {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }
             ContextMenuAction::DeleteBranch { repo_id, name } => {
+                let _ = self.root_view.update(cx, |root, _| {
+                    root.pending_force_delete_branch_centered = false;
+                });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
@@ -736,6 +739,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
@@ -828,6 +832,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
@@ -872,6 +877,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(kind, anchor, window, cx);

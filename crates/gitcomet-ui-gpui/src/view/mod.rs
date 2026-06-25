@@ -1,3 +1,8 @@
+use crate::app::{
+    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRecentPicker, OpenRepository,
+    ResetUiScale,
+};
+use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gitcomet_core::diff::AnnotatedDiffLine;
@@ -58,6 +63,8 @@ actions!(
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
+        ToggleCommandPalette,
+        CommandPaletteDismiss,
     ]
 );
 
@@ -108,6 +115,7 @@ mod caches;
 mod chrome;
 pub(crate) mod clone_progress;
 mod color;
+mod command_palette;
 pub(crate) mod components;
 pub(crate) mod conflict_resolver;
 mod date_time;
@@ -523,6 +531,18 @@ impl GitCometView {
         });
     }
 
+    pub(in crate::view) fn open_popover_centered(
+        &mut self,
+        kind: PopoverKind,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_refs_hover_host
+            .update(cx, |host, cx| host.close(cx));
+        self.popover_host
+            .update(cx, |host, cx| host.open_popover_centered(kind, window, cx));
+    }
+
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
         kind: PopoverKind,
@@ -535,6 +555,784 @@ impl GitCometView {
         self.popover_host.update(cx, |host, cx| {
             host.open_popover_for_bounds(kind, anchor_bounds, window, cx)
         });
+    }
+
+    fn open_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.command_palette_open = true;
+        self.command_palette_subscription = None;
+        self.command_palette.restore_focus = window
+            .focused(cx)
+            .or_else(|| self.pre_palette_focus.clone());
+
+        let query_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Type to search commands...".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+
+        self.command_palette_subscription =
+            Some(
+                cx.observe_in(&query_input, window, move |this, input, window, cx| {
+                    if !this.command_palette_open {
+                        return;
+                    }
+                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+                    if escape_pressed {
+                        this.close_command_palette(window, cx);
+                        return;
+                    }
+
+                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
+                    let has_repo = this.active_repo_id().is_some();
+                    let matches = this.command_palette.filtered_commands(has_repo, &query);
+
+                    let arrow_up = input.update(cx, |input, _| input.take_arrow_up_pressed());
+                    let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
+                    if arrow_up || shift_tab {
+                        if matches.is_empty() {
+                            this.command_palette.selected_index = None;
+                        } else {
+                            let len = matches.len();
+                            this.command_palette.selected_index =
+                                Some(match this.command_palette.selected_index {
+                                    Some(i) if i > 0 => i - 1,
+                                    _ => len - 1,
+                                });
+                        }
+                        if let Some(sel) = this.command_palette.selected_index {
+                            let mut headers_before = 0usize;
+                            let mut cur = None;
+                            for cmd in matches.iter().take(sel.saturating_add(1)) {
+                                if cur != Some(cmd.category) {
+                                    cur = Some(cmd.category);
+                                    headers_before += 1;
+                                }
+                            }
+                            this.command_palette
+                                .scroll_handle
+                                .scroll_to_item(sel + headers_before);
+                        }
+                        cx.notify();
+                        return;
+                    }
+
+                    let arrow_down = input.update(cx, |input, _| input.take_arrow_down_pressed());
+                    let tab = input.update(cx, |input, _| input.take_tab_pressed());
+                    if arrow_down || tab {
+                        if matches.is_empty() {
+                            this.command_palette.selected_index = None;
+                        } else {
+                            let len = matches.len();
+                            this.command_palette.selected_index =
+                                Some(match this.command_palette.selected_index {
+                                    Some(i) if i + 1 < len => i + 1,
+                                    _ => 0,
+                                });
+                        }
+                        if let Some(sel) = this.command_palette.selected_index {
+                            let mut headers_before = 0usize;
+                            let mut cur = None;
+                            for cmd in matches.iter().take(sel.saturating_add(1)) {
+                                if cur != Some(cmd.category) {
+                                    cur = Some(cmd.category);
+                                    headers_before += 1;
+                                }
+                            }
+                            this.command_palette
+                                .scroll_handle
+                                .scroll_to_item(sel + headers_before);
+                        }
+                        cx.notify();
+                        return;
+                    }
+
+                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                    if enter_pressed {
+                        let cmd_to_execute = this
+                            .command_palette
+                            .selected_index
+                            .and_then(|i| matches.get(i).copied())
+                            .or_else(|| matches.first().copied());
+                        if let Some(cmd) = cmd_to_execute {
+                            let command_id: SharedString = cmd.id.into();
+                            this.close_command_palette(window, cx);
+                            this.execute_command(&command_id, Some(window), cx);
+                        } else {
+                            cx.notify();
+                        }
+                        return;
+                    }
+
+                    if query != this.command_palette.previous_query.as_ref() {
+                        this.command_palette.selected_index =
+                            if matches.is_empty() { None } else { Some(0) };
+                        this.command_palette.previous_query = query.into();
+                        this.command_palette
+                            .scroll_handle
+                            .set_offset(point(px(0.0), px(0.0)));
+                    }
+                    cx.notify();
+                }),
+            );
+
+        self.command_palette.query_input = Some(query_input.clone());
+        self.command_palette.selected_index = None;
+        self.command_palette.previous_query = SharedString::default();
+        self.command_palette
+            .scroll_handle
+            .set_offset(point(px(0.0), px(0.0)));
+
+        let focus_handle = query_input.read_with(cx, |input, _| input.focus_handle());
+        window.focus(&focus_handle, cx);
+        cx.notify();
+    }
+
+    fn restore_command_palette_focus(
+        &self,
+        restore_focus: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+        if let Some(focus) = restore_focus {
+            window.focus(&focus, cx);
+        } else {
+            window.focus(&fallback_focus, cx);
+        }
+    }
+
+    fn close_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let palette_focus = self
+            .command_palette
+            .query_input
+            .as_ref()
+            .map(|input| input.read(cx).focus_handle());
+        let mut restore_focus = self.command_palette.restore_focus.take();
+        if restore_focus
+            .as_ref()
+            .zip(palette_focus.as_ref())
+            .is_some_and(|(restore_focus, palette_focus)| restore_focus == palette_focus)
+        {
+            restore_focus = None;
+        }
+        self.command_palette_open = false;
+        self.command_palette_subscription = None;
+        self.command_palette.query_input = None;
+        self.restore_command_palette_focus(restore_focus, window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_command_palette(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.command_palette_open {
+            self.close_command_palette(window, cx);
+        } else {
+            self.open_command_palette(window, cx);
+        }
+    }
+
+    fn render_command_palette(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let Some(ref query_input) = self.command_palette.query_input else {
+            return div().into_any_element();
+        };
+        if !self.command_palette_open {
+            return div().into_any_element();
+        }
+        let ui_scale = ui_scale::UiScale::current(cx);
+        let scaled_px = |value: f32| ui_scale.px(value);
+        let palette_width = scaled_px(560.0);
+        let palette_max_height = scaled_px(400.0);
+        let top_offset = scaled_px(80.0);
+        let item_height = scaled_px(32.0);
+
+        let query = query_input.read_with(cx, |input, _| input.text().trim().to_string());
+        let has_repo = self.active_repo_id().is_some();
+        let commands = self.command_palette.filtered_commands(has_repo, &query);
+
+        let mut list = div()
+            .id("command_palette_list")
+            .flex()
+            .flex_col()
+            .max_h(palette_max_height - item_height)
+            .overflow_y_scroll()
+            .track_scroll(&self.command_palette.scroll_handle)
+            .gap(px(0.0))
+            .items_start();
+        list = restrict_scroll_to_vertical_axis(list);
+        let selected_index = self.command_palette.selected_index;
+
+        let render_label = |label_str: &str| -> AnyElement {
+            let label = label_str.to_string();
+            let match_pos = if !query.is_empty() {
+                label_str
+                    .to_ascii_lowercase()
+                    .find(&query.to_ascii_lowercase())
+            } else {
+                None
+            };
+            if let Some(pos) = match_pos {
+                let end = pos + query.len();
+                let highlight = gpui::HighlightStyle {
+                    color: Some(theme.colors.accent.into()),
+                    font_weight: Some(FontWeight::BOLD),
+                    ..gpui::HighlightStyle::default()
+                };
+                components::TruncatedText::new(label)
+                    .profile(components::TextTruncationProfile::End)
+                    .text_color(theme.colors.text)
+                    .text_sm()
+                    .focus_range(Some(pos..end))
+                    .highlights([(pos..end, highlight)])
+                    .render(cx)
+                    .into_any_element()
+            } else {
+                let highlight = gpui::HighlightStyle {
+                    color: Some(theme.colors.accent.into()),
+                    font_weight: Some(FontWeight::BOLD),
+                    ..gpui::HighlightStyle::default()
+                };
+                components::TruncatedText::new(label)
+                    .profile(components::TextTruncationProfile::End)
+                    .text_color(theme.colors.text)
+                    .text_sm()
+                    .highlights([(0..0, highlight)])
+                    .render(cx)
+                    .into_any_element()
+            }
+        };
+
+        let mut current_category = None;
+
+        for (i, cmd) in commands.iter().enumerate() {
+            if current_category != Some(cmd.category) {
+                current_category = Some(cmd.category);
+                list = list.child(
+                    div()
+                        .h(item_height)
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .px_2()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.colors.text_muted)
+                        .child(cmd.category.to_string()),
+                );
+            }
+
+            let label_row = div()
+                .h(item_height)
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_between()
+                .px_2()
+                .rounded(px(theme.radii.row))
+                .hover(move |s| s.bg(theme.colors.hover))
+                .cursor(CursorStyle::PointingHand);
+
+            let label_row = if selected_index == Some(i) {
+                label_row.bg(theme.colors.active)
+            } else {
+                label_row
+            };
+
+            let cmd_id: SharedString = cmd.id.into();
+            let cmd_id_for_click = cmd_id.clone();
+
+            let label_row = if !cmd.shortcut.is_empty() {
+                let shortcut_text = cmd.shortcut.to_string();
+                label_row
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(scaled_px(4.0))
+                            .overflow_hidden()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(render_label(cmd.label)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(shortcut_text),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.close_command_palette(window, cx);
+                            this.execute_command(&cmd_id_for_click, Some(window), cx);
+                        }),
+                    )
+            } else {
+                label_row
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .overflow_hidden()
+                            .child(render_label(cmd.label)),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.close_command_palette(window, cx);
+                            this.execute_command(&cmd_id, Some(window), cx);
+                        }),
+                    )
+            };
+
+            list = list.child(label_row);
+        }
+
+        if commands.is_empty() && !query.is_empty() {
+            list = list.child(
+                div()
+                    .h(item_height)
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .px_2()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child("No matching commands"),
+            );
+        }
+
+        let scrollbar_gutter = Scrollbar::visible_gutter(
+            self.command_palette.scroll_handle.clone(),
+            ScrollbarAxis::Vertical,
+        );
+        let list = list.pr(scrollbar_gutter);
+        let scrollbar = Scrollbar::new(
+            "command_palette_scrollbar",
+            self.command_palette.scroll_handle.clone(),
+        )
+        .render(theme);
+
+        let palette_body = div()
+            .rounded(px(theme.radii.panel))
+            .bg(theme.colors.surface_bg)
+            .border_1()
+            .border_color(theme.colors.border)
+            .overflow_hidden()
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .border_b_1()
+                    .border_color(theme.colors.border)
+                    .child(query_input.clone()),
+            )
+            .child(
+                div()
+                    .id("command_palette_list_container")
+                    .relative()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .child(list)
+                    .child(scrollbar),
+            );
+
+        let scrim = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .bg(gpui::rgba(0x00000022))
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                    this.close_command_palette(window, cx);
+                }),
+            );
+
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(scrim)
+            .child(
+                div()
+                    .absolute()
+                    .top(top_offset)
+                    .left_0()
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        div()
+                            .w(palette_width)
+                            .max_w(palette_width)
+                            .child(palette_body),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn execute_command(
+        &mut self,
+        command_id: &str,
+        window: Option<&mut Window>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match command_id {
+            "new-window" => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
+            "open-settings" => cx.defer(crate::view::open_settings_window),
+            "quit" => cx.defer(|cx| cx.quit()),
+            "minimize-window" => cx.defer(|cx| {
+                if let Some(win) = cx.active_window() {
+                    let _ = win.update(cx, |_root, win, _cx| win.minimize_window());
+                }
+            }),
+            "zoom-window" => cx.defer(|cx| {
+                if let Some(win) = cx.active_window() {
+                    let _ = win.update(cx, |_root, win, _cx| super::app::toggle_window_zoom(win));
+                }
+            }),
+            "toggle-fullscreen" => cx.defer(|cx| {
+                if let Some(win) = cx.active_window() {
+                    let _ = win.update(cx, |_root, win, _cx| win.toggle_fullscreen());
+                }
+            }),
+            "increase-ui-scale" => cx.defer(|cx| cx.dispatch_action(&IncreaseUiScale)),
+            "decrease-ui-scale" => cx.defer(|cx| cx.dispatch_action(&DecreaseUiScale)),
+            "reset-ui-scale" => cx.defer(|cx| cx.dispatch_action(&ResetUiScale)),
+            "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
+            "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
+            "open-recent" => cx.defer(|cx| cx.dispatch_action(&OpenRecentPicker)),
+            "clone-repository" => {
+                if let Some(window) = window {
+                    self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
+                }
+            }
+            "close-repo-tab" => {
+                self.close_active_repo_tab(cx);
+            }
+            "reload-repository" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::ReloadRepo { repo_id });
+                }
+            }
+            "fetch-all" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::FetchAll { repo_id });
+                }
+            }
+            "previous-repo-tab" => {
+                self.activate_previous_repo_tab(cx);
+            }
+            "next-repo-tab" => {
+                self.activate_next_repo_tab(cx);
+            }
+            "open-active-view-search" => cx.defer(|cx| cx.dispatch_action(&OpenActiveViewSearch)),
+            "toggle-sidebar" => {
+                self.set_sidebar_collapsed(!self.sidebar_collapsed, cx);
+            }
+            "toggle-details" => {
+                self.set_details_collapsed(!self.details_collapsed, cx);
+            }
+            "toggle-diff-view" => {
+                let next = match self.diff_view_mode {
+                    DiffViewMode::Split => DiffViewMode::Inline,
+                    DiffViewMode::Inline => DiffViewMode::Split,
+                };
+                self.set_diff_view_mode(next, cx);
+            }
+            "toggle-diff-word-wrap" => {
+                self.set_diff_word_wrap(!self.diff_word_wrap, cx);
+            }
+            "toggle-line-numbers" => {
+                self.set_diff_show_line_numbers(!self.diff_show_line_numbers, cx);
+            }
+            "toggle-whitespace-chars" => {
+                self.set_diff_reveal_whitespace_chars(!self.diff_reveal_whitespace_chars, cx);
+            }
+            "create-branch" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    let target = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == repo_id)
+                        .and_then(|repo| {
+                            if let Loadable::Ready(head) = &repo.head_branch {
+                                Some(head.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| "HEAD".to_string());
+                    self.open_popover_centered(
+                        PopoverKind::CreateBranchFromRefPrompt {
+                            repo_id,
+                            target,
+                            source_selectable: true,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "checkout-branch" => {
+                if let Some(window) = window {
+                    self.open_popover_centered(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Checkout,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "delete-branch" => {
+                if let Some(window) = window {
+                    self.open_popover_centered(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Delete,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "checkout-remote-branch" => {
+                // TODO: Open remote branch picker
+            }
+            "pull" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::Pull {
+                        repo_id,
+                        mode: PullMode::Default,
+                    });
+                }
+            }
+            "push" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::Push { repo_id });
+                }
+            }
+            "force-push" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::ForcePushConfirm { repo_id },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "delete-remote-branch" => {
+                // TODO: Implement delete remote branch
+            }
+            "commit" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(PopoverKind::CommitPrompt { repo_id }, window, cx);
+                }
+            }
+            "apply-patch" => {
+                let Some(repo_id) = self.active_repo_id() else {
+                    return;
+                };
+                let view = cx.weak_entity();
+                cx.defer(move |cx| {
+                    let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                        files: true,
+                        directories: false,
+                        multiple: false,
+                        prompt: Some("Select patch file".into()),
+                    });
+                    cx.spawn(async move |cx| {
+                        let result = rx.await;
+                        let paths = match result {
+                            Ok(Ok(Some(paths))) => paths,
+                            _ => return,
+                        };
+                        let Some(patch) = paths.into_iter().next() else {
+                            return;
+                        };
+                        let _ = view.update(cx, |this, _cx| {
+                            this.store.dispatch(Msg::ApplyPatch { repo_id, patch });
+                        });
+                    })
+                    .detach();
+                });
+            }
+            "stage-all" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
+                {
+                    let paths: Vec<_> = repo
+                        .worktree_status_entries()
+                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if !paths.is_empty() {
+                        self.store.dispatch(Msg::StagePaths {
+                            repo_id,
+                            paths: paths.into(),
+                        });
+                    }
+                }
+            }
+            "unstage-all" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
+                {
+                    let paths: Vec<_> = repo
+                        .staged_status_entries()
+                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    if !paths.is_empty() {
+                        self.store.dispatch(Msg::UnstagePaths {
+                            repo_id,
+                            paths: paths.into(),
+                        });
+                    }
+                }
+            }
+            "discard-all" => {
+                // TODO: Implement discard all changes command
+            }
+            "stash" => {
+                if let Some(window) = window {
+                    self.open_popover_centered(PopoverKind::StashPrompt, window, cx);
+                }
+            }
+            "stash-pop" | "stash-apply" | "stash-drop" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    let purpose = match command_id {
+                        "stash-pop" => StashPickerPurpose::Pop,
+                        "stash-apply" => StashPickerPurpose::Apply,
+                        _ => StashPickerPurpose::Drop,
+                    };
+                    self.open_popover_centered(
+                        PopoverKind::StashPickerPrompt { repo_id, purpose },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "merge" => {
+                // TODO: Implement merge branch/ref
+            }
+            "rebase" => {
+                // TODO: Implement rebase onto
+            }
+            "rebase-continue" => {
+                // TODO: Continue rebase
+            }
+            "rebase-abort" => {
+                // TODO: Abort rebase
+            }
+            "create-tag" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::CreateTagPrompt {
+                            repo_id,
+                            target: "HEAD".into(),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "delete-tag" => {
+                // TODO: Implement delete tag
+            }
+            "add-remote" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::Repo {
+                            repo_id,
+                            kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "remove-remote" => {
+                // TODO: Implement remove remote
+            }
+            "edit-remote-url" => {
+                // TODO: Implement edit remote URL
+            }
+            "add-submodule" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::Repo {
+                            repo_id,
+                            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "update-submodules" => {
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::UpdateSubmodules { repo_id });
+                }
+            }
+            "remove-submodule" => {
+                // TODO: Implement remove submodule
+            }
+            "add-worktree" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::Repo {
+                            repo_id,
+                            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "remove-worktree" => {
+                // TODO: Implement remove worktree
+            }
+            "back" => {
+                // TODO: Implement navigate back
+            }
+            "forward" => {
+                // TODO: Implement navigate forward
+            }
+            _ => {}
+        }
     }
 
     pub(in crate::view) fn show_history_refs_hover(
@@ -960,8 +1758,20 @@ impl GitCometView {
             )
         });
 
-        let activation_subscription = cx.observe_window_activation(window, |this, window, _cx| {
+        let command_palette = command_palette::CommandPaletteState {
+            query_input: None,
+            restore_focus: None,
+            scroll_handle: ScrollHandle::new(),
+            selected_index: None,
+            previous_query: SharedString::default(),
+        };
+
+        let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
+                // Capture the focused element before the platform blur() fires and clears it.
+                // This is the restore target when opening the palette via a global hotkey while
+                // this window is in the background.
+                this.pre_palette_focus = window.focused(cx);
                 return;
             }
             let runtime = refresh_git_runtime();
@@ -1129,6 +1939,10 @@ impl GitCometView {
             toast_host,
             history_refs_hover_host,
             popover_host,
+            command_palette,
+            command_palette_open: false,
+            command_palette_subscription: None,
+            pre_palette_focus: None,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
             deferred_repo_bootstrap,
@@ -1170,6 +1984,7 @@ impl GitCometView {
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
+            pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
             pending_worktree_branch_removals: HashMap::default(),
@@ -1233,6 +2048,9 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
+        if let Some(ref query_input) = self.command_palette.query_input {
+            query_input.update(cx, |input, cx| input.set_theme(theme, cx));
+        }
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input
@@ -2468,12 +3286,20 @@ impl Render for GitCometView {
         if let Some((repo_id, name)) = self.pending_force_delete_branch_prompt.take()
             && self.active_repo_id() == Some(repo_id)
         {
-            self.open_popover_at(
-                PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
-                self.last_mouse_pos,
-                window,
-                cx,
-            );
+            if self.pending_force_delete_branch_centered {
+                self.open_popover_centered(
+                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    window,
+                    cx,
+                );
+            } else {
+                self.open_popover_at(
+                    PopoverKind::ForceDeleteBranchConfirm { repo_id, name },
+                    self.last_mouse_pos,
+                    window,
+                    cx,
+                );
+            }
         }
 
         if let Some((repo_id, path, branch)) = self.pending_force_remove_worktree_prompt.take()
@@ -2846,6 +3672,16 @@ impl Render for GitCometView {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
+                this.toggle_command_palette(window, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &CommandPaletteDismiss, window, cx| {
+                if this.command_palette_open {
+                    this.close_command_palette(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &TextInputCommitSubmit, window, cx| {
                 let handled = this.details_pane.update(cx, |pane, cx| {
                     pane.handle_commit_submit_shortcut(window, cx)
@@ -2976,20 +3812,26 @@ impl Render for GitCometView {
             self.hover_resize_edge = None;
         }
 
+        let framed_content = div().relative().size_full().child(body);
+
+        let frame_overlay = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .child(self.render_command_palette(cx))
+            .child(stable_overlay_view(self.popover_host.clone()))
+            .child(stable_overlay_view(self.toast_host.clone()))
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
+            .child(stable_overlay_view(self.tooltip_host.clone()));
+
         root = root.child(chrome::window_frame(
             theme,
             decorations,
-            body.into_any_element(),
+            framed_content.into_any_element(),
+            Some(frame_overlay.into_any_element()),
             self.ui_scale_percent,
         ));
-
-        root = root.child(stable_overlay_view(self.toast_host.clone()));
-
-        root = root.child(stable_overlay_view(self.history_refs_hover_host.clone()));
-
-        root = root.child(stable_overlay_view(self.popover_host.clone()));
-
-        root = root.child(stable_overlay_view(self.tooltip_host.clone()));
 
         if crate::startup_probe::is_enabled() {
             root = root.on_children_prepainted(|_children_bounds, window, _cx| {

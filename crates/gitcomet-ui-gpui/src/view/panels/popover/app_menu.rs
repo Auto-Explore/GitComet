@@ -102,12 +102,28 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .min_w(scaled_px(200.0))
         .child(section_label("app_menu_app_section", "Application"))
         .child(
-            entry("app_menu_settings", "Settings…".into(), None, false).on_click(cx.listener(
-                |this, _e: &ClickEvent, _window, cx| {
-                    cx.defer(crate::view::open_settings_window);
-                    this.close_popover(cx);
-                },
-            )),
+            entry(
+                "app_menu_command_palette",
+                "Command Palette".into(),
+                Some("Ctrl+P".into()),
+                false,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                this.close_popover(cx);
+                window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+            })),
+        )
+        .child(
+            entry(
+                "app_menu_settings",
+                "Settings…".into(),
+                Some("Ctrl+,".into()),
+                false,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                cx.defer(crate::view::open_settings_window);
+                this.close_popover(cx);
+            })),
         )
         .when(external_editor_configured, |menu| {
             menu.child(

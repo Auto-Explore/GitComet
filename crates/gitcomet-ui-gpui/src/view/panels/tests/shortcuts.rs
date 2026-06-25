@@ -972,7 +972,9 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         branch_section_model,
         "Enter",
         ContextMenuAction::OpenPopover {
-            kind: PopoverKind::BranchPicker
+            kind: PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::Checkout,
+            },
         }
     );
     assert_shortcut_action!(
@@ -2336,7 +2338,11 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranch,
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id: RepoId(1),
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -2417,7 +2423,11 @@ fn create_branch_popover_text_input_f1_navigates_previous_diff_without_closing_p
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranch,
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id: RepoId(1),
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -4947,7 +4957,15 @@ fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
     let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
 
     apply_state(cx, &view, app_state_with_active_repo(repo));
-    open_popover_for_test(cx, &view, PopoverKind::CreateBranch);
+    open_popover_for_test(
+        cx,
+        &view,
+        PopoverKind::CreateBranchFromRefPrompt {
+            repo_id: RepoId(1),
+            target: "HEAD".to_string(),
+            source_selectable: false,
+        },
+    );
     draw_and_drain_test_window(cx);
 
     let default_width = debug_width(cx, "app_popover");

@@ -4,18 +4,52 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let is_delete = matches!(
+        this.popover,
+        Some(PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::Delete
+        })
+    );
+    let title = if is_delete {
+        "Delete Branch"
+    } else {
+        "Checkout Branch"
+    };
+
     let mut menu = div()
         .flex()
         .flex_col()
         .min_w(scaled_px(420.0))
-        .max_w(scaled_px(820.0));
+        .max_w(scaled_px(820.0))
+        .child(
+            div()
+                .px_2()
+                .py_1()
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(title),
+        )
+        .child(div().border_t_1().border_color(theme.colors.border));
 
     if let Some(repo) = this.active_repo() {
         match &repo.branches {
             Loadable::Ready(branches) => {
                 if let Some(search) = this.branch_picker_search_input.clone() {
                     let repo_id = repo.id;
-                    let branch_names = branches.iter().map(|b| b.name.clone()).collect::<Vec<_>>();
+                    let head_branch = match &repo.head_branch {
+                        Loadable::Ready(head) => Some(head.as_str()),
+                        _ => None,
+                    };
+                    let branch_names = branches
+                        .iter()
+                        .filter_map(|b| {
+                            if is_delete && head_branch == Some(b.name.as_str()) {
+                                None
+                            } else {
+                                Some(b.name.clone())
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     let items = branch_names
                         .iter()
                         .map(|name| name.clone().into())
@@ -27,11 +61,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .tooltip_host(this.tooltip_host.clone())
                             .empty_text("No branches")
                             .max_height(scaled_px(240.0))
+                            .selected_index(this.branch_picker_selected_index)
                             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                                 if let Some(name) = branch_names.get(ix).cloned() {
-                                    this.store.dispatch(Msg::CheckoutBranch { repo_id, name });
+                                    this.handle_inline_branch_picker_select(name, repo_id, cx);
                                 }
-                                this.close_popover(cx);
                             }),
                     );
                 } else {
@@ -52,11 +86,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             )
                             .on_click(cx.listener(
                                 move |this, _e: &ClickEvent, _w, cx| {
-                                    this.store.dispatch(Msg::CheckoutBranch {
+                                    this.handle_inline_branch_picker_select(
+                                        name.clone(),
                                         repo_id,
-                                        name: name.clone(),
-                                    });
-                                    this.close_popover(cx);
+                                        cx,
+                                    );
                                 },
                             )),
                         );
@@ -95,6 +129,7 @@ fn branch_picker_status_panel(
             .tooltip_host(this.tooltip_host.clone())
             .empty_text(empty_text)
             .max_height(scaled_px(240.0))
+            .selected_index(this.branch_picker_selected_index)
             .render(theme, ui_scale_percent, cx, |_, _, _, _, _| {})
     } else {
         components::context_menu_label(
