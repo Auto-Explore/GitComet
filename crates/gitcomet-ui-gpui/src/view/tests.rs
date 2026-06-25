@@ -6,6 +6,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
 use gitcomet_state::store::AppStore;
 use std::path::Path;
 use std::path::PathBuf;
@@ -2743,4 +2744,152 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
                     == "Clone failed:\n\ngit@github.com: Permission denied (publickey)."
         })
     });
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "Enter passphrase".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "git@example.com:repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until("empty passphrase should show banner error", || {
+        store_for_assert
+            .snapshot()
+            .banner_error
+            .as_ref()
+            .is_some_and(|b| b.message.contains("Passphrase is required"))
+    });
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "Enter passphrase".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "git@example.com:repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("my-passphrase", cx));
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until(
+        "auth prompt should be cleared after successful submit",
+        || store_for_assert.snapshot().auth_prompt.is_none(),
+    );
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_username_password_empty_username_shows_error(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "https://example.com/repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("token-123", cx));
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until("empty username should show banner error", || {
+        store_for_assert
+            .snapshot()
+            .banner_error
+            .as_ref()
+            .is_some_and(|b| b.message.contains("Username is required"))
+    });
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "https://example.com/repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.auth_prompt_username_input
+                .update(cx, |input, cx| input.set_text("alice", cx));
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("token-123", cx));
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until(
+        "auth prompt should be cleared after successful submit with credentials",
+        || store_for_assert.snapshot().auth_prompt.is_none(),
+    );
 }
