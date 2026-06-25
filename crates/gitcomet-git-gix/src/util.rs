@@ -2027,7 +2027,7 @@ mod tests {
         #[cfg(unix)]
         let cmd = shell_command("cat");
         #[cfg(windows)]
-        let mut cmd = shell_command("Get-Content -Raw");
+        let cmd = shell_command("[Console]::Out.Write([Console]::In.ReadToEnd())");
 
         let input = b"hello stdin\nline two\n".to_vec();
 
