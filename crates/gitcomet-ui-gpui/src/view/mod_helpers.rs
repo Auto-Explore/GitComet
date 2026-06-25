@@ -3017,6 +3017,8 @@ pub(super) struct TerminalViewportView {
     pub(super) select_all_active: bool,
     pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
     pub(super) scrollbar_dragging: bool,
+    pub(super) scrollbar_hovered: bool,
+    pub(super) scrollbar_active: bool,
 }
 
 /// A single terminal (one PTY + alacritty + rendered viewport). A repo can hold

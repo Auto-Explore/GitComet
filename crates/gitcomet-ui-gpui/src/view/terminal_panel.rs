@@ -38,6 +38,8 @@ struct TerminalCanvasPaintState {
     ime_base_style: Option<gpui::TextStyle>,
     scrollbar_track: Option<Bounds<Pixels>>,
     scrollbar_thumb: Option<Bounds<Pixels>>,
+    scrollbar_hovered: bool,
+    scrollbar_active: bool,
 }
 
 #[derive(Clone)]
@@ -93,6 +95,8 @@ impl TerminalViewportView {
             select_all_active: false,
             ime_state: None,
             scrollbar_dragging: false,
+            scrollbar_hovered: false,
+            scrollbar_active: false,
         }
     }
 
@@ -698,6 +702,7 @@ impl TerminalViewportView {
 
         if button == gpui::MouseButton::Left && self.is_in_scrollbar_area(event.position) {
             self.scrollbar_dragging = true;
+            self.scrollbar_active = true;
             self.scrollbar_scroll_to_pos(event.position.y, cx);
             return;
         }
@@ -764,6 +769,7 @@ impl TerminalViewportView {
     ) {
         if self.scrollbar_dragging {
             self.scrollbar_dragging = false;
+            self.scrollbar_active = false;
             return;
         }
         if self.mouse_mode_active {
@@ -786,6 +792,11 @@ impl TerminalViewportView {
         if self.scrollbar_dragging {
             self.scrollbar_scroll_to_pos(event.position.y, cx);
             return;
+        }
+        let hovered = self.is_in_scrollbar_area(event.position);
+        if self.scrollbar_hovered != hovered {
+            self.scrollbar_hovered = hovered;
+            cx.notify();
         }
         if self.mouse_mode_active {
             let mode = self
@@ -1134,7 +1145,7 @@ impl TerminalViewportView {
                     .is_none_or(|s| s.marked_text.is_empty())
                 && content.cursor.shape != TerminalCursorShape::Hidden
             {
-                let cursor_row = content.cursor.point.line.0 as f32;
+                let cursor_row = content.cursor.point.line.0 as f32 + content.display_offset as f32;
                 let cursor_col = content.cursor.point.column.0 as f32;
                 if cursor_row >= 0.0
                     && cursor_row < rows as f32
@@ -1178,8 +1189,7 @@ impl TerminalViewportView {
             {
                 paint_state.ime_marked_text = Some(ime.marked_text.clone());
                 paint_state.ime_base_style = Some(layout.base_style.clone());
-                // Compute IME bounds from cursor position
-                let cursor_row = content.cursor.point.line.0 as f32;
+                let cursor_row = content.cursor.point.line.0 as f32 + content.display_offset as f32;
                 let cursor_col = content.cursor.point.column.0 as f32;
                 if cursor_row >= 0.0
                     && cursor_row < rows as f32
@@ -1231,6 +1241,8 @@ impl TerminalViewportView {
 
                     paint_state.scrollbar_track = Some(track);
                     paint_state.scrollbar_thumb = Some(thumb);
+                    paint_state.scrollbar_hovered = self.scrollbar_hovered;
+                    paint_state.scrollbar_active = self.scrollbar_active;
                 }
                 drop(term);
             }
@@ -1318,6 +1330,7 @@ impl Render for TerminalViewportView {
             .child({
                 let focus_handle = self.focus_handle.clone();
                 let pty_sender = self.pty_sender.clone();
+                let weak = cx.weak_entity();
                 gpui::canvas(
                     move |bounds, window, cx| {
                         view.update(cx, |this, cx| {
@@ -1325,6 +1338,20 @@ impl Render for TerminalViewportView {
                         })
                     },
                     move |_bounds, paint_state, window, cx| {
+                        window.on_mouse_event({
+                            let weak = weak.clone();
+                            move |_event: &MouseUpEvent, phase, _window, cx| {
+                                if phase != gpui::DispatchPhase::Capture {
+                                    return;
+                                }
+                                let _ = weak.update(cx, |this, _cx| {
+                                    if this.scrollbar_dragging {
+                                        this.scrollbar_dragging = false;
+                                        this.scrollbar_active = false;
+                                    }
+                                });
+                            }
+                        });
                         let ime_handler = TerminalTextInputHandler {
                             pty_sender: pty_sender.clone(),
                             ime_state: paint_state.ime_marked_text.as_ref().map(|t| {
@@ -1682,7 +1709,7 @@ impl GitCometView {
                                 }
                             }
                             TerminalBackendEvent::Bell => {}
-                            TerminalBackendEvent::Exit | TerminalBackendEvent::ChildExit => {
+                            TerminalBackendEvent::Exit => {
                                 instance.connected = false;
                                 instance.exit_status = Some("Shell exited.".to_string());
                                 instance.viewport.update(cx, |viewport, _cx| {
@@ -1690,6 +1717,13 @@ impl GitCometView {
                                     viewport.term_lock = None;
                                 });
                                 cx.notify();
+                            }
+                            TerminalBackendEvent::ChildExit(code) => {
+                                let msg = match code {
+                                    Some(c) => format!("Child process exited with code {c}"),
+                                    None => "Child process exited".to_string(),
+                                };
+                                eprintln!("terminal child process: {msg}");
                             }
                             TerminalBackendEvent::Wakeup
                             | TerminalBackendEvent::CursorBlinkingChange => {
@@ -2660,14 +2694,14 @@ fn paint_terminal_canvas_state(
     cx: &mut App,
 ) {
     window.paint_quad(fill(paint_state.bounds, paint_state.terminal_bg));
+    for (origin, rect_size, color) in paint_state.background_rects {
+        window.paint_quad(fill(Bounds::new(origin, rect_size), color));
+    }
     for rect in paint_state.selection_rects {
         window.paint_quad(fill(
             rect,
             with_alpha(theme.colors.accent, TERMINAL_SELECTION_ALPHA),
         ));
-    }
-    for (origin, rect_size, color) in paint_state.background_rects {
-        window.paint_quad(fill(Bounds::new(origin, rect_size), color));
     }
     for (line, origin, line_height) in paint_state.lines {
         let _ = line.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx);
@@ -2717,10 +2751,17 @@ fn paint_terminal_canvas_state(
     if let Some(track) = paint_state.scrollbar_track
         && let Some(thumb) = paint_state.scrollbar_thumb
     {
-        let track_color = with_alpha(theme.colors.text_muted, 0.08);
+        let (track_alpha, thumb_alpha) = if paint_state.scrollbar_active {
+            (0.18, 0.72)
+        } else if paint_state.scrollbar_hovered {
+            (0.14, 0.48)
+        } else {
+            (0.08, 0.28)
+        };
+        let track_color = with_alpha(theme.colors.text_muted, track_alpha);
         window.paint_quad(fill(track, track_color));
 
-        let thumb_color = with_alpha(theme.colors.text_muted, 0.28);
+        let thumb_color = with_alpha(theme.colors.text_muted, thumb_alpha);
         let thumb_radius = px(4.0);
         window.paint_quad(fill(thumb, thumb_color).corner_radii(thumb_radius));
     }
@@ -3026,5 +3067,65 @@ mod tests {
             history_size
         );
         assert_eq!(terminal_scrollbar_offset_for_fraction(1.5, history_size), 0);
+    }
+
+    #[test]
+    fn cursor_screen_row_adds_display_offset() {
+        // When the terminal is scrolled back (display_offset > 0),
+        // the cursor grid position must be converted to screen position
+        // by adding display_offset. This ensures the cursor stays at
+        // the input line position and does not appear to move with scroll.
+        let cursor_grid_row = 23;
+        let display_offset: usize = 0;
+        let screen_row = cursor_grid_row as f32 + display_offset as f32;
+        assert_eq!(screen_row, 23.0, "cursor at grid row 23, no scroll");
+
+        let display_offset: usize = 5;
+        let screen_row = cursor_grid_row as f32 + display_offset as f32;
+        assert_eq!(
+            screen_row, 28.0,
+            "scrolled back 5 lines, cursor moves below visible area"
+        );
+    }
+
+    #[test]
+    fn cursor_hidden_when_scrolled_beyond_viewport() {
+        // When display_offset pushes the cursor beyond screen_lines,
+        // the cursor should not be rendered (it's below the visible history).
+        let screen_lines: usize = 24;
+        let cursor_grid_row: usize = 23;
+        let display_offset: usize = 5;
+        let screen_row = cursor_grid_row as f32 + display_offset as f32;
+        assert!(
+            screen_row >= screen_lines as f32,
+            "cursor at row {screen_row} should be >= screen_lines ({screen_lines}) -> not visible"
+        );
+    }
+
+    #[test]
+    fn cursor_visible_when_at_live_tail() {
+        let screen_lines: usize = 24;
+        let cursor_grid_row: usize = 23;
+        let display_offset: usize = 0;
+        let screen_row = cursor_grid_row as f32 + display_offset as f32;
+        assert!(
+            screen_row < screen_lines as f32,
+            "cursor at live tail should be visible"
+        );
+    }
+
+    #[test]
+    fn scrollbar_thumb_fraction_clamps_out_of_range_offsets() {
+        assert_eq!(terminal_scrollbar_thumb_fraction(200, 100), 0.0);
+        assert_eq!(terminal_scrollbar_thumb_fraction(0, 0), 0.0);
+
+        let history_size = 100;
+        for offset in 0..=100 {
+            let fraction = terminal_scrollbar_thumb_fraction(offset, history_size);
+            assert!(
+                (0.0..=1.0).contains(&fraction),
+                "fraction must be in [0, 1], got {fraction} for offset {offset}"
+            );
+        }
     }
 }

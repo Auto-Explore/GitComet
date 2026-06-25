@@ -5203,18 +5203,22 @@ fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
 
     cx.simulate_keystrokes("ctrl-s");
     draw_and_drain_test_window(cx);
-    wait_until(cx, "store diff target to clear after staging last file", |cx| {
-        cx.update(|_window, app| {
-            let snapshot = view.read(app).store.snapshot();
-            let Some(repo_id) = snapshot.active_repo else {
-                return false;
-            };
-            let Some(repo) = snapshot.repos.iter().find(|r| r.id == repo_id) else {
-                return false;
-            };
-            repo.diff_state.diff_target.is_none()
-        })
-    });
+    wait_until(
+        cx,
+        "store diff target to clear after staging last file",
+        |cx| {
+            cx.update(|_window, app| {
+                let snapshot = view.read(app).store.snapshot();
+                let Some(repo_id) = snapshot.active_repo else {
+                    return false;
+                };
+                let Some(repo) = snapshot.repos.iter().find(|r| r.id == repo_id) else {
+                    return false;
+                };
+                repo.diff_state.diff_target.is_none()
+            })
+        },
+    );
     sync_store_snapshot(cx, &view);
 
     assert_eq!(

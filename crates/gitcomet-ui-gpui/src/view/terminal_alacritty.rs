@@ -150,7 +150,7 @@ pub(super) enum TerminalBackendEvent {
     Wakeup,
     Bell,
     Exit,
-    ChildExit,
+    ChildExit(Option<i32>),
     CursorBlinkingChange,
 }
 
@@ -164,7 +164,7 @@ impl From<AlacEvent> for TerminalBackendEvent {
             AlacEvent::Wakeup => Self::Wakeup,
             AlacEvent::Bell => Self::Bell,
             AlacEvent::Exit => Self::Exit,
-            AlacEvent::ChildExit(_) => Self::ChildExit,
+            AlacEvent::ChildExit(status) => Self::ChildExit(status.code()),
             AlacEvent::CursorBlinkingChange => Self::CursorBlinkingChange,
             _ => Self::Wakeup,
         }
@@ -263,7 +263,7 @@ pub(super) fn spawn_alacritty_terminal(
             events_tx: events_tx.clone(),
         },
         pty,
-        false,
+        true,
         false,
     )
     .map_err(|e| format!("failed to create event loop: {e}"))?;
@@ -2606,5 +2606,28 @@ mod tests {
         let (text, runs, _bg) = build_alacritty_row(&cells, 5, 3, &base, AppTheme::gitcomet_dark());
         assert_eq!(text, "", "no cells at row 5");
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn child_exit_event_carries_exit_code() {
+        let evt = TerminalBackendEvent::ChildExit(Some(1));
+        let dbg = format!("{evt:?}");
+        assert!(dbg.contains("ChildExit"), "debug must contain variant name");
+        assert!(dbg.contains("1"), "debug must contain exit code");
+    }
+
+    #[test]
+    fn child_exit_event_no_code() {
+        let evt = TerminalBackendEvent::ChildExit(None);
+        let dbg = format!("{evt:?}");
+        assert!(dbg.contains("ChildExit"), "debug must contain variant name");
+        assert!(dbg.contains("None"), "debug must indicate no exit code");
+    }
+
+    #[test]
+    fn exit_event_has_no_payload() {
+        let evt = TerminalBackendEvent::Exit;
+        let dbg = format!("{evt:?}");
+        assert_eq!(dbg, "Exit");
     }
 }
