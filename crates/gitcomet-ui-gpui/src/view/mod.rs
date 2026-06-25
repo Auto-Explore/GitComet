@@ -1058,6 +1058,40 @@ impl GitCometView {
             input
         });
 
+        let auth_prompt_username_input_subscription =
+            cx.observe(&auth_prompt_username_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if escape_pressed {
+                    this.store.dispatch(Msg::CancelAuthPrompt);
+                    cx.notify();
+                    return;
+                }
+                if enter_pressed {
+                    this.try_auth_prompt_submit(cx);
+                    return;
+                }
+                cx.notify();
+            });
+
+        let auth_prompt_secret_input_subscription =
+            cx.observe(&auth_prompt_secret_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if escape_pressed {
+                    this.store.dispatch(Msg::CancelAuthPrompt);
+                    cx.notify();
+                    return;
+                }
+                if enter_pressed {
+                    this.try_auth_prompt_submit(cx);
+                    return;
+                }
+                cx.notify();
+            });
+
         let scale = ui_scale::UiScale::from_percent(ui_scale.percent);
         let initial_sidebar_width_design =
             ui_scale::design_units_from_stored(restored_sidebar_width)
@@ -1079,6 +1113,8 @@ impl GitCometView {
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
+            _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
+            _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
             theme_mode,
             theme: initial_theme,
@@ -2164,6 +2200,49 @@ impl GitCometView {
         )
     }
 
+    fn try_auth_prompt_submit(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(prompt) = self.state.auth_prompt.as_ref() else {
+            return;
+        };
+        let requires_username = prompt.kind == AuthPromptKind::UsernamePassword;
+        let secret_required_message = match prompt.kind {
+            AuthPromptKind::UsernamePassword => "Password is required.",
+            AuthPromptKind::Passphrase => "Passphrase is required.",
+            AuthPromptKind::HostVerification => "Confirmation is required (`yes` or fingerprint).",
+        };
+
+        let username = self
+            .auth_prompt_username_input
+            .read(cx)
+            .text()
+            .trim()
+            .to_string();
+        let secret = self.auth_prompt_secret_input.read(cx).text().to_string();
+
+        if requires_username && username.is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                "Username is required.".to_string(),
+                cx,
+            );
+            return;
+        }
+        if secret.trim().is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                secret_required_message.to_string(),
+                cx,
+            );
+            return;
+        }
+
+        self.store.dispatch(Msg::SubmitAuthPrompt {
+            username: requires_username.then_some(username),
+            secret,
+        });
+        cx.notify();
+    }
+
     fn push_toast(
         &mut self,
         kind: components::ToastKind,
@@ -2587,47 +2666,11 @@ impl Render for GitCometView {
                     "Enter `yes` to trust this host key, or paste the shown fingerprint."
                 }
             };
-            let secret_required_message = match prompt.kind {
-                AuthPromptKind::UsernamePassword => "Password is required.",
-                AuthPromptKind::Passphrase => "Passphrase is required.",
-                AuthPromptKind::HostVerification => {
-                    "Confirmation is required (`yes` or fingerprint)."
-                }
-            };
 
             let confirm_button = components::Button::new("auth_prompt_confirm", "Confirm")
                 .style(components::ButtonStyle::Filled)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
-                    let username = this
-                        .auth_prompt_username_input
-                        .read(cx)
-                        .text()
-                        .trim()
-                        .to_string();
-                    let secret = this.auth_prompt_secret_input.read(cx).text().to_string();
-
-                    if requires_username && username.is_empty() {
-                        this.push_toast(
-                            components::ToastKind::Error,
-                            "Username is required.".to_string(),
-                            cx,
-                        );
-                        return;
-                    }
-                    if secret.trim().is_empty() {
-                        this.push_toast(
-                            components::ToastKind::Error,
-                            secret_required_message.to_string(),
-                            cx,
-                        );
-                        return;
-                    }
-
-                    this.store.dispatch(Msg::SubmitAuthPrompt {
-                        username: requires_username.then_some(username),
-                        secret,
-                    });
-                    cx.notify();
+                    this.try_auth_prompt_submit(cx);
                 });
 
             let cancel_button = components::Button::new("auth_prompt_cancel", "Cancel")
