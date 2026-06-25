@@ -533,6 +533,42 @@ impl PopoverHost {
                     pane.open_submodule_inner_diff(path, target, cx);
                 });
             }
+            ContextMenuAction::ExportPatch { repo_id, commit_id } => {
+                cx.stop_propagation();
+                let view = cx.weak_entity();
+                let sha = commit_id.as_ref();
+                let short = sha.get(0..8).unwrap_or(sha).to_string();
+                let rx = cx.prompt_for_paths(gpui::PathPromptOptions {
+                    files: false,
+                    directories: true,
+                    multiple: false,
+                    prompt: Some("Export patch to folder".into()),
+                });
+                window
+                    .spawn(cx, async move |cx| {
+                        let result = rx.await;
+                        let paths = match result {
+                            Ok(Ok(Some(paths))) => paths,
+                            Ok(Ok(None)) => return,
+                            Ok(Err(_)) | Err(_) => return,
+                        };
+                        let Some(folder) = paths.into_iter().next() else {
+                            return;
+                        };
+                        let dest = folder.join(format!("commit-{short}.patch"));
+                        let _ = view.update(cx, |this, cx| {
+                            this.store.dispatch(Msg::ExportPatch {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                                dest,
+                            });
+                            cx.notify();
+                        });
+                    })
+                    .detach();
+                self.close_popover(cx);
+                return;
+            }
             ContextMenuAction::CheckoutCommit { repo_id, commit_id } => {
                 self.store
                     .dispatch(Msg::CheckoutCommit { repo_id, commit_id });

@@ -45,6 +45,16 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         }),
     });
     items.push(ContextMenuItem::Entry {
+        label: "Export patch…".into(),
+        icon: Some("icons/arrow_down.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ExportPatch {
+            repo_id,
+            commit_id: commit_id.clone(),
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
         label: "Add tag…".into(),
         icon: Some("icons/tag.svg".into()),
         shortcut: Some("T".into()),

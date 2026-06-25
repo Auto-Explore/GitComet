@@ -794,6 +794,16 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    fn export_patch_with_output(
+        &self,
+        _commit_id: &CommitId,
+        _dest: &Path,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "patch export is not implemented for this backend",
+        )))
+    }
+
     fn apply_patch_with_output(&self, _patch: &Path) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "patch apply is not implemented for this backend",

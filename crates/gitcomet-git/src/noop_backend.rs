@@ -292,6 +292,7 @@ mod tests {
         assert_unsupported(repo.accept_conflict_deletion(path));
         assert_unsupported(repo.checkout_conflict_base(path));
         assert_unsupported(repo.launch_mergetool(path));
+        assert_unsupported(repo.export_patch_with_output(&commit, path));
         assert_unsupported(repo.apply_patch_with_output(path));
         assert_unsupported(repo.apply_unified_patch_to_index_with_output("@@ -1 +1 @@", false));
         assert_unsupported(repo.apply_unified_patch_to_worktree_with_output("@@ -1 +1 @@", true));

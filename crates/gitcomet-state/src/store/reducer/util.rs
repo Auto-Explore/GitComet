@@ -1019,7 +1019,7 @@ fn summarize_command(
             RepoCommandKind::CheckoutConflictBase { .. } => "Checkout base",
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
-            RepoCommandKind::ApplyPatch { .. } => "Patch",
+            RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. }
             | RepoCommandKind::RemoveWorktree { .. }
             | RepoCommandKind::ForceRemoveWorktree { .. } => "Worktree",
@@ -1216,6 +1216,9 @@ fn summarize_command(
                 gitcomet_core::services::RemoteUrlKind::Push => "push",
             };
             format!("Remote {name} ({kind}): URL updated")
+        }
+        RepoCommandKind::ExportPatch { dest, .. } => {
+            format!("Patch exported → {}", dest.display())
         }
         RepoCommandKind::ApplyPatch { patch } => format!("Patch applied → {}", patch.display()),
         RepoCommandKind::AddWorktree { path, reference } => {

@@ -1,5 +1,6 @@
 use super::GixRepo;
-use crate::util::run_git_with_output;
+use crate::util::{run_git_capture, run_git_with_output};
+use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CommandOutput, Result};
 use std::io::Write;
@@ -7,6 +8,28 @@ use std::path::Path;
 use tempfile::NamedTempFile;
 
 impl GixRepo {
+    pub(super) fn export_patch_with_output_impl(
+        &self,
+        commit_id: &CommitId,
+        dest: &Path,
+    ) -> Result<CommandOutput> {
+        let sha = commit_id.as_ref();
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("format-patch")
+            .arg("-1")
+            .arg(sha)
+            .arg("--stdout")
+            .arg("--binary");
+        let patch = run_git_capture(cmd, &format!("git format-patch -1 {sha} --stdout"))?;
+        std::fs::write(dest, patch.as_bytes()).map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+        Ok(CommandOutput {
+            command: format!("Export patch {sha}"),
+            stdout: format!("Saved patch to {}", dest.display()),
+            stderr: String::new(),
+            exit_code: Some(0),
+        })
+    }
+
     pub(super) fn apply_patch_with_output_impl(&self, patch: &Path) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("am").arg("--3way").arg("--").arg(patch);

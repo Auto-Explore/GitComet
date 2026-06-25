@@ -54,6 +54,10 @@ pub(in crate::view) enum ContextMenuAction {
         path: std::path::PathBuf,
         target: DiffTarget,
     },
+    ExportPatch {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     CheckoutCommit {
         repo_id: RepoId,
         commit_id: CommitId,

@@ -711,6 +711,10 @@ impl GitRepository for GixRepo {
         self.launch_mergetool_impl(path)
     }
 
+    fn export_patch_with_output(&self, commit_id: &CommitId, dest: &Path) -> Result<CommandOutput> {
+        self.export_patch_with_output_impl(commit_id, dest)
+    }
+
     fn apply_patch_with_output(&self, patch: &Path) -> Result<CommandOutput> {
         self.apply_patch_with_output_impl(patch)
     }
