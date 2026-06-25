@@ -26,6 +26,34 @@ const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
 #[derive(Default)]
+struct TerminalScrollbarState {
+    drag_offset: Option<Pixels>,
+    hovered: bool,
+    active: bool,
+}
+
+struct TerminalScrollbarPrepaint {
+    track: Bounds<Pixels>,
+    thumb: Bounds<Pixels>,
+}
+
+impl TerminalViewportView {
+    fn terminal_scrollbar_prepaint(&self, gutter_bounds: Bounds<Pixels>) -> Option<TerminalScrollbarPrepaint> {
+        let term_lock = self.term_lock.as_ref()?;
+        let content = self.last_content.as_ref()?;
+        let term = term_lock.lock();
+        let screen_lines = content.terminal_bounds.screen_lines;
+        let history_size = term.grid().history_size();
+        let (track, thumb) = compute_terminal_scrollbar_bounds(
+            gutter_bounds,
+            content.display_offset,
+            history_size,
+            screen_lines,
+        )?;
+        Some(TerminalScrollbarPrepaint { track, thumb })
+    }
+}
+#[derive(Default)]
 struct TerminalCanvasPaintState {
     bounds: Bounds<Pixels>,
     terminal_bg: gpui::Rgba,
@@ -36,10 +64,6 @@ struct TerminalCanvasPaintState {
     ime_bounds: Option<Bounds<Pixels>>,
     ime_marked_text: Option<String>,
     ime_base_style: Option<gpui::TextStyle>,
-    scrollbar_track: Option<Bounds<Pixels>>,
-    scrollbar_thumb: Option<Bounds<Pixels>>,
-    scrollbar_hovered: bool,
-    scrollbar_active: bool,
 }
 
 #[derive(Clone)]
@@ -94,9 +118,6 @@ impl TerminalViewportView {
             selection_end: None,
             select_all_active: false,
             ime_state: None,
-            scrollbar_dragging: false,
-            scrollbar_hovered: false,
-            scrollbar_active: false,
         }
     }
 
@@ -309,16 +330,6 @@ impl TerminalViewportView {
             }
         }
         cx.notify();
-    }
-
-    fn is_in_scrollbar_area(&self, position: gpui::Point<Pixels>) -> bool {
-        let Some(bounds) = self.viewport_bounds else {
-            return false;
-        };
-        let scrollbar_width = px(10.0);
-        position.x >= bounds.right() - scrollbar_width
-            && position.y >= bounds.top()
-            && position.y <= bounds.bottom()
     }
 
     fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<Self>) {
@@ -700,13 +711,6 @@ impl TerminalViewportView {
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
 
-        if button == gpui::MouseButton::Left && self.is_in_scrollbar_area(event.position) {
-            self.scrollbar_dragging = true;
-            self.scrollbar_active = true;
-            self.scrollbar_scroll_to_pos(event.position.y, cx);
-            return;
-        }
-
         if self.mouse_mode_active {
             self.queue_mouse_event(event.position, button, event.modifiers, true, cx);
             self.pressed_mouse_button = Some(button);
@@ -767,11 +771,6 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
         button: gpui::MouseButton,
     ) {
-        if self.scrollbar_dragging {
-            self.scrollbar_dragging = false;
-            self.scrollbar_active = false;
-            return;
-        }
         if self.mouse_mode_active {
             self.queue_mouse_event(event.position, button, event.modifiers, false, cx);
         } else if button == gpui::MouseButton::Left && self.selection_end.is_none() {
@@ -789,15 +788,6 @@ impl TerminalViewportView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.scrollbar_dragging {
-            self.scrollbar_scroll_to_pos(event.position.y, cx);
-            return;
-        }
-        let hovered = self.is_in_scrollbar_area(event.position);
-        if self.scrollbar_hovered != hovered {
-            self.scrollbar_hovered = hovered;
-            cx.notify();
-        }
         if self.mouse_mode_active {
             let mode = self
                 .last_content
@@ -1207,46 +1197,6 @@ impl TerminalViewportView {
                 }
             }
 
-            {
-                let term = term_lock.lock();
-                let grid = term.grid();
-                let screen_lines = content.terminal_bounds.screen_lines;
-                let history_size = grid.history_size();
-                let total_lines = history_size + screen_lines;
-                if total_lines > screen_lines {
-                    let track_width = px(8.0);
-                    let margin = px(2.0);
-                    let track_left = bounds.right() - track_width - margin;
-                    let track_top = bounds.top() + margin;
-                    let track_height = bounds.bottom() - track_top - margin;
-                    let track = Bounds::new(
-                        point(track_left, track_top),
-                        size(track_width, track_height),
-                    );
-
-                    let fraction_scrolled =
-                        terminal_scrollbar_thumb_fraction(content.display_offset, history_size);
-                    let fraction_visible = screen_lines as f32 / total_lines.max(1) as f32;
-                    let min_thumb_h = px(16.0);
-                    let thumb_height = (track_height * fraction_visible)
-                        .max(min_thumb_h)
-                        .min(track_height);
-                    let thumb_travel = track_height - thumb_height;
-                    let thumb_offset = thumb_travel * fraction_scrolled;
-
-                    let thumb = Bounds::new(
-                        point(track_left, track_top + thumb_offset),
-                        size(track_width, thumb_height),
-                    );
-
-                    paint_state.scrollbar_track = Some(track);
-                    paint_state.scrollbar_thumb = Some(thumb);
-                    paint_state.scrollbar_hovered = self.scrollbar_hovered;
-                    paint_state.scrollbar_active = self.scrollbar_active;
-                }
-                drop(term);
-            }
-
             paint_state
         } else {
             TerminalCanvasPaintState::default()
@@ -1276,6 +1226,9 @@ impl Render for TerminalViewportView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
         let theme = self.theme;
+        let term_lock = self.term_lock.clone();
+        let weak = cx.weak_entity();
+        let gutter_width = px(16.0);
         div()
             .track_focus(&self.focus_handle)
             .key_context("Terminal")
@@ -1327,46 +1280,220 @@ impl Render for TerminalViewportView {
             .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, window, cx| {
                 this.handle_scroll_wheel(e, window, cx);
             }))
-            .child({
-                let focus_handle = self.focus_handle.clone();
-                let pty_sender = self.pty_sender.clone();
-                let weak = cx.weak_entity();
-                gpui::canvas(
-                    move |bounds, window, cx| {
-                        view.update(cx, |this, cx| {
-                            this.build_terminal_canvas_paint_state(bounds, window, cx)
-                        })
-                    },
-                    move |_bounds, paint_state, window, cx| {
-                        window.on_mouse_event({
-                            let weak = weak.clone();
-                            move |_event: &MouseUpEvent, phase, _window, cx| {
-                                if phase != gpui::DispatchPhase::Capture {
+            .child(
+                div()
+                    .relative()
+                    .w_full()
+                    .h_full()
+                    .child({
+                        let focus_handle = self.focus_handle.clone();
+                        let pty_sender = self.pty_sender.clone();
+                        let view = view.clone();
+                        gpui::canvas(
+                            move |bounds, window, cx| {
+                                view.update(cx, |this, cx| {
+                                    this.build_terminal_canvas_paint_state(bounds, window, cx)
+                                })
+                            },
+                            move |_bounds, paint_state, window, cx| {
+                                let ime_handler = TerminalTextInputHandler {
+                                    pty_sender: pty_sender.clone(),
+                                    ime_state: paint_state.ime_marked_text.as_ref().map(|t| {
+                                        TerminalImeState {
+                                            marked_text: t.clone(),
+                                        }
+                                    }),
+                                };
+                                window.handle_input(&focus_handle, ime_handler, cx);
+                                paint_terminal_canvas_state(paint_state, theme, window, cx);
+                            },
+                        )
+                        .w_full()
+                        .h_full()
+                    })
+                    .child({
+                        let term_lock = term_lock.clone();
+                        let weak = weak.clone();
+                        let view = view.clone();
+                        gpui::canvas(
+                            move |bounds, window, cx| {
+                                window.insert_hitbox(
+                                    bounds,
+                                    gpui::HitboxBehavior::BlockMouseExceptScroll,
+                                );
+                                view.read(cx).terminal_scrollbar_prepaint(bounds)
+                            },
+                            move |gutter_bounds, prepaint, window, cx| {
+                                let interaction = window.use_keyed_state(
+                                    "terminal_scrollbar_interaction",
+                                    cx,
+                                    |_window, _cx| TerminalScrollbarState::default(),
+                                );
+
+                                let Some(prepaint) = prepaint else {
                                     return;
+                                };
+
+                                let (track_alpha, thumb_alpha) = if interaction.read(cx).active {
+                                    (0.18, 0.72)
+                                } else if interaction.read(cx).hovered {
+                                    (0.14, 0.48)
+                                } else {
+                                    (0.08, 0.28)
+                                };
+                                let track_color =
+                                    with_alpha(theme.colors.text_muted, track_alpha);
+                                let thumb_color =
+                                    with_alpha(theme.colors.text_muted, thumb_alpha);
+                                let thumb_radius = px(4.0);
+
+                                window.paint_quad(fill(prepaint.track, track_color));
+                                window.paint_quad(
+                                    fill(prepaint.thumb, thumb_color)
+                                        .corner_radii(thumb_radius),
+                                );
+
+                                if interaction.read(cx).drag_offset.is_some() {
+                                    window.set_window_cursor_style(
+                                        gpui::CursorStyle::Arrow,
+                                    );
                                 }
-                                let _ = weak.update(cx, |this, _cx| {
-                                    if this.scrollbar_dragging {
-                                        this.scrollbar_dragging = false;
-                                        this.scrollbar_active = false;
+
+                                let thumb = prepaint.thumb;
+
+                                window.on_mouse_event({
+                                    let term_lock = term_lock.clone();
+                                    let weak = weak.clone();
+                                    let interaction = interaction.clone();
+                                    move |event: &MouseDownEvent,
+                                          phase,
+                                          window,
+                                          cx| {
+                                        if phase != gpui::DispatchPhase::Bubble
+                                            || event.button != MouseButton::Left
+                                        {
+                                            return;
+                                        }
+                                        let pos_y = event.position.y;
+                                        let pos = event.position;
+                                        if !gutter_bounds.contains(&pos)
+                                        {
+                                            return;
+                                        }
+
+                                        interaction.update(cx, |state, _cx| {
+                                            state.active = true;
+                                            state.hovered = true;
+                                        });
+
+                                        let Some(ref term_lock) = term_lock else {
+                                            return;
+                                        };
+                                        let history_size =
+                                            term_lock.lock().grid().history_size();
+
+                                        if history_size == 0 {
+                                            return;
+                                        }
+
+                                        if thumb.contains(&event.position) {
+                                            interaction.update(cx, |state, _cx| {
+                                                state.drag_offset =
+                                                    Some(pos_y - thumb.origin.y);
+                                            });
+                                        } else {
+                                            interaction.update(cx, |state, _cx| {
+                                                state.drag_offset = None;
+                                            });
+                                        }
+
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.scrollbar_scroll_to_pos(
+                                                pos_y, cx,
+                                            );
+                                        });
+
+                                        window.refresh();
+                                        cx.stop_propagation();
                                     }
                                 });
-                            }
-                        });
-                        let ime_handler = TerminalTextInputHandler {
-                            pty_sender: pty_sender.clone(),
-                            ime_state: paint_state.ime_marked_text.as_ref().map(|t| {
-                                TerminalImeState {
-                                    marked_text: t.clone(),
-                                }
-                            }),
-                        };
-                        window.handle_input(&focus_handle, ime_handler, cx);
-                        paint_terminal_canvas_state(paint_state, theme, window, cx);
-                    },
-                )
-                .w_full()
-                .h_full()
-            })
+
+                                window.on_mouse_event({
+                                    let weak = weak.clone();
+                                    let interaction = interaction.clone();
+                                    move |event: &MouseMoveEvent,
+                                          phase,
+                                          window,
+                                          cx| {
+                                        if phase != gpui::DispatchPhase::Bubble {
+                                            return;
+                                        }
+                                        let drag = interaction.read(cx).drag_offset;
+                                        if let Some(grab) = drag {
+                                            let _ = weak.update(cx, |this, cx| {
+                                                this.scrollbar_scroll_to_pos(
+                                                    event.position.y - grab,
+                                                    cx,
+                                                );
+                                            });
+                                            window.refresh();
+                                            cx.stop_propagation();
+                                        } else {
+                                            let in_gutter =
+                                                gutter_bounds.contains(
+                                                    &event.position,
+                                                );
+                                            let was_hovered =
+                                                interaction.read(cx).hovered;
+                                            if was_hovered != in_gutter {
+                                                interaction.update(
+                                                    cx,
+                                                    |state, _cx| {
+                                                        state.hovered =
+                                                            in_gutter;
+                                                    },
+                                                );
+                                                window.refresh();
+                                            }
+                                        }
+                                    }
+                                });
+
+                                window.on_mouse_event({
+                                    let interaction = interaction.clone();
+                                    move |event: &MouseUpEvent,
+                                          phase,
+                                          window,
+                                          cx| {
+                                        if phase != gpui::DispatchPhase::Bubble
+                                            || event.button
+                                                != MouseButton::Left
+                                        {
+                                            return;
+                                        }
+                                        if interaction.read(cx).drag_offset.is_some()
+                                        {
+                                            interaction.update(
+                                                cx,
+                                                |state, _cx| {
+                                                    state.drag_offset = None;
+                                                    state.active = false;
+                                                },
+                                            );
+                                            window.refresh();
+                                            cx.stop_propagation();
+                                        }
+                                    }
+                                });
+                            },
+                        )
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .w(gutter_width)
+                    }),
+            )
     }
 }
 
@@ -2675,6 +2802,43 @@ fn terminal_scrollbar_offset_for_fraction(fraction_from_top: f32, history_size: 
     (((1.0 - fraction) * history_size as f32).round() as usize).min(history_size)
 }
 
+fn compute_terminal_scrollbar_bounds(
+    gutter_bounds: Bounds<Pixels>,
+    display_offset: usize,
+    history_size: usize,
+    screen_lines: usize,
+) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+    if history_size == 0 {
+        return None;
+    }
+    let total_lines = history_size + screen_lines;
+    if total_lines <= screen_lines {
+        return None;
+    }
+    let track_width = px(8.0);
+    let margin = px(2.0);
+    let track_left = gutter_bounds.right() - track_width - margin;
+    let track_top = gutter_bounds.top() + margin;
+    let track_height = gutter_bounds.bottom() - track_top - margin;
+    let track = Bounds::new(point(track_left, track_top), size(track_width, track_height));
+
+    let fraction_scrolled = terminal_scrollbar_thumb_fraction(display_offset, history_size);
+    let fraction_visible = screen_lines as f32 / total_lines.max(1) as f32;
+    let min_thumb_h = px(16.0);
+    let thumb_height = (track_height * fraction_visible)
+        .max(min_thumb_h)
+        .min(track_height);
+    let thumb_travel = track_height - thumb_height;
+    let thumb_offset = thumb_travel * fraction_scrolled;
+
+    let thumb = Bounds::new(
+        point(track_left, track_top + thumb_offset),
+        size(track_width, thumb_height),
+    );
+
+    Some((track, thumb))
+}
+
 fn terminal_scroll_wheel_delta(
     event: &gpui::ScrollWheelEvent,
     line_height: Pixels,
@@ -2746,24 +2910,6 @@ fn paint_terminal_canvas_state(
             window,
             cx,
         );
-    }
-
-    if let Some(track) = paint_state.scrollbar_track
-        && let Some(thumb) = paint_state.scrollbar_thumb
-    {
-        let (track_alpha, thumb_alpha) = if paint_state.scrollbar_active {
-            (0.18, 0.72)
-        } else if paint_state.scrollbar_hovered {
-            (0.14, 0.48)
-        } else {
-            (0.08, 0.28)
-        };
-        let track_color = with_alpha(theme.colors.text_muted, track_alpha);
-        window.paint_quad(fill(track, track_color));
-
-        let thumb_color = with_alpha(theme.colors.text_muted, thumb_alpha);
-        let thumb_radius = px(4.0);
-        window.paint_quad(fill(thumb, thumb_color).corner_radii(thumb_radius));
     }
 }
 
@@ -3127,5 +3273,140 @@ mod tests {
                 "fraction must be in [0, 1], got {fraction} for offset {offset}"
             );
         }
+    }
+
+    #[test]
+    fn scrollbar_bounds_none_without_history() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        assert!(
+            compute_terminal_scrollbar_bounds(gutter, 0, 0, 24).is_none(),
+            "no scrollbar when history_size is 0"
+        );
+    }
+
+    #[test]
+    fn scrollbar_bounds_some_with_history() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        let result = compute_terminal_scrollbar_bounds(gutter, 0, 100, 24);
+        assert!(result.is_some(), "scrollbar visible with history");
+        let (track, thumb) = result.unwrap();
+        assert!(track.size.height > px(0.0), "track has height");
+        assert!(thumb.size.height >= px(16.0), "thumb meets minimum height");
+        assert!(
+            thumb.size.height <= track.size.height,
+            "thumb fits within track"
+        );
+        assert!(
+            thumb.origin.y >= track.origin.y,
+            "thumb starts within track"
+        );
+    }
+
+    #[test]
+    fn scrollbar_thumb_at_bottom_for_live_tail() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        let (_, thumb_live) =
+            compute_terminal_scrollbar_bounds(gutter, 0, 100, 24).unwrap();
+        let (_, thumb_oldest) =
+            compute_terminal_scrollbar_bounds(gutter, 100, 100, 24).unwrap();
+        assert!(
+            thumb_live.origin.y > thumb_oldest.origin.y,
+            "live tail thumb is below oldest-line thumb"
+        );
+    }
+
+    #[test]
+    fn scrollbar_thumb_moves_continuously_with_scroll() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        let history_size = 200;
+        let mut prev_y = None;
+        for offset in (0..=history_size).step_by(20) {
+            let (_, thumb) = compute_terminal_scrollbar_bounds(
+                gutter,
+                offset,
+                history_size,
+                24,
+            )
+            .unwrap();
+            if let Some(prev) = prev_y {
+                assert!(
+                    thumb.origin.y <= prev,
+                    "thumb moves up as offset increases (scrolls back)"
+                );
+            }
+            prev_y = Some(thumb.origin.y);
+        }
+    }
+
+    #[test]
+    fn scrollbar_bounds_none_when_content_fits() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        let result = compute_terminal_scrollbar_bounds(gutter, 0, 0, 24);
+        assert!(result.is_none(), "no scrollbar when all content fits");
+    }
+
+    #[test]
+    fn scrollbar_state_defaults() {
+        let state = TerminalScrollbarState::default();
+        assert!(state.drag_offset.is_none());
+        assert!(!state.hovered);
+        assert!(!state.active);
+    }
+
+    #[test]
+    fn scrollbar_bounds_track_within_gutter() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        let (track, thumb) =
+            compute_terminal_scrollbar_bounds(gutter, 0, 100, 24).unwrap();
+        assert!(
+            track.origin.x >= gutter.origin.x,
+            "track starts within gutter horizontally"
+        );
+        assert!(
+            track.origin.x + track.size.width <= gutter.origin.x + gutter.size.width,
+            "track fits within gutter horizontally"
+        );
+        assert!(
+            track.origin.y >= gutter.origin.y,
+            "track starts within gutter vertically"
+        );
+        assert!(
+            track.origin.y + track.size.height <= gutter.origin.y + gutter.size.height,
+            "track fits within gutter vertically"
+        );
+        let _ = thumb;
+    }
+
+    #[test]
+    fn scrollbar_gutter_contains_only_points_inside_gutter() {
+        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
+        assert!(
+            gutter.contains(&point(px(308.0), px(200.0))),
+            "point inside gutter is contained"
+        );
+        assert!(
+            !gutter.contains(&point(px(280.0), px(200.0))),
+            "point left of gutter is not contained"
+        );
+        assert!(
+            !gutter.contains(&point(px(320.0), px(200.0))),
+            "point right of gutter is not contained"
+        );
+        assert!(
+            gutter.contains(&point(px(300.0), px(0.0))),
+            "top-left corner is contained"
+        );
+        assert!(
+            gutter.contains(&point(px(300.0), px(200.0))),
+            "point on left edge is contained"
+        );
+        assert!(
+            !gutter.contains(&point(px(316.0), px(200.0))),
+            "point exactly on right edge is NOT contained (exclusive)"
+        );
+        assert!(
+            !gutter.contains(&point(px(300.0), px(400.0))),
+            "point exactly on bottom edge is NOT contained (exclusive)"
+        );
     }
 }
