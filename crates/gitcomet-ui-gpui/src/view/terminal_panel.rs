@@ -3,7 +3,6 @@ use super::*;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use gpui::prelude::*;
 use rustc_hash::FxHasher;
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
@@ -23,7 +22,6 @@ const TERMINAL_CARET_RADIUS_PX: f32 = 0.0;
 const TERMINAL_CARET_BLINK_INTERVAL_MS: u64 = 530;
 const TERMINAL_CARET_RESUME_DELAY_MS: u64 = 700;
 const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
-const TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS: usize = 24;
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
@@ -92,9 +90,8 @@ impl TerminalViewportView {
             was_focused: false,
             selection_start: None,
             selection_end: None,
+            select_all_active: false,
             ime_state: None,
-            search_matches: Vec::new(),
-            active_match_index: None,
             scrollbar_dragging: false,
         }
     }
@@ -267,7 +264,6 @@ impl TerminalViewportView {
         let Some(bounds) = self.viewport_bounds else {
             return;
         };
-        let _track_width = px(8.0);
         let margin = px(2.0);
         let track_top = bounds.top() + margin;
         let track_height = bounds.bottom() - track_top - margin;
@@ -275,32 +271,24 @@ impl TerminalViewportView {
             return;
         }
 
-        let term = term_lock.lock();
-        let grid = term.grid();
-        let _screen_lines = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.screen_lines)
-            .unwrap_or(0);
-        let history_size = grid.history_size();
+        // Read the history size under a short-lived lock and release it before
+        // re-locking below — `FairMutex` is not reentrant, so holding the guard
+        // across the apply step would deadlock the UI thread.
+        let history_size = term_lock.lock().grid().history_size();
         if history_size == 0 {
-            drop(grid);
-            drop(term);
             return;
         }
 
-        let fraction_scrolled = ((mouse_y - track_top) / track_height).clamp(0.0, 1.0) as f32;
+        let fraction_from_top = ((mouse_y - track_top) / track_height).clamp(0.0, 1.0) as f32;
         let new_display_offset =
-            (fraction_scrolled * history_size.saturating_sub(1) as f32) as usize;
+            terminal_scrollbar_offset_for_fraction(fraction_from_top, history_size);
         let current_offset = self
             .last_content
             .as_ref()
             .map(|c| c.display_offset)
             .unwrap_or(0);
         let delta = new_display_offset as i32 - current_offset as i32;
-        drop(grid);
         if delta == 0 {
-            drop(term);
             return;
         }
         {
@@ -360,8 +348,9 @@ impl TerminalViewportView {
     ) {
         match action {
             TerminalShortcutAction::Copy => {
-                let text = if let Some((start, end)) = self.selection_start.zip(self.selection_end)
-                {
+                let text = if self.select_all_active {
+                    self.copy_entire_buffer()
+                } else if let Some((start, end)) = self.selection_start.zip(self.selection_end) {
                     self.copy_grid_range(start, end)
                 } else {
                     // Fallback: copy visible screen content when no selection
@@ -480,13 +469,65 @@ impl TerminalViewportView {
         text
     }
 
+    /// Copies the entire terminal buffer, including the scrollback history above
+    /// the visible screen. The buffer spans `Line(-history_size)` (oldest) to
+    /// `Line(screen_lines - 1)` (newest).
+    fn copy_entire_buffer(&self) -> String {
+        let Some(term_lock) = &self.term_lock else {
+            return String::new();
+        };
+        let term = term_lock.lock();
+        let grid = term.grid();
+        let cols = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.columns)
+            .unwrap_or(80);
+        let screen_lines = self
+            .last_content
+            .as_ref()
+            .map(|c| c.terminal_bounds.screen_lines)
+            .unwrap_or(0);
+        let history_size = grid.history_size();
+        let mut text = String::new();
+        let top = -(history_size as i32);
+        let bottom = screen_lines as i32 - 1;
+        for row in top..=bottom {
+            if row > top {
+                text.push('\n');
+            }
+            for c in 0..cols {
+                let cell = &grid[Line(row)][Column(c)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let ch = cell.c;
+                if ch == ' ' || ch == '\0' {
+                    text.push(' ');
+                } else {
+                    text.push(ch);
+                }
+            }
+        }
+        drop(term);
+        // Trim trailing empty lines
+        while text.ends_with('\n') {
+            text.pop();
+        }
+        text
+    }
+
     pub(super) fn has_selection(&self) -> bool {
         self.selection_start.zip(self.selection_end).is_some()
     }
 
     pub(super) fn selected_text(&self) -> Option<String> {
-        let (start, end) = self.selection_start.zip(self.selection_end)?;
-        let text = self.copy_grid_range(start, end);
+        let text = if self.select_all_active {
+            self.copy_entire_buffer()
+        } else {
+            let (start, end) = self.selection_start.zip(self.selection_end)?;
+            self.copy_grid_range(start, end)
+        };
         if text.is_empty() { None } else { Some(text) }
     }
 
@@ -502,8 +543,11 @@ impl TerminalViewportView {
             .map(|c| c.terminal_bounds.screen_lines)
             .unwrap_or(0);
         if rows > 0 && cols > 0 {
+            // Highlight the visible screen, but mark the whole buffer (including
+            // scrollback) as selected so Copy grabs the history too.
             self.selection_start = Some(TerminalGridPoint::new(0, 0));
             self.selection_end = Some(TerminalGridPoint::new(rows as u16 - 1, cols as u16 - 1));
+            self.select_all_active = true;
             cx.notify();
         }
     }
@@ -550,88 +594,6 @@ impl TerminalViewportView {
         drop(term);
         cx.notify();
         true
-    }
-
-    pub(super) fn find_text(&mut self, query: &str, cx: &mut gpui::Context<Self>) {
-        self.search_matches.clear();
-        self.active_match_index = None;
-        if query.is_empty() {
-            self.clear_search_matches(cx);
-            return;
-        }
-        let Some(term_lock) = &self.term_lock else {
-            return;
-        };
-        let (text, _line_starts) = {
-            let term = term_lock.lock();
-            let text = terminal_full_buffer_text(&term);
-            let mut line_starts = Vec::new();
-            let mut pos = 0;
-            for line in text.lines() {
-                line_starts.push(pos);
-                pos += line.len() + 1;
-            }
-            drop(term);
-            (text, line_starts)
-        };
-        let re = match regex::Regex::new(query) {
-            Ok(r) => r,
-            Err(_) => {
-                cx.notify();
-                return;
-            }
-        };
-        for m in re.find_iter(&text) {
-            let byte_start = m.start();
-            let byte_end = m.end();
-            self.search_matches.push((byte_start, byte_end));
-        }
-        if !self.search_matches.is_empty() {
-            self.active_match_index = Some(0);
-        }
-        cx.notify();
-    }
-
-    pub(super) fn find_next(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        let current = self.active_match_index.unwrap_or(0);
-        let next = if current + 1 < self.search_matches.len() {
-            current + 1
-        } else {
-            0
-        };
-        self.active_match_index = Some(next);
-        // Scroll to make match visible
-        if let Some(term_lock) = &self.term_lock
-            && let Some((_start, _)) = self.search_matches.get(next)
-        {
-            let mut term = term_lock.lock();
-            term.scroll_display(alacritty_terminal::grid::Scroll::Bottom);
-            drop(term);
-        }
-        cx.notify();
-    }
-
-    pub(super) fn find_prev(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        let current = self.active_match_index.unwrap_or(0);
-        let prev = if current > 0 {
-            current - 1
-        } else {
-            self.search_matches.len() - 1
-        };
-        self.active_match_index = Some(prev);
-        cx.notify();
-    }
-
-    pub(super) fn clear_search_matches(&mut self, cx: &mut gpui::Context<Self>) {
-        self.search_matches.clear();
-        self.active_match_index = None;
-        cx.notify();
     }
 
     fn handle_scroll_wheel(
@@ -744,6 +706,8 @@ impl TerminalViewportView {
             self.queue_mouse_event(event.position, button, event.modifiers, true, cx);
             self.pressed_mouse_button = Some(button);
         } else if button == gpui::MouseButton::Left {
+            // Starting a manual selection cancels a prior "select all".
+            self.select_all_active = false;
             let anchor = self.viewport_to_grid_point(event.position);
             match event.click_count {
                 2 => {
@@ -1031,9 +995,11 @@ impl TerminalViewportView {
                     .resize_with(usize::from(rows), TerminalCachedRow::default);
             }
 
-            let mut paint_state = TerminalCanvasPaintState::default();
-            paint_state.bounds = bounds;
-            paint_state.terminal_bg = TerminalAnsiPalette::from_theme(self.theme).background;
+            let mut paint_state = TerminalCanvasPaintState {
+                bounds,
+                terminal_bg: TerminalAnsiPalette::from_theme(self.theme).background,
+                ..Default::default()
+            };
             self.viewport_bounds = Some(bounds);
 
             // Merge background rects across rows after building all rows
@@ -1206,101 +1172,6 @@ impl TerminalViewportView {
                 }
             }
 
-            // Search match highlights
-            if let Some(term_lock) = &self.term_lock
-                && self.active_match_index.is_some()
-            {
-                let (_full_text, byte_to_grid) = {
-                    let term = term_lock.lock();
-                    let text = terminal_full_buffer_text(&term);
-                    let grid = term.grid();
-                    let total_lines = self
-                        .last_content
-                        .as_ref()
-                        .map(|c| c.terminal_bounds.screen_lines + c.display_offset)
-                        .unwrap_or(0);
-                    let cols = self
-                        .last_content
-                        .as_ref()
-                        .map(|c| c.terminal_bounds.columns)
-                        .unwrap_or(0);
-                    let history = total_lines
-                        - self
-                            .last_content
-                            .as_ref()
-                            .map(|c| c.terminal_bounds.screen_lines)
-                            .unwrap_or(0);
-                    let mut map: Vec<Option<(i32, usize)>> = vec![None; text.len() + 1];
-                    let mut byte_pos = 0usize;
-                    for line_idx in 0..total_lines {
-                        let grid_row = line_idx as i32 - history as i32;
-                        for col in 0..cols {
-                            if byte_pos < map.len() {
-                                map[byte_pos] = Some((grid_row, col));
-                            }
-                            let cell = &grid[Line(grid_row)][Column(col)];
-                            let ch = cell.c;
-                            if ch == ' ' || ch == '\0' {
-                                byte_pos += 1;
-                            } else {
-                                byte_pos += ch.len_utf8();
-                            }
-                        }
-                        if line_idx < total_lines - 1 {
-                            if byte_pos < map.len() {
-                                map[byte_pos] = Some((grid_row, cols));
-                            }
-                            byte_pos += 1;
-                        }
-                    }
-                    drop(grid);
-                    drop(term);
-                    (text, map)
-                };
-                let active_idx = self.active_match_index.unwrap_or(0);
-                for (i, (start, end)) in self.search_matches.iter().enumerate() {
-                    let _color = if i == active_idx {
-                        with_alpha(self.theme.colors.accent, 0.48)
-                    } else {
-                        with_alpha(self.theme.colors.accent, 0.24)
-                    };
-                    if let Some(grid_start) = byte_to_grid.get(*start).copied().flatten()
-                        && let Some(grid_end) = byte_to_grid.get(*end).copied().flatten()
-                    {
-                        let disp_off = self
-                            .last_content
-                            .as_ref()
-                            .map(|c| c.display_offset as i32)
-                            .unwrap_or(0);
-                        for gr in grid_start.0..=grid_end.0 {
-                            let vr = gr + disp_off;
-                            if vr < 0 || vr >= rows as i32 {
-                                continue;
-                            }
-                            let sc = if gr == grid_start.0 { grid_start.1 } else { 0 };
-                            let ec = if gr == grid_end.0 {
-                                grid_end.1.min(cols)
-                            } else {
-                                cols
-                            };
-                            if sc < ec {
-                                let origin = point(
-                                    bounds.left() + layout.metrics.cell_width * sc as f32,
-                                    bounds.top() + layout.metrics.line_height * vr as f32,
-                                );
-                                let rect_size = size(
-                                    layout.metrics.cell_width * (ec - sc) as f32,
-                                    layout.metrics.line_height,
-                                );
-                                paint_state
-                                    .selection_rects
-                                    .push(Bounds::new(origin, rect_size));
-                            }
-                        }
-                    }
-                }
-            }
-
             // IME marked text
             if let Some(ref ime) = self.ime_state
                 && !ime.marked_text.is_empty()
@@ -1343,8 +1214,8 @@ impl TerminalViewportView {
                         size(track_width, track_height),
                     );
 
-                    let display_offset = content.display_offset;
-                    let fraction_scrolled = display_offset as f32 / history_size.max(1) as f32;
+                    let fraction_scrolled =
+                        terminal_scrollbar_thumb_fraction(content.display_offset, history_size);
                     let fraction_visible = screen_lines as f32 / total_lines.max(1) as f32;
                     let min_thumb_h = px(16.0);
                     let thumb_height = (track_height * fraction_visible)
@@ -1361,7 +1232,6 @@ impl TerminalViewportView {
                     paint_state.scrollbar_track = Some(track);
                     paint_state.scrollbar_thumb = Some(thumb);
                 }
-                drop(grid);
                 drop(term);
             }
 
@@ -1478,16 +1348,6 @@ impl Render for TerminalViewportView {
 // ============================================================================
 
 impl GitCometView {
-    fn terminal_layout_snapshot(
-        &mut self,
-        theme: AppTheme,
-        window: &Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> TerminalLayoutCache {
-        let base_style = terminal_text_style(theme, window, cx);
-        terminal_layout_cache(base_style, window)
-    }
-
     fn deactivate_terminal_cursor_blink(&mut self) {
         self.terminal_cursor_blink_active = false;
         self.terminal_cursor_blink_task_scheduled = false;
@@ -1514,39 +1374,6 @@ impl GitCometView {
             },
         )
         .detach();
-    }
-
-    fn sync_terminal_cursor_blink_activity(
-        &mut self,
-        repo_id: RepoId,
-        window: &Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !crate::ui_runtime::current().uses_cursor_blink() {
-            if self.terminal_cursor_blink_active
-                || self.terminal_cursor_blink_task_scheduled
-                || !self.terminal_cursor_blink_visible
-            {
-                self.deactivate_terminal_cursor_blink();
-            }
-            return;
-        }
-        if self.terminal_cursor_blink_should_run(repo_id, window) {
-            if !self.terminal_cursor_blink_active {
-                self.terminal_cursor_blink_active = true;
-                self.terminal_cursor_blink_seq = self.terminal_cursor_blink_seq.wrapping_add(1);
-            }
-            self.schedule_terminal_cursor_blink_tick(cx);
-        } else if self.terminal_cursor_blink_active || !self.terminal_cursor_blink_visible {
-            self.deactivate_terminal_cursor_blink();
-        }
-    }
-
-    fn terminal_cursor_blink_should_run(&self, repo_id: RepoId, window: &Window) -> bool {
-        self.terminal_sessions
-            .get(&repo_id)
-            .and_then(|session| session.active_instance())
-            .is_some_and(|inst| inst.connected && inst.focus_handle.is_focused(window))
     }
 
     fn advance_terminal_cursor_blink(&mut self, blink_seq: u64, cx: &mut gpui::Context<Self>) {
@@ -1855,7 +1682,7 @@ impl GitCometView {
                                 }
                             }
                             TerminalBackendEvent::Bell => {}
-                            TerminalBackendEvent::Exit | TerminalBackendEvent::ChildExit(_) => {
+                            TerminalBackendEvent::Exit | TerminalBackendEvent::ChildExit => {
                                 instance.connected = false;
                                 instance.exit_status = Some("Shell exited.".to_string());
                                 instance.viewport.update(cx, |viewport, _cx| {
@@ -1872,7 +1699,7 @@ impl GitCometView {
                                 });
                                 cx.notify();
                             }
-                            TerminalBackendEvent::PtyWrite(_) => {}
+                            TerminalBackendEvent::PtyWrite => {}
                         }
                     });
                     if result.is_err() {
@@ -2276,6 +2103,7 @@ impl GitCometView {
             )
         };
         let has_selection = viewport_entity.read(cx).has_selection();
+        let mouse_mode = viewport_entity.read(cx).mouse_mode_active;
 
         let header = self.render_terminal_header(
             theme,
@@ -2291,6 +2119,34 @@ impl GitCometView {
             .flex_1()
             .min_h(px(0.0))
             .key_context("Terminal")
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    // When the running program has requested mouse reporting
+                    // (e.g. a full-screen TUI), forward the click instead of
+                    // showing our context menu.
+                    if mouse_mode {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    let context = TerminalMenuContext {
+                        has_session: true,
+                        has_selection,
+                        connected,
+                    };
+                    let invoker: SharedString = format!("terminal_menu_{}", active_repo.0).into();
+                    this.set_active_context_menu_invoker(Some(invoker), cx);
+                    this.open_popover_at(
+                        PopoverKind::TerminalMenu {
+                            repo_id: active_repo,
+                            context,
+                        },
+                        e.position,
+                        window,
+                        cx,
+                    );
+                }),
+            )
             .child(viewport_entity)
             .into_any_element();
 
@@ -2766,6 +2622,25 @@ fn terminal_paste_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
     bytes
 }
 
+/// Thumb position as a fraction measured from the top of the scrollbar track.
+/// Viewing the oldest line (`display_offset == history_size`) puts the thumb at
+/// the top (0.0); the live tail (`display_offset == 0`) puts it at the bottom
+/// (1.0) — matching the conventional scrollbar direction.
+fn terminal_scrollbar_thumb_fraction(display_offset: usize, history_size: usize) -> f32 {
+    if history_size == 0 {
+        return 0.0;
+    }
+    let clamped = display_offset.min(history_size);
+    (history_size - clamped) as f32 / history_size as f32
+}
+
+/// Inverse of [`terminal_scrollbar_thumb_fraction`]: maps a thumb fraction from
+/// the top of the track to the target scrollback `display_offset`.
+fn terminal_scrollbar_offset_for_fraction(fraction_from_top: f32, history_size: usize) -> usize {
+    let fraction = fraction_from_top.clamp(0.0, 1.0);
+    (((1.0 - fraction) * history_size as f32).round() as usize).min(history_size)
+}
+
 fn terminal_scroll_wheel_delta(
     event: &gpui::ScrollWheelEvent,
     line_height: Pixels,
@@ -3006,12 +2881,9 @@ fn terminal_instance_has_running_command(instance: &TerminalInstance) -> bool {
     if !instance.connected {
         return false;
     }
-    if let Some(child_pid) = instance.child_pid
-        && terminal_process_has_running_child_command(child_pid)
-    {
-        return true;
-    }
-    cfg!(not(target_os = "linux"))
+    instance
+        .child_pid
+        .is_some_and(terminal_process_has_running_child_command)
 }
 
 fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShutdownAction) {
@@ -3052,17 +2924,22 @@ fn shutdown_terminal_instance(instance: &TerminalInstance, terminate: bool) {
     }
 }
 
-#[cfg(target_os = "linux")]
+/// Returns whether the shell process `pid` has at least one child process, which
+/// indicates a command is currently running (an idle interactive shell has none).
+/// Works uniformly across platforms via `sysinfo`. Called only on user-initiated
+/// close, so a one-shot process snapshot is acceptable.
 fn terminal_process_has_running_child_command(pid: u32) -> bool {
-    let children_path = format!("/proc/{pid}/task/{pid}/children");
-    std::fs::read_to_string(children_path)
-        .ok()
-        .is_some_and(|children| children.split_whitespace().next().is_some())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn terminal_process_has_running_child_command(_pid: u32) -> bool {
-    false
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::everything(),
+    );
+    let target = sysinfo::Pid::from_u32(pid);
+    system
+        .processes()
+        .values()
+        .any(|process| process.parent() == Some(target))
 }
 
 #[cfg(unix)]
@@ -3099,5 +2976,55 @@ fn terminal_clipboard_shortcut_action(
         Some(action)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scrollbar_thumb_fraction_tracks_position() {
+        // No history: thumb pinned to the top.
+        assert_eq!(terminal_scrollbar_thumb_fraction(0, 0), 0.0);
+        // Live tail (offset 0) sits at the bottom of the track.
+        assert_eq!(terminal_scrollbar_thumb_fraction(0, 100), 1.0);
+        // Oldest line (offset == history_size) sits at the top.
+        assert_eq!(terminal_scrollbar_thumb_fraction(100, 100), 0.0);
+        // Halfway through history is halfway up the track.
+        assert_eq!(terminal_scrollbar_thumb_fraction(50, 100), 0.5);
+        // Out-of-range offsets clamp rather than panic.
+        assert_eq!(terminal_scrollbar_thumb_fraction(200, 100), 0.0);
+    }
+
+    #[test]
+    fn scrollbar_offset_for_fraction_is_inverse_of_thumb_fraction() {
+        let history_size = 100;
+        // Dragging to the top of the track scrolls to the oldest line.
+        assert_eq!(
+            terminal_scrollbar_offset_for_fraction(0.0, history_size),
+            history_size
+        );
+        // Dragging to the bottom scrolls to the live tail.
+        assert_eq!(terminal_scrollbar_offset_for_fraction(1.0, history_size), 0);
+        // Mid-track maps to the middle of history.
+        assert_eq!(
+            terminal_scrollbar_offset_for_fraction(0.5, history_size),
+            50
+        );
+        // Round-trips with the thumb fraction.
+        for offset in [0, 25, 50, 75, 100] {
+            let fraction = terminal_scrollbar_thumb_fraction(offset, history_size);
+            assert_eq!(
+                terminal_scrollbar_offset_for_fraction(fraction, history_size),
+                offset
+            );
+        }
+        // Out-of-range fractions clamp.
+        assert_eq!(
+            terminal_scrollbar_offset_for_fraction(-0.5, history_size),
+            history_size
+        );
+        assert_eq!(terminal_scrollbar_offset_for_fraction(1.5, history_size), 0);
     }
 }

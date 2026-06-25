@@ -142,27 +142,6 @@ impl GitCometView {
             .update(cx, |bar, cx| bar.set_workspace_actions_enabled(enabled, cx));
     }
 
-    pub(in crate::view) fn set_tooltip_text_if_changed(
-        &mut self,
-        next: Option<SharedString>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.set_tooltip_text_if_changed(next, cx));
-    }
-
-    pub(in crate::view) fn clear_tooltip_if_matches(
-        &mut self,
-        tooltip: &SharedString,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let tooltip = tooltip.clone();
-        let _ = self
-            .tooltip_host
-            .update(cx, |host, cx| host.clear_tooltip_if_matches(&tooltip, cx));
-    }
-
     fn interstitial_logo(_theme: AppTheme, size: Pixels) -> AnyElement {
         div()
             .id("repository_entry_logo")

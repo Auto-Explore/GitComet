@@ -3011,9 +3011,11 @@ pub(super) struct TerminalViewportView {
     pub(super) was_focused: bool,
     pub(super) selection_start: Option<TerminalGridPoint>,
     pub(super) selection_end: Option<TerminalGridPoint>,
+    /// Set by "select all" so Copy grabs the entire buffer (including scrollback
+    /// history, which the `u16` grid-point selection cannot represent). Cleared
+    /// as soon as a manual selection begins.
+    pub(super) select_all_active: bool,
     pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
-    pub(super) search_matches: Vec<(usize, usize)>,
-    pub(super) active_match_index: Option<usize>,
     pub(super) scrollbar_dragging: bool,
 }
 
@@ -3063,17 +3065,6 @@ pub(in crate::view) enum TerminalShutdownAction {
     CloseTerminalTab { repo_id: RepoId, index: usize },
     CloseWindow,
     QuitApp,
-}
-
-impl TerminalShutdownAction {
-    pub(in crate::view) fn repo_id(&self) -> Option<RepoId> {
-        match self {
-            Self::CloseRepo { repo_id }
-            | Self::CloseTerminalForRepo { repo_id }
-            | Self::CloseTerminalTab { repo_id, .. } => Some(*repo_id),
-            Self::CloseWindow | Self::QuitApp => None,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

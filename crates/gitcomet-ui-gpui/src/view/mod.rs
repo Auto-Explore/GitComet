@@ -258,7 +258,6 @@ const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
-const TERMINAL_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
 pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
 

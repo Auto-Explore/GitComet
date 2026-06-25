@@ -2,7 +2,7 @@ use super::*;
 use alacritty_terminal::event::{Event as AlacEvent, EventListener};
 use alacritty_terminal::event_loop::{EventLoop, Msg};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line, Point as AlacPoint};
+use alacritty_terminal::index::Point as AlacPoint;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{
     Config, Osc52, Term, TermMode,
@@ -143,28 +143,28 @@ impl EventListener for GitCometListener {
 
 #[derive(Clone, Debug)]
 pub(super) enum TerminalBackendEvent {
-    PtyWrite(String),
+    PtyWrite,
     Title(String),
     ClipboardStore(String),
     ClipboardLoad,
     Wakeup,
     Bell,
     Exit,
-    ChildExit(std::process::ExitStatus),
+    ChildExit,
     CursorBlinkingChange,
 }
 
 impl From<AlacEvent> for TerminalBackendEvent {
     fn from(event: AlacEvent) -> Self {
         match event {
-            AlacEvent::PtyWrite(data) => Self::PtyWrite(data),
+            AlacEvent::PtyWrite(_) => Self::PtyWrite,
             AlacEvent::Title(title) => Self::Title(title),
             AlacEvent::ClipboardStore(_, data) => Self::ClipboardStore(data),
             AlacEvent::ClipboardLoad(_, _) => Self::ClipboardLoad,
             AlacEvent::Wakeup => Self::Wakeup,
             AlacEvent::Bell => Self::Bell,
             AlacEvent::Exit => Self::Exit,
-            AlacEvent::ChildExit(status) => Self::ChildExit(status),
+            AlacEvent::ChildExit(_) => Self::ChildExit,
             AlacEvent::CursorBlinkingChange => Self::CursorBlinkingChange,
             _ => Self::Wakeup,
         }
@@ -215,14 +215,15 @@ pub(super) fn spawn_alacritty_terminal(
     let shell_program = resolve_embedded_shell_program()?;
     let shell_program_str = shell_program.to_string_lossy().to_string();
 
-    let mut env: Vec<(String, String)> = Vec::new();
-    env.push(("TERM".to_string(), "xterm-256color".to_string()));
-    env.push(("COLORTERM".to_string(), "truecolor".to_string()));
-    env.push(("TERM_PROGRAM".to_string(), "GitComet".to_string()));
-    env.push((
-        "TERM_PROGRAM_VERSION".to_string(),
-        env!("CARGO_PKG_VERSION").to_string(),
-    ));
+    let env: Vec<(String, String)> = vec![
+        ("TERM".to_string(), "xterm-256color".to_string()),
+        ("COLORTERM".to_string(), "truecolor".to_string()),
+        ("TERM_PROGRAM".to_string(), "GitComet".to_string()),
+        (
+            "TERM_PROGRAM_VERSION".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        ),
+    ];
 
     let (events_tx, events_rx) = smol::channel::unbounded();
 
@@ -230,6 +231,7 @@ pub(super) fn spawn_alacritty_terminal(
         shell: Some(tty::Shell::new(shell_program_str, Vec::<String>::new())),
         working_directory: Some(workdir.to_path_buf()),
         drain_on_exit: false,
+        escape_args: true,
         env: env.into_iter().collect(),
     };
 
@@ -304,10 +306,11 @@ impl Dimensions for TerminalDims {
 // ---------------------------------------------------------------------------
 
 fn terminal_config(scrollback: usize) -> Config {
-    let mut config = Config::default();
-    config.scrolling_history = scrollback;
-    config.osc52 = Osc52::Disabled;
-    config
+    Config {
+        scrolling_history: scrollback,
+        osc52: Osc52::Disabled,
+        ..Default::default()
+    }
 }
 
 fn new_term(
@@ -477,10 +480,6 @@ impl TerminalCellStyle {
     fn foreground(cell: &AlacCell, palette: &TerminalAnsiPalette) -> gpui::Rgba {
         color_to_rgba(cell.fg, palette, palette.foreground)
     }
-
-    fn background(cell: &AlacCell, palette: &TerminalAnsiPalette) -> gpui::Rgba {
-        color_to_rgba(cell.bg, palette, palette.background)
-    }
 }
 
 pub(super) fn alacritty_cell_style(
@@ -499,7 +498,17 @@ pub(super) fn alacritty_cell_style(
         fg.a *= 0.7;
     }
 
-    let is_default_bg = cell.bg
+    // Determine default-ness from the *effective* background, i.e. after the
+    // inverse swap. For a reverse-video cell on default colors (e.g. the
+    // PowerShell update banner) the visible background becomes the default
+    // foreground, which must still be painted — testing the original `cell.bg`
+    // would wrongly drop it and render dark-on-dark.
+    let effective_bg_color = if flags.contains(Flags::INVERSE) {
+        cell.fg
+    } else {
+        cell.bg
+    };
+    let is_default_bg = effective_bg_color
         == alacritty_terminal::vte::ansi::Color::Named(
             alacritty_terminal::vte::ansi::NamedColor::Background,
         );
@@ -678,26 +687,6 @@ pub(super) fn make_terminal_content(term: &Term<GitCometListener>) -> TerminalCo
 }
 
 // ---------------------------------------------------------------------------
-// Grid resize
-// ---------------------------------------------------------------------------
-
-pub(super) fn resize_terminal_grid(
-    term_lock: &AlacrittyTermLock,
-    pty_sender: &PtySender,
-    rows: u16,
-    cols: u16,
-) {
-    let mut term = term_lock.lock();
-    term.resize(TerminalDims {
-        columns: cols as usize,
-        screen_lines: rows as usize,
-        total_lines: TERMINAL_SCROLLBACK_ROWS,
-    });
-    drop(term);
-    pty_sender.resize(cols as usize, rows as usize);
-}
-
-// ---------------------------------------------------------------------------
 // Alt screen scroll bytes
 // ---------------------------------------------------------------------------
 
@@ -714,9 +703,7 @@ pub(super) fn terminal_alt_screen_scroll_bytes(
     } else {
         b"\x1b[B"
     };
-    let repeats = step_rows
-        .max(1)
-        .min(TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS);
+    let repeats = step_rows.clamp(1, TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS);
     let mut bytes = Vec::with_capacity(sequence.len() * repeats);
     for _ in 0..repeats {
         bytes.extend_from_slice(sequence);
@@ -1103,42 +1090,6 @@ pub(super) fn terminal_text_run(
 }
 
 // ---------------------------------------------------------------------------
-// Full buffer text (including scrollback)
-// ---------------------------------------------------------------------------
-
-pub(super) fn terminal_full_buffer_text(term: &Term<GitCometListener>) -> String {
-    let grid = term.grid();
-    let history_size = grid.history_size();
-    let screen_lines = term.screen_lines();
-    let cols = term.columns();
-
-    let mut text = String::new();
-    let total_lines = history_size + screen_lines;
-
-    for line_idx in 0..total_lines {
-        let row = Line((line_idx as i32) - (history_size as i32));
-
-        for col in 0..cols {
-            let cell = &grid[row][Column(col)];
-            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                continue;
-            }
-            let ch = cell.c;
-            if ch == ' ' || ch == '\0' {
-                text.push(' ');
-            } else {
-                text.push(ch);
-            }
-        }
-
-        if line_idx < total_lines - 1 {
-            text.push('\n');
-        }
-    }
-    text
-}
-
-// ---------------------------------------------------------------------------
 // Bracketed paste sanitization
 // ---------------------------------------------------------------------------
 
@@ -1473,26 +1424,6 @@ pub(super) fn merge_background_rects(
 #[derive(Clone, Debug)]
 pub(super) struct TerminalImeState {
     pub marked_text: String,
-}
-
-impl TerminalImeState {
-    pub fn new() -> Self {
-        Self {
-            marked_text: String::new(),
-        }
-    }
-
-    pub fn set_marked_text(&mut self, text: String) {
-        self.marked_text = text;
-    }
-
-    pub fn clear(&mut self) {
-        self.marked_text.clear();
-    }
-
-    pub fn has_marked_text(&self) -> bool {
-        !self.marked_text.is_empty()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1920,6 +1851,35 @@ mod tests {
             style.bg,
             Some(palette.white),
             "inverse swaps bg to fg color"
+        );
+    }
+
+    #[test]
+    fn alacritty_cell_style_inverse_default_colors_paints_background() {
+        // Reverse-video over default colors (e.g. the PowerShell update banner):
+        // the effective background is the default foreground, which must be
+        // painted rather than dropped as "default background".
+        let palette = TerminalAnsiPalette::from_theme(AppTheme::gitcomet_dark());
+        let cell = AlacCell {
+            c: 'X',
+            fg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Foreground,
+            ),
+            bg: alacritty_terminal::vte::ansi::Color::Named(
+                alacritty_terminal::vte::ansi::NamedColor::Background,
+            ),
+            flags: Flags::INVERSE,
+            extra: None,
+        };
+        let style = alacritty_cell_style(&cell, &palette);
+        assert_eq!(
+            style.fg, palette.background,
+            "inverse draws text in the default background color"
+        );
+        assert_eq!(
+            style.bg,
+            Some(palette.foreground),
+            "inverse over default colors must still paint a (foreground-colored) background"
         );
     }
 

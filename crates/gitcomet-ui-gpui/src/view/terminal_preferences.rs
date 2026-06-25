@@ -4,6 +4,7 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 const LINUX_AUTOMATIC_TERMINALS: &[LinuxAutomaticTerminal] = &[
     LinuxAutomaticTerminal::new("kgx", &["--working-directory"]),
     LinuxAutomaticTerminal::new("ptyxis", &["--working-directory"]),
@@ -181,12 +182,14 @@ impl ExternalTerminalLaunchSpec {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LinuxAutomaticTerminal {
     program: &'static str,
     args_prefix: &'static [&'static str],
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 impl LinuxAutomaticTerminal {
     const fn new(program: &'static str, args_prefix: &'static [&'static str]) -> Self {
         Self {
@@ -282,14 +285,14 @@ where
             });
         }
 
-        return Ok(ExternalTerminalLaunchSpec {
+        Ok(ExternalTerminalLaunchSpec {
             program: OsString::from("cmd.exe"),
             args: vec![
                 OsString::from("/K"),
                 OsString::from(format!("cd /d {}", windows_cmd_quote_path(&context.cwd))),
             ],
             current_dir: Some(context.cwd.clone()),
-        });
+        })
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -389,10 +392,26 @@ fn resolve_custom_external_terminal_launch_spec(
 fn resolve_automatic_embedded_shell_program() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        resolve_automatic_embedded_shell_program_with(
-            env::var_os("COMSPEC"),
-            find_executable_in_path,
-        )
+        // Detection touches the filesystem; the embedded terminal is spawned repeatedly, so
+        // resolve once per process (mirrors Zed's cached `SYSTEM_SHELL`).
+        static SYSTEM_SHELL: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
+            resolve_windows_embedded_shell_program(
+                |name| env::var_os(name),
+                |path| path.is_file(),
+                |dir| {
+                    std::fs::read_dir(dir)
+                        .map(|entries| {
+                            entries
+                                .flatten()
+                                .map(|entry| entry.file_name())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                },
+                find_executable_in_path,
+            )
+        });
+        Some((*SYSTEM_SHELL).clone())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -401,21 +420,134 @@ fn resolve_automatic_embedded_shell_program() -> Option<PathBuf> {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn resolve_automatic_embedded_shell_program_with<F>(
-    comspec: Option<OsString>,
+/// Resolve the embedded-terminal shell on Windows, preferring PowerShell 7+ (`pwsh.exe`),
+/// then Windows PowerShell (`powershell.exe`), and finally `cmd.exe`.
+///
+/// Mirrors Zed's `get_windows_system_shell` and deliberately ignores `COMSPEC` (which Windows
+/// almost always sets to `cmd.exe`, so honoring it would mean the embedded terminal never used
+/// PowerShell). Dependencies are injected so the ordering can be unit-tested on any platform.
+#[cfg(any(target_os = "windows", test))]
+fn resolve_windows_embedded_shell_program<E, F>(
+    get_env: E,
+    path_is_file: impl Fn(&Path) -> bool + Copy,
+    list_dir: impl Fn(&Path) -> Vec<OsString> + Copy,
     mut find_executable: F,
-) -> Option<PathBuf>
+) -> PathBuf
 where
+    E: Fn(&str) -> Option<OsString> + Copy,
     F: FnMut(&str) -> Option<PathBuf>,
 {
-    comspec
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    #[cfg(target_pointer_width = "64")]
+    let (program_files, program_files_alt) = ("ProgramFiles", "ProgramFiles(x86)");
+    #[cfg(target_pointer_width = "32")]
+    let (program_files, program_files_alt) = ("ProgramFiles", "ProgramW6432");
+
+    find_pwsh_in_programfiles(program_files, false, get_env, path_is_file, list_dir)
+        .or_else(|| {
+            find_pwsh_in_programfiles(program_files_alt, false, get_env, path_is_file, list_dir)
+        })
+        .or_else(|| find_pwsh_in_msix(false, get_env, path_is_file, list_dir))
+        .or_else(|| find_pwsh_in_programfiles(program_files, true, get_env, path_is_file, list_dir))
+        .or_else(|| find_pwsh_in_msix(true, get_env, path_is_file, list_dir))
+        .or_else(|| {
+            find_pwsh_in_programfiles(program_files_alt, true, get_env, path_is_file, list_dir)
+        })
+        .or_else(|| find_pwsh_in_scoop(get_env, path_is_file))
         .or_else(|| find_executable("pwsh.exe"))
         .or_else(|| find_executable("powershell.exe"))
-        .or_else(|| find_executable("cmd.exe"))
-        .or_else(|| Some(PathBuf::from("cmd.exe")))
+        .unwrap_or_else(|| {
+            eprintln!(
+                "PowerShell was not found for the embedded terminal; falling back to cmd.exe"
+            );
+            PathBuf::from("cmd.exe")
+        })
+}
+
+/// Find the newest `pwsh.exe` under `%<env_var>%\PowerShell\<version>`, selecting either the
+/// stable or `-preview` channel. Returns the highest version that actually contains `pwsh.exe`.
+#[cfg(any(target_os = "windows", test))]
+fn find_pwsh_in_programfiles(
+    env_var: &str,
+    find_preview: bool,
+    get_env: impl Fn(&str) -> Option<OsString>,
+    path_is_file: impl Fn(&Path) -> bool,
+    list_dir: impl Fn(&Path) -> Vec<OsString>,
+) -> Option<PathBuf> {
+    let base = PathBuf::from(get_env(env_var)?).join("PowerShell");
+
+    let mut best: Option<(Vec<u32>, OsString)> = None;
+    for name in list_dir(&base) {
+        let name_str = name.to_string_lossy();
+        if name_str.contains("-preview") != find_preview {
+            continue;
+        }
+        let Some(version) = parse_pwsh_version(name_str.split('-').next().unwrap_or_default())
+        else {
+            continue;
+        };
+        let is_better = match &best {
+            Some((best_version, _)) => version > *best_version,
+            None => true,
+        };
+        if is_better {
+            best = Some((version, name.clone()));
+        }
+    }
+
+    let candidate = base.join(best?.1).join("pwsh.exe");
+    path_is_file(&candidate).then_some(candidate)
+}
+
+/// Find an MSIX-packaged `pwsh.exe` under `%LOCALAPPDATA%\Microsoft\WindowsApps`.
+#[cfg(any(target_os = "windows", test))]
+fn find_pwsh_in_msix(
+    find_preview: bool,
+    get_env: impl Fn(&str) -> Option<OsString>,
+    path_is_file: impl Fn(&Path) -> bool,
+    list_dir: impl Fn(&Path) -> Vec<OsString>,
+) -> Option<PathBuf> {
+    let apps = PathBuf::from(get_env("LOCALAPPDATA")?)
+        .join("Microsoft")
+        .join("WindowsApps");
+    let prefix = if find_preview {
+        "Microsoft.PowerShellPreview_"
+    } else {
+        "Microsoft.PowerShell_"
+    };
+
+    list_dir(&apps).into_iter().find_map(|name| {
+        if name.to_string_lossy().starts_with(prefix) {
+            let candidate = apps.join(&name).join("pwsh.exe");
+            path_is_file(&candidate).then_some(candidate)
+        } else {
+            None
+        }
+    })
+}
+
+/// Find a Scoop-installed `pwsh.exe` shim under `%USERPROFILE%\scoop\shims`.
+#[cfg(any(target_os = "windows", test))]
+fn find_pwsh_in_scoop(
+    get_env: impl Fn(&str) -> Option<OsString>,
+    path_is_file: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    let candidate = PathBuf::from(get_env("USERPROFILE")?)
+        .join("scoop")
+        .join("shims")
+        .join("pwsh.exe");
+    path_is_file(&candidate).then_some(candidate)
+}
+
+/// Parse a PowerShell install-directory version (e.g. `7`, `7.4.1`) into comparable components.
+/// Returns `None` if any component is not a number.
+#[cfg(any(target_os = "windows", test))]
+fn parse_pwsh_version(raw: &str) -> Option<Vec<u32>> {
+    if raw.is_empty() {
+        return None;
+    }
+    raw.split('.')
+        .map(|part| part.parse::<u32>().ok())
+        .collect()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -478,6 +610,7 @@ fn find_executable_in_path_with_env(
     None
 }
 
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn shell_single_quote(raw: &str) -> String {
     format!("'{}'", raw.replace('\'', "'\"'\"'"))
 }
@@ -630,6 +763,85 @@ mod tests {
     }
 
     #[test]
+    fn windows_embedded_shell_prefers_programfiles_pwsh_with_highest_version() {
+        use std::collections::{HashMap, HashSet};
+
+        // Build paths via `join` so the test is independent of the host path separator.
+        let program_files = PathBuf::from("C:/Program Files");
+        let local_app_data = PathBuf::from("C:/Users/me/AppData/Local");
+        let user_profile = PathBuf::from("C:/Users/me");
+
+        let pwsh_root = program_files.join("PowerShell");
+        let expected = pwsh_root.join("7.4.1").join("pwsh.exe");
+        let msix_dir = local_app_data
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("Microsoft.PowerShell_8wekyb3d8bbwe");
+        let scoop_pwsh = user_profile.join("scoop").join("shims").join("pwsh.exe");
+
+        // Program Files, MSIX, Scoop, and PATH all offer pwsh; Program Files must win, and the
+        // highest version (7.4.1, not 7) must be selected.
+        let files: HashSet<PathBuf> = HashSet::from([
+            pwsh_root.join("7").join("pwsh.exe"),
+            expected.clone(),
+            msix_dir.join("pwsh.exe"),
+            scoop_pwsh,
+        ]);
+        let dirs: HashMap<PathBuf, Vec<OsString>> = HashMap::from([
+            (
+                pwsh_root.clone(),
+                vec![
+                    OsString::from("7"),
+                    OsString::from("7.4.1"),
+                    OsString::from("7-preview"),
+                ],
+            ),
+            (
+                local_app_data.join("Microsoft").join("WindowsApps"),
+                vec![OsString::from("Microsoft.PowerShell_8wekyb3d8bbwe")],
+            ),
+        ]);
+        let env: HashMap<&str, OsString> = HashMap::from([
+            ("ProgramFiles", program_files.clone().into_os_string()),
+            ("LOCALAPPDATA", local_app_data.into_os_string()),
+            ("USERPROFILE", user_profile.into_os_string()),
+        ]);
+
+        let resolved = resolve_windows_embedded_shell_program(
+            |name| env.get(name).cloned(),
+            |path| files.contains(path),
+            |dir| dirs.get(dir).cloned().unwrap_or_default(),
+            // A populated PATH (even one returning cmd.exe) must not override the install.
+            |name| (name == "pwsh.exe").then(|| PathBuf::from("pwsh.exe")),
+        );
+
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn windows_embedded_shell_falls_back_through_path_to_cmd() {
+        // No PowerShell installs and no env vars: fall through to `powershell.exe` on PATH.
+        let powershell = PathBuf::from("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe");
+        let powershell_for_closure = powershell.clone();
+        let resolved = resolve_windows_embedded_shell_program(
+            |_name| None,
+            |_path| false,
+            |_dir| Vec::new(),
+            move |name| (name == "powershell.exe").then(|| powershell_for_closure.clone()),
+        );
+        assert_eq!(resolved, powershell);
+
+        // Nothing discoverable anywhere: ultimate fallback is `cmd.exe`.
+        let fallback = resolve_windows_embedded_shell_program(
+            |_name| None,
+            |_path| false,
+            |_dir| Vec::new(),
+            |_name| None,
+        );
+        assert_eq!(fallback, PathBuf::from("cmd.exe"));
+    }
+
+    #[test]
     fn custom_launch_spec_substitutes_placeholders() {
         let preferences = TerminalPreferences {
             external_terminal_mode: ExternalTerminalMode::CustomProgram,
@@ -704,6 +916,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     #[test]
     fn shell_single_quote_escapes_single_quotes() {
         assert_eq!(shell_single_quote("a'b"), "'a'\"'\"'b'");

@@ -94,6 +94,7 @@ serde_json = { workspace = true }
 smallvec = { workspace = true }
 smol = { workspace = true }
 stats_alloc = { workspace = true }
+sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true, optional = true }
