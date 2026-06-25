@@ -1,6 +1,6 @@
 use gitcomet_core::domain::{HistoryMode, LogScope, RepoSpec};
 use gitcomet_state::model::{AppState, RepoId, RepoState};
-use gitcomet_state::session::{self, UiSession, UiSettings};
+use gitcomet_state::session::{self, ExternalCodeEditorSetting, UiSession, UiSettings};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -369,6 +369,136 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     let loaded = session::load_from_path(&session_file);
     assert_eq!(loaded.window_width, Some(640));
     assert_eq!(loaded.window_height, Some(480));
+}
+
+#[test]
+fn external_code_editor_round_trips_detected_custom_and_none() {
+    let dir = unique_temp_dir("external-code-editor");
+    let session_file = dir.join("session.json");
+    let code_path = dir.join("bin/code");
+    let custom_path = dir.join("bin/custom-editor");
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            external_code_editor: Some(Some(ExternalCodeEditorSetting::Detected {
+                id: "vscode".to_string(),
+                path: code_path.clone(),
+            })),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist detected editor");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(
+        loaded.external_code_editor,
+        Some(ExternalCodeEditorSetting::Detected {
+            id: "vscode".to_string(),
+            path: code_path,
+        })
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            external_code_editor: Some(Some(ExternalCodeEditorSetting::Custom {
+                executable: custom_path.clone(),
+                arguments: Some("--reuse-window {path}".to_string()),
+            })),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist custom editor");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(
+        loaded.external_code_editor,
+        Some(ExternalCodeEditorSetting::Custom {
+            executable: custom_path,
+            arguments: Some("--reuse-window {path}".to_string()),
+        })
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            external_code_editor: Some(None),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("clear external editor");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.external_code_editor, None);
+}
+
+#[test]
+fn external_code_editor_missing_older_session_field_defaults_to_none() {
+    let dir = unique_temp_dir("external-code-editor-missing");
+    let session_file = dir.join("session.json");
+
+    write_session_json(
+        &session_file,
+        json!({
+            "version": 3,
+            "open_repos": [],
+            "active_repo": null
+        }),
+    );
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.external_code_editor, None);
+}
+
+#[test]
+fn external_code_editor_persistence_distinguishes_clear_from_unchanged() {
+    let dir = unique_temp_dir("external-code-editor-clear-unchanged");
+    let session_file = dir.join("session.json");
+    let code_path = dir.join("bin/code");
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            external_code_editor: Some(Some(ExternalCodeEditorSetting::Detected {
+                id: "vscode".to_string(),
+                path: code_path.clone(),
+            })),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist detected editor");
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            ui_scale_percent: Some(125),
+            external_code_editor: None,
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("persist unrelated settings");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(
+        loaded.external_code_editor,
+        Some(ExternalCodeEditorSetting::Detected {
+            id: "vscode".to_string(),
+            path: code_path,
+        })
+    );
+
+    session::persist_ui_settings_to_path(
+        UiSettings {
+            external_code_editor: Some(None),
+            ..UiSettings::default()
+        },
+        &session_file,
+    )
+    .expect("clear external editor");
+
+    let loaded = session::load_from_path(&session_file);
+    assert_eq!(loaded.external_code_editor, None);
 }
 
 #[test]

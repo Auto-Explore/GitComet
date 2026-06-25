@@ -21,6 +21,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    OpenInCodeEditor {
+        repo_id: Option<RepoId>,
+        path: std::path::PathBuf,
+    },
     OpenFileContent {
         repo_id: RepoId,
         source: gitcomet_core::domain::FileSource,
