@@ -438,7 +438,14 @@ fn open_gitcomet_window(
             })
         },
     )
-    .expect("failed to open main GitComet window")
+    .unwrap_or_else(|err| {
+        panic!(
+            "failed to open main GitComet window: {err}\n\
+             This is usually a GPU/display problem, not a GitComet bug. \
+             If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
+             For per-adapter details, relaunch with RUST_LOG=info."
+        )
+    })
 }
 
 fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {

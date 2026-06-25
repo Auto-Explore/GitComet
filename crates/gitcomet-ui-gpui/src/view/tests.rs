@@ -2455,8 +2455,15 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
     test_support::wait_for_native_tooltip(cx);
 
-    let expected_tooltip =
-        path_display::path_display_string(Path::new("/tmp/splash-tooltip-clear-test"));
+    let expected_tooltip = {
+        let snapshot = store_for_assert.snapshot();
+        let workdir = snapshot
+            .repos
+            .first()
+            .map(|r| r.spec.workdir.clone())
+            .unwrap_or_else(|| PathBuf::from("/tmp/splash-tooltip-clear-test"));
+        path_display::path_display_string(&workdir)
+    };
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
         Some(expected_tooltip)

@@ -263,7 +263,7 @@ pub(super) fn hash_text_content(text: &str) -> u64 {
     hasher.finish()
 }
 
-fn hash_rgba_bits(hasher: &mut FxHasher, rgba: gpui::Rgba) {
+pub(in crate::view::rows) fn hash_rgba_bits(hasher: &mut FxHasher, rgba: gpui::Rgba) {
     rgba.r.to_bits().hash(hasher);
     rgba.g.to_bits().hash(hasher);
     rgba.b.to_bits().hash(hasher);

@@ -823,6 +823,152 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
 }
 
 #[test]
+fn repo_externally_changed_invalidates_loaded_blame() {
+    // Regression: an external edit/stage reloads the working-tree diff, and the
+    // blame annotation column is derived from that same content. Leaving blame
+    // `Ready` would make `request_blame_for_current_target` treat the target as
+    // already attempted and keep painting stale attribution over the new lines.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].history_state.blame_source = Some(
+        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
+    );
+    state.repos[0].history_state.blame = Loadable::Ready(std::sync::Arc::new(vec![
+        gitcomet_core::services::BlameLine {
+            commit_id: Arc::from("1111111111111111111111111111111111111111"),
+            author: Arc::from("Ada"),
+            author_time_unix: Some(1_700_000_000),
+            summary: Arc::from("initial"),
+            body: None,
+            line: "let x = 1;".to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
+        },
+    ]));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+
+    // The working-tree diff reloads against the new content...
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id: id, .. } if *id == repo_id)),
+        "external worktree change must reload the diff"
+    );
+    // ...and blame is dropped so it reloads too, with the target preserved.
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        "blame must be invalidated when the working-tree diff reloads externally"
+    );
+    assert_eq!(
+        state.repos[0].history_state.blame_path.as_deref(),
+        Some(std::path::Path::new("src/lib.rs"))
+    );
+    assert_eq!(
+        state.repos[0].history_state.blame_source,
+        Some(gitcomet_core::domain::BlameSource::WorkingTree(
+            DiffArea::Unstaged
+        ))
+    );
+}
+
+#[test]
+fn reload_repo_clears_stale_navigation_history() {
+    // Regression: a full reload may rewrite history (rebase/amend), so saved
+    // back/forward snapshots can reference commits that no longer resolve. The
+    // nav stacks must start fresh rather than letting Back restore a dead view.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+
+    let commit_a = CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    let commit_b = CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+    let snap = |c: &CommitId| crate::model::MainViewSnapshot {
+        diff_target: Some(DiffTarget::Commit {
+            commit_id: c.clone(),
+            path: Some(PathBuf::from("src/lib.rs")),
+        }),
+        content_preview: false,
+        selected_commit: Some(c.clone()),
+    };
+    state.repos[0].nav_history.record(snap(&commit_a));
+    state.repos[0].nav_history.record(snap(&commit_b));
+    state.repos[0]
+        .view_history
+        .record(crate::model::ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::Commit(commit_a.clone()),
+            path: PathBuf::from("src/lib.rs"),
+        });
+    // Make the live view match the nav tail so the reduce-wrapper's reconcile is
+    // a no-op and the stack survives intact up to the point ReloadRepo runs.
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: commit_b.clone(),
+        path: Some(PathBuf::from("src/lib.rs")),
+    });
+    state.repos[0].set_selected_commit(Some(commit_b.clone()));
+    assert_eq!(state.repos[0].nav_history.entries.len(), 2);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReloadRepo { repo_id },
+    );
+
+    // The stale back-stack entry (commit A) must be gone — without the clear it
+    // would survive as `entries[0]` while only the tail gets folded over.
+    assert!(
+        !state.repos[0]
+            .nav_history
+            .entries
+            .iter()
+            .any(|s| s.selected_commit.as_ref() == Some(&commit_a)),
+        "stale nav back-stack entry must be cleared on reload"
+    );
+    assert!(
+        state.repos[0].nav_history.entries.len() <= 1,
+        "only the post-reload current view may remain in nav_history"
+    );
+    assert!(
+        state.repos[0].view_history.entries.is_empty(),
+        "view_history must be cleared on reload"
+    );
+}
+
+#[test]
 fn load_more_history_emits_paginated_load_log_effect() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

@@ -81,7 +81,7 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.control
             && !mods.platform
             && !mods.function
-            && matches!(key, "i" | "s" | "w" | "up" | "down"))
+            && matches!(key, "i" | "s" | "w" | "up" | "down" | "left" | "right"))
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
@@ -1325,11 +1325,18 @@ impl GitCometView {
             "remove-worktree" => {
                 // TODO: Implement remove worktree
             }
+            "blame" => {
+                self.set_annotate_enabled(!self.annotate_enabled, cx);
+            }
             "back" => {
-                // TODO: Implement navigate back
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::GlobalNavBack { repo_id });
+                }
             }
             "forward" => {
-                // TODO: Implement navigate forward
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::GlobalNavForward { repo_id });
+                }
             }
             _ => {}
         }
@@ -1552,6 +1559,7 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffViewMode::from_key)
             .unwrap_or(DiffViewMode::Split);
+        let annotate_enabled = ui_session.annotate_enabled.unwrap_or(false);
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
         let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
@@ -1693,6 +1701,7 @@ impl GitCometView {
                 diff_content_mode,
                 diff_whitespace_mode,
                 diff_view_mode,
+                annotate_enabled,
                 diff_reveal_whitespace_chars,
                 diff_word_wrap,
                 diff_show_line_numbers,
@@ -1961,6 +1970,7 @@ impl GitCometView {
             diff_content_mode,
             diff_whitespace_mode,
             diff_view_mode,
+            annotate_enabled,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2265,6 +2275,21 @@ impl GitCometView {
         self.diff_view_mode = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_annotate_enabled(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.annotate_enabled == next {
+            return;
+        }
+
+        self.annotate_enabled = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3185,6 +3210,22 @@ impl GitCometView {
         });
     }
 
+    /// Mouse back/forward side buttons: step the active repo's global navigation
+    /// history (diffs, file content, commit selections). Active anywhere in the
+    /// window.
+    fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.main_pane.read(cx).active_repo_id() else {
+            return;
+        };
+        let msg = if forward {
+            Msg::GlobalNavForward { repo_id }
+        } else {
+            Msg::GlobalNavBack { repo_id }
+        };
+        self.store.dispatch(msg);
+        cx.notify();
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
@@ -3785,6 +3826,19 @@ impl Render for GitCometView {
         root = root.on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
             this.dismiss_history_refs_menus(cx);
         }));
+        root = root
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Back),
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                    this.dispatch_global_nav(false, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                    this.dispatch_global_nav(true, cx);
+                }),
+            );
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,

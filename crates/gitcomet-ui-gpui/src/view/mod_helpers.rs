@@ -446,6 +446,19 @@ pub(super) struct DiffSplitResizeState {
 pub(super) use ResizeDragGhost as DiffSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum AnnotateResizeHandle {
+    Divider,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct AnnotateResizeState {
+    pub(in crate::view) start_x: Pixels,
+    pub(in crate::view) start_width: f32,
+}
+
+pub(in crate::view) use ResizeDragGhost as AnnotateResizeDragGhost;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictVSplitResizeHandle {
     Divider,
 }
@@ -3328,6 +3341,7 @@ pub struct GitCometView {
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
+    pub(super) annotate_enabled: bool,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,

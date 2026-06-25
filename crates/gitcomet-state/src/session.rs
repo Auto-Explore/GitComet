@@ -34,6 +34,7 @@ pub struct UiSession {
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
     pub diff_view_mode: Option<String>,
+    pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
@@ -156,6 +157,7 @@ struct UiSessionFile {
     diff_content_mode: Option<String>,
     diff_whitespace_mode: Option<String>,
     diff_view_mode: Option<String>,
+    annotate_enabled: Option<bool>,
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
@@ -255,6 +257,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
         diff_view_mode: file.diff_view_mode,
+        annotate_enabled: file.annotate_enabled,
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
@@ -554,6 +557,7 @@ pub struct UiSettings {
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
     pub diff_view_mode: Option<String>,
+    pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
@@ -634,6 +638,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.diff_view_mode {
             file.diff_view_mode = Some(value);
+        }
+        if let Some(value) = settings.annotate_enabled {
+            file.annotate_enabled = Some(value);
         }
         if let Some(value) = settings.diff_reveal_whitespace_chars {
             file.diff_reveal_whitespace_chars = Some(value);
