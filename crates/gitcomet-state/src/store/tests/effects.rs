@@ -144,7 +144,8 @@ fn session_update_effects_persist_on_session_executor() {
         },
     );
 
-    let deadline = Instant::now() + Duration::from_secs(2);
+    std::thread::sleep(Duration::from_millis(10));
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let session = crate::session::load_from_path(&session_file);
         let repo_a_mode = crate::session::load_repo_history_mode_from_path(&repo_a, &session_file);

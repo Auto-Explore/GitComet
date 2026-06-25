@@ -601,8 +601,20 @@ mod tests {
 
         // A negative civil year (pre-year-1) must clamp to 0000, not drop its
         // sign via unsigned_abs (e.g. -44 -> "0044").
-        let far_past = UNIX_EPOCH - Duration::from_secs(100_000_000_000);
-        let s = format_datetime(far_past, DateTimeFormat::YmdHm, Timezone::Utc, false);
-        assert!(s.starts_with("0000-"), "got {s:?}");
+        // Windows SystemTime only goes back to 1601-01-01, so this assertion
+        // is only meaningful on platforms that can represent pre-epoch times.
+        #[cfg(not(windows))]
+        {
+            let far_past = UNIX_EPOCH - Duration::from_secs(100_000_000_000);
+            let s = format_datetime(far_past, DateTimeFormat::YmdHm, Timezone::Utc, false);
+            assert!(s.starts_with("0000-"), "got {s:?}");
+        }
+        // On Windows, verify clamping with a safe pre-epoch value.
+        #[cfg(windows)]
+        {
+            let far_past = UNIX_EPOCH - Duration::from_secs(11_600_000_000);
+            let s = format_datetime(far_past, DateTimeFormat::YmdHm, Timezone::Utc, false);
+            assert!(s.starts_with("160"), "expected early-1600s year, got {s:?}");
+        }
     }
 }
