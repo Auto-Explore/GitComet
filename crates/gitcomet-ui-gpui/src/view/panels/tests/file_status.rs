@@ -2230,7 +2230,7 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
         "gitcomet_ui_test_{}_commit_added_copy_path",
         std::process::id()
     ));
-    let added_path = std::path::PathBuf::from_iter(["src", "added_from_commit.rs"]);
+    let added_path = std::path::Path::new("src").join("added_from_commit.rs");
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

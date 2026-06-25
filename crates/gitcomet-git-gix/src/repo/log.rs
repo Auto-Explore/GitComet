@@ -2,7 +2,7 @@ use super::history::gix_head_id_or_none;
 use super::{GixRepo, bstr_to_arc_str, oid_to_arc_str};
 use crate::util::{
     bytes_to_text_preserving_utf8, parse_git_log_pretty_records_from_reader,
-    path_buf_from_git_bytes, run_git_parsed_stdout, unix_seconds_to_system_time,
+    path_buf_from_git_bytes, run_git_capture, run_git_parsed_stdout, unix_seconds_to_system_time,
     unix_seconds_to_system_time_or_epoch,
 };
 use gitcomet_core::domain::{
@@ -15,7 +15,7 @@ use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use rustc_hash::FxHashSet as HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const RECENT_COMMIT_MESSAGES_MAX_LIMIT: usize = 100;
@@ -764,6 +764,163 @@ impl GixRepo {
         token
     }
 
+    pub(super) fn resolve_file_path_at_commit_impl(
+        &self,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        // Fast path: the file is named `path` in this commit already.
+        if self.path_exists_in_commit_tree(commit, path) {
+            return Ok(Some(path.to_path_buf()));
+        }
+        // Otherwise the file is named differently in this commit; follow renames
+        // to find the name it has in that commit's tree.
+        self.resolve_renamed_path_at_commit(path, commit)
+    }
+
+    /// Whether `path` is present in the tree of `commit`. Best-effort: any lookup
+    /// failure (bad rev, missing object) is treated as "not present".
+    fn path_exists_in_commit_tree(&self, commit: &CommitId, path: &Path) -> bool {
+        let repo = self._repo.to_thread_local();
+        let Ok(id) = repo.rev_parse_single(commit.as_ref()) else {
+            return false;
+        };
+        let Ok(object) = id.object() else {
+            return false;
+        };
+        let Ok(tree) = object.peel_to_tree() else {
+            return false;
+        };
+        matches!(tree.lookup_entry_by_path(path), Ok(Some(_)))
+    }
+
+    /// Find the file's name in `commit`'s tree by following renames from `path`.
+    /// Runs `git log --follow --name-status` and reads the entry for `commit`:
+    /// a rename yields its destination; a plain change yields its path; a
+    /// deletion (the followed name was renamed away at `commit`) is resolved to
+    /// the rename's destination via `git diff-tree -M`.
+    fn resolve_renamed_path_at_commit(
+        &self,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
+            .arg("core.quotePath=false")
+            .arg("log")
+            .arg("--follow")
+            .arg("--name-status")
+            .arg("-M")
+            // Record separator (0x1e) before each commit hash so records can be
+            // split unambiguously from the name-status lines that follow.
+            .arg("--format=%x1e%H")
+            .arg("--")
+            .arg(path);
+        let output = run_git_capture(cmd, "git log --follow --name-status")?;
+
+        let target = commit.as_ref();
+        for record in output.split('\u{1e}') {
+            let mut lines = record.lines().map(str::trim).filter(|l| !l.is_empty());
+            let Some(hash) = lines.next() else {
+                continue;
+            };
+            if hash != target {
+                continue;
+            }
+            // The pathspec filters output to the followed file, so the first
+            // status line is the one we want.
+            if let Some(status_line) = lines.next() {
+                return self.interpret_name_status_for_commit(status_line, commit);
+            }
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
+    /// Interpret one `--name-status` line (`<status>\t<path>[\t<path2>]`) as the
+    /// file's name in the commit's tree.
+    fn interpret_name_status_for_commit(
+        &self,
+        status_line: &str,
+        commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        let mut fields = status_line.split('\t');
+        let status = fields.next().unwrap_or_default();
+        let first = fields.next();
+        let second = fields.next();
+        let to_path = |s: &str| path_buf_from_git_bytes(s.as_bytes(), "git name-status path");
+        match status.chars().next() {
+            // Rename/copy: the destination is the name in this commit's tree.
+            Some('R') | Some('C') => second.map(to_path).transpose(),
+            // Added/modified/type-change: the listed path is the name here.
+            Some('A') | Some('M') | Some('T') => first.map(to_path).transpose(),
+            // Deleted under the followed name: it was renamed away at this commit,
+            // so the tree holds the rename destination — recover it.
+            Some('D') => match first.map(to_path).transpose()? {
+                Some(old) => self.rename_destination_at_commit(commit, &old),
+                None => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    /// The hex object id of `commit`'s first parent, or `None` for a root commit
+    /// (or any lookup failure).
+    fn first_parent_id(&self, commit: &CommitId) -> Option<String> {
+        let repo = self._repo.to_thread_local();
+        let id = repo.rev_parse_single(commit.as_ref()).ok()?.detach();
+        let commit = repo.find_commit(id).ok()?;
+        commit.parent_ids().next().map(|parent| parent.to_string())
+    }
+
+    /// The destination path of a rename of `old_path` introduced by `commit`,
+    /// using rename detection against its parent.
+    fn rename_destination_at_commit(
+        &self,
+        commit: &CommitId,
+        old_path: &Path,
+    ) -> Result<Option<PathBuf>> {
+        // Diff against the first parent explicitly. A bare `git diff-tree <merge>`
+        // emits no per-file rows for a merge commit (it needs -m/-c/--cc), which
+        // would silently fail to resolve a rename introduced at a merge; passing
+        // both endpoints makes diff-tree produce a normal first-parent diff. For a
+        // non-merge commit this is identical to the implicit single-arg form, and
+        // for a root commit (no parent) there is no rename to find.
+        let Some(parent) = self.first_parent_id(commit) else {
+            return Ok(None);
+        };
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("-c")
+            .arg("core.quotePath=false")
+            .arg("diff-tree")
+            .arg("-M")
+            .arg("-r")
+            .arg("--name-status")
+            .arg("--no-commit-id")
+            .arg(&parent)
+            .arg(commit.as_ref());
+        let output = run_git_capture(cmd, "git diff-tree -M")?;
+
+        for line in output.lines() {
+            let mut fields = line.split('\t');
+            let status = fields.next().unwrap_or_default();
+            if !status.starts_with('R') && !status.starts_with('C') {
+                continue;
+            }
+            let (Some(old), Some(new)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            let old = path_buf_from_git_bytes(old.as_bytes(), "git diff-tree old path")?;
+            if old == old_path {
+                return Ok(Some(path_buf_from_git_bytes(
+                    new.as_bytes(),
+                    "git diff-tree new path",
+                )?));
+            }
+        }
+        Ok(None)
+    }
+
     fn log_follow_commits(&self, path: &Path, max_count: Option<usize>) -> Result<Vec<Commit>> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("log")
@@ -1227,6 +1384,16 @@ mod tests {
         );
     }
 
+    fn git_stdout(workdir: &Path, args: &[&str]) -> String {
+        let mut cmd = crate::util::git_workdir_cmd_for(workdir);
+        let output = cmd.args(args).output().expect("spawn git");
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("utf8 stdout")
+            .trim()
+            .to_string()
+    }
+
     fn init_test_repo(workdir: &Path) {
         git_success(workdir, &["init"]);
         for args in [
@@ -1277,6 +1444,46 @@ mod tests {
     #[test]
     fn object_id_from_commit_id_rejects_invalid_hex() {
         assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    }
+
+    #[test]
+    fn rename_destination_at_commit_resolves_rename_introduced_at_merge() {
+        // Regression: a bare `git diff-tree <merge>` prints nothing (it needs
+        // -m/-c/--cc), so resolving a rename introduced at a merge commit used to
+        // fail and the followed file fell back to a now-nonexistent path. The fix
+        // diffs against the first parent explicitly, which works for merges too.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        commit_file(repo, "src/old.txt", "alpha\nbeta\ngamma\n", "base");
+        let main = git_stdout(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+
+        // A side branch edits the file so the merge is a real (non-ff) merge.
+        git_success(repo, &["checkout", "-b", "feature"]);
+        commit_file(
+            repo,
+            "src/old.txt",
+            "alpha\nbeta two\ngamma\n",
+            "edit on feature",
+        );
+
+        // Back on the mainline, advance unrelated history, then merge feature but
+        // resolve it by renaming the file — a rename that exists only at the merge
+        // commit relative to its first parent.
+        git_success(repo, &["checkout", &main]);
+        commit_file(repo, "other.txt", "x\n", "main advance");
+        git_success(repo, &["merge", "--no-commit", "--no-ff", "feature"]);
+        fs::create_dir_all(repo.join("lib")).expect("create lib dir");
+        git_success(repo, &["mv", "src/old.txt", "lib/new.txt"]);
+        git_success(repo, &["commit", "-m", "evil merge rename"]);
+        let merge = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+        let opened = open_repo(repo);
+        let resolved = opened
+            .rename_destination_at_commit(&CommitId(merge.into()), Path::new("src/old.txt"))
+            .expect("rename resolution should not error");
+        assert_eq!(resolved, Some(PathBuf::from("lib/new.txt")));
     }
 
     #[test]

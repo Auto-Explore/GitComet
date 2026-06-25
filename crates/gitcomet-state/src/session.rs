@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::{env, fs, io};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -34,6 +34,7 @@ pub struct UiSession {
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
     pub diff_view_mode: Option<String>,
+    pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
@@ -52,6 +53,19 @@ pub struct UiSession {
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub git_executable_path: Option<PathBuf>,
+    pub external_code_editor: Option<ExternalCodeEditorSetting>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ExternalCodeEditorSetting {
+    Detected {
+        id: String,
+        path: PathBuf,
+    },
+    Custom {
+        executable: PathBuf,
+        arguments: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -147,6 +161,7 @@ struct UiSessionFile {
     diff_content_mode: Option<String>,
     diff_whitespace_mode: Option<String>,
     diff_view_mode: Option<String>,
+    annotate_enabled: Option<bool>,
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
@@ -165,10 +180,25 @@ struct UiSessionFile {
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
     git_executable_path: Option<String>,
+    external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ExternalCodeEditorSettingFile {
+    Detected {
+        id: String,
+        path: String,
+    },
+    Custom {
+        executable: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        arguments: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -235,6 +265,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
         diff_view_mode: file.diff_view_mode,
+        annotate_enabled: file.annotate_enabled,
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
@@ -256,6 +287,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
             .git_executable_path
             .as_deref()
             .map(path_from_storage_key),
+        external_code_editor: external_code_editor_from_file(file.external_code_editor),
     }
 }
 
@@ -453,19 +485,21 @@ pub fn persist_repos_snapshot_to_path(
     snapshot: &SessionReposSnapshot,
     path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file(path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    file.open_repos = snapshot
-        .open_repos
-        .iter()
-        .map(|path| path.to_string())
-        .collect();
-    file.active_repo = snapshot
-        .active_repo_index
-        .and_then(|ix| snapshot.open_repos.get(ix))
-        .map(|path| path.to_string());
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        file.open_repos = snapshot
+            .open_repos
+            .iter()
+            .map(|path| path.to_string())
+            .collect();
+        file.active_repo = snapshot
+            .active_repo_index
+            .and_then(|ix| snapshot.open_repos.get(ix))
+            .map(|path| path.to_string());
 
-    persist_to_path(path, &file)
+        persist_to_path(path, &file)
+    })
 }
 
 pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
@@ -476,19 +510,21 @@ pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
 }
 
 pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
 
-    let workdir_key = path_storage_key(workdir);
-    let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
-    recent_repos.retain(|path| path.trim() != workdir_key);
-    recent_repos.retain(|path| !path.trim().is_empty());
-    recent_repos.insert(0, workdir_key);
-    if recent_repos.len() > MAX_RECENT_REPOS {
-        recent_repos.truncate(MAX_RECENT_REPOS);
-    }
+        let workdir_key = path_storage_key(workdir);
+        let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
+        recent_repos.retain(|path| path.trim() != workdir_key);
+        recent_repos.retain(|path| !path.trim().is_empty());
+        recent_repos.insert(0, workdir_key);
+        if recent_repos.len() > MAX_RECENT_REPOS {
+            recent_repos.truncate(MAX_RECENT_REPOS);
+        }
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 pub fn remove_recent_repo(workdir: &Path) -> io::Result<()> {
@@ -499,16 +535,18 @@ pub fn remove_recent_repo(workdir: &Path) -> io::Result<()> {
 }
 
 pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
 
-    let workdir_key = path_storage_key(workdir);
-    let Some(recent_repos) = file.recent_repos.as_mut() else {
-        return Ok(());
-    };
-    recent_repos.retain(|path| path.trim() != workdir_key);
+        let workdir_key = path_storage_key(workdir);
+        let Some(recent_repos) = file.recent_repos.as_mut() else {
+            return Ok(());
+        };
+        recent_repos.retain(|path| path.trim() != workdir_key);
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -531,6 +569,7 @@ pub struct UiSettings {
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
     pub diff_view_mode: Option<String>,
+    pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
@@ -549,6 +588,7 @@ pub struct UiSettings {
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
     pub git_executable_path: Option<Option<PathBuf>>,
+    pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
 
 pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
@@ -559,122 +599,143 @@ pub fn persist_ui_settings(settings: UiSettings) -> io::Result<()> {
 }
 
 pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Result<()> {
-    let mut file = load_file(path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    if settings.window_width.is_some() && settings.window_height.is_some() {
-        file.window_width = settings.window_width;
-        file.window_height = settings.window_height;
-    }
-    if let Some(w) = settings.sidebar_width {
-        file.sidebar_width = Some(w);
-    }
-    if let Some(w) = settings.details_width {
-        file.details_width = Some(w);
-    }
-    if let Some(items) = settings.repo_sidebar_collapsed_items {
-        let items = path_keyed_string_sets_to_storage(items);
-        file.repo_sidebar_collapsed_items = (!items.is_empty()).then_some(items);
-    }
-    if let Some(theme_mode) = settings.theme_mode {
-        file.theme_mode = Some(theme_mode);
-    }
-    if let Some(percent) = settings.ui_scale_percent {
-        file.ui_scale_percent = Some(percent);
-    }
-    if let Some(font_family) = settings.ui_font_family {
-        file.ui_font_family = Some(font_family);
-    }
-    if let Some(font_family) = settings.editor_font_family {
-        file.editor_font_family = Some(font_family);
-    }
-    if let Some(value) = settings.use_font_ligatures {
-        file.use_font_ligatures = Some(value);
-    }
-    if let Some(fmt) = settings.date_time_format {
-        file.date_time_format = Some(fmt);
-    }
-    if let Some(tz) = settings.timezone {
-        file.timezone = Some(tz);
-    }
-    if let Some(value) = settings.show_timezone {
-        file.show_timezone = Some(value);
-    }
-    if let Some(value) = settings.change_tracking_view {
-        file.change_tracking_view = Some(value);
-    }
-    if let Some(value) = settings.diff_scroll_sync {
-        file.diff_scroll_sync = Some(value);
-    }
-    if let Some(value) = settings.diff_content_mode {
-        file.diff_content_mode = Some(value);
-    }
-    if let Some(value) = settings.diff_whitespace_mode {
-        file.diff_whitespace_mode = Some(value);
-    }
-    if let Some(value) = settings.diff_view_mode {
-        file.diff_view_mode = Some(value);
-    }
-    if let Some(value) = settings.diff_reveal_whitespace_chars {
-        file.diff_reveal_whitespace_chars = Some(value);
-    }
-    if let Some(value) = settings.diff_word_wrap {
-        file.diff_word_wrap = Some(value);
-    }
-    if let Some(value) = settings.diff_show_line_numbers {
-        file.diff_show_line_numbers = Some(value);
-    }
-    if let Some(value) = settings.change_tracking_height {
-        file.change_tracking_height = Some(value);
-    }
-    if let Some(value) = settings.untracked_height {
-        file.untracked_height = Some(value);
-    }
-    if let Some(value) = settings.history_show_graph {
-        file.history_show_graph = Some(value);
-    }
-    if let Some(value) = settings.history_show_author {
-        file.history_show_author = Some(value);
-    }
-    if let Some(value) = settings.history_show_date {
-        file.history_show_date = Some(value);
-    }
-    if let Some(value) = settings.history_show_sha {
-        file.history_show_sha = Some(value);
-    }
-    if let Some(value) = settings.terminal_external_mode {
-        file.terminal_external_mode = Some(value);
-    }
-    if let Some(value) = settings.terminal_external_program {
-        file.terminal_external_program = Some(value);
-    }
-    if let Some(value) = settings.terminal_external_args {
-        let values = value
-            .into_iter()
-            .map(|arg| arg.trim().to_string())
-            .filter(|arg| !arg.is_empty())
-            .collect::<Vec<_>>();
-        file.terminal_external_args = Some(values);
-    }
-    if let Some(value) = settings.terminal_action_bar_target {
-        file.terminal_action_bar_target = Some(value);
-    }
-    if let Some(value) = settings.history_show_tags {
-        file.history_show_tags = Some(value);
-    }
-    if let Some(value) = settings.history_tag_fetch_mode {
-        file.history_tag_fetch_mode = Some(value);
-    }
-    if let Some(value) = settings.default_history_mode {
-        file.default_history_mode = Some(value.into());
-    }
-    if let Some(value) = settings.commit_push_after_enabled {
-        file.commit_push_after_enabled = Some(value);
-    }
-    if let Some(path) = settings.git_executable_path {
-        file.git_executable_path = path.map(|path| path_storage_key(&path));
-    }
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        if settings.window_width.is_some() && settings.window_height.is_some() {
+            file.window_width = settings.window_width;
+            file.window_height = settings.window_height;
+        }
+        if let Some(w) = settings.sidebar_width {
+            file.sidebar_width = Some(w);
+        }
+        if let Some(w) = settings.details_width {
+            file.details_width = Some(w);
+        }
+        if let Some(items) = settings.repo_sidebar_collapsed_items {
+            let items = path_keyed_string_sets_to_storage(items);
+            file.repo_sidebar_collapsed_items = (!items.is_empty()).then_some(items);
+        }
+        if let Some(theme_mode) = settings.theme_mode {
+            file.theme_mode = Some(theme_mode);
+        }
+        if let Some(percent) = settings.ui_scale_percent {
+            file.ui_scale_percent = Some(percent);
+        }
+        if let Some(font_family) = settings.ui_font_family {
+            file.ui_font_family = Some(font_family);
+        }
+        if let Some(font_family) = settings.editor_font_family {
+            file.editor_font_family = Some(font_family);
+        }
+        if let Some(value) = settings.use_font_ligatures {
+            file.use_font_ligatures = Some(value);
+        }
+        if let Some(fmt) = settings.date_time_format {
+            file.date_time_format = Some(fmt);
+        }
+        if let Some(tz) = settings.timezone {
+            file.timezone = Some(tz);
+        }
+        if let Some(value) = settings.show_timezone {
+            file.show_timezone = Some(value);
+        }
+        if let Some(value) = settings.change_tracking_view {
+            file.change_tracking_view = Some(value);
+        }
+        if let Some(value) = settings.diff_scroll_sync {
+            file.diff_scroll_sync = Some(value);
+        }
+        if let Some(value) = settings.diff_content_mode {
+            file.diff_content_mode = Some(value);
+        }
+        if let Some(value) = settings.diff_whitespace_mode {
+            file.diff_whitespace_mode = Some(value);
+        }
+        if let Some(value) = settings.diff_view_mode {
+            file.diff_view_mode = Some(value);
+        }
+        if let Some(value) = settings.annotate_enabled {
+            file.annotate_enabled = Some(value);
+        }
+        if let Some(value) = settings.diff_reveal_whitespace_chars {
+            file.diff_reveal_whitespace_chars = Some(value);
+        }
+        if let Some(value) = settings.diff_word_wrap {
+            file.diff_word_wrap = Some(value);
+        }
+        if let Some(value) = settings.diff_show_line_numbers {
+            file.diff_show_line_numbers = Some(value);
+        }
+        if let Some(value) = settings.change_tracking_height {
+            file.change_tracking_height = Some(value);
+        }
+        if let Some(value) = settings.untracked_height {
+            file.untracked_height = Some(value);
+        }
+        if let Some(value) = settings.history_show_graph {
+            file.history_show_graph = Some(value);
+        }
+        if let Some(value) = settings.history_show_author {
+            file.history_show_author = Some(value);
+        }
+        if let Some(value) = settings.history_show_date {
+            file.history_show_date = Some(value);
+        }
+        if let Some(value) = settings.history_show_sha {
+            file.history_show_sha = Some(value);
+        }
+        if let Some(value) = settings.terminal_external_mode {
+            file.terminal_external_mode = Some(value);
+        }
+        if let Some(value) = settings.terminal_external_program {
+            file.terminal_external_program = Some(value);
+        }
+        if let Some(value) = settings.terminal_external_args {
+            let values = value
+                .into_iter()
+                .map(|arg| arg.trim().to_string())
+                .filter(|arg| !arg.is_empty())
+                .collect::<Vec<_>>();
+            file.terminal_external_args = Some(values);
+        }
+        if let Some(value) = settings.terminal_action_bar_target {
+            file.terminal_action_bar_target = Some(value);
+        }
+        if let Some(value) = settings.history_show_tags {
+            file.history_show_tags = Some(value);
+        }
+        if let Some(value) = settings.history_tag_fetch_mode {
+            file.history_tag_fetch_mode = Some(value);
+        }
+        if let Some(value) = settings.default_history_mode {
+            file.default_history_mode = Some(value.into());
+        }
+        if let Some(value) = settings.commit_push_after_enabled {
+            file.commit_push_after_enabled = Some(value);
+        }
+        if let Some(path) = settings.git_executable_path {
+            file.git_executable_path = path.map(|path| path_storage_key(&path));
+        }
+        if let Some(editor) = settings.external_code_editor {
+            file.external_code_editor = editor.map(external_code_editor_to_file);
+        }
 
-    persist_to_path(path, &file)
+        persist_to_path(path, &file)
+    })
+}
+
+static SESSION_FILE_PERSIST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn session_file_persist_lock() -> &'static Mutex<()> {
+    SESSION_FILE_PERSIST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn with_session_file_persist_lock<T>(persist: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+    let _guard = session_file_persist_lock()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    persist()
 }
 
 pub fn load_default_history_mode() -> Option<HistoryMode> {
@@ -749,21 +810,24 @@ pub fn persist_repo_history_mode_to_path(
     mode: HistoryMode,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    let mode = HistoryModeSetting::from(mode);
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let mode = HistoryModeSetting::from(mode);
 
-    if repo_history_mode_setting_from_file(&file, workdir).is_some_and(|existing| existing == mode)
-    {
-        return Ok(());
-    }
+        if repo_history_mode_setting_from_file(&file, workdir)
+            .is_some_and(|existing| existing == mode)
+        {
+            return Ok(());
+        }
 
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    let workdir_key = path_storage_key(workdir);
-    file.repo_history_modes
-        .get_or_insert_with(BTreeMap::new)
-        .insert(workdir_key, mode);
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        let workdir_key = path_storage_key(workdir);
+        file.repo_history_modes
+            .get_or_insert_with(BTreeMap::new)
+            .insert(workdir_key, mode);
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 pub(crate) fn persist_repo_history_modes_batch_to_path(
@@ -774,30 +838,32 @@ pub(crate) fn persist_repo_history_modes_batch_to_path(
         return Ok(());
     }
 
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    let mut changed = false;
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let mut changed = false;
 
-    for (workdir, mode) in updates {
-        let mode = HistoryModeSetting::from(*mode);
-        if repo_history_mode_setting_from_file(&file, workdir)
-            .is_some_and(|existing| existing == mode)
-        {
-            continue;
+        for (workdir, mode) in updates {
+            let mode = HistoryModeSetting::from(*mode);
+            if repo_history_mode_setting_from_file(&file, workdir)
+                .is_some_and(|existing| existing == mode)
+            {
+                continue;
+            }
+
+            let workdir_key = path_storage_key(workdir);
+            file.repo_history_modes
+                .get_or_insert_with(BTreeMap::new)
+                .insert(workdir_key, mode);
+            changed = true;
         }
 
-        let workdir_key = path_storage_key(workdir);
-        file.repo_history_modes
-            .get_or_insert_with(BTreeMap::new)
-            .insert(workdir_key, mode);
-        changed = true;
-    }
+        if !changed {
+            return Ok(());
+        }
 
-    if !changed {
-        return Ok(());
-    }
-
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    persist_to_path(session_file_path, &file)
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 pub fn load_repo_history_scope(workdir: &Path) -> Option<LogScope> {
@@ -845,29 +911,31 @@ pub fn persist_repo_history_scope_to_path(
     scope: LogScope,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    let scope = HistoryScopeSetting::from(scope);
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let scope = HistoryScopeSetting::from(scope);
 
-    if let Some(existing_scope) = file.repo_history_scopes.as_ref().and_then(|scopes| {
-        workdir
-            .to_str()
-            .and_then(|path| scopes.get(path).copied())
-            .or_else(|| {
-                let workdir_key = path_storage_key(workdir);
-                scopes.get(&workdir_key).copied()
-            })
-    }) && existing_scope == scope
-    {
-        return Ok(());
-    }
+        if let Some(existing_scope) = file.repo_history_scopes.as_ref().and_then(|scopes| {
+            workdir
+                .to_str()
+                .and_then(|path| scopes.get(path).copied())
+                .or_else(|| {
+                    let workdir_key = path_storage_key(workdir);
+                    scopes.get(&workdir_key).copied()
+                })
+        }) && existing_scope == scope
+        {
+            return Ok(());
+        }
 
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    let workdir_key = path_storage_key(workdir);
-    file.repo_history_scopes
-        .get_or_insert_with(BTreeMap::new)
-        .insert(workdir_key, scope);
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        let workdir_key = path_storage_key(workdir);
+        file.repo_history_scopes
+            .get_or_insert_with(BTreeMap::new)
+            .insert(workdir_key, scope);
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 pub fn load_repo_fetch_prune_deleted_remote_tracking_branches(workdir: &Path) -> Option<bool> {
@@ -921,14 +989,16 @@ pub fn persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(
     enabled: bool,
     session_file_path: &Path,
 ) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    let workdir_key = path_storage_key(workdir);
-    file.repo_fetch_prune_deleted_remote_tracking_branches
-        .get_or_insert_with(BTreeMap::new)
-        .insert(workdir_key, enabled);
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        let workdir_key = path_storage_key(workdir);
+        file.repo_fetch_prune_deleted_remote_tracking_branches
+            .get_or_insert_with(BTreeMap::new)
+            .insert(workdir_key, enabled);
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 pub fn should_show_survey_prompt(survey_id: &str) -> bool {
@@ -977,15 +1047,17 @@ pub fn persist_survey_prompt_opened_to_path(
     survey_id: &str,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    file.survey_prompt = Some(SurveyPromptSession {
-        survey_id: survey_id.to_string(),
-        opened_at_unix_seconds: Some(now_unix_seconds),
-        postponed_until_unix_seconds: None,
-    });
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        file.survey_prompt = Some(SurveyPromptSession {
+            survey_id: survey_id.to_string(),
+            opened_at_unix_seconds: Some(now_unix_seconds),
+            postponed_until_unix_seconds: None,
+        });
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 pub fn persist_survey_prompt_postponed(survey_id: &str, postpone_seconds: u64) -> io::Result<()> {
@@ -1006,15 +1078,17 @@ pub fn persist_survey_prompt_postponed_to_path(
     postpone_seconds: u64,
     now_unix_seconds: u64,
 ) -> io::Result<()> {
-    let mut file = load_file(session_file_path).unwrap_or_default();
-    file.version = CURRENT_SESSION_FILE_VERSION;
-    file.survey_prompt = Some(SurveyPromptSession {
-        survey_id: survey_id.to_string(),
-        opened_at_unix_seconds: None,
-        postponed_until_unix_seconds: Some(now_unix_seconds.saturating_add(postpone_seconds)),
-    });
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        file.survey_prompt = Some(SurveyPromptSession {
+            survey_id: survey_id.to_string(),
+            opened_at_unix_seconds: None,
+            postponed_until_unix_seconds: Some(now_unix_seconds.saturating_add(postpone_seconds)),
+        });
 
-    persist_to_path(session_file_path, &file)
+        persist_to_path(session_file_path, &file)
+    })
 }
 
 fn current_unix_seconds() -> u64 {
@@ -1128,6 +1202,55 @@ fn path_keyed_string_sets_to_storage(
         stored.insert(path_storage_key(&path), normalized);
     }
     stored
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn external_code_editor_from_file(
+    setting: Option<ExternalCodeEditorSettingFile>,
+) -> Option<ExternalCodeEditorSetting> {
+    match setting? {
+        ExternalCodeEditorSettingFile::Detected { id, path } => {
+            let path = path.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(ExternalCodeEditorSetting::Detected {
+                id: non_empty_string(id)?,
+                path: path_from_storage_key(path),
+            })
+        }
+        ExternalCodeEditorSettingFile::Custom {
+            executable,
+            arguments,
+        } => Some(ExternalCodeEditorSetting::Custom {
+            executable: path_from_storage_key(executable.trim()),
+            arguments: arguments.and_then(non_empty_string),
+        }),
+    }
+}
+
+fn external_code_editor_to_file(
+    setting: ExternalCodeEditorSetting,
+) -> ExternalCodeEditorSettingFile {
+    match setting {
+        ExternalCodeEditorSetting::Detected { id, path } => {
+            ExternalCodeEditorSettingFile::Detected {
+                id,
+                path: path_storage_key(&path),
+            }
+        }
+        ExternalCodeEditorSetting::Custom {
+            executable,
+            arguments,
+        } => ExternalCodeEditorSettingFile::Custom {
+            executable: path_storage_key(&executable),
+            arguments: arguments.and_then(non_empty_string),
+        },
+    }
 }
 
 fn sanitize_ui_scale_percent(percent: Option<u32>) -> u32 {
@@ -1479,6 +1602,107 @@ mod tests {
         ));
         let _ = fs::create_dir_all(&dir);
         dir
+    }
+
+    fn assert_session_writer_waits_for_shared_lock(
+        label: &str,
+        persist: impl FnOnce(PathBuf) -> io::Result<()> + Send + 'static,
+    ) {
+        let path = unique_session_test_dir(label).join("session.json");
+        let guard = session_file_persist_lock()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            started_tx.send(()).expect("send writer started");
+            let result = persist(path);
+            done_tx.send(result).expect("send writer result");
+        });
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("writer thread started");
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(100))
+                .is_err(),
+            "{label} writer finished while the session persist lock was held"
+        );
+        drop(guard);
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("writer finished after lock release")
+            .expect("writer persist succeeds");
+        handle.join().expect("writer thread joins");
+    }
+
+    #[test]
+    fn session_file_persist_lock_is_shared_by_session_writers() {
+        assert_session_writer_waits_for_shared_lock("persist-repos-snapshot", |path| {
+            let repo = path.with_file_name("repo-snapshot");
+            let repo_text = repo.to_string_lossy().into_owned();
+            let open_repos: Arc<[Arc<str>]> =
+                Arc::from(vec![Arc::<str>::from(repo_text)].into_boxed_slice());
+            let snapshot = SessionReposSnapshot {
+                open_repos,
+                active_repo_index: Some(0),
+            };
+            persist_repos_snapshot_to_path(&snapshot, &path)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-recent-repo", |path| {
+            let repo = path.with_file_name("recent-repo");
+            fs::create_dir_all(&repo)?;
+            persist_recent_repo_to_path(&repo, &path)
+        });
+        assert_session_writer_waits_for_shared_lock("remove-recent-repo", |path| {
+            let repo = path.with_file_name("remove-recent-repo");
+            persist_to_path(
+                &path,
+                &UiSessionFile {
+                    version: CURRENT_SESSION_FILE_VERSION,
+                    recent_repos: Some(vec![path_storage_key(&repo)]),
+                    ..UiSessionFile::default()
+                },
+            )?;
+            remove_recent_repo_to_path(&repo, &path)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-ui-settings", |path| {
+            persist_ui_settings_to_path(
+                UiSettings {
+                    external_code_editor: Some(Some(ExternalCodeEditorSetting::Custom {
+                        executable: PathBuf::from("/usr/bin/editor"),
+                        arguments: Some("--reuse-window".to_string()),
+                    })),
+                    ..UiSettings::default()
+                },
+                &path,
+            )
+        });
+        assert_session_writer_waits_for_shared_lock("persist-history-mode", |path| {
+            let repo = path.with_file_name("history-mode-repo");
+            persist_repo_history_mode_to_path(&repo, HistoryMode::NoMerges, &path)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-history-mode-batch", |path| {
+            let repo = path.with_file_name("history-mode-batch-repo");
+            persist_repo_history_modes_batch_to_path(&[(repo, HistoryMode::FirstParent)], &path)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-history-scope", |path| {
+            let repo = path.with_file_name("history-scope-repo");
+            persist_repo_history_scope_to_path(&repo, LogScope::AllBranches, &path)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-fetch-prune", |path| {
+            let repo = path.with_file_name("fetch-prune-repo");
+            persist_repo_fetch_prune_deleted_remote_tracking_branches_to_path(&repo, true, &path)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-survey-opened", |path| {
+            persist_survey_prompt_opened_to_path(&path, "survey", 123)
+        });
+        assert_session_writer_waits_for_shared_lock("persist-survey-postponed", |path| {
+            persist_survey_prompt_postponed_to_path(&path, "survey", 60, 123)
+        });
     }
 
     #[test]

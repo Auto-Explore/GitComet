@@ -1015,7 +1015,8 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
             Some(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::CreateBranchFromRefPrompt {
                     repo_id: rid,
-                    target
+                    target,
+                    ..
                 }
             }) if rid == repo_id && target == branch_name
         ));
@@ -1167,7 +1168,8 @@ fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCo
             Some(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::CreateBranchFromRefPrompt {
                     repo_id: rid,
-                    target
+                    target,
+                    ..
                 }
             }) if rid == repo_id && target == branch_name
         ));

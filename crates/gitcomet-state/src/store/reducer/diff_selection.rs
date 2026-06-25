@@ -7,6 +7,7 @@ use super::util::{
 use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, InlineSubmoduleDiffEntry,
     InlineSubmoduleDiffSection, InlineSubmoduleDiffState, Loadable, RepoId, RepoState,
+    ViewHistoryEntry,
 };
 use crate::msg::Effect;
 use gitcomet_core::domain::{
@@ -188,21 +189,172 @@ pub(super) fn open_file_content(
     source: gitcomet_core::domain::FileSource,
     path: std::path::PathBuf,
 ) -> Vec<Effect> {
-    let target = match source {
-        gitcomet_core::domain::FileSource::WorkingDirectory => DiffTarget::WorkingTree {
+    let Some(target) = content_view_target(source.clone(), path.clone()) else {
+        return Vec::new();
+    };
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state
+            .view_history
+            .record(ViewHistoryEntry { source, path });
+    }
+    let mut effects = SelectDiffEffects::new();
+    fill_select_diff_inline(state, repo_id, target, true, &mut effects);
+    effects.into_vec()
+}
+
+/// Map a `(source, path)` content view to its `DiffTarget`. Returns `None` for
+/// the unwired `Branch` source.
+fn content_view_target(
+    source: gitcomet_core::domain::FileSource,
+    path: std::path::PathBuf,
+) -> Option<DiffTarget> {
+    match source {
+        gitcomet_core::domain::FileSource::WorkingDirectory => Some(DiffTarget::WorkingTree {
             path,
             area: DiffArea::Unstaged,
-        },
-        gitcomet_core::domain::FileSource::Commit(commit_id) => DiffTarget::Commit {
+        }),
+        gitcomet_core::domain::FileSource::Commit(commit_id) => Some(DiffTarget::Commit {
             commit_id,
             path: Some(path),
-        },
+        }),
         // Branch file listing is not wired, so this is unreachable from the UI.
-        gitcomet_core::domain::FileSource::Branch(_) => return Vec::new(),
+        gitcomet_core::domain::FileSource::Branch(_) => None,
+    }
+}
+
+/// Reverse of [`content_view_target`]: the [`ViewHistoryEntry`] a file-content
+/// `target` corresponds to, or `None` when `target` is not a file-content view
+/// (range/full-tree diffs). Used to realign the viewer's file-version history
+/// when a global navigation restores a file-content view.
+fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry> {
+    match target {
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => Some(ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::Commit(commit_id.clone()),
+            path: path.clone(),
+        }),
+        DiffTarget::WorkingTree {
+            path,
+            area: DiffArea::Unstaged,
+        } => Some(ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::WorkingDirectory,
+            path: path.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// Step the viewer's back/forward history and replay the resulting view without
+/// recording it (so navigation doesn't mutate the stack).
+pub(super) fn viewer_nav(
+    state: &mut AppState,
+    repo_id: RepoId,
+    dir: crate::model::ViewNavDir,
+) -> Vec<Effect> {
+    let target = {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        let Some(entry) = repo_state.view_history.step(dir) else {
+            return Vec::new();
+        };
+        content_view_target(entry.source, entry.path)
+    };
+    let Some(target) = target else {
+        return Vec::new();
     };
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(state, repo_id, target, true, &mut effects);
     effects.into_vec()
+}
+
+/// Step the broad global navigation history and restore the resulting main-view
+/// snapshot (diff/file content, history log, and/or commit selection) without
+/// recording it as a new destination.
+pub(super) fn global_nav(
+    state: &mut AppState,
+    repo_id: RepoId,
+    dir: crate::model::ViewNavDir,
+) -> Vec<Effect> {
+    let snapshot = {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        repo_state.nav_history.step(dir)
+    };
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+
+    let mut effects: Vec<Effect> = Vec::new();
+
+    // Restore the selected commit (history-log selection / commit details).
+    match snapshot.selected_commit {
+        Some(commit_id) => {
+            let sel_effects = super::effects::select_commit(state, repo_id, commit_id.clone());
+            // `select_commit` no-ops when this commit is already selected, but a
+            // prior nav step or a cancelled load may have left its details
+            // unloaded. Reload unless the details already shown are for this
+            // exact commit. We deliberately do NOT skip merely because a load is
+            // in flight: that load may be for a *different* commit (a stale or
+            // cancelled select) whose result the id-guard will drop, which would
+            // otherwise leave the details pane stuck Loading forever. A redundant
+            // load for the same commit is cheap — this runs once per nav step —
+            // and idempotent.
+            let select_was_noop = sel_effects.is_empty();
+            effects.extend(sel_effects);
+            if select_was_noop
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                let needs_load = !matches!(
+                    &repo_state.history_state.commit_details,
+                    Loadable::Ready(details) if details.id == commit_id
+                );
+                if needs_load {
+                    repo_state.set_commit_details(Loadable::NotLoaded);
+                    effects.push(Effect::LoadCommitDetails { repo_id, commit_id });
+                }
+            }
+        }
+        None => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.set_selected_commit(None);
+                repo_state.set_commit_details(Loadable::NotLoaded);
+            }
+        }
+    }
+
+    // Restore the main content target: a diff/file view, or the history log.
+    match snapshot.diff_target {
+        Some(target) => {
+            // When this global step lands on a file-content view, realign the
+            // viewer's file-version history (a separate stack) onto the file now
+            // shown, so its prev/next-version buttons step relative to it instead
+            // of a stale cursor left from earlier file opens.
+            if snapshot.content_preview
+                && let Some(entry) = view_history_entry_for_target(&target)
+                && let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+            {
+                repo_state.view_history.seek_or_record(entry);
+            }
+            let mut inline = SelectDiffEffects::new();
+            fill_select_diff_inline(
+                state,
+                repo_id,
+                target,
+                snapshot.content_preview,
+                &mut inline,
+            );
+            effects.extend(inline.into_vec());
+        }
+        None => {
+            effects.extend(clear_diff_selection(state, repo_id));
+        }
+    }
+
+    effects
 }
 
 pub(super) fn fill_select_diff_inline(

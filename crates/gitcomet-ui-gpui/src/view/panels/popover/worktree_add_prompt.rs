@@ -3,11 +3,72 @@ use super::*;
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
+    window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+
+    let ref_row = if let Some(search) = this.branch_picker_search_input.clone() {
+        let is_focused = search
+            .read_with(cx, |input, _| input.focus_handle())
+            .is_focused(window);
+
+        if is_focused {
+            let branches: Vec<String> = this
+                .active_repo()
+                .map(|repo| {
+                    let mut names: Vec<String> = vec!["HEAD".to_string()];
+                    if let Loadable::Ready(branches) = &repo.branches {
+                        names.extend(branches.iter().map(|b| b.name.clone()));
+                    }
+                    if let Loadable::Ready(tags) = &repo.tags {
+                        names.extend(tags.iter().map(|t| t.name.clone()));
+                    }
+                    names
+                })
+                .unwrap_or_default();
+            let items: Vec<SharedString> = branches.iter().map(|n| n.clone().into()).collect();
+
+            div().px_2().pb_1().w_full().min_w(px(0.0)).child(
+                components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
+                    .items(items)
+                    .tooltip_host(this.tooltip_host.clone())
+                    .empty_text("No matches")
+                    .max_height(scaled_px(240.0))
+                    .selected_index(this.branch_picker_selected_index)
+                    .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
+                        let branches: Vec<String> = this
+                            .active_repo()
+                            .map(|repo| {
+                                let mut names: Vec<String> = vec!["HEAD".to_string()];
+                                if let Loadable::Ready(branches) = &repo.branches {
+                                    names.extend(branches.iter().map(|b| b.name.clone()));
+                                }
+                                if let Loadable::Ready(tags) = &repo.tags {
+                                    names.extend(tags.iter().map(|t| t.name.clone()));
+                                }
+                                names
+                            })
+                            .unwrap_or_default();
+                        if let Some(name) = branches.get(ix).cloned() {
+                            let repo_id = this.active_repo_id().unwrap_or(RepoId(0));
+                            this.handle_inline_branch_picker_select(name, repo_id, cx);
+                        }
+                    }),
+            )
+        } else {
+            div().px_2().pb_1().w_full().min_w(px(0.0)).child(search)
+        }
+    } else {
+        div()
+            .px_2()
+            .pb_1()
+            .w_full()
+            .min_w(px(0.0))
+            .child(this.worktree_ref_input.clone())
+    };
 
     div()
         .flex()
@@ -89,14 +150,7 @@ pub(super) fn panel(
                 .text_color(theme.colors.text_muted)
                 .child("Branch / commit (optional)"),
         )
-        .child(
-            div()
-                .px_2()
-                .pb_1()
-                .w_full()
-                .min_w(px(0.0))
-                .child(this.worktree_ref_input.clone()),
-        )
+        .child(ref_row)
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -129,9 +183,7 @@ pub(super) fn panel(
                                 );
                                 return;
                             }
-                            let reference = this
-                                .worktree_ref_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
+                            let reference = this.worktree_ref_source_target.trim().to_string();
                             let reference = (!reference.is_empty()).then_some(reference);
                             this.store.dispatch(Msg::AddWorktree {
                                 repo_id,

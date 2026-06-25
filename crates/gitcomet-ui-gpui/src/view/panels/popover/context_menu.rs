@@ -485,6 +485,35 @@ impl PopoverHost {
                     );
                 }
             }
+            ContextMenuAction::OpenInCodeEditor { repo_id, path } => {
+                let full_path = match repo_id {
+                    Some(repo_id) => match self.resolve_workdir_path(repo_id, &path) {
+                        Ok(path) => path,
+                        Err(err) => {
+                            self.push_toast(components::ToastKind::Error, err, cx);
+                            self.close_popover(cx);
+                            return;
+                        }
+                    },
+                    None => path,
+                };
+
+                if !full_path.exists() {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Path not found: {}", full_path.display()),
+                        cx,
+                    );
+                } else if let Err(err) =
+                    crate::external_editor::launch_configured_editor(&full_path)
+                {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open in code editor: {err}"),
+                        cx,
+                    );
+                }
+            }
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
             }
@@ -560,6 +589,9 @@ impl PopoverHost {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }
             ContextMenuAction::DeleteBranch { repo_id, name } => {
+                let _ = self.root_view.update(cx, |root, _| {
+                    root.pending_force_delete_branch_centered = false;
+                });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
@@ -711,6 +743,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
@@ -803,6 +836,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(
@@ -847,6 +881,7 @@ impl PopoverHost {
                     .map(|anchor| match anchor {
                         PopoverAnchor::Point(point) => *point,
                         PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
                     })
                     .unwrap_or_else(|| point(px(64.0), px(64.0)));
                 self.open_popover_at(kind, anchor, window, cx);

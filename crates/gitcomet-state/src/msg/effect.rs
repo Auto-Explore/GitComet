@@ -96,7 +96,7 @@ pub enum Effect {
     LoadBlame {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
     },
     LoadWorktrees {
         repo_id: RepoId,
@@ -120,6 +120,16 @@ pub enum Effect {
     LoadCommitDetails {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
+    OpenFileAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
     },
     LoadDiff {
         repo_id: RepoId,

@@ -81,6 +81,9 @@ impl ActionBarView {
             // The historical-browse badge keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
+            // Global back/forward buttons enable/disable with nav stack position.
+            repo.nav_history.cursor.hash(&mut hasher);
+            repo.nav_history.entries.len().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -352,6 +355,55 @@ impl Render for ActionBarView {
                 || repo.push_in_flight > 0
         });
 
+        // Global back/forward navigation, mirroring the mouse side-buttons and
+        // Alt+Left / Alt+Right. Sits at the very start of the action bar.
+        let (nav_can_back, nav_can_forward) = self
+            .active_repo()
+            .map(|repo| (repo.nav_history.can_back(), repo.nav_history.can_forward()))
+            .unwrap_or((false, false));
+        let nav_back = components::Button::new("global_nav_back", "")
+            .start_slot(icon(
+                "icons/arrow_left.svg",
+                if nav_can_back {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                },
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .disabled(!nav_can_back)
+            .on_click(theme, cx, |this, _e, _w, _cx| {
+                if let Some(repo_id) = this.active_repo_id() {
+                    this.store.dispatch(Msg::GlobalNavBack { repo_id });
+                }
+            })
+            .gitcomet_tooltip(theme, "Navigate Back (Alt+Left)".into());
+        let nav_forward = components::Button::new("global_nav_forward", "")
+            .start_slot(icon(
+                "icons/arrow_right.svg",
+                if nav_can_forward {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                },
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .disabled(!nav_can_forward)
+            .on_click(theme, cx, |this, _e, _w, _cx| {
+                if let Some(repo_id) = this.active_repo_id() {
+                    this.store.dispatch(Msg::GlobalNavForward { repo_id });
+                }
+            })
+            .gitcomet_tooltip(theme, "Navigate Forward (Alt+Right)".into());
+        let global_nav = div()
+            .id("global_nav")
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .flex_none()
+            .child(nav_back)
+            .child(nav_forward);
+
         let repo_picker = div()
             .id("repo_picker")
             .debug_selector(|| "repo_picker".to_string())
@@ -432,7 +484,14 @@ impl Render for ActionBarView {
                     .child(branch),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(PopoverKind::BranchPicker, e.position(), window, cx);
+                this.open_popover_at(
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    },
+                    e.position(),
+                    window,
+                    cx,
+                );
             }))
             .gitcomet_tooltip(theme, "Select branch".into());
 
@@ -687,7 +746,28 @@ impl Render for ActionBarView {
             .selected_bg(menu_selected_bg)
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
                 this.activate_context_menu_invoker(create_branch_invoker.clone(), cx);
-                this.open_popover_for_bounds(PopoverKind::CreateBranch, bounds, window, cx);
+                if let Some(repo_id) = this.state.active_repo {
+                    let target = this
+                        .active_repo()
+                        .and_then(|repo| {
+                            if let Loadable::Ready(head) = &repo.head_branch {
+                                Some(head.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or_else(|| "HEAD".to_string());
+                    this.open_popover_for_bounds(
+                        PopoverKind::CreateBranchFromRefPrompt {
+                            repo_id,
+                            target,
+                            source_selectable: true,
+                        },
+                        bounds,
+                        window,
+                        cx,
+                    );
+                }
             })
             .gitcomet_tooltip(theme, "Create branch".into());
 
@@ -709,6 +789,7 @@ impl Render for ActionBarView {
                     .items_center()
                     .gap_2()
                     .flex_1()
+                    .child(global_nav)
                     .child(repo_picker)
                     .child(branch_picker)
                     .children(historical_badge)

@@ -214,7 +214,7 @@ pub enum Msg {
     LoadBlame {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
     },
     LoadWorktrees {
         repo_id: RepoId,
@@ -252,11 +252,47 @@ pub enum Msg {
         source: FileSource,
         path: PathBuf,
     },
+    /// Open the given file as it was in the parent of `commit_id` (the
+    /// revision just before that commit's change). The parent is resolved
+    /// asynchronously; if `commit_id` is a root commit this is a no-op.
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
+    /// Open the file's content at `commit_id`, resolving `path` to the name the
+    /// file has in that commit's tree (following renames) before opening. Used
+    /// by the file-history list so navigating across a rename does not look up a
+    /// name that is absent from the target commit's tree. Resolved
+    /// asynchronously; falls back to `path` when no rename mapping is found.
+    OpenFileAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
     },
     ResetBrowseToLive {
+        repo_id: RepoId,
+    },
+    /// Step back through the cross-file viewer history (browser-style),
+    /// replaying the previously viewed file/version without recording it.
+    ViewerNavBack {
+        repo_id: RepoId,
+    },
+    /// Step forward through the cross-file viewer history.
+    ViewerNavForward {
+        repo_id: RepoId,
+    },
+    /// Step back through the broad global navigation history (mouse back
+    /// button): diffs, file-content views, and commit selections.
+    GlobalNavBack {
+        repo_id: RepoId,
+    },
+    /// Step forward through the global navigation history (mouse forward button).
+    GlobalNavForward {
         repo_id: RepoId,
     },
     SetSidebarMode {
@@ -727,7 +763,7 @@ pub enum InternalMsg {
     BlameLoaded {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {

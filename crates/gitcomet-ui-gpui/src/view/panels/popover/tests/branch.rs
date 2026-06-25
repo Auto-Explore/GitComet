@@ -288,6 +288,7 @@ pub(super) fn create_tracking_store(
 #[gpui::test]
 fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
     let (store, events, repo, _workdir) = create_tracking_store("create-branch-escape");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -302,7 +303,11 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
             this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranch,
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -361,6 +366,7 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::TestAppContext) {
     let (store, events, _repo, _workdir) = create_tracking_store("create-branch-shortcuts");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -373,7 +379,11 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranch,
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -385,13 +395,13 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
         let _ = window.draw(app);
     });
 
-    cx.debug_bounds("create_branch_cancel_hint")
+    cx.debug_bounds("create_branch_from_ref_cancel_hint")
         .expect("expected create-branch Cancel shortcut hint");
-    cx.debug_bounds("create_branch_go_hint")
+    cx.debug_bounds("create_branch_from_ref_go_hint")
         .expect("expected create-branch Create shortcut hint");
-    cx.debug_bounds("create_branch_cancel_end_slot_separator")
+    cx.debug_bounds("create_branch_from_ref_cancel_end_slot_separator")
         .expect("expected create-branch Cancel shortcut separator");
-    cx.debug_bounds("create_branch_go_end_slot_separator")
+    cx.debug_bounds("create_branch_from_ref_go_end_slot_separator")
         .expect("expected create-branch Create shortcut separator");
 }
 
@@ -414,6 +424,7 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
                     PopoverKind::CreateBranchFromRefPrompt {
                         repo_id: RepoId(1),
                         target: "main".to_string(),
+                        source_selectable: false,
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -509,6 +520,7 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
 #[gpui::test]
 fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext) {
     let (store, events, repo, _workdir) = create_tracking_store("create-branch-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -527,7 +539,11 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
             this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranch,
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -586,6 +602,7 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events, repo, _workdir) = create_tracking_store("create-branch-empty-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
@@ -604,7 +621,11 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
             this.set_active_context_menu_invoker(Some("create_branch_btn".into()), cx);
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::CreateBranch,
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,

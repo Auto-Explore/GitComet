@@ -55,7 +55,9 @@ fn branch_picker_escape_closes(cx: &mut gpui::TestAppContext) {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::BranchPicker,
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,
@@ -108,7 +110,9 @@ fn branch_picker_escape_closes_while_branches_unavailable(cx: &mut gpui::TestApp
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
                 host.open_popover_at(
-                    PopoverKind::BranchPicker,
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
                     cx,

@@ -448,6 +448,19 @@ pub(super) struct DiffSplitResizeState {
 pub(super) use ResizeDragGhost as DiffSplitResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum AnnotateResizeHandle {
+    Divider,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct AnnotateResizeState {
+    pub(in crate::view) start_x: Pixels,
+    pub(in crate::view) start_width: f32,
+}
+
+pub(in crate::view) use ResizeDragGhost as AnnotateResizeDragGhost;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictVSplitResizeHandle {
     Divider,
 }
@@ -2447,26 +2460,48 @@ pub(super) struct TerminalMenuContext {
     pub(super) connected: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BranchPickerPurpose {
+    Checkout,
+    Delete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StashPickerPurpose {
+    Pop,
+    Apply,
+    Drop,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
     RecentRepositoryPicker,
-    BranchPicker,
-    CreateBranch,
+    BranchPicker {
+        purpose: BranchPickerPurpose,
+    },
     CreateBranchFromRefPrompt {
         repo_id: RepoId,
         target: String,
+        source_selectable: bool,
     },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
         remote: String,
         branch: String,
     },
+    CommitPrompt {
+        repo_id: RepoId,
+    },
     StashPrompt,
     StashDropConfirm {
         repo_id: RepoId,
         index: usize,
         message: String,
+    },
+    StashPickerPrompt {
+        repo_id: RepoId,
+        purpose: StashPickerPurpose,
     },
     StashMenu {
         repo_id: RepoId,
@@ -3433,6 +3468,8 @@ pub struct GitCometView {
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) _activation_subscription: gpui::Subscription,
     pub(super) _appearance_subscription: gpui::Subscription,
+    pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
+    pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
     pub(super) theme_mode: ThemeMode,
     pub(super) theme: AppTheme,
@@ -3447,6 +3484,11 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
+    pub(super) command_palette: super::command_palette::CommandPaletteState,
+    pub(super) command_palette_open: bool,
+    #[allow(dead_code)]
+    pub(super) command_palette_subscription: Option<gpui::Subscription>,
+    pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
     pub(super) deferred_repo_bootstrap: Option<DeferredRepoBootstrap>,
@@ -3477,6 +3519,7 @@ pub struct GitCometView {
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
+    pub(super) annotate_enabled: bool,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
@@ -3506,6 +3549,7 @@ pub struct GitCometView {
     pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
+    pub(super) pending_force_delete_branch_centered: bool,
     pub(super) pending_force_remove_worktree_prompt:
         Option<(RepoId, std::path::PathBuf, Option<String>)>,
     pub(super) pending_submodule_trust_prompt:

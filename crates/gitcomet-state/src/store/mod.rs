@@ -27,11 +27,12 @@ use executor::StoreExecutorPool;
 use executor::{
     TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
 };
+#[cfg(feature = "benchmarks")]
+use reducer::fill_select_diff_inline;
 use reducer::{
-    fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
-    fill_stage_path_inline, fill_stage_paths_inline, fill_unstage_path_inline,
-    fill_unstage_paths_inline, reduce, reset_conflict_resolutions_inline,
-    set_conflict_region_choice_inline,
+    fill_reorder_repo_tabs_inline, fill_set_active_repo_inline, fill_stage_path_inline,
+    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
+    reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::try_send_state_changed_or_log;
@@ -477,41 +478,6 @@ impl AppStore {
                                 app_state,
                                 repo_id,
                                 insert_before,
-                                &mut effects,
-                            );
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                            effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
-                    }
-                    Msg::SelectDiff { repo_id, target } => {
-                        let mut effects = reducer::SelectDiffEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
-                            fill_select_diff_inline(
-                                app_state,
-                                repo_id,
-                                target,
-                                false,
                                 &mut effects,
                             );
                             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());

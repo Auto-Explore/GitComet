@@ -126,6 +126,7 @@ impl GitCometView {
                                 this.diff_whitespace_mode.key().to_string(),
                             ),
                             diff_view_mode: Some(this.diff_view_mode.key().to_string()),
+                            annotate_enabled: Some(this.annotate_enabled),
                             diff_reveal_whitespace_chars: Some(
                                 this.diff_reveal_whitespace_chars,
                             ),
@@ -151,6 +152,7 @@ impl GitCometView {
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
                             git_executable_path: None,
+                            external_code_editor: None,
                         };
 
                         Some(settings)

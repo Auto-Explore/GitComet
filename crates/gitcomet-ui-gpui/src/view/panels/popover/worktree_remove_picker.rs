@@ -58,6 +58,7 @@ pub(super) fn panel(
                             .tooltip_host(this.tooltip_host.clone())
                             .empty_text("No worktrees")
                             .max_height(scaled_px(260.0))
+                            .selected_index(this.worktree_picker_selected_index)
                             .render(
                                 theme,
                                 ui_scale_percent,

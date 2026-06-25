@@ -1272,6 +1272,100 @@ fn single_line_shift_enter_is_a_noop(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn escape_key_flags_escape_pressed(cx: &mut gpui::TestAppContext) {
+    let (input, cx) =
+        cx.add_window_view(|window, cx| TextInput::new(TextInputOptions::default(), window, cx));
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            assert!(
+                !input.take_escape_pressed(),
+                "escape should not be flagged before the key is pressed"
+            );
+
+            let keystroke = gpui::Keystroke::parse("escape")
+                .expect("valid keystroke")
+                .with_simulated_ime();
+            let event = gpui::KeyDownEvent {
+                keystroke,
+                is_held: false,
+                prefer_character_input: false,
+            };
+            input.on_key_down(&event, _window, cx);
+
+            assert!(
+                input.take_escape_pressed(),
+                "escape key should flag escape_pressed"
+            );
+            assert!(
+                !input.take_escape_pressed(),
+                "take_escape_pressed should consume the flag"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn modified_escape_keystroke_does_not_flag_escape_pressed(cx: &mut gpui::TestAppContext) {
+    let (input, cx) =
+        cx.add_window_view(|window, cx| TextInput::new(TextInputOptions::default(), window, cx));
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let mut keystroke = gpui::Keystroke::parse("ctrl-escape")
+                .expect("valid keystroke")
+                .with_simulated_ime();
+            keystroke.modifiers.control = true;
+            let event = gpui::KeyDownEvent {
+                keystroke,
+                is_held: false,
+                prefer_character_input: false,
+            };
+            input.on_key_down(&event, _window, cx);
+
+            assert!(
+                !input.take_escape_pressed(),
+                "modified escape should not flag escape_pressed"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn single_line_enter_flags_enter_pressed(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: false,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            assert!(
+                !input.take_enter_pressed(),
+                "enter should not be flagged before the key is pressed"
+            );
+
+            input.enter(&Enter, window, cx);
+
+            assert!(
+                input.take_enter_pressed(),
+                "enter key should flag enter_pressed in single-line inputs"
+            );
+            assert!(
+                !input.take_enter_pressed(),
+                "take_enter_pressed should consume the flag"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn stable_highlight_provider_binding_key_preserves_existing_provider_and_cache(
     cx: &mut gpui::TestAppContext,
 ) {

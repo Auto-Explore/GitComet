@@ -1,10 +1,20 @@
 use super::*;
 
 pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
-    model_for_state(host.state.as_ref(), repo_id)
+    let workdir = host
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| repo.spec.workdir.clone());
+    model_for_state(host.state.as_ref(), repo_id, workdir)
 }
 
-fn model_for_state(state: &AppState, repo_id: RepoId) -> ContextMenuModel {
+fn model_for_state(
+    state: &AppState,
+    repo_id: RepoId,
+    workdir: Option<std::path::PathBuf>,
+) -> ContextMenuModel {
     let Some(repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         return ContextMenuModel::new(Vec::new());
     };
@@ -25,15 +35,32 @@ fn model_for_state(state: &AppState, repo_id: RepoId) -> ContextMenuModel {
         .filter(|active_repo| close_to_right.contains(active_repo))
         .map(|_| repo_id);
 
-    ContextMenuModel::new(vec![
-        ContextMenuItem::Entry {
-            label: "Active".into(),
-            icon: Some("icons/check.svg".into()),
-            shortcut: None,
-            disabled: state.active_repo == Some(repo_id),
-            action: Box::new(ContextMenuAction::ActivateRepo { repo_id }),
-        },
-        ContextMenuItem::Separator,
+    let mut items = vec![ContextMenuItem::Entry {
+        label: "Active".into(),
+        icon: Some("icons/check.svg".into()),
+        shortcut: None,
+        disabled: state.active_repo == Some(repo_id),
+        action: Box::new(ContextMenuAction::ActivateRepo { repo_id }),
+    }];
+
+    if crate::external_editor::configured_setting().is_some()
+        && let Some(ref workdir) = workdir
+    {
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Open in code editor".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: Some("Ctrl+Shift+E".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenInCodeEditor {
+                repo_id: None,
+                path: workdir.clone(),
+            }),
+        });
+    }
+
+    items.push(ContextMenuItem::Separator);
+    items.extend_from_slice(&[
         ContextMenuItem::Entry {
             label: "Close".into(),
             icon: Some("icons/repo_tab_close.svg".into()),
@@ -61,7 +88,9 @@ fn model_for_state(state: &AppState, repo_id: RepoId) -> ContextMenuModel {
                 activate_after: Some(repo_id),
             }),
         },
-    ])
+    ]);
+
+    ContextMenuModel::new(items)
 }
 
 #[cfg(test)]
@@ -116,7 +145,7 @@ mod tests {
     #[test]
     fn active_entry_activates_inactive_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2));
+        let model = model_for_state(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Active");
 
@@ -130,7 +159,7 @@ mod tests {
     #[test]
     fn active_entry_is_disabled_for_active_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
-        let model = model_for_state(&state, RepoId(2));
+        let model = model_for_state(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Active");
 
@@ -144,7 +173,7 @@ mod tests {
     #[test]
     fn close_repo_entry_uses_repo_tab_close_icon() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2));
+        let model = model_for_state(&state, RepoId(2), None);
 
         let ContextMenuItem::Entry {
             icon,
@@ -170,7 +199,7 @@ mod tests {
     #[test]
     fn close_right_entry_targets_only_repos_to_the_right() {
         let state = state_with_repo_tabs(RepoId(3), 3);
-        let model = model_for_state(&state, RepoId(2));
+        let model = model_for_state(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Close repositories to the right");
 
@@ -189,7 +218,7 @@ mod tests {
     #[test]
     fn close_right_entry_is_disabled_for_last_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
-        let model = model_for_state(&state, RepoId(3));
+        let model = model_for_state(&state, RepoId(3), None);
 
         let (disabled, action) = entry_action(&model, "Close repositories to the right");
 
@@ -208,7 +237,7 @@ mod tests {
     #[test]
     fn close_other_repositories_entry_targets_every_repo_except_selected() {
         let state = state_with_repo_tabs(RepoId(1), 3);
-        let model = model_for_state(&state, RepoId(2));
+        let model = model_for_state(&state, RepoId(2), None);
 
         let (disabled, action) = entry_action(&model, "Close other repositories");
 
@@ -227,7 +256,7 @@ mod tests {
     #[test]
     fn close_other_repositories_entry_is_disabled_for_single_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 1);
-        let model = model_for_state(&state, RepoId(1));
+        let model = model_for_state(&state, RepoId(1), None);
 
         let (disabled, action) = entry_action(&model, "Close other repositories");
 
@@ -247,6 +276,6 @@ mod tests {
     fn missing_repo_tab_returns_empty_menu_model() {
         let state = state_with_repo_tabs(RepoId(1), 3);
 
-        assert!(model_for_state(&state, RepoId(99)).items.is_empty());
+        assert!(model_for_state(&state, RepoId(99), None).items.is_empty());
     }
 }
