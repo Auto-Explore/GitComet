@@ -5,9 +5,11 @@ use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
 };
 use gitcomet_state::model::GitLogTagFetchMode;
+use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 const SETTINGS_WINDOW_MIN_WIDTH_PX: f32 = 620.0;
 const SETTINGS_WINDOW_MIN_HEIGHT_PX: f32 = 460.0;
@@ -27,6 +29,79 @@ const GITHUB_URL: &str = "https://github.com/Auto-Explore/GitComet";
 const THEMES_GUIDE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/docs/themes.md";
 const LICENSE_URL: &str = "https://github.com/Auto-Explore/GitComet/blob/main/LICENSE-AGPL-3.0";
 const LICENSE_NAME: &str = "AGPL-3.0";
+
+#[derive(Clone, Default)]
+struct ExternalEditorPreferencePersistQueue {
+    latest_sequence: Arc<AtomicU64>,
+    write_lock: Arc<Mutex<()>>,
+}
+
+impl ExternalEditorPreferencePersistQueue {
+    fn next_sequence(&self) -> u64 {
+        self.latest_sequence
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    fn persist_if_latest(
+        &self,
+        sequence: u64,
+        setting: Option<ExternalCodeEditorSetting>,
+    ) -> std::io::Result<bool> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if self.latest_sequence.load(Ordering::Acquire) != sequence {
+            return Ok(false);
+        }
+        session::persist_ui_settings(external_editor_preference_settings(setting))?;
+        Ok(true)
+    }
+
+    #[cfg(test)]
+    fn persist_to_path_if_latest(
+        &self,
+        sequence: u64,
+        setting: Option<ExternalCodeEditorSetting>,
+        path: &std::path::Path,
+    ) -> std::io::Result<bool> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if self.latest_sequence.load(Ordering::Acquire) != sequence {
+            return Ok(false);
+        }
+        session::persist_ui_settings_to_path(external_editor_preference_settings(setting), path)?;
+        Ok(true)
+    }
+}
+
+static EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE: OnceLock<ExternalEditorPreferencePersistQueue> =
+    OnceLock::new();
+
+fn external_editor_preference_persist_queue() -> &'static ExternalEditorPreferencePersistQueue {
+    EXTERNAL_EDITOR_PREFERENCE_PERSIST_QUEUE.get_or_init(Default::default)
+}
+
+fn external_editor_preference_settings(
+    setting: Option<ExternalCodeEditorSetting>,
+) -> session::UiSettings {
+    session::UiSettings {
+        external_code_editor: Some(setting),
+        ..session::UiSettings::default()
+    }
+}
+
+fn custom_external_editor_path_prompt_options() -> gpui::PathPromptOptions {
+    gpui::PathPromptOptions {
+        files: true,
+        directories: true,
+        multiple: false,
+        prompt: Some("Select external code editor".into()),
+    }
+}
 
 const CHANGE_TRACKING_OPTIONS: &[(&str, ChangeTrackingView, &str)] = &[
     (
@@ -96,6 +171,7 @@ enum SettingsSection {
     UiScale,
     UiFont,
     EditorFont,
+    ExternalCodeEditor,
     DateFormat,
     Timezone,
     ChangeTracking,
@@ -166,10 +242,12 @@ pub(crate) struct SettingsWindowView {
     use_font_ligatures: bool,
     ui_font_options: Arc<[String]>,
     editor_font_options: Arc<[String]>,
+    external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]>,
     settings_window_scroll: ScrollHandle,
     theme_scroll: UniformListScrollHandle,
     ui_font_scroll: UniformListScrollHandle,
     editor_font_scroll: UniformListScrollHandle,
+    external_editor_scroll: UniformListScrollHandle,
     date_format_scroll: UniformListScrollHandle,
     timezone_scroll: UniformListScrollHandle,
     change_tracking_scroll: UniformListScrollHandle,
@@ -200,13 +278,22 @@ pub(crate) struct SettingsWindowView {
     git_executable_mode: GitExecutableMode,
     git_custom_path_draft: String,
     git_executable_input: Entity<components::TextInput>,
+    external_editor_setting: Option<ExternalCodeEditorSetting>,
+    external_editor_custom_path_draft: String,
+    external_editor_custom_arguments_draft: String,
+    external_editor_custom_path_input: Entity<components::TextInput>,
+    external_editor_custom_arguments_input: Entity<components::TextInput>,
     expanded_section: Option<SettingsSection>,
     hover_resize_edge: Option<ResizeEdge>,
     title_drag_state: chrome::TitleBarDragState,
     _git_executable_input_subscription: gpui::Subscription,
+    _external_editor_custom_path_input_subscription: gpui::Subscription,
+    _external_editor_custom_arguments_input_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
     #[cfg(test)]
     overflow_probe: bool,
+    #[cfg(test)]
+    external_editor_browse_notify_count: usize,
 }
 
 pub(crate) fn open_settings_window(cx: &mut App) {
@@ -484,6 +571,13 @@ fn git_executable_scope_note() -> &'static str {
     "Applies to the main GitComet browser window. Git-invoked command modes keep using git from System PATH. Helper tools such as gpg are resolved by Git from the app environment unless configured in Git."
 }
 
+fn initial_external_editor_setting(
+    ui_session: &session::UiSession,
+) -> Option<ExternalCodeEditorSetting> {
+    crate::external_editor::configured_setting_preference_override()
+        .unwrap_or_else(|| ui_session.external_code_editor.clone())
+}
+
 impl SettingsWindowView {
     fn new(window: &mut Window, cx: &mut gpui::Context<Self>) -> Self {
         window.set_window_title(SETTINGS_WINDOW_TITLE);
@@ -543,6 +637,21 @@ impl SettingsWindowView {
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
+        let external_editor_setting = initial_external_editor_setting(&ui_session);
+        let external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]> =
+            crate::external_editor::external_editor_options(external_editor_setting.as_ref())
+                .into();
+        let (external_editor_custom_path_draft, external_editor_custom_arguments_draft) =
+            match &external_editor_setting {
+                Some(ExternalCodeEditorSetting::Custom {
+                    executable,
+                    arguments,
+                }) => (
+                    executable.display().to_string(),
+                    arguments.clone().unwrap_or_default(),
+                ),
+                _ => (String::new(), String::new()),
+            };
         let theme = theme_mode.resolve_theme(window.appearance());
         let runtime_info = SettingsRuntimeInfo::detect();
         let git_executable_mode =
@@ -602,6 +711,65 @@ impl SettingsWindowView {
                 }
             });
 
+        let external_editor_custom_path_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/editor".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+        external_editor_custom_path_input.update(cx, |input, cx| {
+            input.set_text(external_editor_custom_path_draft.clone(), cx);
+        });
+        let external_editor_custom_arguments_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "--reuse-window {path}".into(),
+                    multiline: false,
+                    read_only: false,
+                    chromeless: false,
+                    soft_wrap: false,
+                },
+                window,
+                cx,
+            )
+        });
+        external_editor_custom_arguments_input.update(cx, |input, cx| {
+            input.set_text(external_editor_custom_arguments_draft.clone(), cx);
+        });
+        let external_editor_custom_path_input_subscription =
+            cx.observe(&external_editor_custom_path_input, |this, input, cx| {
+                let next = input.read(cx).text().to_string();
+                if this.external_editor_custom_path_draft == next {
+                    return;
+                }
+                this.external_editor_custom_path_draft = next;
+                if this.external_editor_is_custom() {
+                    this.persist_external_editor_from_custom_drafts(cx);
+                }
+                cx.notify();
+            });
+        let external_editor_custom_arguments_input_subscription = cx.observe(
+            &external_editor_custom_arguments_input,
+            |this, input, cx| {
+                let next = input.read(cx).text().to_string();
+                if this.external_editor_custom_arguments_draft == next {
+                    return;
+                }
+                this.external_editor_custom_arguments_draft = next;
+                if this.external_editor_is_custom() {
+                    this.persist_external_editor_from_custom_drafts(cx);
+                }
+                cx.notify();
+            },
+        );
+
         Self {
             theme_mode,
             theme,
@@ -611,10 +779,12 @@ impl SettingsWindowView {
             use_font_ligatures: font_preferences.use_font_ligatures,
             ui_font_options: crate::font_preferences::ui_font_options(window),
             editor_font_options: crate::font_preferences::editor_font_options(window),
+            external_editor_options,
             settings_window_scroll: ScrollHandle::default(),
             theme_scroll: UniformListScrollHandle::default(),
             ui_font_scroll: UniformListScrollHandle::default(),
             editor_font_scroll: UniformListScrollHandle::default(),
+            external_editor_scroll: UniformListScrollHandle::default(),
             date_format_scroll: UniformListScrollHandle::default(),
             timezone_scroll: UniformListScrollHandle::default(),
             change_tracking_scroll: UniformListScrollHandle::default(),
@@ -645,13 +815,24 @@ impl SettingsWindowView {
             git_executable_mode,
             git_custom_path_draft,
             git_executable_input,
+            external_editor_setting,
+            external_editor_custom_path_draft,
+            external_editor_custom_arguments_draft,
+            external_editor_custom_path_input,
+            external_editor_custom_arguments_input,
             expanded_section: None,
             hover_resize_edge: None,
             title_drag_state: chrome::TitleBarDragState::default(),
             _git_executable_input_subscription: git_executable_input_subscription,
+            _external_editor_custom_path_input_subscription:
+                external_editor_custom_path_input_subscription,
+            _external_editor_custom_arguments_input_subscription:
+                external_editor_custom_arguments_input_subscription,
             _appearance_subscription: appearance_subscription,
             #[cfg(test)]
             overflow_probe: false,
+            #[cfg(test)]
+            external_editor_browse_notify_count: 0,
         }
     }
 
@@ -665,7 +846,16 @@ impl SettingsWindowView {
     }
 
     fn persist_preferences(&self, cx: &mut gpui::Context<Self>) {
-        let settings = session::UiSettings {
+        let settings = self.preference_settings();
+
+        cx.background_spawn(async move {
+            let _ = session::persist_ui_settings(settings);
+        })
+        .detach();
+    }
+
+    fn preference_settings(&self) -> session::UiSettings {
+        session::UiSettings {
             window_width: None,
             window_height: None,
             sidebar_width: None,
@@ -698,12 +888,8 @@ impl SettingsWindowView {
             default_history_mode: Some(self.default_history_mode),
             commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
-        };
-
-        cx.background_spawn(async move {
-            let _ = session::persist_ui_settings(settings);
-        })
-        .detach();
+            external_code_editor: None,
+        }
     }
 
     fn show_root(&mut self, cx: &mut gpui::Context<Self>) {
@@ -854,6 +1040,91 @@ impl SettingsWindowView {
 
         self.git_executable_mode = mode;
         self.apply_git_executable_settings(cx);
+    }
+
+    fn external_editor_is_custom(&self) -> bool {
+        matches!(
+            self.external_editor_setting,
+            Some(ExternalCodeEditorSetting::Custom { .. })
+        )
+    }
+
+    fn custom_external_editor_setting_from_drafts(&self) -> ExternalCodeEditorSetting {
+        let executable = self.external_editor_custom_path_draft.trim();
+        let arguments = self.external_editor_custom_arguments_draft.trim();
+        ExternalCodeEditorSetting::Custom {
+            executable: if executable.is_empty() {
+                PathBuf::new()
+            } else {
+                PathBuf::from(executable)
+            },
+            arguments: (!arguments.is_empty()).then(|| arguments.to_string()),
+        }
+    }
+
+    fn persist_external_editor_preference(&self, cx: &mut gpui::Context<Self>) {
+        let setting = self.external_editor_setting.clone();
+        crate::external_editor::set_configured_setting_override(setting.clone());
+        let persist_queue = external_editor_preference_persist_queue().clone();
+        let sequence = persist_queue.next_sequence();
+        let setting_for_persist = setting.clone();
+        cx.background_spawn(async move {
+            let _ = persist_queue.persist_if_latest(sequence, setting_for_persist);
+        })
+        .detach();
+        cx.defer(move |cx| {
+            crate::app::refresh_external_editor_app_surfaces_for_setting(setting.as_ref(), cx);
+        });
+    }
+
+    fn apply_browsed_external_editor_path(&mut self, path: PathBuf, cx: &mut gpui::Context<Self>) {
+        let next = path.display().to_string();
+        self.external_editor_custom_path_draft = next.clone();
+        self.external_editor_custom_path_input
+            .update(cx, |input, cx| input.set_text(next, cx));
+        self.persist_external_editor_from_custom_drafts(cx);
+        self.notify_after_external_editor_browse(cx);
+    }
+
+    fn notify_after_external_editor_browse(&mut self, cx: &mut gpui::Context<Self>) {
+        #[cfg(test)]
+        {
+            self.external_editor_browse_notify_count += 1;
+        }
+        cx.notify();
+    }
+
+    fn persist_external_editor_from_custom_drafts(&mut self, cx: &mut gpui::Context<Self>) {
+        let next = self.custom_external_editor_setting_from_drafts();
+        if self.external_editor_setting.as_ref() == Some(&next) {
+            return;
+        }
+        self.external_editor_setting = Some(next);
+        self.persist_external_editor_preference(cx);
+    }
+
+    fn set_external_editor_setting(
+        &mut self,
+        next: Option<ExternalCodeEditorSetting>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.external_editor_setting == next {
+            self.expanded_section = None;
+            cx.notify();
+            return;
+        }
+
+        self.external_editor_setting = next;
+        self.expanded_section = None;
+        self.persist_external_editor_preference(cx);
+        cx.notify();
+    }
+
+    fn select_custom_external_editor(&mut self, cx: &mut gpui::Context<Self>) {
+        self.set_external_editor_setting(
+            Some(self.custom_external_editor_setting_from_drafts()),
+            cx,
+        );
     }
 
     fn font_option_detail(&self, family: &str) -> Option<SharedString> {
@@ -2019,6 +2290,55 @@ impl SettingsWindowView {
             .collect()
     }
 
+    fn render_external_editor_option_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let theme = this.theme;
+        range
+            .filter_map(|ix| this.external_editor_options.get(ix).cloned())
+            .map(|option| {
+                let selected = match &option.kind {
+                    crate::external_editor::ExternalEditorOptionKind::None => {
+                        this.external_editor_setting.is_none()
+                    }
+                    crate::external_editor::ExternalEditorOptionKind::Detected(setting) => {
+                        this.external_editor_setting.as_ref() == Some(setting)
+                    }
+                    crate::external_editor::ExternalEditorOptionKind::Custom => {
+                        this.external_editor_is_custom()
+                    }
+                };
+                let row = this.option_row(
+                    option.id.clone(),
+                    option.label.clone(),
+                    option.detail.clone().map(Into::into),
+                    selected,
+                    theme,
+                );
+                match option.kind {
+                    crate::external_editor::ExternalEditorOptionKind::None => row
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_external_editor_setting(None, cx);
+                        }))
+                        .into_any_element(),
+                    crate::external_editor::ExternalEditorOptionKind::Detected(setting) => row
+                        .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                            this.set_external_editor_setting(Some(setting.clone()), cx);
+                        }))
+                        .into_any_element(),
+                    crate::external_editor::ExternalEditorOptionKind::Custom => row
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.select_custom_external_editor(cx);
+                        }))
+                        .into_any_element(),
+                }
+            })
+            .collect()
+    }
+
     fn render_date_format_option_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -2396,6 +2716,10 @@ impl Render for SettingsWindowView {
 
         self.git_executable_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.external_editor_custom_path_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.external_editor_custom_arguments_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
 
         #[cfg(test)]
         let show_overflow_probe =
@@ -2477,6 +2801,21 @@ impl Render for SettingsWindowView {
                         )
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_use_font_ligatures(!this.use_font_ligatures, cx);
+                        }));
+
+                    let external_editor_row = self
+                        .summary_row(
+                            "settings_window_external_code_editor",
+                            "External code editor",
+                            crate::external_editor::label_for_setting(
+                                self.external_editor_setting.as_ref(),
+                            )
+                            .into(),
+                            self.expanded_section == Some(SettingsSection::ExternalCodeEditor),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.toggle_section(SettingsSection::ExternalCodeEditor, cx);
                         }));
 
                     let timezone_row = self
@@ -2847,6 +3186,120 @@ impl Render for SettingsWindowView {
                     }
 
                     general_card = general_card.child(font_ligatures_row);
+
+                    general_card = general_card.child(external_editor_row);
+                    if self.expanded_section == Some(SettingsSection::ExternalCodeEditor) {
+                        let list = uniform_list(
+                            "settings_window_external_code_editor_list",
+                            self.external_editor_options.len(),
+                            cx.processor(Self::render_external_editor_option_rows),
+                        )
+                        .w_full()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .min_h(px(0.0))
+                        .track_scroll(&self.external_editor_scroll)
+                        .on_scroll_wheel({
+                            let scroll = self.external_editor_scroll.clone();
+                            move |event, window, cx| {
+                                if uniform_list_should_stop_scroll_propagation(
+                                    &scroll, event, window,
+                                ) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        })
+                        .into_any_element();
+                        general_card = general_card.child(self.dropdown_list_container(
+                            "settings_window_external_code_editor_list_container",
+                            "settings_window_external_code_editor_scrollbar",
+                            self.external_editor_scroll.clone(),
+                            self.external_editor_options.len(),
+                            SETTINGS_DROPDOWN_DETAIL_ROW_HEIGHT_PX,
+                            SETTINGS_DROPDOWN_DETAIL_LIST_EXTRA_HEIGHT_PX,
+                            list,
+                            theme,
+                        ));
+                    }
+
+                    if self.external_editor_is_custom() {
+                        let browse_button = components::Button::new(
+                            "settings_window_external_code_editor_browse",
+                            "Browse",
+                        )
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, |_this, _e, window, cx| {
+                            let view = cx.weak_entity();
+                            let rx = cx.prompt_for_paths(custom_external_editor_path_prompt_options());
+
+                            window
+                                .spawn(cx, async move |cx| {
+                                    let result = rx.await;
+                                    let paths = match result {
+                                        Ok(Ok(Some(paths))) => paths,
+                                        Ok(Ok(None)) => return,
+                                        Ok(Err(_)) | Err(_) => return,
+                                    };
+                                    let Some(path) = paths.into_iter().next() else {
+                                        return;
+                                    };
+                                    let _ = view.update(cx, |this, cx| {
+                                        this.apply_browsed_external_editor_path(path, cx);
+                                    });
+                                })
+                                .detach();
+                        });
+
+                        general_card = general_card.child(
+                            self.detail_container(
+                                "settings_window_external_code_editor_custom_container",
+                                theme,
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Custom editor executable"),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .child(self.external_editor_custom_path_input.clone()),
+                                    )
+                                    .child(browse_button),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pt_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Arguments"),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .child(
+                                        self.external_editor_custom_arguments_input.clone(),
+                                    ),
+                            ),
+                        );
+                    }
 
                     general_card = general_card.child(date_format_row);
                     if self.expanded_section == Some(SettingsSection::DateFormat) {
@@ -4338,6 +4791,10 @@ mod tests {
                 "settings_window_editor_font_list_container",
             ),
             (
+                SettingsSection::ExternalCodeEditor,
+                "settings_window_external_code_editor_list_container",
+            ),
+            (
                 SettingsSection::Timezone,
                 "settings_window_timezone_list_container",
             ),
@@ -4726,6 +5183,252 @@ mod tests {
                 .is_some(),
             "expected custom git executable mode to render its detail container"
         );
+    }
+
+    #[gpui::test]
+    fn custom_external_editor_renders_detail_container(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+        settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
+        settings_cx.run_until_parked();
+
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_external_code_editor_custom_container")
+                .is_none(),
+            "expected external editor custom details to stay hidden for the default None setting"
+        );
+
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.external_editor_setting = Some(ExternalCodeEditorSetting::Custom {
+                executable: PathBuf::new(),
+                arguments: None,
+            });
+            cx.notify();
+        });
+        settings_cx.run_until_parked();
+        settings_cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            settings_cx
+                .debug_bounds("settings_window_external_code_editor_custom_container")
+                .is_some(),
+            "expected custom external editor mode to render its detail container"
+        );
+    }
+
+    #[gpui::test]
+    fn browsed_external_editor_path_updates_custom_setting_and_notifies(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let _external_editor_guard =
+            crate::external_editor::configured_setting_override_test_guard();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
+        settings_cx.run_until_parked();
+
+        let editor_path = PathBuf::from("/tmp/gitcomet-custom-editor");
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.apply_browsed_external_editor_path(editor_path.clone(), cx);
+
+            assert_eq!(
+                settings.external_editor_setting,
+                Some(ExternalCodeEditorSetting::Custom {
+                    executable: editor_path.clone(),
+                    arguments: None,
+                })
+            );
+            assert_eq!(
+                settings.external_editor_custom_path_draft,
+                editor_path.display().to_string()
+            );
+            assert_eq!(
+                settings
+                    .external_editor_custom_path_input
+                    .read(cx)
+                    .text()
+                    .to_string(),
+                editor_path.display().to_string()
+            );
+            assert_eq!(settings.external_editor_browse_notify_count, 1);
+        });
+    }
+
+    #[test]
+    fn custom_external_editor_browse_prompt_allows_app_bundle_directories() {
+        let options = custom_external_editor_path_prompt_options();
+
+        assert!(
+            options.files,
+            "custom external editor browsing should still allow executable files"
+        );
+        assert!(
+            options.directories,
+            "custom external editor browsing should allow macOS .app bundle directories"
+        );
+        assert!(
+            !options.multiple,
+            "custom external editor browsing should remain a single-selection prompt"
+        );
+        assert_eq!(
+            options.prompt.as_ref().map(ToString::to_string),
+            Some("Select external code editor".to_string())
+        );
+    }
+
+    #[gpui::test]
+    fn external_editor_setting_seeds_from_pending_override_and_can_clear(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let _external_editor_guard =
+            crate::external_editor::configured_setting_override_test_guard();
+        let pending_setting = ExternalCodeEditorSetting::Custom {
+            executable: PathBuf::from("/tmp/gitcomet-pending-editor"),
+            arguments: Some("--reuse-window {path}".to_string()),
+        };
+        crate::external_editor::set_configured_setting_override(Some(pending_setting.clone()));
+
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, cx| {
+                assert_eq!(
+                    settings.external_editor_setting,
+                    Some(pending_setting.clone()),
+                    "settings should use the pending in-memory editor preference before session persistence finishes"
+                );
+
+                settings.set_external_editor_setting(None, cx);
+
+                assert_eq!(settings.external_editor_setting, None);
+                assert_eq!(
+                    crate::external_editor::configured_setting_preference_override(),
+                    Some(None),
+                    "clearing the reopened settings window should replace the pending editor preference"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn external_editor_preference_persist_queue_skips_stale_custom_draft_writes() {
+        let session_file = unique_session_file("external-editor-draft-sequence");
+        let queue = ExternalEditorPreferencePersistQueue::default();
+        let stale_setting = Some(ExternalCodeEditorSetting::Custom {
+            executable: PathBuf::from("/tmp/editor"),
+            arguments: Some("--reuse".to_string()),
+        });
+        let latest_setting = Some(ExternalCodeEditorSetting::Custom {
+            executable: PathBuf::from("/tmp/editor-final"),
+            arguments: Some("--reuse-window {path}".to_string()),
+        });
+
+        let stale_sequence = queue.next_sequence();
+        let latest_sequence = queue.next_sequence();
+
+        assert!(
+            queue
+                .persist_to_path_if_latest(latest_sequence, latest_setting.clone(), &session_file)
+                .expect("persist latest custom editor draft")
+        );
+        assert!(
+            !queue
+                .persist_to_path_if_latest(stale_sequence, stale_setting, &session_file)
+                .expect("skip stale custom editor draft")
+        );
+
+        let loaded = gitcomet_state::session::load_from_path(&session_file);
+        assert_eq!(loaded.external_code_editor, latest_setting);
+    }
+
+    #[gpui::test]
+    fn generic_preference_persistence_omits_external_editor_snapshot(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (_main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            let _ = settings_window.update(app, |settings, _window, _cx| {
+                settings.external_editor_setting = Some(ExternalCodeEditorSetting::Custom {
+                    executable: PathBuf::from("/tmp/editor-before-theme-change"),
+                    arguments: Some("--reuse-window {path}".to_string()),
+                });
+                let persisted = settings.preference_settings();
+                assert_eq!(persisted.external_code_editor, None);
+            });
+        });
     }
 
     #[gpui::test]

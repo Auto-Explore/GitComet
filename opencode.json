@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": {
+    "rust": {
+      "command": ["rust-analyzer"],
+      "env": {
+        "RUST_LOG": "debug"
+      }
+    }
+  }
+}

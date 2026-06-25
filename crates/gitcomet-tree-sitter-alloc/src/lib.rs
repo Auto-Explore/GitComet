@@ -276,7 +276,7 @@ unsafe fn usable_size(ptr: *mut c_void) -> usize {
 
     #[cfg(windows)]
     {
-        unsafe { _msize(ptr) as usize }
+        unsafe { _msize(ptr) }
     }
 
     #[cfg(not(any(

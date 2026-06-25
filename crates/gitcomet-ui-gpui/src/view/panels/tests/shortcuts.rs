@@ -5362,7 +5362,7 @@ fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext
     bind_app_keys_and_global_diff_fallback_for_test(cx);
     focus_diff_panel(cx, &view);
 
-    cx.simulate_keystrokes("ctrl-s ctrl-d ctrl-h ctrl-shift-c");
+    cx.simulate_keystrokes("ctrl-s ctrl-d ctrl-h ctrl-shift-c ctrl-e");
     draw_and_drain_test_window(cx);
 
     let clipboard_text = cx.read_from_clipboard().and_then(|item| item.text());
@@ -5371,6 +5371,94 @@ fn ctrl_shortcuts_do_not_crash_without_diff_target(cx: &mut gpui::TestAppContext
         clipboard_text.is_none(),
         "expected Ctrl+Shift+C to not copy anything without a diff target, got: {clipboard_text:?}"
     );
+}
+
+#[gpui::test]
+fn ctrl_e_opens_file_in_code_editor(cx: &mut gpui::TestAppContext) {
+    let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
+    crate::external_editor::set_configured_setting_override(Some(
+        gitcomet_state::session::ExternalCodeEditorSetting::Custom {
+            executable: std::path::PathBuf::from("/usr/bin/true"),
+            arguments: None,
+        },
+    ));
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70620);
+    let commit_id = CommitId("abcdef00112233cc".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_e_code_editor",
+        std::process::id()
+    ));
+
+    // Create the actual workdir and file so that path.exists() passes
+    std::fs::create_dir_all(&workdir).expect("should create temp workdir");
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let full_path = workdir.join(&path);
+    if let Some(parent) = full_path.parent() {
+        std::fs::create_dir_all(parent).expect("should create parent dir");
+    }
+    std::fs::write(&full_path, "// test file").expect("should write test file");
+
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    // Should not panic; Ctrl+E opens the current file in the code editor
+    cx.simulate_keystrokes("ctrl-e");
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
+fn ctrl_e_is_ignored_when_no_editor_configured(cx: &mut gpui::TestAppContext) {
+    let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70621);
+    let commit_id = CommitId("abcdef00112233dd".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_e_no_editor",
+        std::process::id()
+    ));
+
+    std::fs::create_dir_all(&workdir).expect("should create temp workdir");
+    let path = std::path::PathBuf::from("src/lib.rs");
+    let full_path = workdir.join(&path);
+    if let Some(parent) = full_path.parent() {
+        std::fs::create_dir_all(parent).expect("should create parent dir");
+    }
+    std::fs::write(&full_path, "// test file").expect("should write test file");
+
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        std::slice::from_ref(&path),
+        &path,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("ctrl-e");
+    draw_and_drain_test_window(cx);
 }
 
 #[gpui::test]

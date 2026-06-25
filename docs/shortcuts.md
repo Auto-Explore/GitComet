@@ -23,6 +23,7 @@ These shortcuts apply in the normal GitComet window.
 | Open Settings | `Cmd-,` | `Ctrl-,` | |
 | Open a repository | `Cmd-O` | `Ctrl-O` | |
 | Open recent repositories | `Cmd-Shift-O`, `Option-Cmd-O` | `Ctrl-Shift-O` | |
+| Open active repository in external code editor | `Cmd-Shift-E` | `Ctrl-Shift-E` | Only active when an external code editor is configured. |
 | Close the active repository tab, or close the window if no repo tab can close | `Cmd-W` | `Ctrl-W` | |
 | Close the active window | `Cmd-Shift-W` | `Ctrl-Shift-W` | |
 | Previous repository tab | `Cmd-PageUp`, `Cmd-{`, `Option-Cmd-Left` | `Ctrl-PageUp`, `Ctrl-Shift-Tab` | |
