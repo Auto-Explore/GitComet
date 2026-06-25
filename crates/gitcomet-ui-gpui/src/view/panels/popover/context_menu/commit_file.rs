@@ -62,6 +62,18 @@ pub(super) fn model(
                 path: submodule_state.open_path.clone().unwrap_or_default(),
             }),
         });
+        if crate::external_editor::configured_setting().is_some() {
+            items.push(ContextMenuItem::Entry {
+                label: "Open in code editor".into(),
+                icon: Some("icons/open_external.svg".into()),
+                shortcut: Some("Ctrl+E".into()),
+                disabled: !submodule_state.can_open,
+                action: Box::new(ContextMenuAction::OpenInCodeEditor {
+                    repo_id: Some(repo_id),
+                    path: path.to_path_buf(),
+                }),
+            });
+        }
         if submodule_state.show_load {
             items.push(ContextMenuItem::Entry {
                 label: "Load submodule".into(),
@@ -120,6 +132,18 @@ pub(super) fn model(
             path: path.to_path_buf(),
         }),
     });
+    if crate::external_editor::configured_setting().is_some() {
+        items.push(ContextMenuItem::Entry {
+            label: "Open in code editor".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: Some("Ctrl+E".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenInCodeEditor {
+                repo_id: Some(repo_id),
+                path: path.to_path_buf(),
+            }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "File history".into(),
         icon: Some("icons/refresh.svg".into()),

@@ -21,6 +21,7 @@ pub struct PickerPrompt {
     empty_text: SharedString,
     max_height: gpui::Pixels,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
+    selected_index: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +52,7 @@ impl PickerPrompt {
             empty_text: "No matches".into(),
             max_height: px(360.0),
             tooltip_host: None,
+            selected_index: None,
         }
     }
 
@@ -78,6 +80,11 @@ impl PickerPrompt {
         self
     }
 
+    pub fn selected_index(mut self, ix: Option<usize>) -> Self {
+        self.selected_index = ix;
+        self
+    }
+
     pub fn render<V: 'static>(
         self,
         theme: AppTheme,
@@ -94,6 +101,14 @@ impl PickerPrompt {
             .query_input
             .read_with(cx, |input, _| input.text().trim().to_string());
         let matches = match_items(&self.items, &query);
+
+        let selected_index = self.selected_index.and_then(|ix| {
+            if matches.is_empty() {
+                None
+            } else {
+                Some(ix.min(matches.len() - 1))
+            }
+        });
 
         let body = div()
             .flex()
@@ -131,7 +146,7 @@ impl PickerPrompt {
                     .child(self.empty_text),
             );
         } else {
-            for m in matches {
+            for (display_ix, m) in matches.iter().enumerate() {
                 let label = picker_item_label(
                     theme,
                     &self.items[m.index],
@@ -141,24 +156,28 @@ impl PickerPrompt {
                 );
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
-                list = list.child(
-                    div()
-                        .id(("picker_prompt_item", original_index))
-                        .debug_selector(move || format!("picker_prompt_item_{original_index}"))
-                        .h(control_height_md(ui_scale))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px(scaled_px(8.0))
-                        .rounded(px(theme.radii.row))
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .active(move |s| s.bg(theme.colors.active))
-                        .cursor(CursorStyle::PointingHand)
-                        .child(label)
-                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                            (on_select)(this, original_index, event, window, cx);
-                        })),
-                );
+                let is_selected = selected_index == Some(display_ix);
+                let mut row = div()
+                    .id(("picker_prompt_item", original_index))
+                    .debug_selector(move || format!("picker_prompt_item_{original_index}"))
+                    .h(control_height_md(ui_scale))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .px(scaled_px(8.0))
+                    .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
+                    .child(label)
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        (on_select)(this, original_index, event, window, cx);
+                    }));
+                if is_selected {
+                    row = row.bg(theme.colors.active);
+                }
+                row = row
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active));
+                list = list.child(row);
             }
         }
 
@@ -275,7 +294,7 @@ impl PickerPromptItemPart {
         let part_range = self.match_range.as_ref()?;
         let start = range.start.max(part_range.start);
         let end = range.end.min(part_range.end);
-        (start < end).then_some((start - part_range.start)..(end - part_range.start))
+        (start < end).then(|| (start - part_range.start)..(end - part_range.start))
     }
 }
 

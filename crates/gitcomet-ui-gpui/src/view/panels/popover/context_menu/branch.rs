@@ -75,6 +75,7 @@ pub(super) fn model(
             kind: PopoverKind::CreateBranchFromRefPrompt {
                 repo_id,
                 target: name.clone(),
+                source_selectable: false,
             },
         }),
     });

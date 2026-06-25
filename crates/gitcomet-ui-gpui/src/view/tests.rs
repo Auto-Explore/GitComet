@@ -6,6 +6,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
 use gitcomet_core::services::{GitBackend, GitRepository, Result};
+use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoId, RepoState};
 use gitcomet_state::store::AppStore;
 use std::path::Path;
 use std::path::PathBuf;
@@ -102,6 +103,50 @@ fn open_repo_tab_context_menu(cx: &mut gpui::VisualTestContext, selector: &'stat
     test_support::redraw(cx);
 }
 
+fn install_app_shortcuts_for_test(cx: &mut gpui::VisualTestContext, backend: Arc<dyn GitBackend>) {
+    cx.update(|window, app| {
+        crate::app::install_app_shortcuts_for_test(app, backend);
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+}
+
+fn sync_view_snapshot(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<GitCometView>) {
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+}
+
+fn focus_detached_window_focus(cx: &mut gpui::VisualTestContext) {
+    cx.update(|window, app| {
+        let focus = app.focus_handle();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    test_support::redraw(cx);
+}
+
+fn command_palette_input_focus(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> Option<gpui::FocusHandle> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .command_palette
+            .query_input
+            .as_ref()
+            .map(|input| input.read(app).focus_handle())
+    })
+}
+
+fn command_palette_is_open(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+) -> bool {
+    cx.update(|_window, app| view.read(app).command_palette_open)
+}
+
 fn available_git_runtime_state() -> GitRuntimeState {
     GitRuntimeState {
         preference: GitExecutablePreference::SystemPath,
@@ -133,6 +178,149 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
         active_repo: Some(repo_id),
         ..Default::default()
     }
+}
+
+#[gpui::test]
+fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    focus_detached_window_focus(cx);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected secondary-p from detached focus to open the command palette"
+    );
+    let input_focus = command_palette_input_focus(cx, &view)
+        .expect("expected command palette input to exist after opening");
+    cx.update(|window, app| {
+        assert_eq!(
+            window.focused(app),
+            Some(input_focus),
+            "expected command palette input to own window focus after opening"
+        );
+    });
+}
+
+#[gpui::test]
+fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+    store.dispatch(Msg::SetActiveRepo { repo_id: RepoId(2) });
+    sync_view_snapshot(cx, &view);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected command palette to open after switching repository tabs"
+    );
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        !command_palette_is_open(cx, &view),
+        "expected secondary-p to close the command palette"
+    );
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected command palette to reopen after a toggle-close cycle"
+    );
+
+    cx.simulate_keystrokes("escape");
+    test_support::redraw(cx);
+    assert!(
+        !command_palette_is_open(cx, &view),
+        "expected escape to close the command palette"
+    );
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    assert!(
+        command_palette_is_open(cx, &view),
+        "expected command palette to reopen after closing with escape"
+    );
+}
+
+#[gpui::test]
+fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    let state = view_state_with_active_ready_repo(RepoId(1));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|window, app| {
+        let focus = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .clone();
+        window.focus(&focus, app);
+        let _ = window.draw(app);
+    });
+    test_support::redraw(cx);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let stale_focus = this
+                .command_palette
+                .query_input
+                .as_ref()
+                .map(|input| input.read(cx).focus_handle());
+            this.command_palette.restore_focus = stale_focus;
+        });
+    });
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    pump_for(cx, Duration::from_millis(16));
+
+    let diff_focus = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_panel_focus_handle
+            .clone()
+    });
+    cx.update(|window, app| {
+        assert_eq!(
+            window.focused(app),
+            Some(diff_focus),
+            "expected stale command-palette restore focus to fall back to the diff panel"
+        );
+    });
 }
 
 #[test]
@@ -2218,7 +2406,9 @@ fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) 
         let popover_host = view.read(app).popover_host.clone();
         popover_host.update(app, |host, cx| {
             host.open_popover_at(
-                PopoverKind::BranchPicker,
+                PopoverKind::BranchPicker {
+                    purpose: BranchPickerPurpose::Checkout,
+                },
                 point(px(72.0), px(72.0)),
                 window,
                 cx,
@@ -2750,4 +2940,152 @@ fn apply_state_snapshot_routes_clone_progress_errors_into_global_banner(
                     == "Clone failed:\n\ngit@github.com: Permission denied (publickey)."
         })
     });
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_passphrase_without_secret_shows_error(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "Enter passphrase".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "git@example.com:repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until("empty passphrase should show banner error", || {
+        store_for_assert
+            .snapshot()
+            .banner_error
+            .as_ref()
+            .is_some_and(|b| b.message.contains("Passphrase is required"))
+    });
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_passphrase_dispatches_submit(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::Passphrase,
+        reason: "Enter passphrase".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "git@example.com:repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("my-passphrase", cx));
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until(
+        "auth prompt should be cleared after successful submit",
+        || store_for_assert.snapshot().auth_prompt.is_none(),
+    );
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_username_password_empty_username_shows_error(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "https://example.com/repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("token-123", cx));
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until("empty username should show banner error", || {
+        store_for_assert
+            .snapshot()
+            .banner_error
+            .as_ref()
+            .is_some_and(|b| b.message.contains("Username is required"))
+    });
+}
+
+#[gpui::test]
+fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let mut state = AppState::default();
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::Clone {
+            url: "https://example.com/repo.git".to_string(),
+            dest: PathBuf::from("/tmp/repo"),
+        },
+    });
+    let state = Arc::new(state);
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.apply_state_snapshot(Arc::clone(&state), cx);
+            this.auth_prompt_username_input
+                .update(cx, |input, cx| input.set_text("alice", cx));
+            this.auth_prompt_secret_input
+                .update(cx, |input, cx| input.set_text("token-123", cx));
+            this.try_auth_prompt_submit(cx);
+        });
+    });
+
+    wait_until(
+        "auth prompt should be cleared after successful submit with credentials",
+        || store_for_assert.snapshot().auth_prompt.is_none(),
+    );
 }

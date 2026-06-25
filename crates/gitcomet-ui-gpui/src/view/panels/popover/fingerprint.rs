@@ -131,8 +131,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::UiScalePicker => None,
 
         // Popovers that implicitly use the currently active repo.
-        PopoverKind::BranchPicker
-        | PopoverKind::CreateBranch
+        PopoverKind::BranchPicker { .. }
         | PopoverKind::StashPrompt
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -142,7 +141,9 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
 
         // Popovers that carry an explicit repo id.
-        PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+        PopoverKind::CommitPrompt { repo_id }
+        | PopoverKind::StashPickerPrompt { repo_id, .. }
+        | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
@@ -183,8 +184,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
     view_fingerprint::hash_loadable_kind(&repo.open, hasher);
 
     match popover {
-        PopoverKind::BranchPicker
-        | PopoverKind::CreateBranch
+        PopoverKind::BranchPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
@@ -222,7 +222,9 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.stashes_rev.hash(hasher);
             repo.status_cache_rev().hash(hasher);
         }
-        PopoverKind::StashDropConfirm { .. } | PopoverKind::StashMenu { .. } => {
+        PopoverKind::StashDropConfirm { .. }
+        | PopoverKind::StashMenu { .. }
+        | PopoverKind::StashPickerPrompt { .. } => {
             repo.stashes_rev.hash(hasher);
         }
 
@@ -315,7 +317,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::AppMenu
         | PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
-        | PopoverKind::CloneRepo => {}
+        | PopoverKind::CloneRepo
+        | PopoverKind::CommitPrompt { .. } => {}
     }
 }
 
@@ -337,12 +340,19 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     match kind {
         PopoverKind::RepoPicker => 0u8.hash(hasher),
         PopoverKind::RecentRepositoryPicker => 65u8.hash(hasher),
-        PopoverKind::BranchPicker => 1u8.hash(hasher),
-        PopoverKind::CreateBranch => 2u8.hash(hasher),
-        PopoverKind::CreateBranchFromRefPrompt { repo_id, target } => {
+        PopoverKind::BranchPicker { purpose } => {
+            1u8.hash(hasher);
+            (*purpose as u8).hash(hasher);
+        }
+        PopoverKind::CreateBranchFromRefPrompt {
+            repo_id,
+            target,
+            source_selectable,
+        } => {
             66u8.hash(hasher);
             repo_id.hash(hasher);
             target.hash(hasher);
+            source_selectable.hash(hasher);
         }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,
@@ -613,6 +623,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path.hash(hasher);
             has_conflict_markers.hash(hasher);
             unresolved_blocks.hash(hasher);
+        }
+        PopoverKind::CommitPrompt { repo_id } => {
+            73u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::StashPickerPrompt { repo_id, purpose } => {
+            74u8.hash(hasher);
+            repo_id.hash(hasher);
+            (*purpose as u8).hash(hasher);
         }
     }
 }

@@ -497,11 +497,70 @@ impl MainPaneView {
                     );
                     handled = true;
                 }
+                "e" if !mods.shift && crate::external_editor::configured_setting().is_some() => {
+                    let full_path = repo.spec.workdir.join(&path);
+                    let root_view = self.root_view.clone();
+                    let p = full_path;
+                    cx.defer(move |cx| {
+                        if let Some(root) = root_view.upgrade() {
+                            root.update(cx, |root, cx| {
+                                root.open_path_in_external_code_editor(p, cx);
+                            });
+                        }
+                    });
+                    handled = true;
+                }
                 "c" if mods.shift => {
                     crate::clipboard::write_text(cx, path.display().to_string());
                     handled = true;
                 }
                 _ => {}
+            }
+        }
+
+        if !handled
+            && !self.is_inline_submodule_diff_active()
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && !self
+                .diff_raw_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && !self
+                .diff_search_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+            && let Some(_repo_id) = self.active_repo_id()
+            && let Some(repo) = self.active_repo()
+            && let Some(diff_target) = repo.diff_state.diff_target.clone()
+        {
+            let path = match &diff_target {
+                DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+                DiffTarget::Commit { path, .. } => path.clone(),
+                DiffTarget::CommitRange { path, .. } => path.clone(),
+            };
+            if let Some(path) = path {
+                match key {
+                    "e" if !mods.shift
+                        && crate::external_editor::configured_setting().is_some() =>
+                    {
+                        let full_path = repo.spec.workdir.join(&path);
+                        let root_view = self.root_view.clone();
+                        let p = full_path;
+                        cx.defer(move |cx| {
+                            if let Some(root) = root_view.upgrade() {
+                                root.update(cx, |root, cx| {
+                                    root.open_path_in_external_code_editor(p, cx);
+                                });
+                            }
+                        });
+                        handled = true;
+                    }
+                    _ => {}
+                }
             }
         }
 

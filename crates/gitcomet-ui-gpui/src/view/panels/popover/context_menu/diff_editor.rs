@@ -130,6 +130,18 @@ pub(super) fn model(
                 path: path.clone(),
             }),
         });
+        if crate::external_editor::configured_setting().is_some() {
+            items.push(ContextMenuItem::Entry {
+                label: "Open in code editor".into(),
+                icon: Some("icons/open_external.svg".into()),
+                shortcut: Some("Ctrl+E".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenInCodeEditor {
+                    repo_id: Some(repo_id),
+                    path: path.clone(),
+                }),
+            });
+        }
         items.push(ContextMenuItem::Separator);
     }
     items.push(ContextMenuItem::Entry {

@@ -679,6 +679,7 @@ pub(crate) fn window_frame(
     theme: AppTheme,
     decorations: Decorations,
     content: AnyElement,
+    overlay: Option<AnyElement>,
     ui_scale_percent: u32,
 ) -> AnyElement {
     let suppress_frame = should_suppress_window_frame(decorations);
@@ -699,8 +700,8 @@ pub(crate) fn window_frame(
     let mut inner = div()
         .id("window_surface")
         .size_full()
-        .bg(theme.colors.window_bg)
-        .overflow_hidden();
+        .relative()
+        .bg(theme.colors.window_bg);
 
     if !suppress_frame {
         inner = inner
@@ -711,7 +712,10 @@ pub(crate) fn window_frame(
             });
     }
 
-    let inner = inner.child(content);
+    inner = inner.child(content);
+    if let Some(overlay) = overlay {
+        inner = inner.child(overlay);
+    }
 
     outer.child(inner).into_any_element()
 }

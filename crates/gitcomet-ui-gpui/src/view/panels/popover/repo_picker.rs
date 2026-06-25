@@ -27,6 +27,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .tooltip_host(this.tooltip_host.clone())
                 .empty_text("No repositories")
                 .max_height(scaled_px(260.0))
+                .selected_index(this.repo_picker_selected_index)
                 .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                     if let Some(&repo_id) = repo_ids.get(ix) {
                         this.store.dispatch(Msg::SetActiveRepo { repo_id });

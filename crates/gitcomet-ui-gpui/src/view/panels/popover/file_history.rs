@@ -126,6 +126,7 @@ pub(super) fn panel(
                     .tooltip_host(this.tooltip_host.clone())
                     .empty_text("No commits")
                     .max_height(scaled_px(340.0))
+                    .selected_index(this.file_history_selected_index)
                     .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                         let Some(commit_id) = commit_ids.get(ix).cloned() else {
                             return;

@@ -4,6 +4,21 @@ use crate::view::panels::tests::{
     app_state_with_repo, opening_repo_state, push_test_state, set_test_file_status,
 };
 
+fn context_menu_entry_disabled(model: &ContextMenuModel, label: &str) -> bool {
+    model
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label: entry_label,
+                disabled,
+                ..
+            } if entry_label.as_ref() == label => Some(*disabled),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected `{label}` context menu entry"))
+}
+
 #[gpui::test]
 fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -244,6 +259,115 @@ fn status_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
             }
             _ => panic!("expected Open file location entry with OpenFileLocation action"),
         }
+    });
+}
+
+#[gpui::test]
+fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppContext) {
+    let _external_editor_guard = crate::external_editor::configured_setting_override_test_guard();
+    crate::external_editor::set_configured_setting_override(Some(
+        gitcomet_state::session::ExternalCodeEditorSetting::Custom {
+            executable: std::path::PathBuf::from("/usr/bin/editor"),
+            arguments: None,
+        },
+    ));
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(4);
+    let commit_id = CommitId("baadf00dbaadf00d".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_unopened_submodule_editor_menu",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("vendor/lib");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.history_state.commit_details = Loadable::Ready(
+                gitcomet_core::domain::CommitDetails {
+                    id: commit_id.clone(),
+                    message: "Submodule update".into(),
+                    committed_at: String::new(),
+                    parent_ids: Vec::new(),
+                    files: vec![gitcomet_core::domain::CommitFileChange {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        is_submodule: true,
+                    }],
+                }
+                .into(),
+            );
+            repo.status = Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            repo.submodules = Loadable::Ready(
+                vec![gitcomet_core::domain::Submodule {
+                    path: path.clone(),
+                    recorded_head: CommitId("1111111111111111".into()),
+                    checked_out_head: None,
+                    status: gitcomet_core::domain::SubmoduleStatus::NotInitialized,
+                }]
+                .into(),
+            );
+
+            let state = app_state_with_repo(repo, repo_id);
+            this.state = Arc::clone(&state);
+            push_test_state(this, state, cx);
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let commit_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitFileMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                            path: path.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit file context menu model");
+        assert!(context_menu_entry_disabled(&commit_model, "Open submodule"));
+        assert!(context_menu_entry_disabled(
+            &commit_model,
+            "Open in code editor"
+        ));
+
+        let status_model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected status file context menu model");
+        assert!(context_menu_entry_disabled(&status_model, "Open submodule"));
+        assert!(context_menu_entry_disabled(
+            &status_model,
+            "Open in code editor"
+        ));
     });
 }
 
