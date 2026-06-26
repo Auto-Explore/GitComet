@@ -6,7 +6,7 @@ use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use crate::kit::ScrollbarDriver;
 use rustc_hash::FxHasher;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -3016,7 +3016,7 @@ fn terminal_process_has_running_child_command(pid: u32) -> bool {
         .any(|process| process.parent() == Some(target))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn terminate_terminal_process_group(child_pid: Option<u32>) {
     let Some(child_pid) = child_pid else {
         return;
@@ -3027,7 +3027,7 @@ fn terminate_terminal_process_group(child_pid: Option<u32>) {
     let _ = kill_process_group(pid, Signal::TERM);
 }
 
-#[cfg(not(unix))]
+#[cfg(not(target_os = "linux"))]
 fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
 fn terminal_clipboard_shortcut_action(
