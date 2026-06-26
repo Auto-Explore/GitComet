@@ -3042,7 +3042,10 @@ pub(super) struct TerminalViewportView {
     pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(super) viewport_bounds: Option<Bounds<Pixels>>,
     pub(super) pressed_mouse_button: Option<gpui::MouseButton>,
-    pub(super) mouse_mode_active: bool,
+    /// Last grid cell `(row, col)` reported to the PTY for mouse-motion tracking.
+    /// Used to dedupe motion reports so a TUI in any-event mode (1003) receives at
+    /// most one report per cell instead of one per pixel-level move event.
+    pub(super) last_motion_cell: Option<(u16, u16)>,
     pub(super) was_focused: bool,
     pub(super) selection_start: Option<TerminalGridPoint>,
     pub(super) selection_end: Option<TerminalGridPoint>,

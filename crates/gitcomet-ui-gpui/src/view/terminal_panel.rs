@@ -1,8 +1,10 @@
 use super::terminal_alacritty::*;
 use super::*;
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
+use crate::kit::ScrollbarDriver;
 use rustc_hash::FxHasher;
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
@@ -25,32 +27,69 @@ const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
 
-#[derive(Default)]
-struct TerminalScrollbarState {
-    drag_offset: Option<Pixels>,
-    hovered: bool,
-    active: bool,
+// ---------------------------------------------------------------------------
+// Terminal scrollbar driver — maps Alacritty display_offset to pixel space
+// so the kit Scrollbar component can drive the terminal's scroll model.
+// ---------------------------------------------------------------------------
+
+struct TerminalScrollbarDriver {
+    term_lock: Option<AlacrittyTermLock>,
+    line_height: Pixels,
 }
 
-struct TerminalScrollbarPrepaint {
-    track: Bounds<Pixels>,
-    thumb: Bounds<Pixels>,
-}
+impl ScrollbarDriver for TerminalScrollbarDriver {
+    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        if axis != ScrollbarAxis::Vertical {
+            return px(0.0);
+        }
+        let Some(ref term_lock) = self.term_lock else {
+            return px(0.0);
+        };
+        (term_lock.lock().grid().history_size() as f32 * self.line_height).max(px(0.0))
+    }
 
-impl TerminalViewportView {
-    fn terminal_scrollbar_prepaint(&self, gutter_bounds: Bounds<Pixels>) -> Option<TerminalScrollbarPrepaint> {
-        let term_lock = self.term_lock.as_ref()?;
-        let content = self.last_content.as_ref()?;
+    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        if axis != ScrollbarAxis::Vertical {
+            return px(0.0);
+        }
+        let Some(ref term_lock) = self.term_lock else {
+            return px(0.0);
+        };
         let term = term_lock.lock();
-        let screen_lines = content.terminal_bounds.screen_lines;
-        let history_size = term.grid().history_size();
-        let (track, thumb) = compute_terminal_scrollbar_bounds(
-            gutter_bounds,
-            content.display_offset,
-            history_size,
-            screen_lines,
-        )?;
-        Some(TerminalScrollbarPrepaint { track, thumb })
+        let history = term.grid().history_size() as f32;
+        let display = term.grid().display_offset() as f32;
+        -(history - display) * self.line_height
+    }
+
+    fn set_axis_offset(&self, axis: ScrollbarAxis, offset: Pixels) {
+        if axis != ScrollbarAxis::Vertical {
+            return;
+        }
+        let Some(ref term_lock) = self.term_lock else {
+            return;
+        };
+        let mut term = term_lock.lock();
+        let history = term.grid().history_size();
+        if history == 0 {
+            return;
+        }
+        let current = term.grid().display_offset();
+        let scroll_y = if offset < px(0.0) { -offset } else { offset };
+        let target = history
+            .saturating_sub(((scroll_y / self.line_height).round() as usize).min(history));
+        let delta = target as i32 - current as i32;
+        if delta != 0 {
+            let steps = delta.unsigned_abs() as usize;
+            if delta > 0 {
+                for _ in 0..steps {
+                    term.scroll_display(Scroll::Delta(1));
+                }
+            } else {
+                for _ in 0..steps {
+                    term.scroll_display(Scroll::Delta(-1));
+                }
+            }
+        }
     }
 }
 #[derive(Default)]
@@ -112,7 +151,7 @@ impl TerminalViewportView {
             last_content: None,
             viewport_bounds: None,
             pressed_mouse_button: None,
-            mouse_mode_active: false,
+            last_motion_cell: None,
             was_focused: false,
             selection_start: None,
             selection_end: None,
@@ -280,56 +319,6 @@ impl TerminalViewportView {
             self.reset_cursor_blink(cx);
             cx.notify();
         }
-    }
-
-    fn scrollbar_scroll_to_pos(&mut self, mouse_y: Pixels, cx: &mut gpui::Context<Self>) {
-        let Some(term_lock) = &self.term_lock else {
-            return;
-        };
-        let Some(bounds) = self.viewport_bounds else {
-            return;
-        };
-        let margin = px(2.0);
-        let track_top = bounds.top() + margin;
-        let track_height = bounds.bottom() - track_top - margin;
-        if track_height <= px(0.0) {
-            return;
-        }
-
-        // Read the history size under a short-lived lock and release it before
-        // re-locking below — `FairMutex` is not reentrant, so holding the guard
-        // across the apply step would deadlock the UI thread.
-        let history_size = term_lock.lock().grid().history_size();
-        if history_size == 0 {
-            return;
-        }
-
-        let fraction_from_top = ((mouse_y - track_top) / track_height).clamp(0.0, 1.0) as f32;
-        let new_display_offset =
-            terminal_scrollbar_offset_for_fraction(fraction_from_top, history_size);
-        let current_offset = self
-            .last_content
-            .as_ref()
-            .map(|c| c.display_offset)
-            .unwrap_or(0);
-        let delta = new_display_offset as i32 - current_offset as i32;
-        if delta == 0 {
-            return;
-        }
-        {
-            let mut term = term_lock.lock();
-            let scroll_lines = delta.abs();
-            if delta > 0 {
-                for _ in 0..scroll_lines {
-                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(1));
-                }
-            } else {
-                for _ in 0..scroll_lines {
-                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(-1));
-                }
-            }
-        }
-        cx.notify();
     }
 
     fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<Self>) {
@@ -624,12 +613,8 @@ impl TerminalViewportView {
         };
         cx.stop_propagation();
 
-        if self
-            .last_content
-            .as_ref()
-            .map(|c| c.mode.mouse_mode())
-            .unwrap_or(false)
-        {
+        let mouse_mode = self.live_modes();
+        if mouse_mode.mouse_mode() {
             if let Some(pos) = self.viewport_bounds.and_then(|b| {
                 terminal_grid_point(
                     event.position,
@@ -647,18 +632,13 @@ impl TerminalViewportView {
                 )
             }) {
                 let (grid_row, grid_col) = pos;
-                let mode = self
-                    .last_content
-                    .as_ref()
-                    .map(|c| c.mode)
-                    .unwrap_or_default();
                 let reports = terminal_scroll_report(
                     grid_row,
                     grid_col,
                     event.modifiers,
                     delta_y,
                     step_rows,
-                    mode,
+                    mouse_mode,
                 );
                 for report in reports {
                     self.queue_input(report, cx);
@@ -701,6 +681,17 @@ impl TerminalViewportView {
         cx.notify();
     }
 
+    /// Current terminal modes read live from the backing `Term`, rather than the
+    /// last painted [`TerminalContent`] snapshot. Mouse forwarding gates on this so a
+    /// TUI that has just enabled mouse reporting is honoured at the instant of the
+    /// click, independent of when the next paint refreshes `last_content`.
+    fn live_modes(&self) -> TerminalModes {
+        self.term_lock
+            .as_ref()
+            .map(|t| terminal_live_modes(&t.lock()))
+            .unwrap_or_default()
+    }
+
     fn handle_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -711,9 +702,11 @@ impl TerminalViewportView {
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
 
-        if self.mouse_mode_active {
-            self.queue_mouse_event(event.position, button, event.modifiers, true, cx);
+        let mode = self.live_modes();
+        if mode.mouse_mode() {
+            self.queue_mouse_event(event.position, button, event.modifiers, true, mode, cx);
             self.pressed_mouse_button = Some(button);
+            cx.stop_propagation();
         } else if button == gpui::MouseButton::Left {
             // Starting a manual selection cancels a prior "select all".
             self.select_all_active = false;
@@ -771,8 +764,10 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
         button: gpui::MouseButton,
     ) {
-        if self.mouse_mode_active {
-            self.queue_mouse_event(event.position, button, event.modifiers, false, cx);
+        let mode = self.live_modes();
+        if mode.mouse_mode() {
+            self.queue_mouse_event(event.position, button, event.modifiers, false, mode, cx);
+            cx.stop_propagation();
         } else if button == gpui::MouseButton::Left && self.selection_end.is_none() {
             // A left click that never dragged (no end point) clears the selection.
             if self.selection_start.take().is_some() {
@@ -788,24 +783,30 @@ impl TerminalViewportView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.mouse_mode_active {
-            let mode = self
-                .last_content
-                .as_ref()
-                .map(|c| c.mode)
-                .unwrap_or_default();
-            if mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG)
-                && let Some(report) = terminal_mouse_moved_report_at(
-                    event.position,
-                    self.viewport_bounds,
-                    &self.layout_cache,
-                    &self.last_content,
-                    self.pressed_mouse_button,
-                    event.modifiers,
-                    mode,
-                )
-            {
-                self.queue_input(report, cx);
+        let mode = self.live_modes();
+        if mode.mouse_mode() {
+            if mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
+                // Only forward a motion report when the pointer crosses into a new
+                // grid cell. Without this, every sub-cell GPUI move event produces a
+                // duplicate report and floods a TUI in any-event mode (1003); Zed
+                // dedupes the same way via `mouse_changed`.
+                let cell = self
+                    .viewport_to_grid_point(event.position)
+                    .map(|p| (p.row, p.col));
+                if cell != self.last_motion_cell {
+                    self.last_motion_cell = cell;
+                    if let Some(report) = terminal_mouse_moved_report_at(
+                        event.position,
+                        self.viewport_bounds,
+                        &self.layout_cache,
+                        &self.last_content,
+                        self.pressed_mouse_button,
+                        event.modifiers,
+                        mode,
+                    ) {
+                        self.queue_input(report, cx);
+                    }
+                }
             }
         } else if event.pressed_button == Some(gpui::MouseButton::Left)
             && self.selection_start.is_some()
@@ -908,6 +909,7 @@ impl TerminalViewportView {
         button: gpui::MouseButton,
         modifiers: gpui::Modifiers,
         pressed: bool,
+        mode: TerminalModes,
         cx: &mut gpui::Context<Self>,
     ) {
         if let Some(report) = terminal_mouse_event_at(
@@ -918,6 +920,7 @@ impl TerminalViewportView {
             button,
             modifiers,
             pressed,
+            mode,
         ) {
             self.queue_input(report, cx);
         }
@@ -968,7 +971,6 @@ impl TerminalViewportView {
             let term = term_lock.lock();
             let content = make_terminal_content(&term);
             let display_offset = content.display_offset;
-            self.mouse_mode_active = content.mode.mouse_mode();
             self.last_content = Some(content.clone());
             drop(term);
 
@@ -1227,8 +1229,6 @@ impl Render for TerminalViewportView {
         let view = cx.entity().clone();
         let theme = self.theme;
         let term_lock = self.term_lock.clone();
-        let weak = cx.weak_entity();
-        let gutter_width = px(16.0);
         div()
             .track_focus(&self.focus_handle)
             .key_context("Terminal")
@@ -1312,186 +1312,16 @@ impl Render for TerminalViewportView {
                         .h_full()
                     })
                     .child({
-                        let term_lock = term_lock.clone();
-                        let weak = weak.clone();
-                        let view = view.clone();
-                        gpui::canvas(
-                            move |bounds, window, cx| {
-                                window.insert_hitbox(
-                                    bounds,
-                                    gpui::HitboxBehavior::BlockMouseExceptScroll,
-                                );
-                                view.read(cx).terminal_scrollbar_prepaint(bounds)
-                            },
-                            move |gutter_bounds, prepaint, window, cx| {
-                                let interaction = window.use_keyed_state(
-                                    "terminal_scrollbar_interaction",
-                                    cx,
-                                    |_window, _cx| TerminalScrollbarState::default(),
-                                );
-
-                                let Some(prepaint) = prepaint else {
-                                    return;
-                                };
-
-                                let (track_alpha, thumb_alpha) = if interaction.read(cx).active {
-                                    (0.18, 0.72)
-                                } else if interaction.read(cx).hovered {
-                                    (0.14, 0.48)
-                                } else {
-                                    (0.08, 0.28)
-                                };
-                                let track_color =
-                                    with_alpha(theme.colors.text_muted, track_alpha);
-                                let thumb_color =
-                                    with_alpha(theme.colors.text_muted, thumb_alpha);
-                                let thumb_radius = px(4.0);
-
-                                window.paint_quad(fill(prepaint.track, track_color));
-                                window.paint_quad(
-                                    fill(prepaint.thumb, thumb_color)
-                                        .corner_radii(thumb_radius),
-                                );
-
-                                if interaction.read(cx).drag_offset.is_some() {
-                                    window.set_window_cursor_style(
-                                        gpui::CursorStyle::Arrow,
-                                    );
-                                }
-
-                                let thumb = prepaint.thumb;
-
-                                window.on_mouse_event({
-                                    let term_lock = term_lock.clone();
-                                    let weak = weak.clone();
-                                    let interaction = interaction.clone();
-                                    move |event: &MouseDownEvent,
-                                          phase,
-                                          window,
-                                          cx| {
-                                        if phase != gpui::DispatchPhase::Bubble
-                                            || event.button != MouseButton::Left
-                                        {
-                                            return;
-                                        }
-                                        let pos_y = event.position.y;
-                                        let pos = event.position;
-                                        if !gutter_bounds.contains(&pos)
-                                        {
-                                            return;
-                                        }
-
-                                        interaction.update(cx, |state, _cx| {
-                                            state.active = true;
-                                            state.hovered = true;
-                                        });
-
-                                        let Some(ref term_lock) = term_lock else {
-                                            return;
-                                        };
-                                        let history_size =
-                                            term_lock.lock().grid().history_size();
-
-                                        if history_size == 0 {
-                                            return;
-                                        }
-
-                                        if thumb.contains(&event.position) {
-                                            interaction.update(cx, |state, _cx| {
-                                                state.drag_offset =
-                                                    Some(pos_y - thumb.origin.y);
-                                            });
-                                        } else {
-                                            interaction.update(cx, |state, _cx| {
-                                                state.drag_offset = None;
-                                            });
-                                        }
-
-                                        let _ = weak.update(cx, |this, cx| {
-                                            this.scrollbar_scroll_to_pos(
-                                                pos_y, cx,
-                                            );
-                                        });
-
-                                        window.refresh();
-                                        cx.stop_propagation();
-                                    }
-                                });
-
-                                window.on_mouse_event({
-                                    let weak = weak.clone();
-                                    let interaction = interaction.clone();
-                                    move |event: &MouseMoveEvent,
-                                          phase,
-                                          window,
-                                          cx| {
-                                        if phase != gpui::DispatchPhase::Bubble {
-                                            return;
-                                        }
-                                        let drag = interaction.read(cx).drag_offset;
-                                        if let Some(grab) = drag {
-                                            let _ = weak.update(cx, |this, cx| {
-                                                this.scrollbar_scroll_to_pos(
-                                                    event.position.y - grab,
-                                                    cx,
-                                                );
-                                            });
-                                            window.refresh();
-                                            cx.stop_propagation();
-                                        } else {
-                                            let in_gutter =
-                                                gutter_bounds.contains(
-                                                    &event.position,
-                                                );
-                                            let was_hovered =
-                                                interaction.read(cx).hovered;
-                                            if was_hovered != in_gutter {
-                                                interaction.update(
-                                                    cx,
-                                                    |state, _cx| {
-                                                        state.hovered =
-                                                            in_gutter;
-                                                    },
-                                                );
-                                                window.refresh();
-                                            }
-                                        }
-                                    }
-                                });
-
-                                window.on_mouse_event({
-                                    let interaction = interaction.clone();
-                                    move |event: &MouseUpEvent,
-                                          phase,
-                                          window,
-                                          cx| {
-                                        if phase != gpui::DispatchPhase::Bubble
-                                            || event.button
-                                                != MouseButton::Left
-                                        {
-                                            return;
-                                        }
-                                        if interaction.read(cx).drag_offset.is_some()
-                                        {
-                                            interaction.update(
-                                                cx,
-                                                |state, _cx| {
-                                                    state.drag_offset = None;
-                                                    state.active = false;
-                                                },
-                                            );
-                                            window.refresh();
-                                            cx.stop_propagation();
-                                        }
-                                    }
-                                });
+                        let line_height = self.terminal_layout_snapshot(_window, cx).metrics.line_height;
+                        Scrollbar::new(
+                            "terminal_scrollbar",
+                            TerminalScrollbarDriver {
+                                term_lock: term_lock.clone(),
+                                line_height,
                             },
                         )
-                        .absolute()
-                        .top_0()
-                        .right_0()
-                        .bottom_0()
-                        .w(gutter_width)
+                        .always_visible()
+                        .render(theme)
                     }),
             )
     }
@@ -2264,7 +2094,12 @@ impl GitCometView {
             )
         };
         let has_selection = viewport_entity.read(cx).has_selection();
-        let mouse_mode = viewport_entity.read(cx).mouse_mode_active;
+        let mouse_mode = viewport_entity
+            .read(cx)
+            .last_content
+            .as_ref()
+            .map(|c| c.mode.mouse_mode())
+            .unwrap_or(false);
 
         let header = self.render_terminal_header(
             theme,
@@ -2783,62 +2618,6 @@ fn terminal_paste_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
     bytes
 }
 
-/// Thumb position as a fraction measured from the top of the scrollbar track.
-/// Viewing the oldest line (`display_offset == history_size`) puts the thumb at
-/// the top (0.0); the live tail (`display_offset == 0`) puts it at the bottom
-/// (1.0) — matching the conventional scrollbar direction.
-fn terminal_scrollbar_thumb_fraction(display_offset: usize, history_size: usize) -> f32 {
-    if history_size == 0 {
-        return 0.0;
-    }
-    let clamped = display_offset.min(history_size);
-    (history_size - clamped) as f32 / history_size as f32
-}
-
-/// Inverse of [`terminal_scrollbar_thumb_fraction`]: maps a thumb fraction from
-/// the top of the track to the target scrollback `display_offset`.
-fn terminal_scrollbar_offset_for_fraction(fraction_from_top: f32, history_size: usize) -> usize {
-    let fraction = fraction_from_top.clamp(0.0, 1.0);
-    (((1.0 - fraction) * history_size as f32).round() as usize).min(history_size)
-}
-
-fn compute_terminal_scrollbar_bounds(
-    gutter_bounds: Bounds<Pixels>,
-    display_offset: usize,
-    history_size: usize,
-    screen_lines: usize,
-) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
-    if history_size == 0 {
-        return None;
-    }
-    let total_lines = history_size + screen_lines;
-    if total_lines <= screen_lines {
-        return None;
-    }
-    let track_width = px(8.0);
-    let margin = px(2.0);
-    let track_left = gutter_bounds.right() - track_width - margin;
-    let track_top = gutter_bounds.top() + margin;
-    let track_height = gutter_bounds.bottom() - track_top - margin;
-    let track = Bounds::new(point(track_left, track_top), size(track_width, track_height));
-
-    let fraction_scrolled = terminal_scrollbar_thumb_fraction(display_offset, history_size);
-    let fraction_visible = screen_lines as f32 / total_lines.max(1) as f32;
-    let min_thumb_h = px(16.0);
-    let thumb_height = (track_height * fraction_visible)
-        .max(min_thumb_h)
-        .min(track_height);
-    let thumb_travel = track_height - thumb_height;
-    let thumb_offset = thumb_travel * fraction_scrolled;
-
-    let thumb = Bounds::new(
-        point(track_left, track_top + thumb_offset),
-        size(track_width, thumb_height),
-    );
-
-    Some((track, thumb))
-}
-
 fn terminal_scroll_wheel_delta(
     event: &gpui::ScrollWheelEvent,
     line_height: Pixels,
@@ -3171,51 +2950,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scrollbar_thumb_fraction_tracks_position() {
-        // No history: thumb pinned to the top.
-        assert_eq!(terminal_scrollbar_thumb_fraction(0, 0), 0.0);
-        // Live tail (offset 0) sits at the bottom of the track.
-        assert_eq!(terminal_scrollbar_thumb_fraction(0, 100), 1.0);
-        // Oldest line (offset == history_size) sits at the top.
-        assert_eq!(terminal_scrollbar_thumb_fraction(100, 100), 0.0);
-        // Halfway through history is halfway up the track.
-        assert_eq!(terminal_scrollbar_thumb_fraction(50, 100), 0.5);
-        // Out-of-range offsets clamp rather than panic.
-        assert_eq!(terminal_scrollbar_thumb_fraction(200, 100), 0.0);
-    }
-
-    #[test]
-    fn scrollbar_offset_for_fraction_is_inverse_of_thumb_fraction() {
-        let history_size = 100;
-        // Dragging to the top of the track scrolls to the oldest line.
-        assert_eq!(
-            terminal_scrollbar_offset_for_fraction(0.0, history_size),
-            history_size
-        );
-        // Dragging to the bottom scrolls to the live tail.
-        assert_eq!(terminal_scrollbar_offset_for_fraction(1.0, history_size), 0);
-        // Mid-track maps to the middle of history.
-        assert_eq!(
-            terminal_scrollbar_offset_for_fraction(0.5, history_size),
-            50
-        );
-        // Round-trips with the thumb fraction.
-        for offset in [0, 25, 50, 75, 100] {
-            let fraction = terminal_scrollbar_thumb_fraction(offset, history_size);
-            assert_eq!(
-                terminal_scrollbar_offset_for_fraction(fraction, history_size),
-                offset
-            );
-        }
-        // Out-of-range fractions clamp.
-        assert_eq!(
-            terminal_scrollbar_offset_for_fraction(-0.5, history_size),
-            history_size
-        );
-        assert_eq!(terminal_scrollbar_offset_for_fraction(1.5, history_size), 0);
-    }
-
-    #[test]
     fn cursor_screen_row_adds_display_offset() {
         // When the terminal is scrolled back (display_offset > 0),
         // the cursor grid position must be converted to screen position
@@ -3258,123 +2992,6 @@ mod tests {
             screen_row < screen_lines as f32,
             "cursor at live tail should be visible"
         );
-    }
-
-    #[test]
-    fn scrollbar_thumb_fraction_clamps_out_of_range_offsets() {
-        assert_eq!(terminal_scrollbar_thumb_fraction(200, 100), 0.0);
-        assert_eq!(terminal_scrollbar_thumb_fraction(0, 0), 0.0);
-
-        let history_size = 100;
-        for offset in 0..=100 {
-            let fraction = terminal_scrollbar_thumb_fraction(offset, history_size);
-            assert!(
-                (0.0..=1.0).contains(&fraction),
-                "fraction must be in [0, 1], got {fraction} for offset {offset}"
-            );
-        }
-    }
-
-    #[test]
-    fn scrollbar_bounds_none_without_history() {
-        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
-        assert!(
-            compute_terminal_scrollbar_bounds(gutter, 0, 0, 24).is_none(),
-            "no scrollbar when history_size is 0"
-        );
-    }
-
-    #[test]
-    fn scrollbar_bounds_some_with_history() {
-        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
-        let result = compute_terminal_scrollbar_bounds(gutter, 0, 100, 24);
-        assert!(result.is_some(), "scrollbar visible with history");
-        let (track, thumb) = result.unwrap();
-        assert!(track.size.height > px(0.0), "track has height");
-        assert!(thumb.size.height >= px(16.0), "thumb meets minimum height");
-        assert!(
-            thumb.size.height <= track.size.height,
-            "thumb fits within track"
-        );
-        assert!(
-            thumb.origin.y >= track.origin.y,
-            "thumb starts within track"
-        );
-    }
-
-    #[test]
-    fn scrollbar_thumb_at_bottom_for_live_tail() {
-        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
-        let (_, thumb_live) =
-            compute_terminal_scrollbar_bounds(gutter, 0, 100, 24).unwrap();
-        let (_, thumb_oldest) =
-            compute_terminal_scrollbar_bounds(gutter, 100, 100, 24).unwrap();
-        assert!(
-            thumb_live.origin.y > thumb_oldest.origin.y,
-            "live tail thumb is below oldest-line thumb"
-        );
-    }
-
-    #[test]
-    fn scrollbar_thumb_moves_continuously_with_scroll() {
-        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
-        let history_size = 200;
-        let mut prev_y = None;
-        for offset in (0..=history_size).step_by(20) {
-            let (_, thumb) = compute_terminal_scrollbar_bounds(
-                gutter,
-                offset,
-                history_size,
-                24,
-            )
-            .unwrap();
-            if let Some(prev) = prev_y {
-                assert!(
-                    thumb.origin.y <= prev,
-                    "thumb moves up as offset increases (scrolls back)"
-                );
-            }
-            prev_y = Some(thumb.origin.y);
-        }
-    }
-
-    #[test]
-    fn scrollbar_bounds_none_when_content_fits() {
-        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
-        let result = compute_terminal_scrollbar_bounds(gutter, 0, 0, 24);
-        assert!(result.is_none(), "no scrollbar when all content fits");
-    }
-
-    #[test]
-    fn scrollbar_state_defaults() {
-        let state = TerminalScrollbarState::default();
-        assert!(state.drag_offset.is_none());
-        assert!(!state.hovered);
-        assert!(!state.active);
-    }
-
-    #[test]
-    fn scrollbar_bounds_track_within_gutter() {
-        let gutter = Bounds::new(point(px(300.0), px(0.0)), size(px(16.0), px(400.0)));
-        let (track, thumb) =
-            compute_terminal_scrollbar_bounds(gutter, 0, 100, 24).unwrap();
-        assert!(
-            track.origin.x >= gutter.origin.x,
-            "track starts within gutter horizontally"
-        );
-        assert!(
-            track.origin.x + track.size.width <= gutter.origin.x + gutter.size.width,
-            "track fits within gutter horizontally"
-        );
-        assert!(
-            track.origin.y >= gutter.origin.y,
-            "track starts within gutter vertically"
-        );
-        assert!(
-            track.origin.y + track.size.height <= gutter.origin.y + gutter.size.height,
-            "track fits within gutter vertically"
-        );
-        let _ = thumb;
     }
 
     #[test]

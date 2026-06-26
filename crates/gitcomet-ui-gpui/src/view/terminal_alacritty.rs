@@ -189,7 +189,9 @@ pub(super) struct PtySender {
 
 impl PtySender {
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
-        self.event_loop_tx.send(Msg::Input(bytes.into())).ok();
+        if let Err(err) = self.event_loop_tx.send(Msg::Input(bytes.into())) {
+            eprintln!("terminal: failed to write input to pty: {err}");
+        }
     }
 
     pub fn resize(&self, columns: usize, screen_lines: usize) {
@@ -231,6 +233,7 @@ pub(super) fn spawn_alacritty_terminal(
         shell: Some(tty::Shell::new(shell_program_str, Vec::<String>::new())),
         working_directory: Some(workdir.to_path_buf()),
         drain_on_exit: false,
+        #[cfg(target_os = "windows")]
         escape_args: true,
         env: env.into_iter().collect(),
     };
@@ -653,6 +656,14 @@ pub(super) fn terminal_default_foreground(theme: AppTheme) -> gpui::Rgba {
 // ---------------------------------------------------------------------------
 // Build content snapshot from Alacritty Term
 // ---------------------------------------------------------------------------
+
+/// Read the *current* terminal modes straight from the live `Term`, bypassing the
+/// painted [`TerminalContent`] snapshot. Mouse-mode forwarding must consult the live
+/// mode at the instant of the click so a TUI that just enabled mouse reporting is
+/// honoured immediately, independent of paint timing.
+pub(super) fn terminal_live_modes(term: &Term<GitCometListener>) -> TerminalModes {
+    TerminalModes::from_term_mode(*term.mode())
+}
 
 pub(super) fn make_terminal_content(term: &Term<GitCometListener>) -> TerminalContent {
     let content = term.renderable_content();
@@ -1147,8 +1158,8 @@ impl MouseButtonCode {
     fn from_button(e: gpui::MouseButton) -> Self {
         match e {
             gpui::MouseButton::Left => MouseButtonCode::LeftButton,
-            gpui::MouseButton::Right => MouseButtonCode::MiddleButton,
-            gpui::MouseButton::Middle => MouseButtonCode::RightButton,
+            gpui::MouseButton::Middle => MouseButtonCode::MiddleButton,
+            gpui::MouseButton::Right => MouseButtonCode::RightButton,
             gpui::MouseButton::Navigate(_) => MouseButtonCode::LeftButton,
         }
     }
@@ -1196,8 +1207,8 @@ pub(super) fn terminal_grid_point(
     display_offset: usize,
     cols: u16,
 ) -> Option<(i32, usize)> {
-    let rel_x = (mouse_pos.x - bounds.left()).max(px(0.0));
-    let rel_y = (mouse_pos.y - bounds.top()).max(px(0.0));
+    let rel_x = mouse_pos.x - bounds.left();
+    let rel_y = mouse_pos.y - bounds.top();
     if rel_x < px(0.0) || rel_y < px(0.0) {
         return None;
     }
@@ -1339,11 +1350,11 @@ pub(super) fn terminal_mouse_event_at(
     button: gpui::MouseButton,
     modifiers: gpui::Modifiers,
     pressed: bool,
+    mode: TerminalModes,
 ) -> Option<Vec<u8>> {
     let bounds = viewport_bounds?;
     let cache = layout_cache.as_ref()?;
     let content = last_content.as_ref()?;
-    let mode = content.mode;
     if !mode.mouse_mode() {
         return None;
     }
