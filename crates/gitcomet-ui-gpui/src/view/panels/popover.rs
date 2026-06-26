@@ -1918,12 +1918,10 @@ impl PopoverHost {
                         input.set_text("", cx);
                         cx.notify();
                     });
-                    if !*source_selectable {
-                        let focus = self
-                            .create_branch_input
-                            .read_with(cx, |i, _| i.focus_handle());
-                        window.focus(&focus, cx);
-                    }
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     let theme = self.theme;
