@@ -447,6 +447,7 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
         target: String,
+        message: Option<String>,
     },
     DeleteTag {
         repo_id: RepoId,

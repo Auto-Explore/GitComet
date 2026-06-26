@@ -201,7 +201,7 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
-    fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
+    fn create_tag_with_output(&self, name: &str, target: &str, _message: Option<&str>) -> Result<CommandOutput> {
         self.actions
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

@@ -930,9 +930,11 @@ pub(super) fn schedule_create_tag(
     repo_id: RepoId,
     name: String,
     target: String,
+    message: Option<String>,
 ) {
     let command_name = name.clone();
     let command_target = target.clone();
+    let command_message = message.clone();
     schedule_repo_command(
         executor,
         repos,
@@ -941,8 +943,9 @@ pub(super) fn schedule_create_tag(
         RepoCommandKind::CreateTag {
             name: command_name,
             target: command_target,
+            message: command_message,
         },
-        move |repo| repo.create_tag_with_output(&name, &target),
+        move |repo| repo.create_tag_with_output(&name, &target, message.as_deref()),
     );
 }
 

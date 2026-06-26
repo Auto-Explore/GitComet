@@ -621,8 +621,13 @@ impl GitRepository for GixRepo {
         Ok(message)
     }
 
-    fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
-        self.create_tag_with_output_impl(name, target)
+    fn create_tag_with_output(
+        &self,
+        name: &str,
+        target: &str,
+        message: Option<&str>,
+    ) -> Result<CommandOutput> {
+        self.create_tag_with_output_impl(name, target, message)
     }
 
     fn delete_tag_with_output(&self, name: &str) -> Result<CommandOutput> {

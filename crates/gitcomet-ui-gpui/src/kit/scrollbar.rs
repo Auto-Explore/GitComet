@@ -38,6 +38,7 @@ pub struct Scrollbar {
     axis: ScrollbarAxis,
     markers: Vec<ScrollbarMarker>,
     always_visible: bool,
+    show_track: bool,
     #[cfg(test)]
     debug_selector: Option<&'static str>,
 }
@@ -153,6 +154,7 @@ impl Scrollbar {
             axis: ScrollbarAxis::Vertical,
             markers: Vec::new(),
             always_visible: true,
+            show_track: false,
             #[cfg(test)]
             debug_selector: None,
         }
@@ -165,6 +167,7 @@ impl Scrollbar {
             axis: ScrollbarAxis::Horizontal,
             markers: Vec::new(),
             always_visible: true,
+            show_track: false,
             #[cfg(test)]
             debug_selector: None,
         }
@@ -180,6 +183,11 @@ impl Scrollbar {
         self
     }
 
+    pub fn show_track(mut self) -> Self {
+        self.show_track = true;
+        self
+    }
+
     #[cfg(test)]
     pub fn debug_selector(mut self, selector: &'static str) -> Self {
         self.debug_selector = Some(selector);
@@ -192,6 +200,7 @@ impl Scrollbar {
         let markers = self.markers;
         let id = self.id.clone();
         let always_visible = self.always_visible;
+        let show_track = self.show_track;
 
         let prepaint_handle = handle.clone();
         let paint = canvas(
@@ -405,6 +414,9 @@ impl Scrollbar {
                     theme.colors.scrollbar_thumb
                 };
 
+                if show_track {
+                    window.paint_quad(fill(prepaint.track_bounds, theme.colors.scrollbar_track));
+                }
                 if show {
                     window.paint_quad(fill(prepaint.thumb_bounds, thumb_color));
                 }

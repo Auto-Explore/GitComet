@@ -30,7 +30,7 @@ fn same_history_refs_hover_state(lhs: &HistoryRefsHoverState, rhs: &HistoryRefsH
     lhs.repo_id == rhs.repo_id
         && lhs.commit_id == rhs.commit_id
         && lhs.source_bounds == rhs.source_bounds
-        && Arc::ptr_eq(&lhs.items, &rhs.items)
+        && *lhs.items == *rhs.items
 }
 
 pub(in crate::view) struct HistoryRefsHoverHost {

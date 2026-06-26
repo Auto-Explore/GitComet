@@ -23,6 +23,7 @@ impl TextInput {
             read_only: options.read_only,
             chromeless: options.chromeless,
             soft_wrap: options.soft_wrap,
+            min_lines: options.min_lines,
             display_truncation: None,
             masked: false,
             line_ending: if cfg!(windows) { "\r\n" } else { "\n" },
@@ -343,6 +344,7 @@ impl TextInput {
 
     pub(super) fn queue_cursor_autoscroll(&mut self) {
         self.interaction.pending_cursor_autoscroll = true;
+        self.interaction.cursor_autoscroll_retry_exhausted = false;
     }
 
     pub(super) fn resolve_provider_highlights(
@@ -1303,7 +1305,19 @@ impl TextInput {
             target_scroll
         };
         handle.set_offset(point(current.x, next_y));
-        self.interaction.pending_cursor_autoscroll = false;
+        // max_offset is one frame stale when content just grew. If the cursor isn't
+        // actually in view at target_scroll, allow one retry so the next frame can use
+        // the updated max_offset. After that single retry we always stop: when the cursor
+        // is at end-of-document cursor_bottom equals the content height, which is always
+        // outside the caret_margin zone, so without a retry cap this would loop forever.
+        let cursor_will_be_visible = cursor_top >= target_scroll + caret_margin
+            && cursor_bottom <= target_scroll + viewport_height - caret_margin;
+        if !cursor_will_be_visible && !self.interaction.cursor_autoscroll_retry_exhausted {
+            self.interaction.pending_cursor_autoscroll = true;
+            self.interaction.cursor_autoscroll_retry_exhausted = true;
+        } else {
+            self.interaction.pending_cursor_autoscroll = false;
+        }
         cx.notify();
     }
 

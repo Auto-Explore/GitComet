@@ -126,6 +126,12 @@ pub(super) fn repo_externally_changed(
         {
             effects.push(Effect::LoadRemoteBranches { repo_id });
         }
+        if change.tags {
+            repo_state.set_tags(Loadable::NotLoaded);
+            if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+                effects.push(Effect::LoadTags { repo_id });
+            }
+        }
         effects
     } else {
         let mut effects = Vec::new();

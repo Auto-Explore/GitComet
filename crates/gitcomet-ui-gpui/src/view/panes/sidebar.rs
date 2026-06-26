@@ -129,6 +129,7 @@ impl SidebarPaneView {
                     read_only: false,
                     chromeless: true,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 cx,
             )

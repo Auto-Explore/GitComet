@@ -169,6 +169,8 @@ pub(in super::super) struct PopoverHost {
     clone_repo_parent_dir_input: Entity<components::TextInput>,
     rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
+    create_tag_message_input: Entity<components::TextInput>,
+    create_tag_message_scroll: ScrollHandle,
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
@@ -670,6 +672,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -684,6 +687,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -732,6 +736,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -746,10 +751,29 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
             )
+        });
+
+        let create_tag_message_scroll = ScrollHandle::new();
+        let create_tag_message_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Annotation message (optional)".into(),
+                    multiline: true,
+                    read_only: false,
+                    chromeless: true,
+                    soft_wrap: false,
+                    min_lines: 0,
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(create_tag_message_scroll.clone()));
+            input
         });
 
         let remote_name_input = cx.new(|cx| {
@@ -760,6 +784,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -774,6 +799,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -788,6 +814,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -802,6 +829,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -816,6 +844,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -885,6 +914,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: true,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -901,6 +931,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -915,6 +946,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -929,6 +961,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -943,6 +976,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -957,6 +991,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -971,6 +1006,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -985,6 +1021,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -999,6 +1036,7 @@ impl PopoverHost {
                     read_only: false,
                     chromeless: false,
                     soft_wrap: false,
+                    min_lines: 0,
                 },
                 window,
                 cx,
@@ -1134,6 +1172,8 @@ impl PopoverHost {
             clone_repo_parent_dir_input,
             rebase_onto_input,
             create_tag_input,
+            create_tag_message_input,
+            create_tag_message_scroll,
             remote_name_input,
             remote_url_input,
             remote_url_edit_input,
@@ -1500,10 +1540,16 @@ impl PopoverHost {
             return;
         }
 
+        let message = self
+            .create_tag_message_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        let message = if message.is_empty() { None } else { Some(message) };
+
         self.store.dispatch(Msg::CreateTag {
             repo_id,
             name,
             target,
+            message,
         });
         self.close_popover(cx);
     }
@@ -1997,6 +2043,11 @@ impl PopoverHost {
                     let theme = self.theme;
                     self.create_tag_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.create_tag_message_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();
@@ -2544,7 +2595,7 @@ impl PopoverHost {
                 mode,
             } => reset_prompt::panel(self, repo_id, target, mode, cx),
             PopoverKind::CreateTagPrompt { repo_id, target } => {
-                create_tag_prompt::panel(self, repo_id, target, cx)
+                create_tag_prompt::panel(self, repo_id, target, window, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {

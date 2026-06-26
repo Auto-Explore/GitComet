@@ -5983,7 +5983,7 @@ fn create_and_delete_local_tag() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    opened.create_tag_with_output("v1.0.0", "HEAD").unwrap();
+    opened.create_tag_with_output("v1.0.0", "HEAD", None).unwrap();
     run_git(
         repo,
         &["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"],
@@ -6038,7 +6038,7 @@ fn create_tag_respects_tag_gpgsign_config() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
     let err = opened
-        .create_tag_with_output("v1.0.0", "HEAD")
+        .create_tag_with_output("v1.0.0", "HEAD", None)
         .expect_err("tag creation should fail when signing is required and gpg is missing");
 
     match err.kind() {
@@ -6207,7 +6207,7 @@ fn push_and_delete_remote_tag() {
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
 
-    opened.create_tag_with_output("v1.0.0", "HEAD").unwrap();
+    opened.create_tag_with_output("v1.0.0", "HEAD", None).unwrap();
     opened.push_tag_with_output("origin", "v1.0.0").unwrap();
     run_git(
         &origin,

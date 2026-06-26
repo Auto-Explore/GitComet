@@ -3,6 +3,7 @@ pub struct RepoExternalChange {
     pub worktree: bool,
     pub index: bool,
     pub git_state: bool,
+    pub tags: bool,
 }
 
 impl RepoExternalChange {
@@ -13,6 +14,8 @@ impl RepoExternalChange {
     #[allow(non_upper_case_globals)]
     pub const GitState: Self = Self::git_state();
     #[allow(non_upper_case_globals)]
+    pub const Tags: Self = Self::tags();
+    #[allow(non_upper_case_globals)]
     pub const Both: Self = Self::all();
 
     pub const fn worktree() -> Self {
@@ -20,6 +23,7 @@ impl RepoExternalChange {
             worktree: true,
             index: false,
             git_state: false,
+            tags: false,
         }
     }
 
@@ -28,6 +32,7 @@ impl RepoExternalChange {
             worktree: false,
             index: true,
             git_state: false,
+            tags: false,
         }
     }
 
@@ -36,6 +41,16 @@ impl RepoExternalChange {
             worktree: false,
             index: false,
             git_state: true,
+            tags: false,
+        }
+    }
+
+    pub const fn tags() -> Self {
+        Self {
+            worktree: false,
+            index: false,
+            git_state: true,
+            tags: true,
         }
     }
 
@@ -44,10 +59,11 @@ impl RepoExternalChange {
             worktree: true,
             index: true,
             git_state: true,
+            tags: true,
         }
     }
 
     pub const fn is_empty(self) -> bool {
-        !self.worktree && !self.index && !self.git_state
+        !self.worktree && !self.index && !self.git_state && !self.tags
     }
 }

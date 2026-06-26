@@ -317,6 +317,7 @@ impl ToastHost {
                     read_only: true,
                     chromeless: true,
                     soft_wrap: true,
+                    min_lines: 0,
                 },
                 cx,
             )

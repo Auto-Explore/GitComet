@@ -174,20 +174,23 @@ impl GixRepo {
         &self,
         name: &str,
         target: &str,
+        message: Option<&str>,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "tag name")?;
         validate_ref_like_arg(target, "tag target")?;
 
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c")
-            .arg("alias.tag=")
-            .arg("tag")
-            .arg("-m")
-            .arg(name)
-            .arg("--")
-            .arg(name)
-            .arg(target);
-        run_git_with_output(cmd, &format!("git tag -m {name} -- {name} {target}"))
+        cmd.arg("-c").arg("alias.tag=").arg("tag");
+        if let Some(msg) = message {
+            cmd.arg("-m").arg(msg);
+        }
+        cmd.arg("--").arg(name).arg(target);
+        let label = if message.is_some() {
+            format!("git tag -m <message> -- {name} {target}")
+        } else {
+            format!("git tag -- {name} {target}")
+        };
+        run_git_with_output(cmd, &label)
     }
 
     pub(super) fn delete_tag_with_output_impl(&self, name: &str) -> Result<CommandOutput> {

@@ -1206,7 +1206,7 @@ fn summarize_command(
         RepoCommandKind::RebaseContinue => "Rebase: Continued".to_string(),
         RepoCommandKind::RebaseAbort => "Rebase: Aborted".to_string(),
         RepoCommandKind::MergeAbort => "Merge: Aborted".to_string(),
-        RepoCommandKind::CreateTag { name, target } => format!("Tag {name} → {target}: Created"),
+        RepoCommandKind::CreateTag { name, target, .. } => format!("Tag {name} → {target}: Created"),
         RepoCommandKind::DeleteTag { name } => format!("Tag {name}: Deleted"),
         RepoCommandKind::AddRemote { name, .. } => format!("Remote {name}: Added"),
         RepoCommandKind::RemoveRemote { name } => format!("Remote {name}: Removed"),
@@ -1906,6 +1906,7 @@ mod tests {
                 RepoCommandKind::CreateTag {
                     name: "v2".into(),
                     target: "HEAD".into(),
+                    message: None,
                 },
                 "Tag",
             ),
@@ -2170,6 +2171,7 @@ mod tests {
             &RepoCommandKind::CreateTag {
                 name: "v2".into(),
                 target: "HEAD".into(),
+                message: None,
             },
             &command_output("git tag v2 HEAD", "", ""),
             true,

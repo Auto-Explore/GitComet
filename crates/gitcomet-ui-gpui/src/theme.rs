@@ -55,6 +55,7 @@ pub struct Colors {
     pub scrollbar_thumb: Rgba,
     pub scrollbar_thumb_hover: Rgba,
     pub scrollbar_thumb_active: Rgba,
+    pub scrollbar_track: Rgba,
     pub danger: Rgba,
     pub warning: Rgba,
     pub success: Rgba,
@@ -438,6 +439,8 @@ struct ThemeFileColors {
     scrollbar_thumb: ThemeColor,
     scrollbar_thumb_hover: ThemeColor,
     scrollbar_thumb_active: ThemeColor,
+    #[serde(default)]
+    scrollbar_track: Option<ThemeColor>,
     danger: ThemeColor,
     warning: ThemeColor,
     success: ThemeColor,
@@ -594,6 +597,7 @@ impl From<ThemeFile> for AppTheme {
             scrollbar_thumb,
             scrollbar_thumb_hover,
             scrollbar_thumb_active,
+            scrollbar_track,
             danger,
             warning,
             success,
@@ -628,6 +632,9 @@ impl From<ThemeFile> for AppTheme {
             scrollbar_thumb: scrollbar_thumb.into_rgba(),
             scrollbar_thumb_hover: scrollbar_thumb_hover.into_rgba(),
             scrollbar_thumb_active: scrollbar_thumb_active.into_rgba(),
+            scrollbar_track: scrollbar_track
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_scrollbar_track(is_dark)),
             danger: danger.into_rgba(),
             warning: warning.into_rgba(),
             success: success.into_rgba(),
@@ -832,6 +839,14 @@ fn default_diff_remove_text(is_dark: bool) -> Rgba {
         gpui::rgb(0xFECACA)
     } else {
         gpui::rgba(0xcb2431ff)
+    }
+}
+
+fn default_scrollbar_track(is_dark: bool) -> Rgba {
+    if is_dark {
+        with_alpha(gpui::rgba(0x8a8986ff), 0.08)
+    } else {
+        with_alpha(gpui::rgba(0x58585aff), 0.07)
     }
 }
 
