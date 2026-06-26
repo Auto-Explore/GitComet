@@ -5,6 +5,7 @@ use gpui::{
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, UniformListScrollHandle,
     canvas, div, fill, point, px, size,
 };
+use std::sync::Arc;
 use std::time::Duration;
 
 pub const SCROLLBAR_GUTTER_PX: f32 = 16.0;
@@ -31,35 +32,117 @@ pub struct ScrollbarMarker {
     pub kind: ScrollbarMarkerKind,
 }
 
+/// Trait abstracting the scroll model a scrollbar drives.
+///
+/// Implementations exist for:
+/// - GPUI `ScrollHandle`
+/// - GPUI `UniformListScrollHandle`
+/// - Alacritty terminal scroll model
+pub trait ScrollbarDriver: 'static {
+    /// Maximum scroll extent in pixels for the given axis.
+    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels;
+
+    /// Current scroll position as a signed pixel offset.
+    /// Sign convention: negative values represent "reversed" scroll direction
+    /// (e.g. newer content at higher offsets).
+    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels;
+
+    /// Set the scroll position for the given axis.
+    fn set_axis_offset(&self, axis: ScrollbarAxis, offset: Pixels);
+
+    /// Lifecycle: called when a scrollbar drag starts.
+    fn drag_started(&self, _axis: ScrollbarAxis) {}
+
+    /// Lifecycle: called when a scrollbar drag ends.
+    fn drag_ended(&self, _axis: ScrollbarAxis) {}
+}
+
+// ---------------------------------------------------------------------------
+// Scrollbar driver implementations for GPUI scroll handles
+// ---------------------------------------------------------------------------
+
+impl ScrollbarDriver for ScrollHandle {
+    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match axis {
+            ScrollbarAxis::Vertical => self.max_offset().y.max(px(0.0)),
+            ScrollbarAxis::Horizontal => self.max_offset().x.max(px(0.0)),
+        }
+    }
+
+    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match axis {
+            ScrollbarAxis::Vertical => self.offset().y,
+            ScrollbarAxis::Horizontal => self.offset().x,
+        }
+    }
+
+    fn set_axis_offset(&self, axis: ScrollbarAxis, offset: Pixels) {
+        let current = self.offset();
+        match axis {
+            ScrollbarAxis::Vertical => self.set_offset(point(current.x, offset)),
+            ScrollbarAxis::Horizontal => self.set_offset(point(offset, current.y)),
+        }
+    }
+
+    fn drag_started(&self, _axis: ScrollbarAxis) {}
+
+    fn drag_ended(&self, _axis: ScrollbarAxis) {}
+}
+
+impl ScrollbarDriver for UniformListScrollHandle {
+    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match axis {
+            ScrollbarAxis::Vertical => self
+                .0
+                .borrow()
+                .last_item_size
+                .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
+                .unwrap_or_else(|| self.0.borrow().base_handle.max_offset().y),
+            ScrollbarAxis::Horizontal => self
+                .0
+                .borrow()
+                .last_item_size
+                .map(|size| (size.contents.width - size.item.width).max(px(0.0)))
+                .unwrap_or_else(|| self.0.borrow().base_handle.max_offset().x),
+        }
+    }
+
+    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        let base = self.0.borrow().base_handle.clone();
+        match axis {
+            ScrollbarAxis::Vertical => base.offset().y,
+            ScrollbarAxis::Horizontal => base.offset().x,
+        }
+    }
+
+    fn set_axis_offset(&self, axis: ScrollbarAxis, offset: Pixels) {
+        let base = self.0.borrow().base_handle.clone();
+        let current = base.offset();
+        match axis {
+            ScrollbarAxis::Vertical => base.set_offset(point(current.x, offset)),
+            ScrollbarAxis::Horizontal => base.set_offset(point(offset, current.y)),
+        }
+    }
+
+    fn drag_started(&self, _axis: ScrollbarAxis) {}
+
+    fn drag_ended(&self, _axis: ScrollbarAxis) {}
+}
+
+// ---------------------------------------------------------------------------
+// Scrollbar component
+// ---------------------------------------------------------------------------
+
 #[derive(Clone)]
 pub struct Scrollbar {
     id: ElementId,
-    handle: ScrollbarHandle,
+    driver: Arc<dyn ScrollbarDriver>,
     axis: ScrollbarAxis,
     markers: Vec<ScrollbarMarker>,
     always_visible: bool,
     show_track: bool,
     #[cfg(test)]
     debug_selector: Option<&'static str>,
-}
-
-#[derive(Clone)]
-#[doc(hidden)]
-pub enum ScrollbarHandle {
-    Scroll(ScrollHandle),
-    UniformList(UniformListScrollHandle),
-}
-
-impl From<ScrollHandle> for ScrollbarHandle {
-    fn from(handle: ScrollHandle) -> Self {
-        Self::Scroll(handle)
-    }
-}
-
-impl From<UniformListScrollHandle> for ScrollbarHandle {
-    fn from(handle: UniformListScrollHandle) -> Self {
-        Self::UniformList(handle)
-    }
 }
 
 struct ScrollbarInteractionState {
@@ -86,57 +169,6 @@ impl Default for ScrollbarInteractionState {
     }
 }
 
-impl ScrollbarHandle {
-    fn base_handle(&self) -> ScrollHandle {
-        match self {
-            Self::Scroll(handle) => handle.clone(),
-            Self::UniformList(handle) => handle.0.borrow().base_handle.clone(),
-        }
-    }
-
-    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
-        match (axis, self) {
-            (ScrollbarAxis::Vertical, Self::UniformList(handle)) => handle
-                .0
-                .borrow()
-                .last_item_size
-                .map(|size| (size.contents.height - size.item.height).max(px(0.0)))
-                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().y),
-            (ScrollbarAxis::Horizontal, Self::UniformList(handle)) => handle
-                .0
-                .borrow()
-                .last_item_size
-                .map(|size| (size.contents.width - size.item.width).max(px(0.0)))
-                .unwrap_or_else(|| handle.0.borrow().base_handle.max_offset().x),
-            (ScrollbarAxis::Vertical, _) => self.base_handle().max_offset().y.max(px(0.0)),
-            (ScrollbarAxis::Horizontal, _) => self.base_handle().max_offset().x.max(px(0.0)),
-        }
-    }
-
-    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
-        match (axis, self) {
-            (ScrollbarAxis::Vertical, Self::UniformList(handle)) => {
-                handle.0.borrow().base_handle.offset().y
-            }
-            (ScrollbarAxis::Vertical, _) => self.base_handle().offset().y,
-            (ScrollbarAxis::Horizontal, _) => self.base_handle().offset().x,
-        }
-    }
-
-    fn set_axis_offset(&self, axis: ScrollbarAxis, axis_offset: Pixels) {
-        let base = self.base_handle();
-        let current = base.offset();
-        match axis {
-            ScrollbarAxis::Vertical => base.set_offset(point(current.x, axis_offset)),
-            ScrollbarAxis::Horizontal => base.set_offset(point(axis_offset, current.y)),
-        }
-    }
-
-    fn scrollbar_drag_started(&self, _axis: ScrollbarAxis) {}
-
-    fn scrollbar_drag_ended(&self, _axis: ScrollbarAxis) {}
-}
-
 #[derive(Clone, Debug)]
 struct ScrollbarPrepaintState {
     interaction_bounds: Bounds<Pixels>,
@@ -144,13 +176,14 @@ struct ScrollbarPrepaintState {
     thumb_bounds: Bounds<Pixels>,
     thumb_hit_bounds: Bounds<Pixels>,
     cursor_hitbox: Hitbox,
+    scroll: Pixels,
 }
 
 impl Scrollbar {
-    pub fn new(id: impl Into<ElementId>, handle: impl Into<ScrollbarHandle>) -> Self {
+    pub fn new(id: impl Into<ElementId>, driver: impl ScrollbarDriver) -> Self {
         Self {
             id: id.into(),
-            handle: handle.into(),
+            driver: Arc::new(driver),
             axis: ScrollbarAxis::Vertical,
             markers: Vec::new(),
             always_visible: true,
@@ -160,10 +193,10 @@ impl Scrollbar {
         }
     }
 
-    pub fn horizontal(id: impl Into<ElementId>, handle: impl Into<ScrollbarHandle>) -> Self {
+    pub fn horizontal(id: impl Into<ElementId>, driver: impl ScrollbarDriver) -> Self {
         Self {
             id: id.into(),
-            handle: handle.into(),
+            driver: Arc::new(driver),
             axis: ScrollbarAxis::Horizontal,
             markers: Vec::new(),
             always_visible: true,
@@ -195,27 +228,27 @@ impl Scrollbar {
     }
 
     pub fn render(self, theme: AppTheme) -> impl IntoElement {
-        let handle = self.handle.clone();
+        let driver = self.driver.clone();
         let axis = self.axis;
         let markers = self.markers;
         let id = self.id.clone();
         let always_visible = self.always_visible;
         let show_track = self.show_track;
 
-        let prepaint_handle = handle.clone();
+        let prepaint_driver = driver.clone();
         let paint = canvas(
             move |bounds, window, _cx| {
                 let margin = px(4.0);
                 let (viewport_size, max_offset, raw_offset) = match axis {
                     ScrollbarAxis::Vertical => (
                         bounds.size.height,
-                        prepaint_handle.max_offset(axis),
-                        prepaint_handle.raw_offset(axis),
+                        prepaint_driver.max_offset(axis),
+                        prepaint_driver.raw_offset(axis),
                     ),
                     ScrollbarAxis::Horizontal => (
                         bounds.size.width,
-                        prepaint_handle.max_offset(axis),
-                        prepaint_handle.raw_offset(axis),
+                        prepaint_driver.max_offset(axis),
+                        prepaint_driver.raw_offset(axis),
                     ),
                 };
                 let scroll = if raw_offset < px(0.0) {
@@ -275,6 +308,7 @@ impl Scrollbar {
                     thumb_bounds,
                     thumb_hit_bounds,
                     cursor_hitbox,
+                    scroll,
                 })
             },
             move |bounds, prepaint, window, cx| {
@@ -343,23 +377,7 @@ impl Scrollbar {
                 let hovered = prepaint.cursor_hitbox.is_hovered(window);
                 let is_dragging = interaction.read(cx).drag_offset.is_some();
 
-                let max_offset = handle.max_offset(axis);
-                let raw_offset = handle.raw_offset(axis);
-                let observed_sign = if raw_offset < px(0.0) {
-                    -1
-                } else if raw_offset > px(0.0) {
-                    1
-                } else {
-                    interaction.read(cx).offset_sign
-                };
-                if observed_sign != interaction.read(cx).offset_sign && raw_offset != px(0.0) {
-                    interaction.update(cx, |state, _cx| state.offset_sign = observed_sign);
-                }
-                let scroll = if observed_sign < 0 {
-                    (-raw_offset).max(px(0.0)).min(max_offset)
-                } else {
-                    raw_offset.max(px(0.0)).min(max_offset)
-                };
+                let scroll = prepaint.scroll;
                 let show = if always_visible {
                     true
                 } else {
@@ -438,7 +456,7 @@ impl Scrollbar {
 
                 window.on_mouse_event({
                     let interaction = interaction.clone();
-                    let handle = handle.clone();
+                    let driver = driver.clone();
                     move |event: &MouseDownEvent, phase, window, cx| {
                         if phase != capture_phase || event.button != MouseButton::Left {
                             return;
@@ -447,13 +465,13 @@ impl Scrollbar {
                             return;
                         }
 
-                        let max_offset = handle.max_offset(axis);
+                        let max_offset = driver.max_offset(axis);
                         if max_offset <= px(0.0) {
                             return;
                         }
 
                         if thumb_hit_bounds.contains(&event.position) {
-                            handle.scrollbar_drag_started(axis);
+                            driver.drag_started(axis);
                             let grab = match axis {
                                 ScrollbarAxis::Vertical => event.position.y - thumb_bounds.origin.y,
                                 ScrollbarAxis::Horizontal => {
@@ -494,7 +512,7 @@ impl Scrollbar {
                                     sign,
                                 ),
                             };
-                            handle.set_axis_offset(axis, new_offset);
+                            driver.set_axis_offset(axis, new_offset);
                         }
 
                         window.refresh();
@@ -504,7 +522,7 @@ impl Scrollbar {
 
                 window.on_mouse_event({
                     let interaction = interaction.clone();
-                    let handle = handle.clone();
+                    let driver = driver.clone();
                     move |event: &MouseMoveEvent, phase, _window, cx| {
                         if phase != capture_phase || !event.dragging() {
                             return;
@@ -514,7 +532,7 @@ impl Scrollbar {
                             return;
                         };
 
-                        let max_offset = handle.max_offset(axis);
+                        let max_offset = driver.max_offset(axis);
                         if max_offset <= px(0.0) {
                             return;
                         }
@@ -538,7 +556,7 @@ impl Scrollbar {
                                 sign,
                             ),
                         };
-                        handle.set_axis_offset(axis, new_offset);
+                        driver.set_axis_offset(axis, new_offset);
                         if !always_visible {
                             interaction.update(cx, |state, _cx| state.showing = true);
                         }
@@ -549,6 +567,7 @@ impl Scrollbar {
 
                 window.on_mouse_event({
                     let interaction = interaction.clone();
+                    let driver = driver.clone();
                     move |event: &MouseUpEvent, phase, window, cx| {
                         if phase != capture_phase || event.button != MouseButton::Left {
                             return;
@@ -556,7 +575,7 @@ impl Scrollbar {
                         if interaction.read(cx).drag_offset.is_none() {
                             return;
                         }
-                        handle.scrollbar_drag_ended(axis);
+                        driver.drag_ended(axis);
                         interaction.update(cx, |state, _cx| state.drag_offset = None);
                         window.refresh();
                         cx.stop_propagation();
@@ -601,9 +620,8 @@ impl Scrollbar {
         px(SCROLLBAR_GUTTER_PX)
     }
 
-    pub fn visible_gutter(handle: impl Into<ScrollbarHandle>, axis: ScrollbarAxis) -> Pixels {
-        let handle: ScrollbarHandle = handle.into();
-        if handle.max_offset(axis) > px(0.0) {
+    pub fn visible_gutter(driver: impl ScrollbarDriver, axis: ScrollbarAxis) -> Pixels {
+        if driver.max_offset(axis) > px(0.0) {
             Self::gutter(axis)
         } else {
             px(0.0)
@@ -626,12 +644,20 @@ impl Scrollbar {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Thumb metrics
+// ---------------------------------------------------------------------------
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ThumbMetrics {
     pub(crate) offset: Pixels,
     pub(crate) length: Pixels,
     pub(crate) thickness: Pixels,
 }
+
+// ---------------------------------------------------------------------------
+// Render helpers
+// ---------------------------------------------------------------------------
 
 fn marker_colors(
     theme: AppTheme,

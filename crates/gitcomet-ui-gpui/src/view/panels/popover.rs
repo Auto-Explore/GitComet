@@ -36,6 +36,7 @@ mod submodule_open_picker;
 mod submodule_remove_confirm;
 mod submodule_remove_picker;
 mod submodule_trust_confirm;
+mod terminal_shutdown_confirm;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -293,6 +294,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
+            | PopoverKind::TerminalMenu { .. }
             | PopoverKind::DiffHunkMenu { .. }
             | PopoverKind::DiffEditorMenu { .. }
             | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -425,6 +427,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
+        | PopoverKind::TerminalMenu { .. }
         | PopoverKind::UiScalePicker => Anchor::TopRight,
         _ => Anchor::TopLeft,
     }
@@ -506,6 +509,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
+        PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
+        PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
@@ -1964,12 +1969,10 @@ impl PopoverHost {
                         input.set_text("", cx);
                         cx.notify();
                     });
-                    if !*source_selectable {
-                        let focus = self
-                            .create_branch_input
-                            .read_with(cx, |i, _| i.focus_handle());
-                        window.focus(&focus, cx);
-                    }
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
                     let theme = self.theme;
@@ -2707,6 +2710,9 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
+            PopoverKind::TerminalMenu { repo_id, context } => {
+                self.context_menu_view(PopoverKind::TerminalMenu { repo_id, context }, cx)
+            }
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }
@@ -2893,6 +2899,9 @@ impl PopoverHost {
                 cx,
             ),
             PopoverKind::AppMenu => app_menu::panel(self, cx),
+            PopoverKind::TerminalShutdownConfirm(prompt) => {
+                terminal_shutdown_confirm::panel(self, prompt, cx)
+            }
         };
 
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);

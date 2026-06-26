@@ -40,6 +40,7 @@ gitcomet-ui = { path = "crates/gitcomet-ui" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 
 # External crates
+alacritty_terminal = "0.26"
 clap = { version = "4.6.1", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
@@ -48,9 +49,11 @@ gix = { version = "0.85.0", default-features = false, features = ["max-performan
 gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "b7a78f8541c04528bb6c2db68174e3a128716dba" }
 gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "b7a78f8541c04528bb6c2db68174e3a128716dba", features = ["font-kit"] }
 image = "0.25.10"
+libc = "0.2"
 lru = "0.18"
 memchr = "2.8.2"
 mimalloc = "0.1.52"
+parking_lot = "0.12"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
@@ -66,6 +69,7 @@ smallvec = "1.15.2"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
 strsim = "0.11.1"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.26.9"

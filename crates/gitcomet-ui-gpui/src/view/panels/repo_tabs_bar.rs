@@ -9,6 +9,7 @@ pub(in super::super) struct RepoTabsBarView {
     theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
+    open_terminal_repo_ids: HashSet<RepoId>,
 
     hovered_repo_tab: Option<RepoId>,
     active_context_menu_invoker: Option<SharedString>,
@@ -113,6 +114,11 @@ impl RepoTabsBarView {
 
     fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.hovered_repo_tab = None;
+        if let Ok(true) = self.root_view.update(cx, |root, cx| {
+            root.request_terminal_shutdown_action(TerminalShutdownAction::CloseRepo { repo_id }, cx)
+        }) {
+            return;
+        }
         self.store.dispatch(Msg::CloseRepo { repo_id });
         cx.notify();
     }
@@ -152,6 +158,7 @@ impl RepoTabsBarView {
             theme,
             _ui_model_subscription: subscription,
             root_view,
+            open_terminal_repo_ids: HashSet::default(),
             hovered_repo_tab: None,
             active_context_menu_invoker: None,
             repo_tab_spinner_delay: None,
@@ -167,6 +174,18 @@ impl RepoTabsBarView {
         cx.notify();
     }
 
+    pub(in super::super) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: HashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids == next {
+            return;
+        }
+        self.open_terminal_repo_ids = next;
+        cx.notify();
+    }
+
     pub(in super::super) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,
@@ -178,7 +197,6 @@ impl RepoTabsBarView {
         self.active_context_menu_invoker = next;
         cx.notify();
     }
-
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -368,7 +386,18 @@ impl Render for RepoTabsBarView {
                         .text_sm()
                         .line_clamp(1)
                         .child(label),
-                );
+                )
+                .when(self.open_terminal_repo_ids.contains(&repo_id), |d| {
+                    d.child(
+                        div()
+                            .debug_selector(move || format!("repo_tab_terminal_{}", repo_id.0))
+                            .child(svg_icon(
+                                "icons/terminal.svg",
+                                theme.colors.accent,
+                                px(12.0),
+                            )),
+                    )
+                });
 
             let tab = tab
                 .child(tab_label)

@@ -215,6 +215,21 @@ pub(in crate::view) enum ContextMenuAction {
         visible_ix: usize,
         region: DiffTextRegion,
     },
+    TerminalCopy {
+        repo_id: RepoId,
+    },
+    TerminalPaste {
+        repo_id: RepoId,
+    },
+    TerminalSelectAll {
+        repo_id: RepoId,
+    },
+    TerminalClear {
+        repo_id: RepoId,
+    },
+    TerminalOpenExternal {
+        repo_id: RepoId,
+    },
     ApplyIndexPatch {
         repo_id: RepoId,
         patch: String,
