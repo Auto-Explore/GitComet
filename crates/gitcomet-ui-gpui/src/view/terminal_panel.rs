@@ -321,15 +321,24 @@ impl TerminalViewportView {
         }
     }
 
-    fn handle_key_down(&mut self, event: &gpui::KeyDownEvent, cx: &mut gpui::Context<Self>) {
-        if let Some(action) = terminal_clipboard_shortcut_action(&event.keystroke) {
+    /// Handles a keystroke aimed at the terminal. Returns `true` when the
+    /// keystroke was consumed (encoded and forwarded to the PTY, or used for a
+    /// terminal shortcut/scrollback action). Callers use the return value to
+    /// decide whether to suppress the app's global key bindings — see
+    /// [`GitCometView::forward_keystroke_to_focused_terminal`].
+    fn handle_key_down(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if let Some(action) = terminal_clipboard_shortcut_action(keystroke) {
             self.perform_clipboard_action(action, cx);
             cx.stop_propagation();
-            return;
+            return true;
         }
-        if self.handle_scrollback_key(event, cx) {
+        if self.handle_scrollback_key(keystroke, cx) {
             cx.stop_propagation();
-            return;
+            return true;
         }
         let app_cursor = self
             .last_content
@@ -337,12 +346,12 @@ impl TerminalViewportView {
             .map(|c| c.mode.contains(TerminalModes::APP_CURSOR))
             .unwrap_or(false);
         let option_as_meta = true;
-        if let Some(bytes) =
-            encode_alacritty_key_input(&event.keystroke, app_cursor, option_as_meta)
-        {
+        if let Some(bytes) = encode_alacritty_key_input(keystroke, app_cursor, option_as_meta) {
             self.queue_input(bytes, cx);
             cx.stop_propagation();
+            return true;
         }
+        false
     }
 
     fn perform_clipboard_action(
@@ -568,11 +577,11 @@ impl TerminalViewportView {
 
     fn handle_scrollback_key(
         &mut self,
-        event: &gpui::KeyDownEvent,
+        keystroke: &gpui::Keystroke,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let key = event.keystroke.key.as_str();
-        let mods = event.keystroke.modifiers;
+        let key = keystroke.key.as_str();
+        let mods = keystroke.modifiers;
         if mods.control || mods.alt || mods.platform || mods.function || !mods.shift {
             return false;
         }
@@ -1275,7 +1284,7 @@ impl Render for TerminalViewportView {
                 this.handle_mouse_move(e, window, cx);
             }))
             .on_key_down(cx.listener(|this, e: &gpui::KeyDownEvent, _window, cx| {
-                this.handle_key_down(e, cx);
+                this.handle_key_down(&e.keystroke, cx);
             }))
             .on_scroll_wheel(cx.listener(|this, e: &gpui::ScrollWheelEvent, window, cx| {
                 this.handle_scroll_wheel(e, window, cx);
@@ -1332,6 +1341,60 @@ impl Render for TerminalViewportView {
 // ============================================================================
 
 impl GitCometView {
+    /// Returns the viewport of the embedded terminal that currently holds
+    /// keyboard focus in `window`, if any.
+    pub(super) fn focused_terminal_viewport(
+        &self,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> Option<Entity<TerminalViewportView>> {
+        self.terminal_sessions
+            .values()
+            .flat_map(|session| session.instances.iter())
+            .find(|instance| instance.viewport.read(cx).focus_handle.is_focused(window))
+            .map(|instance| instance.viewport.clone())
+    }
+
+    /// Routes a keystroke to the focused embedded terminal before the app's
+    /// global key bindings get a chance to run. A focused terminal must take
+    /// priority over app shortcuts (e.g. `Ctrl+P`) so that the TUI running
+    /// inside it receives its own shortcuts. Installed as a keystroke
+    /// interceptor (see [`GitCometView::install_terminal_keystroke_interceptor`]),
+    /// which fires before binding/action dispatch; when the terminal consumes
+    /// the keystroke we stop propagation so no app action is triggered.
+    pub(super) fn forward_keystroke_to_focused_terminal(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(viewport) = self.focused_terminal_viewport(window, cx) else {
+            return;
+        };
+        viewport.update(cx, |viewport, cx| {
+            viewport.handle_key_down(keystroke, cx);
+        });
+    }
+
+    /// Installs an app-level keystroke interceptor that forwards keystrokes to a
+    /// focused embedded terminal. Interceptors run before key bindings resolve
+    /// to actions, so this is what lets the terminal swallow shortcuts that the
+    /// app would otherwise claim (Ctrl+P, function keys, etc.). The returned
+    /// [`gpui::Subscription`] must be stored for the interceptor to stay active.
+    pub(super) fn install_terminal_keystroke_interceptor(
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Subscription {
+        let view = cx.weak_entity();
+        cx.intercept_keystrokes(move |event, window, cx| {
+            let Some(view) = view.upgrade() else {
+                return;
+            };
+            view.update(cx, |this, cx| {
+                this.forward_keystroke_to_focused_terminal(&event.keystroke, window, cx);
+            });
+        })
+    }
+
     fn deactivate_terminal_cursor_blink(&mut self) {
         self.terminal_cursor_blink_active = false;
         self.terminal_cursor_blink_task_scheduled = false;
@@ -2100,6 +2163,10 @@ impl GitCometView {
             .as_ref()
             .map(|c| c.mode.mouse_mode())
             .unwrap_or(false);
+        // When the terminal holds keyboard focus, app shortcuts are routed to
+        // the embedded TUI instead of the app. Surface that state so the user
+        // understands why their usual shortcuts behave differently.
+        let terminal_focused = viewport_entity.read(cx).focus_handle.is_focused(window);
 
         let header = self.render_terminal_header(
             theme,
@@ -2108,6 +2175,7 @@ impl GitCometView {
             active_index,
             has_selection,
             connected,
+            terminal_focused,
             window,
             cx,
         );
@@ -2152,6 +2220,15 @@ impl GitCometView {
             .h(self.terminal_panel_height)
             .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
             .bg(terminal_default_background(theme))
+            // A focus ring along the top edge reinforces that the terminal is
+            // capturing keyboard input. The border is always present (kept
+            // transparent when unfocused) so toggling focus never shifts layout.
+            .border_t_2()
+            .border_color(if terminal_focused {
+                theme.colors.focus_ring
+            } else {
+                with_alpha(theme.colors.focus_ring, 0.0)
+            })
             .child(header)
             .child(viewport_element)
             .into_any_element();
@@ -2183,6 +2260,7 @@ impl GitCometView {
         active_index: usize,
         _has_selection: bool,
         _connected: bool,
+        focused: bool,
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
@@ -2308,6 +2386,36 @@ impl GitCometView {
             .border_b_1()
             .border_color(theme.colors.border)
             .child(tabs_row)
+            .when(focused, |row| {
+                // Badge that explains why the usual app shortcuts (Ctrl+P, etc.)
+                // are being swallowed: the terminal currently owns the keyboard.
+                row.child(
+                    div()
+                        .id("terminal_focus_badge")
+                        .flex()
+                        .flex_none()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.0))
+                        .px(px(6.0))
+                        .py(px(2.0))
+                        .rounded(px(theme.radii.row))
+                        .bg(with_alpha(theme.colors.accent, 0.15))
+                        .child(div().size(px(6.0)).rounded(px(3.0)).bg(theme.colors.accent))
+                        .child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme.colors.text)
+                                .child("Keyboard captured"),
+                        )
+                        .gitcomet_tooltip(
+                            theme,
+                            "Terminal has keyboard focus — app shortcuts are sent to the \
+                             terminal. Click outside the terminal to release."
+                                .into(),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()

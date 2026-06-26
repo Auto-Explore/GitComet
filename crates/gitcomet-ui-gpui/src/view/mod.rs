@@ -1938,6 +1938,8 @@ impl GitCometView {
         let initial_sidebar_width = scale.px(initial_sidebar_width_design);
         let initial_details_width = scale.px(initial_details_width_design);
 
+        let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1947,6 +1949,7 @@ impl GitCometView {
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
+            _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
