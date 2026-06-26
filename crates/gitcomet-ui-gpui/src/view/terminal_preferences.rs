@@ -260,7 +260,7 @@ where
     #[cfg(target_os = "macos")]
     {
         let _ = &mut find_executable;
-        return Ok(ExternalTerminalLaunchSpec {
+        Ok(ExternalTerminalLaunchSpec {
             program: OsString::from("open"),
             args: vec![
                 OsString::from("-a"),
@@ -268,7 +268,7 @@ where
                 context.cwd.as_os_str().to_os_string(),
             ],
             current_dir: None,
-        });
+        })
     }
 
     #[cfg(target_os = "windows")]
