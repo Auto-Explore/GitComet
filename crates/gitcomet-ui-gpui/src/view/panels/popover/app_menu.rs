@@ -204,7 +204,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .active(move |s| s.bg(theme.colors.active))
                 .child("Quit")
                 .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
-                    cx.quit();
+                    crate::app::quit_app_or_warn(cx);
                 })),
         )
         .child(

@@ -63,6 +63,9 @@ actions!(
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
+        TerminalCopy,
+        TerminalPaste,
+        TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
     ]
@@ -149,6 +152,9 @@ mod settings_window;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
+mod terminal_alacritty;
+mod terminal_panel;
+mod terminal_preferences;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod toast_host;
@@ -176,6 +182,11 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+pub(in crate::view) use terminal_preferences::{
+    ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
+    TerminalPreferences, launch_external_terminal_from_preferences, parse_terminal_args_multiline,
+    resolve_embedded_shell_program,
+};
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 #[cfg(test)]
@@ -195,6 +206,7 @@ use file_diff_display::{
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
 use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
+pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
@@ -253,6 +265,8 @@ const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
+const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
+const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
 pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
 
 pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
@@ -1539,6 +1553,7 @@ impl GitCometView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
         let diff_scroll_sync = ui_session
             .diff_scroll_sync
             .as_deref()
@@ -1923,6 +1938,8 @@ impl GitCometView {
         let initial_sidebar_width = scale.px(initial_sidebar_width_design);
         let initial_details_width = scale.px(initial_details_width_design);
 
+        let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1932,6 +1949,7 @@ impl GitCometView {
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
+            _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
@@ -1965,6 +1983,16 @@ impl GitCometView {
             timezone,
             show_timezone,
             change_tracking_view,
+            terminal_preferences,
+            terminal_sessions: HashMap::default(),
+            terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
+            terminal_panel_resize: None,
+            next_terminal_session_seq: 1,
+            terminal_cursor_blink_visible: true,
+            terminal_cursor_blink_hold_until: Instant::now(),
+            terminal_cursor_blink_active: false,
+            terminal_cursor_blink_task_scheduled: false,
+            terminal_cursor_blink_seq: 0,
             commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
@@ -1992,6 +2020,8 @@ impl GitCometView {
             details_width_animating: false,
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
+            pending_terminal_shutdown_prompt: None,
+            pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             pending_force_delete_branch_centered: false,
@@ -2009,6 +2039,7 @@ impl GitCometView {
         };
 
         view.set_theme(initial_theme, cx);
+        view.sync_action_bar_terminal_target(cx);
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
@@ -2036,6 +2067,13 @@ impl GitCometView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        for session in self.terminal_sessions.values() {
+            for instance in &session.instances {
+                instance.viewport.update(cx, |viewport, cx| {
+                    viewport.set_theme(theme, cx);
+                });
+            }
+        }
         self.title_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
@@ -2069,9 +2107,17 @@ impl GitCometView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_secret_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        cx.notify();
     }
 
     fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        for session in self.terminal_sessions.values() {
+            for instance in &session.instances {
+                instance.viewport.update(cx, |viewport, cx| {
+                    viewport.invalidate_layout(cx);
+                });
+            }
+        }
         self.title_bar.update(cx, |_bar, cx| cx.notify());
         self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
         self.main_pane
@@ -2869,6 +2915,11 @@ impl GitCometView {
         self.state.active_repo
     }
 
+    fn active_repo(&self) -> Option<&RepoState> {
+        let repo_id = self.active_repo_id()?;
+        self.state.repos.iter().find(|repo| repo.id == repo_id)
+    }
+
     fn drive_focused_mergetool_bootstrap(&mut self) {
         if !self.state.git_runtime.is_available() {
             return;
@@ -3259,6 +3310,11 @@ impl GitCometView {
         self.change_tracking_view
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn terminal_preferences_for_test(&self) -> &TerminalPreferences {
+        &self.terminal_preferences
+    }
+
     fn resume_after_git_runtime_recovery(&mut self) {
         if let Some(bootstrap) = self.deferred_repo_bootstrap.take() {
             match bootstrap {
@@ -3319,6 +3375,19 @@ impl Render for GitCometView {
             self.open_popover_at(
                 PopoverKind::PullReconcilePrompt { repo_id },
                 self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(prompt) = self.pending_terminal_shutdown_prompt.take() {
+            let anchor = point(
+                self.last_window_size.width / 2.0,
+                self.last_window_size.height / 2.0,
+            );
+            self.open_popover_at(
+                PopoverKind::TerminalShutdownConfirm(prompt),
+                anchor,
                 window,
                 cx,
             );

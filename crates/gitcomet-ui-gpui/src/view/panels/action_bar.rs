@@ -59,6 +59,8 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
+    open_terminal_repo_ids: HashSet<RepoId>,
+    action_bar_terminal_target: ActionBarTerminalTarget,
 }
 
 impl ActionBarView {
@@ -115,6 +117,8 @@ impl ActionBarView {
             root_view,
             notify_fingerprint,
             active_context_menu_invoker: None,
+            open_terminal_repo_ids: HashSet::default(),
+            action_bar_terminal_target: ActionBarTerminalTarget::default(),
         }
     }
 
@@ -132,6 +136,30 @@ impl ActionBarView {
             return;
         }
         self.active_context_menu_invoker = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: HashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids == next {
+            return;
+        }
+        self.open_terminal_repo_ids = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_action_bar_terminal_target(
+        &mut self,
+        target: ActionBarTerminalTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.action_bar_terminal_target == target {
+            return;
+        }
+        self.action_bar_terminal_target = target;
         cx.notify();
     }
 
@@ -540,6 +568,31 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
+        let terminal_opens_external =
+            self.action_bar_terminal_target == ActionBarTerminalTarget::External;
+        let terminal_is_open = !terminal_opens_external
+            && self
+                .active_repo_id()
+                .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
+        let terminal_tooltip: SharedString = if terminal_opens_external {
+            "Open external terminal".into()
+        } else if terminal_is_open {
+            "Hide terminal".into()
+        } else {
+            "Show terminal".into()
+        };
+        let terminal = components::Button::new("terminal", "Terminal")
+            .start_slot(icon("icons/terminal.svg", icon_primary))
+            .style(components::ButtonStyle::Outlined)
+            .selected(terminal_is_open)
+            .selected_bg(menu_selected_bg)
+            .disabled(self.active_repo_id().is_none())
+            .on_click(theme, cx, move |this, _e, window, cx| {
+                let _ = this.root_view.update(cx, |root, cx| {
+                    root.activate_terminal_button_for_active_repo(window, cx);
+                });
+            })
+            .gitcomet_tooltip(theme, terminal_tooltip);
         let mut push_main = components::Button::new("push_main", "Push")
             .borderless()
             .start_slot(if push_loading {
@@ -801,6 +854,7 @@ impl Render for ActionBarView {
                     .gap_2()
                     .child(pull)
                     .child(push)
+                    .child(terminal)
                     .child(create_branch)
                     .child(stash),
             )

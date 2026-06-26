@@ -136,6 +136,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
+        | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -173,6 +174,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::BrowseHistoryMenu { repo_id }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
+        | PopoverKind::TerminalMenu { repo_id, .. }
         | PopoverKind::TagRefMenu { repo_id, .. }
         | PopoverKind::HistoryBranchFilter { repo_id } => Some(*repo_id),
     }?;
@@ -315,6 +317,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
+        | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker
         | PopoverKind::RecentRepositoryPicker
         | PopoverKind::CloneRepo
@@ -468,6 +472,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::PullPicker => 36u8.hash(hasher),
         PopoverKind::PushPicker => 37u8.hash(hasher),
         PopoverKind::AppMenu => 38u8.hash(hasher),
+        PopoverKind::TerminalShutdownConfirm(prompt) => {
+            67u8.hash(hasher);
+            prompt.action.hash(hasher);
+            prompt.summary.terminal_count.hash(hasher);
+            prompt.summary.running_command_count.hash(hasher);
+            prompt.summary.repo_names.hash(hasher);
+        }
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
             40u8.hash(hasher);
             repo_id.hash(hasher);
@@ -607,6 +618,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::HistoryBranchFilter { repo_id } => {
             48u8.hash(hasher);
             repo_id.hash(hasher);
+        }
+        PopoverKind::TerminalMenu { repo_id, context } => {
+            72u8.hash(hasher);
+            repo_id.hash(hasher);
+            context.hash(hasher);
         }
         PopoverKind::MergeAbortConfirm { repo_id } => {
             51u8.hash(hasher);
