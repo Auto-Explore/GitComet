@@ -6,7 +6,7 @@ use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use rustc_hash::FxHasher;
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -347,6 +347,13 @@ impl TerminalViewportView {
             .unwrap_or(false);
         let option_as_meta = true;
         if let Some(bytes) = encode_alacritty_key_input(keystroke, app_cursor, option_as_meta) {
+            // Typing clears any active selection / select-all so the highlight
+            // doesn't linger and `selected_text()` stops copying the whole buffer.
+            if self.selection_start.is_some() || self.select_all_active {
+                self.selection_start = None;
+                self.selection_end = None;
+                self.select_all_active = false;
+            }
             self.queue_input(bytes, cx);
             cx.stop_propagation();
             return true;
@@ -475,11 +482,7 @@ impl TerminalViewportView {
             }
         }
         drop(term);
-        // Trim trailing empty lines
-        while text.ends_with('\n') {
-            text.pop();
-        }
-        text
+        trim_terminal_copy(&text)
     }
 
     /// Copies the entire terminal buffer, including the scrollback history above
@@ -523,11 +526,7 @@ impl TerminalViewportView {
             }
         }
         drop(term);
-        // Trim trailing empty lines
-        while text.ends_with('\n') {
-            text.pop();
-        }
-        text
+        trim_terminal_copy(&text)
     }
 
     pub(super) fn has_selection(&self) -> bool {
@@ -869,8 +868,13 @@ impl TerminalViewportView {
             content.display_offset,
             content.terminal_bounds.columns as u16,
         )?;
+        // Clamp the row to the visible grid. A drag that leaves the viewport (the
+        // auto-scroll path above relies on exactly this) can yield a row past the
+        // last line; without this clamp `copy_grid_range` would index the grid out
+        // of range and panic.
+        let max_row = content.terminal_bounds.screen_lines.saturating_sub(1) as i32;
         Some(TerminalGridPoint::new(
-            grid_row.max(0) as u16,
+            grid_row.clamp(0, max_row) as u16,
             grid_col as u16,
         ))
     }
@@ -957,7 +961,7 @@ impl TerminalViewportView {
             term.resize(TerminalResizeDims {
                 columns: next_size.cols as usize,
                 screen_lines: next_size.rows as usize,
-                total_lines: 10_000,
+                total_lines: TERMINAL_SCROLLBACK_ROWS,
             });
             drop(term);
             pty_sender.resize(next_size.cols as usize, next_size.rows as usize);
@@ -1096,13 +1100,21 @@ impl TerminalViewportView {
                     .push((origin, rect_size, rect.color));
             }
 
-            // Selection rects
+            // Selection rects. Selection points are in grid coordinates (display
+            // offset already subtracted), so convert each grid row to a display row
+            // with `+ disp_off` — matching the background rects above — and skip any
+            // row scrolled out of view. Painting `sel_row` directly left the
+            // highlight glued to fixed screen rows when scrolled.
             if let Some((start, end)) = self
                 .selection_start
                 .zip(self.selection_end)
                 .map(|(s, e)| if s <= e { (s, e) } else { (e, s) })
             {
-                for sel_row in start.row..=end.row.min(rows - 1) {
+                for sel_row in start.row..=end.row {
+                    let display_row = sel_row as i32 + disp_off;
+                    if display_row < 0 || display_row >= rows as i32 {
+                        continue;
+                    }
                     let sel_start_col = if sel_row == start.row {
                         start.col as usize
                     } else {
@@ -1121,7 +1133,7 @@ impl TerminalViewportView {
                             ),
                             terminal_snap_to_device_pixels(
                                 window,
-                                bounds.top() + layout.metrics.line_height * sel_row as f32,
+                                bounds.top() + layout.metrics.line_height * display_row as f32,
                             ),
                         );
                         let sel_size = size(
@@ -1756,7 +1768,14 @@ impl GitCometView {
                                 });
                                 cx.notify();
                             }
-                            TerminalBackendEvent::PtyWrite => {}
+                            TerminalBackendEvent::PtyWrite(data) => {
+                                // Terminal query responses (DSR, Device Attributes,
+                                // etc.) must be written back to the PTY, or programs
+                                // that probe the terminal hang waiting for a reply.
+                                if let Some(ref pty) = instance.pty_sender {
+                                    pty.write(data.into_bytes());
+                                }
+                            }
                         }
                     });
                     if result.is_err() {
@@ -2568,8 +2587,13 @@ impl GitCometView {
 
 impl Drop for GitCometView {
     fn drop(&mut self) {
+        // Fallback teardown for OS-level window close / unwind that bypasses the
+        // explicit shutdown flow. SIGTERM the child process group (a no-op on a
+        // group already terminating) so commands aren't left as orphans, then
+        // close the PTY. A repeated shutdown is safe.
         for session in self.terminal_sessions.values() {
             for instance in &session.instances {
+                terminate_terminal_process_group(instance.child_pid);
                 if let Some(ref pty) = instance.pty_sender {
                     pty.shutdown();
                 }
@@ -2695,6 +2719,24 @@ fn pixels_bits(value: Pixels) -> u32 {
 fn pixels_to_u16(value: Pixels) -> u16 {
     let raw: f32 = value.into();
     raw as u16
+}
+
+/// Cleans up text copied from the terminal grid. Grid rows are space-padded to
+/// the full width, so trim trailing whitespace from each line and drop trailing
+/// blank lines (the previous `while ends_with('\n')` trim was a no-op because
+/// rows end in spaces, not newlines).
+fn trim_terminal_copy(text: &str) -> String {
+    let mut result = String::new();
+    for line in text.lines() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str(line.trim_end());
+    }
+    while result.ends_with('\n') {
+        result.pop();
+    }
+    result
 }
 
 fn terminal_paste_bytes(text: &str, bracketed_paste: bool) -> Vec<u8> {
@@ -3001,10 +3043,14 @@ fn shutdown_terminal_instance(instance: &TerminalInstance, terminate: bool) {
 /// close, so a one-shot process snapshot is acceptable.
 fn terminal_process_has_running_child_command(pid: u32) -> bool {
     let mut system = sysinfo::System::new();
+    // We must enumerate all processes to find any whose *parent* is `pid` (a
+    // child-of-pid query can't be narrowed to a single PID), but we only read
+    // `parent()`, which is base info — so skip the expensive cmd/environ/exe/cwd
+    // field collection that `everything()` would do for every process.
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::All,
         true,
-        sysinfo::ProcessRefreshKind::everything(),
+        sysinfo::ProcessRefreshKind::nothing(),
     );
     let target = sysinfo::Pid::from_u32(pid);
     system
@@ -3013,7 +3059,7 @@ fn terminal_process_has_running_child_command(pid: u32) -> bool {
         .any(|process| process.parent() == Some(target))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn terminate_terminal_process_group(child_pid: Option<u32>) {
     let Some(child_pid) = child_pid else {
         return;
@@ -3024,7 +3070,7 @@ fn terminate_terminal_process_group(child_pid: Option<u32>) {
     let _ = kill_process_group(pid, Signal::TERM);
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(unix))]
 fn terminate_terminal_process_group(_child_pid: Option<u32>) {}
 
 fn terminal_clipboard_shortcut_action(
@@ -3053,6 +3099,18 @@ fn terminal_clipboard_shortcut_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_terminal_copy_strips_trailing_whitespace_and_blank_lines() {
+        // Grid rows are space-padded to the full width; copying must trim trailing
+        // spaces per line and drop trailing blank lines (the old newline-only trim
+        // was a no-op because rows end in spaces).
+        let raw = "git status      \n                \n";
+        assert_eq!(trim_terminal_copy(raw), "git status");
+        // Interior blank lines are preserved.
+        assert_eq!(trim_terminal_copy("a   \n   \nb   "), "a\n\nb");
+        assert_eq!(trim_terminal_copy(""), "");
+    }
 
     #[test]
     fn cursor_screen_row_adds_display_offset() {

@@ -157,10 +157,6 @@ impl GitCometView {
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();
         }
-        self.sync_terminal_sessions_with_state(cx);
-        if !prev_git_runtime_available && self.state.git_runtime.is_available() {
-            self.resume_after_git_runtime_recovery();
-        }
         for msg in follow_up_msgs {
             self.store.dispatch(msg);
         }

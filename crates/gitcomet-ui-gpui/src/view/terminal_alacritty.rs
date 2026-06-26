@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 const TERMINAL_INITIAL_ROWS: u16 = 24;
 const TERMINAL_INITIAL_COLS: u16 = 80;
-const TERMINAL_SCROLLBACK_ROWS: usize = 10_000;
+pub(super) const TERMINAL_SCROLLBACK_ROWS: usize = 10_000;
 const TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS: usize = 24;
 
 #[derive(Clone, Copy, Debug)]
@@ -143,7 +143,10 @@ impl EventListener for GitCometListener {
 
 #[derive(Clone, Debug)]
 pub(super) enum TerminalBackendEvent {
-    PtyWrite,
+    /// A response the emulator must write back to the PTY (e.g. cursor-position
+    /// report `ESC[6n`, Device Attributes `ESC[c`). Alacritty's `Term` produces
+    /// these via the event proxy and relies on us to forward them.
+    PtyWrite(String),
     Title(String),
     ClipboardStore(String),
     ClipboardLoad,
@@ -157,7 +160,7 @@ pub(super) enum TerminalBackendEvent {
 impl From<AlacEvent> for TerminalBackendEvent {
     fn from(event: AlacEvent) -> Self {
         match event {
-            AlacEvent::PtyWrite(_) => Self::PtyWrite,
+            AlacEvent::PtyWrite(text) => Self::PtyWrite(text),
             AlacEvent::Title(title) => Self::Title(title),
             AlacEvent::ClipboardStore(_, data) => Self::ClipboardStore(data),
             AlacEvent::ClipboardLoad(_, _) => Self::ClipboardLoad,
@@ -232,7 +235,7 @@ pub(super) fn spawn_alacritty_terminal(
     let pty_options = tty::Options {
         shell: Some(tty::Shell::new(shell_program_str, Vec::<String>::new())),
         working_directory: Some(workdir.to_path_buf()),
-        drain_on_exit: false,
+        drain_on_exit: true,
         #[cfg(target_os = "windows")]
         escape_args: true,
         env: env.into_iter().collect(),
@@ -738,19 +741,12 @@ pub(super) fn encode_alacritty_key_input(
         return None;
     }
 
-    if mods.alt && !mods.control && option_as_meta {
-        if let Some(control) = encode_control_key(key) {
-            return Some(vec![0x1b, control]);
-        }
-        if key.len() == 1 {
-            let base = key.as_bytes();
-            let mut bytes = Vec::with_capacity(1 + base.len());
-            bytes.push(0x1b);
-            bytes.extend_from_slice(base);
-            return Some(bytes);
-        }
-        return None;
-    }
+    // Alt-as-Meta is intentionally NOT handled up front: special keys (arrows,
+    // home/end, function keys) must flow through the `modifier_code` block below
+    // so `Alt+Left` becomes `ESC[1;3D`, and character keys are Meta-prefixed by
+    // the `ESC`+key fallback at the end (`Alt+f` -> `ESC f`). Handling Alt here
+    // first — and routing letters through `encode_control_key` — produced
+    // `ESC Ctrl-F` for `Alt+f` and swallowed `Alt`+special-key combos entirely.
 
     if mods.shift && !mods.control && !mods.alt {
         match key {
@@ -800,6 +796,15 @@ pub(super) fn encode_alacritty_key_input(
         && let Some(control) = encode_control_key(key)
     {
         return Some(vec![control]);
+    }
+
+    // Meta (Alt) + editing keys that have no CSI-with-modifier form: prefix ESC.
+    if mods.alt && !mods.control && option_as_meta {
+        match key {
+            "backspace" => return Some(vec![0x1b, 0x7f]),
+            "enter" => return Some(vec![0x1b, b'\r']),
+            _ => {}
+        }
     }
 
     match key {
@@ -866,7 +871,7 @@ pub(super) fn encode_alacritty_key_input(
         "f10" => Some(b"\x1b[21~".to_vec()),
         "f11" => Some(b"\x1b[23~".to_vec()),
         "f12" => Some(b"\x1b[24~".to_vec()),
-        _ if mods.alt && !mods.control && key.len() == 1 => {
+        _ if mods.alt && !mods.control && option_as_meta && key.len() == 1 => {
             let base = key.as_bytes();
             let mut bytes = Vec::with_capacity(1 + base.len());
             bytes.push(0x1b);
@@ -1155,22 +1160,26 @@ enum MouseButtonCode {
 }
 
 impl MouseButtonCode {
-    fn from_button(e: gpui::MouseButton) -> Self {
+    /// Returns `None` for buttons the mouse protocol does not report (Navigate
+    /// back/forward), so they are suppressed rather than reported as left-clicks.
+    fn from_button(e: gpui::MouseButton) -> Option<Self> {
         match e {
-            gpui::MouseButton::Left => MouseButtonCode::LeftButton,
-            gpui::MouseButton::Middle => MouseButtonCode::MiddleButton,
-            gpui::MouseButton::Right => MouseButtonCode::RightButton,
-            gpui::MouseButton::Navigate(_) => MouseButtonCode::LeftButton,
+            gpui::MouseButton::Left => Some(MouseButtonCode::LeftButton),
+            gpui::MouseButton::Middle => Some(MouseButtonCode::MiddleButton),
+            gpui::MouseButton::Right => Some(MouseButtonCode::RightButton),
+            gpui::MouseButton::Navigate(_) => None,
         }
     }
 
-    fn from_move_button(e: Option<gpui::MouseButton>) -> Self {
+    /// `None` for the held button means "suppress" (Navigate); `Some(NoneMove)`
+    /// means no button is held (plain motion).
+    fn from_move_button(e: Option<gpui::MouseButton>) -> Option<Self> {
         match e {
-            Some(gpui::MouseButton::Left) => MouseButtonCode::LeftMove,
-            Some(gpui::MouseButton::Middle) => MouseButtonCode::MiddleMove,
-            Some(gpui::MouseButton::Right) => MouseButtonCode::RightMove,
-            Some(gpui::MouseButton::Navigate(_)) => MouseButtonCode::LeftMove,
-            None => MouseButtonCode::NoneMove,
+            Some(gpui::MouseButton::Left) => Some(MouseButtonCode::LeftMove),
+            Some(gpui::MouseButton::Middle) => Some(MouseButtonCode::MiddleMove),
+            Some(gpui::MouseButton::Right) => Some(MouseButtonCode::RightMove),
+            Some(gpui::MouseButton::Navigate(_)) => None,
+            None => Some(MouseButtonCode::NoneMove),
         }
     }
 
@@ -1212,7 +1221,7 @@ pub(super) fn terminal_grid_point(
     if rel_x < px(0.0) || rel_y < px(0.0) {
         return None;
     }
-    let col = ((rel_x / cell_width).floor() as usize).min(cols as usize - 1);
+    let col = ((rel_x / cell_width).floor() as usize).min((cols as usize).saturating_sub(1));
     let row = (rel_y / line_height).floor() as i32;
     let grid_row = row - display_offset as i32;
     Some((grid_row, col))
@@ -1226,7 +1235,7 @@ pub(super) fn terminal_mouse_button_report(
     pressed: bool,
     mode: TerminalModes,
 ) -> Option<Vec<u8>> {
-    let code = MouseButtonCode::from_button(button);
+    let code = MouseButtonCode::from_button(button)?;
     mouse_report(
         grid_row,
         grid_col,
@@ -1247,7 +1256,7 @@ pub(super) fn terminal_mouse_moved_report(
     if !mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
         return None;
     }
-    let code = MouseButtonCode::from_move_button(held_button);
+    let code = MouseButtonCode::from_move_button(held_button)?;
     if mode.contains(TerminalModes::MOUSE_DRAG) && matches!(code, MouseButtonCode::NoneMove) {
         return None;
     }
@@ -2421,6 +2430,63 @@ mod tests {
         let option_as_meta = true;
         let result = encode_alacritty_key_input(&ks, app_cursor, option_as_meta);
         assert_eq!(result, Some(vec![0x16]));
+    }
+
+    // -----------------------------------------------------------------------
+    // Alt / Meta key encoding tests
+    // -----------------------------------------------------------------------
+
+    fn alt_keystroke(key: &str) -> gpui::Keystroke {
+        gpui::Keystroke {
+            key: key.into(),
+            modifiers: gpui::Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+            key_char: None,
+        }
+    }
+
+    #[test]
+    fn encode_alt_letter_is_meta_prefixed_not_control() {
+        // Alt+f must be ESC 'f' (readline forward-word), not ESC Ctrl-F (0x06).
+        let result = encode_alacritty_key_input(&alt_keystroke("f"), false, true);
+        assert_eq!(result, Some(vec![0x1b, b'f']));
+    }
+
+    #[test]
+    fn encode_alt_arrow_uses_modifier_code() {
+        // Alt+Left -> CSI 1 ; 3 D
+        let result = encode_alacritty_key_input(&alt_keystroke("left"), false, true);
+        assert_eq!(result, Some(b"\x1b[1;3D".to_vec()));
+    }
+
+    #[test]
+    fn encode_alt_backspace_is_meta_delete() {
+        let result = encode_alacritty_key_input(&alt_keystroke("backspace"), false, true);
+        assert_eq!(result, Some(vec![0x1b, 0x7f]));
+    }
+
+    #[test]
+    fn encode_alt_letter_ignored_when_option_as_meta_disabled() {
+        // With option-as-meta off, a lone Alt+letter is not Meta-encoded here
+        // (the character arrives via IME instead).
+        let result = encode_alacritty_key_input(&alt_keystroke("f"), false, false);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn mouse_report_suppresses_navigate_buttons() {
+        let mode = TerminalModes::MOUSE_REPORT_CLICK | TerminalModes::SGR_MOUSE;
+        let report = terminal_mouse_button_report(
+            0,
+            0,
+            gpui::MouseButton::Navigate(gpui::NavigationDirection::Back),
+            gpui::Modifiers::default(),
+            true,
+            mode,
+        );
+        assert_eq!(report, None);
     }
 
     #[test]

@@ -138,8 +138,11 @@ tree-sitter-zig = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
+# Used to SIGTERM the terminal child process group on Linux and macOS.
 rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
