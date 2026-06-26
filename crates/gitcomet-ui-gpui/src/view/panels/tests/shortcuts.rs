@@ -2068,7 +2068,7 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
     cx.simulate_keystrokes("secondary-enter");
     draw_and_drain_test_window(cx);
 
-    wait_until(cx, "commit to be dispatched to store", |cx| {
+    wait_until(cx, "commit to be dispatched to store", |_cx| {
         let snapshot = store_for_assert.snapshot();
         snapshot
             .repos

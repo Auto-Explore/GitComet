@@ -3022,8 +3022,6 @@ pub(super) struct TerminalViewportCacheKey {
 pub(super) struct TerminalRenderCache {
     pub(super) viewport_key: Option<TerminalViewportCacheKey>,
     pub(super) rows: Vec<TerminalCachedRow>,
-    #[cfg(test)]
-    pub(super) rebuilt_rows: usize,
 }
 
 pub(super) struct TerminalViewportView {

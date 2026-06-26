@@ -3,7 +3,9 @@ mod text_input;
 pub(crate) mod text_model;
 pub(crate) mod text_truncation;
 
-pub use scrollbar::{Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker, ScrollbarMarkerKind};
+pub use scrollbar::{
+    Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker, ScrollbarMarkerKind,
+};
 #[cfg(feature = "benchmarks")]
 pub(crate) use scrollbar::{compute_vertical_click_offset, vertical_thumb_metrics};
 pub use text_input::{

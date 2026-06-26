@@ -1,10 +1,10 @@
 use super::terminal_alacritty::*;
 use super::*;
+use crate::kit::ScrollbarDriver;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
-use crate::kit::ScrollbarDriver;
 use rustc_hash::FxHasher;
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
@@ -75,8 +75,8 @@ impl ScrollbarDriver for TerminalScrollbarDriver {
         }
         let current = term.grid().display_offset();
         let scroll_y = if offset < px(0.0) { -offset } else { offset };
-        let target = history
-            .saturating_sub(((scroll_y / self.line_height).round() as usize).min(history));
+        let target =
+            history.saturating_sub(((scroll_y / self.line_height).round() as usize).min(history));
         let delta = target as i32 - current as i32;
         if delta != 0 {
             let steps = delta.unsigned_abs() as usize;
@@ -1321,7 +1321,10 @@ impl Render for TerminalViewportView {
                         .h_full()
                     })
                     .child({
-                        let line_height = self.terminal_layout_snapshot(_window, cx).metrics.line_height;
+                        let line_height = self
+                            .terminal_layout_snapshot(_window, cx)
+                            .metrics
+                            .line_height;
                         Scrollbar::new(
                             "terminal_scrollbar",
                             TerminalScrollbarDriver {
@@ -2173,10 +2176,7 @@ impl GitCometView {
             active_repo,
             &tabs,
             active_index,
-            has_selection,
-            connected,
             terminal_focused,
-            window,
             cx,
         );
         let viewport_element = div()
@@ -2258,10 +2258,7 @@ impl GitCometView {
         active_repo: RepoId,
         tabs: &[SharedString],
         active_index: usize,
-        _has_selection: bool,
-        _connected: bool,
         focused: bool,
-        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let external_repo = active_repo;

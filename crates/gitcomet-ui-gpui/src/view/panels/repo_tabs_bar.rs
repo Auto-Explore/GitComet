@@ -186,11 +186,6 @@ impl RepoTabsBarView {
         cx.notify();
     }
 
-    #[cfg(test)]
-    pub(in super::super) fn open_terminal_repo_ids_for_test(&self) -> &HashSet<RepoId> {
-        &self.open_terminal_repo_ids
-    }
-
     pub(in super::super) fn set_active_context_menu_invoker(
         &mut self,
         next: Option<SharedString>,

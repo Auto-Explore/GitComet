@@ -2152,6 +2152,7 @@ mod tests {
             gpui::MouseButton::Left,
             gpui::Modifiers::default(),
             true,
+            TerminalModes::default(),
         );
         assert!(report.is_none(), "no report when mouse mode is off");
     }

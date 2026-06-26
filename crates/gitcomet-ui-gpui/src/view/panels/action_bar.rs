@@ -163,11 +163,6 @@ impl ActionBarView {
         cx.notify();
     }
 
-    #[cfg(test)]
-    pub(in super::super) fn open_terminal_repo_ids_for_test(&self) -> &HashSet<RepoId> {
-        &self.open_terminal_repo_ids
-    }
-
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
