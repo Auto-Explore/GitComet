@@ -634,7 +634,7 @@ impl From<ThemeFile> for AppTheme {
             scrollbar_thumb_active: scrollbar_thumb_active.into_rgba(),
             scrollbar_track: scrollbar_track
                 .map(ThemeColor::into_rgba)
-                .unwrap_or_else(|| default_scrollbar_track(is_dark)),
+                .unwrap_or_else(|| default_scrollbar_track(scrollbar_thumb.into_rgba())),
             danger: danger.into_rgba(),
             warning: warning.into_rgba(),
             success: success.into_rgba(),
@@ -842,12 +842,8 @@ fn default_diff_remove_text(is_dark: bool) -> Rgba {
     }
 }
 
-fn default_scrollbar_track(is_dark: bool) -> Rgba {
-    if is_dark {
-        with_alpha(gpui::rgba(0x8a8986ff), 0.08)
-    } else {
-        with_alpha(gpui::rgba(0x58585aff), 0.07)
-    }
+fn default_scrollbar_track(thumb: Rgba) -> Rgba {
+    with_alpha(thumb, 0.08)
 }
 
 fn default_input_placeholder(is_dark: bool) -> Rgba {

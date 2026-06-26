@@ -154,10 +154,7 @@ impl SmokeView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Enter".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -258,9 +255,8 @@ impl TextInputCursorScrollView {
                     components::TextInputOptions {
                         placeholder: "Enter".into(),
                         multiline: true,
-                        read_only: false,
-                        chromeless: false,
                         soft_wrap: true,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -321,10 +317,7 @@ impl TextInputHostView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Enter".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -382,13 +375,10 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
         cx.open_window(Default::default(), |window, cx| {
             cx.new(|cx| {
                 components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Commit message".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
-                    },
+                components::TextInputOptions {
+                    placeholder: "Commit message".into(),
+                    ..Default::default()
+                },
                     window,
                     cx,
                 )
@@ -3010,13 +3000,10 @@ impl PickerPromptScrollbarTestView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
         let input = cx.new(|cx| {
             components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Filter commits".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
+            components::TextInputOptions {
+                placeholder: "Filter commits".into(),
+                ..Default::default()
+            },
                 window,
                 cx,
             )

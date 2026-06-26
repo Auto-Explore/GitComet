@@ -582,11 +582,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Type to search commands...".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1839,11 +1835,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/repo".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1853,12 +1845,10 @@ impl GitCometView {
         let error_banner_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1869,11 +1859,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Username".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1884,11 +1870,7 @@ impl GitCometView {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Password / passphrase / confirmation".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,

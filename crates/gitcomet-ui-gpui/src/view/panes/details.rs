@@ -233,14 +233,12 @@ impl DetailsPaneView {
         let commit_message_scroll = ScrollHandle::new();
         let commit_message_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Enter commit message".into(),
-                    multiline: true,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: true,
-                    min_lines: 0,
-                },
+            components::TextInputOptions {
+                placeholder: "Enter commit message".into(),
+                multiline: true,
+                soft_wrap: true,
+                ..Default::default()
+            },
                 window,
                 cx,
             );
@@ -251,12 +249,11 @@ impl DetailsPaneView {
         let commit_details_message_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
                     chromeless: true,
                     soft_wrap: true,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -279,12 +276,9 @@ impl DetailsPaneView {
         let commit_details_sha_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
-                    multiline: false,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -296,12 +290,9 @@ impl DetailsPaneView {
         let commit_details_date_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
-                    multiline: false,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -311,12 +302,9 @@ impl DetailsPaneView {
         let commit_details_parent_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
-                    multiline: false,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,

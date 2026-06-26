@@ -702,13 +702,10 @@ impl SettingsWindowView {
 
         let terminal_external_program_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "wezterm".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
+            components::TextInputOptions {
+                placeholder: "wezterm".into(),
+                ..Default::default()
+            },
                 window,
                 cx,
             );
@@ -719,13 +716,11 @@ impl SettingsWindowView {
 
         let terminal_external_args_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "One argument per line".into(),
-                    multiline: true,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                },
+            components::TextInputOptions {
+                placeholder: "One argument per line".into(),
+                multiline: true,
+                ..Default::default()
+            },
                 window,
                 cx,
             );
@@ -737,14 +732,10 @@ impl SettingsWindowView {
 
         let git_executable_input = cx.new(|cx| {
             components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "/path/to/git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
-                },
+            components::TextInputOptions {
+                placeholder: "/path/to/git".into(),
+                ..Default::default()
+            },
                 window,
                 cx,
             )
@@ -767,14 +758,10 @@ impl SettingsWindowView {
 
         let external_editor_custom_path_input = cx.new(|cx| {
             components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "/path/to/editor".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
-                },
+                    components::TextInputOptions {
+                        placeholder: "/path/to/editor".into(),
+                        ..Default::default()
+                    },
                 window,
                 cx,
             )
@@ -784,14 +771,10 @@ impl SettingsWindowView {
         });
         let external_editor_custom_arguments_input = cx.new(|cx| {
             components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "--reuse-window {path}".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
-                },
+                    components::TextInputOptions {
+                        placeholder: "--reuse-window {path}".into(),
+                        ..Default::default()
+                    },
                 window,
                 cx,
             )

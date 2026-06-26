@@ -673,11 +673,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -688,11 +684,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/parent/folder".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -737,11 +729,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "origin/main".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -752,11 +740,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "v1.0.0".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -769,10 +753,8 @@ impl PopoverHost {
                 components::TextInputOptions {
                     placeholder: "Annotation message (optional)".into(),
                     multiline: true,
-                    read_only: false,
                     chromeless: true,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -785,11 +767,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "origin".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -800,11 +778,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -815,11 +789,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -830,11 +800,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -845,11 +811,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Stash message".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -916,10 +878,8 @@ impl PopoverHost {
                 components::TextInputOptions {
                     placeholder: "Commit message".into(),
                     multiline: true,
-                    read_only: false,
-                    chromeless: false,
                     soft_wrap: true,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -932,11 +892,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -947,11 +903,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/worktree".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -962,11 +914,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-or-commit".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -977,11 +925,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -992,11 +936,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "path/in/repo".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1007,11 +947,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-or-commit".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1022,11 +958,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "submodule-logical-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1037,11 +969,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "feature".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
-                    min_lines: 0,
+                    ..Default::default()
                 },
                 window,
                 cx,
