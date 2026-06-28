@@ -95,6 +95,17 @@ impl ConflictAutosolveStats {
     }
 }
 
+/// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepoWatchDegradedReason {
+    /// The worktree has more non-ignored folders than the watch budget, so its source folders are
+    /// not watched live at all. Carries the folder count.
+    TooManyFolders { dir_count: usize },
+    /// Some per-directory watches could not be added (the kernel inotify limit was reached), so part
+    /// of the worktree is not watched live. Carries the number of folders left unwatched.
+    WatchLimitReached { unwatched_dirs: usize },
+}
+
 #[derive(Debug)]
 pub enum Msg {
     OpenRepo(PathBuf),
@@ -144,12 +155,12 @@ pub enum Msg {
         repo_id: RepoId,
         change: RepoExternalChange,
     },
-    /// The file-system watcher disabled live watching of the worktree because it has too many
-    /// folders to watch within the kernel inotify limit. Carries the directory count for the
-    /// user-facing warning; the repository still refreshes when the window regains focus.
+    /// The file-system watcher could not fully watch the worktree, so live change detection is
+    /// degraded. The repository still refreshes when the window regains focus; the `reason` carries
+    /// the detail for the user-facing warning.
     RepoWatchDegraded {
         repo_id: RepoId,
-        dir_count: usize,
+        reason: RepoWatchDegradedReason,
     },
     SetHistoryScope {
         repo_id: RepoId,

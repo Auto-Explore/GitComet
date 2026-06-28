@@ -1,6 +1,7 @@
 use super::{
     GitlinkStatusCapabilityCacheEntry, GixRepo, RepoFileStamp, TreeIndexCacheEntry,
     conflict_stages::conflict_kind_from_stage_mask, git_ops::head_upstream_divergence,
+    repo_file_stamp,
 };
 use crate::util::{git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output};
 use gitcomet_core::domain::{
@@ -436,18 +437,6 @@ fn remove_conflicted_paths_from_staged(
     }
 }
 
-fn repo_file_stamp(path: &Path) -> RepoFileStamp {
-    match std::fs::metadata(path) {
-        Ok(metadata) => RepoFileStamp {
-            exists: true,
-            len: metadata.len(),
-            modified: metadata.modified().ok(),
-            ..RepoFileStamp::default()
-        },
-        Err(_) => RepoFileStamp::default(),
-    }
-}
-
 /// File stamp for `.git/index`, hardened so the staged-status cache is invalidated
 /// whenever the index changes even when length and mtime collide (atomic rewrite of
 /// the same tracked entries on a filesystem with coarse or cached timestamps, e.g.
@@ -461,16 +450,22 @@ fn repo_index_stamp(repo: &gix::Repository) -> RepoFileStamp {
 }
 
 fn index_stamp_for(path: &Path, hash_kind: gix::hash::Kind) -> RepoFileStamp {
-    // Fall back to the stat-only stamp (which uses `metadata`, needing no read permission) rather
-    // than the all-empty default if the index can't be opened: it may exist but be momentarily
-    // unreadable (a permission flip, or a Windows sharing/AV lock). Returning the default would
-    // let two such stamps compare equal and risk a stale cache hit; the length/mtime stamp keeps
-    // the cache honest by still reflecting the file.
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return repo_file_stamp(path);
+    // A genuinely-absent index is a stable state, so the all-empty default (exists=false) is a safe,
+    // cacheable stamp. But if the index *exists yet is momentarily unreadable* (a permission flip, or
+    // a Windows sharing / AV lock) we must NOT fall back to the length+mtime stat stamp: during that
+    // window an atomic rewrite with an identical length and unchanged/coarse mtime would make two
+    // such stamps compare equal and serve a stale cache hit — the exact collision this stamp exists
+    // to prevent. Return an uncacheable stamp so the read is forced fresh until the index is
+    // readable again.
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RepoFileStamp::default();
+        }
+        Err(_) => return RepoFileStamp::uncacheable(),
     };
     let Ok(metadata) = file.metadata() else {
-        return repo_file_stamp(path);
+        return RepoFileStamp::uncacheable();
     };
 
     let mut stamp = RepoFileStamp {
@@ -2040,13 +2035,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn index_stamp_falls_back_to_stat_when_index_is_unreadable() {
+    fn index_stamp_is_uncacheable_when_index_is_present_but_unreadable() {
         // A unix socket is a deterministic stand-in for "the index exists and is stat-able, but
         // File::open fails" (the real-world cases being a momentary permission flip or a Windows
         // sharing/AV lock). open() on a socket fails with ENXIO even for root, while stat()
-        // succeeds — exactly the condition under which the stamp must not collapse to the
-        // all-empty default (which would let two such stamps compare equal and false-hit the
-        // cache while the index keeps changing).
+        // succeeds. A stat-only (len+mtime) fallback could collide with an atomic index rewrite of
+        // the same length and an unchanged/coarse mtime and false-hit the cache — exactly the bug
+        // the content discriminators exist to prevent. So an unreadable-but-present index must
+        // instead yield an *uncacheable* stamp: two such stamps must never compare equal, forcing a
+        // fresh read until the index is readable again.
         use std::os::unix::net::UnixListener;
 
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -2061,15 +2058,17 @@ mod tests {
             "precondition: stat-ing the socket file must succeed"
         );
 
-        let stamp = super::index_stamp_for(&path, gix::hash::Kind::Sha1);
-        assert!(
-            stamp.exists,
-            "an unreadable-but-present index must still yield a stat stamp, not the empty default"
+        let first = super::index_stamp_for(&path, gix::hash::Kind::Sha1);
+        let second = super::index_stamp_for(&path, gix::hash::Kind::Sha1);
+        assert_ne!(
+            first, second,
+            "two stamps taken while the index is unreadable must never compare equal, so the cache \
+             is forced to miss rather than risk a stale hit"
         );
         assert_ne!(
-            stamp,
+            first,
             super::super::RepoFileStamp::default(),
-            "the stat fallback must differ from the empty default so the cache cannot false-hit"
+            "an unreadable-index stamp must also differ from the absent-index default"
         );
     }
 
@@ -2260,7 +2259,4 @@ mod tests {
             status.unstaged
         );
     }
-
 }
-
-// watch-probe 1782541259873720271

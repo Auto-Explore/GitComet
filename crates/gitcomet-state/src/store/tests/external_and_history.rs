@@ -407,7 +407,8 @@ fn external_index_change_must_not_refresh_only_the_staged_lane() {
     // The unstaged lane must be refreshed — either by the combined status load or a direct
     // worktree load.
     assert!(
-        has_combined_status_effect(&effects, repo_id) || has_worktree_status_effect(&effects, repo_id),
+        has_combined_status_effect(&effects, repo_id)
+            || has_worktree_status_effect(&effects, repo_id),
         "an index-only change must refresh the unstaged lane, got {effects:?}"
     );
     // The exact old-behavior shape (staged lane only) must not occur.

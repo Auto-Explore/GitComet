@@ -79,6 +79,41 @@ struct RepoFileStamp {
     /// every metadata/content change including the rename above, so it backs up the
     /// inode against reuse. `None` for generic stamps and on non-Unix platforms.
     ctime_nanos: Option<i128>,
+    /// Set (to a process-unique value) only when a stamp could not be computed reliably — e.g.
+    /// `.git/index` exists but is momentarily unreadable (a permission flip, or a Windows sharing
+    /// / AV lock). A fresh value on every such call guarantees two of these stamps never compare
+    /// equal, forcing a cache miss (a fresh read) instead of risking a stale cache hit from a weak
+    /// length+mtime stamp that could collide with an atomic rewrite. `None` for every normally
+    /// computed stamp.
+    uncacheable_nonce: Option<u64>,
+}
+
+impl RepoFileStamp {
+    /// A stamp that never compares equal to any other (not even another uncacheable one). Used when
+    /// a file's real fingerprint cannot be read, so the cache treats it as changed rather than risk
+    /// serving a stale result. See [`RepoFileStamp::uncacheable_nonce`].
+    fn uncacheable() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            uncacheable_nonce: Some(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+            ..Self::default()
+        }
+    }
+}
+
+/// Cheap stat-based file stamp (existence, length, mtime). A reliable change *hint* but not
+/// content-exact — `.git/index` uses the hardened `repo_index_stamp` instead. Shared by the status
+/// and git-ops cache keys (do not duplicate this mapping; see `status.rs` / `git_ops.rs`).
+fn repo_file_stamp(path: &Path) -> RepoFileStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => RepoFileStamp {
+            exists: true,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            ..RepoFileStamp::default()
+        },
+        Err(_) => RepoFileStamp::default(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
