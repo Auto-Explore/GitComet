@@ -3,7 +3,7 @@ use crate::msg::{Msg, RepoExternalChange, RepoWatchDegradedReason};
 use gix::index::entry::Mode as GitIndexMode;
 use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::any::Any;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -659,6 +659,7 @@ fn build_workdir_watcher(
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
+    watched_dirs: &mut HashSet<PathBuf>,
     monitor_tx: &mpsc::Sender<MonitorMsg>,
     monitor_enabled: &Arc<AtomicBool>,
 ) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
@@ -685,7 +686,15 @@ fn build_workdir_watcher(
         }
     };
 
-    let outcome = setup_workdir_watch(&mut watcher, workdir, git_dir, gitignore, repo_id);
+    // `setup_workdir_watch` repopulates `watched_dirs` with the freshly-watched worktree subdirs.
+    let outcome = setup_workdir_watch(
+        &mut watcher,
+        watched_dirs,
+        workdir,
+        git_dir,
+        gitignore,
+        repo_id,
+    );
     if outcome == WatchSetupOutcome::RootWatchFailed {
         return None;
     }
@@ -704,7 +713,7 @@ fn watch_degraded_reason(outcome: WatchSetupOutcome) -> Option<RepoWatchDegraded
         WatchSetupOutcome::WorktreeSubdirsSkipped { dir_count } => {
             Some(RepoWatchDegradedReason::TooManyFolders { dir_count })
         }
-        WatchSetupOutcome::Watching { failed_dirs, .. } if failed_dirs > 0 => {
+        WatchSetupOutcome::Watching { failed_dirs } if failed_dirs > 0 => {
             Some(RepoWatchDegradedReason::WatchLimitReached {
                 unwatched_dirs: failed_dirs,
             })
@@ -742,18 +751,32 @@ fn note_watch_outcome(
     }
 }
 
+/// While degraded (worktree over budget), re-check for recovery at most this often rather than on
+/// every idle tick: each re-check reloads the ignore rules (a `gix::open`), which is wasteful to do
+/// every 30s for a repo that stays over budget.
+const DEGRADED_WATCH_RECHECK_INTERVAL: Duration = Duration::from_secs(120);
+
+/// Whether a degraded-watch recovery re-check is due, given when one was last attempted.
+fn recovery_recheck_due(last_attempt: Option<Instant>, now: Instant, interval: Duration) -> bool {
+    match last_attempt {
+        None => true,
+        Some(last) => now.duration_since(last) >= interval,
+    }
+}
+
 /// While the worktree is over budget (source watching disabled), a `.gitignore` edit in an
 /// *unwatched* subdirectory can bring it back under budget without producing any event we can
-/// observe. Called on the idle tick: reloads the ignore rules and, only if the worktree is now
-/// within budget, rebuilds the watcher so live watching resumes. Returns the rebuilt watcher +
-/// outcome on recovery, or `None` if still over budget / not currently skipped. No-op off Linux,
-/// where the recursive watcher has no per-directory budget.
+/// observe. Called (throttled) on the idle tick: reloads the ignore rules and, only if the worktree
+/// is now within budget, rebuilds the watcher so live watching resumes (repopulating `watched_dirs`).
+/// Returns the rebuilt watcher + outcome on recovery, or `None` if still over budget / not currently
+/// skipped. No-op off Linux, where the recursive watcher has no per-directory budget.
 fn attempt_degraded_watch_recovery(
     watch_outcome: WatchSetupOutcome,
     repo_id: RepoId,
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
+    watched_dirs: &mut HashSet<PathBuf>,
     monitor_tx: &mpsc::Sender<MonitorMsg>,
     monitor_enabled: &Arc<AtomicBool>,
 ) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
@@ -786,6 +809,7 @@ fn attempt_degraded_watch_recovery(
             workdir,
             git_dir,
             gitignore,
+            watched_dirs,
             monitor_tx,
             monitor_enabled,
         )
@@ -797,6 +821,7 @@ fn attempt_degraded_watch_recovery(
             workdir,
             git_dir,
             gitignore,
+            watched_dirs,
             monitor_tx,
             monitor_enabled,
         );
@@ -821,11 +846,17 @@ fn repo_monitor_thread(
     let git_dir = resolve_git_dir(&workdir);
     let mut gitignore = GitignoreRules::load(&workdir);
 
+    // The set of worktree subdirectories currently watched per-directory, kept in sync as the tree
+    // changes (deduped on re-watch, pruned on deletion). `build_workdir_watcher` repopulates it; its
+    // length is the live-watch count enforced against the budget.
+    let mut watched_dirs: HashSet<PathBuf> = HashSet::default();
+
     let Some((mut watcher, mut watch_outcome)) = build_workdir_watcher(
         repo_id,
         &workdir,
         git_dir.as_deref(),
         &mut gitignore,
+        &mut watched_dirs,
         &monitor_tx,
         &monitor_enabled,
     ) else {
@@ -835,9 +866,9 @@ fn repo_monitor_thread(
 
     // Warn the user once if live watching of the source tree had to be disabled (too many folders)
     // or could only be partially established; the `.git` watch + focus reload still keep the
-    // repository correct. `watched_dirs` tracks the live worktree watch count for the runtime budget.
+    // repository correct.
     let mut watch_degraded = false;
-    let mut watched_dirs = watch_outcome.watched_subdirs();
+    let mut last_recovery_attempt: Option<Instant> = None;
     note_watch_outcome(&msg_tx, repo_id, &mut watch_degraded, watch_outcome);
 
     let debounce = Duration::from_millis(250);
@@ -912,6 +943,7 @@ fn repo_monitor_thread(
                         // "too many folders" mode); the `.git` subtree (rebase/merge state) is
                         // always kept in sync since the `.git` watch is always active.
                         if watch_outcome.watches_subtree() {
+                            prune_removed_worktree_dirs(&mut watched_dirs, &event);
                             watch_created_dirs(
                                 &mut watcher,
                                 &mut watched_dirs,
@@ -958,12 +990,12 @@ fn repo_monitor_thread(
                                 &workdir,
                                 git_dir.as_deref(),
                                 &mut gitignore,
+                                &mut watched_dirs,
                                 &monitor_tx,
                                 &monitor_enabled,
                             ) {
                                 watcher = new_watcher;
                                 watch_outcome = new_outcome;
-                                watched_dirs = watch_outcome.watched_subdirs();
                                 note_watch_outcome(
                                     &msg_tx,
                                     repo_id,
@@ -989,20 +1021,30 @@ fn repo_monitor_thread(
                 flush_if_active(debouncer.take_if_due(now));
                 // While watching is disabled because the worktree was over budget, an ignore edit in
                 // an unwatched subdirectory (which we cannot observe) may have brought it back under
-                // budget. Re-check periodically on the idle tick and resume live watching if so.
-                if let Some((new_watcher, new_outcome)) = attempt_degraded_watch_recovery(
-                    watch_outcome,
-                    repo_id,
-                    &workdir,
-                    git_dir.as_deref(),
-                    &mut gitignore,
-                    &monitor_tx,
-                    &monitor_enabled,
+                // budget. Re-check on the idle tick — but throttled, since each re-check reloads the
+                // ignore rules — and resume live watching if so.
+                if watch_outcome.watches_subtree() {
+                    last_recovery_attempt = None;
+                } else if recovery_recheck_due(
+                    last_recovery_attempt,
+                    now,
+                    DEGRADED_WATCH_RECHECK_INTERVAL,
                 ) {
-                    watcher = new_watcher;
-                    watch_outcome = new_outcome;
-                    watched_dirs = watch_outcome.watched_subdirs();
-                    note_watch_outcome(&msg_tx, repo_id, &mut watch_degraded, watch_outcome);
+                    last_recovery_attempt = Some(now);
+                    if let Some((new_watcher, new_outcome)) = attempt_degraded_watch_recovery(
+                        watch_outcome,
+                        repo_id,
+                        &workdir,
+                        git_dir.as_deref(),
+                        &mut gitignore,
+                        &mut watched_dirs,
+                        &monitor_tx,
+                        &monitor_enabled,
+                    ) {
+                        watcher = new_watcher;
+                        watch_outcome = new_outcome;
+                        note_watch_outcome(&msg_tx, repo_id, &mut watch_degraded, watch_outcome);
+                    }
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -1090,37 +1132,41 @@ fn collect_watchable_dirs_capped(
 /// Adds non-recursive watches for the directories in `start`'s subtree, respecting the watch budget:
 /// it stops once `watched_dirs` reaches `max_dirs` so a large directory moved into the worktree at
 /// runtime cannot grow the watch set without bound (which would exhaust the kernel inotify limit and
-/// silently drop later watches). `watched_dirs` is updated with the number of watches actually added.
+/// silently drop later watches). Directories already present in `watched_dirs` are skipped (no
+/// double counting on re-watch), and newly watched ones are inserted into the set.
 #[cfg(target_os = "linux")]
 fn add_subtree_watches(
     watcher: &mut RecommendedWatcher,
-    watched_dirs: &mut usize,
+    watched_dirs: &mut HashSet<PathBuf>,
     max_dirs: usize,
     start: &Path,
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
 ) {
-    let remaining = max_dirs.saturating_sub(*watched_dirs);
+    let remaining = max_dirs.saturating_sub(watched_dirs.len());
     if remaining == 0 {
         repo_load_trace::trace!(
             "monitor_runtime_watch_budget_reached watched={} max={}",
-            *watched_dirs,
+            watched_dirs.len(),
             max_dirs
         );
         return;
     }
     for dir in collect_watchable_dirs_capped(start, workdir, git_dir, gitignore, remaining) {
-        if *watched_dirs >= max_dirs {
+        if watched_dirs.len() >= max_dirs {
             repo_load_trace::trace!(
                 "monitor_runtime_watch_budget_reached watched={} max={}",
-                *watched_dirs,
+                watched_dirs.len(),
                 max_dirs
             );
             break;
         }
+        if watched_dirs.contains(&dir) {
+            continue;
+        }
         if watcher.watch(&dir, RecursiveMode::NonRecursive).is_ok() {
-            *watched_dirs += 1;
+            watched_dirs.insert(dir);
         }
     }
 }
@@ -1137,13 +1183,12 @@ const MAX_WORKTREE_WATCH_DIRS: usize = 4096;
 /// of the source tree was disabled or only partially established.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WatchSetupOutcome {
-    /// The workdir root and the non-ignored worktree subdirectories are watched per-directory.
-    /// `failed_dirs` is non-zero when some per-directory watches could not be added (the kernel
-    /// inotify limit was reached partway through), i.e. the worktree is only partially watched.
-    Watching {
-        watched_dirs: usize,
-        failed_dirs: usize,
-    },
+    /// The workdir root and the non-ignored worktree subdirectories are watched per-directory. The
+    /// set of watched subdirectories is tracked separately by the monitor thread (so it can be
+    /// deduped on re-watch and pruned on deletion); `failed_dirs` is non-zero when some per-directory
+    /// watches could not be added (the kernel inotify limit was reached partway through), i.e. the
+    /// worktree is only partially watched.
+    Watching { failed_dirs: usize },
     /// Too many non-ignored worktree directories: no source folders are watched (only the workdir
     /// root); the source tree is left to the `.git` watch + focus-triggered full refresh. Carries
     /// the subdirectory count for the user-facing warning.
@@ -1154,19 +1199,9 @@ enum WatchSetupOutcome {
 
 impl WatchSetupOutcome {
     /// Whether the worktree subtree is watched per-directory, so newly-created directories need
-    /// watches added at runtime. False in the skipped/failed modes.
+    /// watches added (and removed directories pruned) at runtime. False in the skipped/failed modes.
     fn watches_subtree(self) -> bool {
         matches!(self, WatchSetupOutcome::Watching { .. })
-    }
-
-    /// Number of worktree subdirectories currently watched, used to enforce the watch budget when
-    /// adding watches for directories that appear at runtime.
-    fn watched_subdirs(self) -> usize {
-        match self {
-            WatchSetupOutcome::Watching { watched_dirs, .. } => watched_dirs,
-            WatchSetupOutcome::WorktreeSubdirsSkipped { .. }
-            | WatchSetupOutcome::RootWatchFailed => 0,
-        }
     }
 }
 
@@ -1178,6 +1213,7 @@ impl WatchSetupOutcome {
 #[cfg(target_os = "linux")]
 fn setup_workdir_watch(
     watcher: &mut RecommendedWatcher,
+    watched_dirs: &mut HashSet<PathBuf>,
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
@@ -1185,6 +1221,7 @@ fn setup_workdir_watch(
 ) -> WatchSetupOutcome {
     setup_workdir_watch_with_limit(
         watcher,
+        watched_dirs,
         workdir,
         git_dir,
         gitignore,
@@ -1194,16 +1231,19 @@ fn setup_workdir_watch(
 }
 
 /// Implementation of the Linux worktree watch setup, with the directory budget injected so tests can
-/// exercise the "too many folders" path without creating thousands of directories.
+/// exercise the "too many folders" path without creating thousands of directories. `watched_dirs` is
+/// cleared and repopulated with the worktree subdirectories that were successfully watched.
 #[cfg(any(target_os = "linux", test))]
 fn setup_workdir_watch_with_limit(
     watcher: &mut RecommendedWatcher,
+    watched_dirs: &mut HashSet<PathBuf>,
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
     repo_id: RepoId,
     max_dirs: usize,
 ) -> WatchSetupOutcome {
+    watched_dirs.clear();
     // Always watch the workdir root non-recursively: it is cheap, catches edits to root-level files,
     // and — crucially — observes root `.gitignore` edits so the watcher can re-initiate (and so a
     // worktree that drops below the budget after an ignore edit can start watching its source tree).
@@ -1254,7 +1294,10 @@ fn setup_workdir_watch_with_limit(
             continue;
         }
         match watcher.watch(dir, RecursiveMode::NonRecursive) {
-            Ok(()) => watched += 1,
+            Ok(()) => {
+                watched += 1;
+                watched_dirs.insert(dir.clone());
+            }
             Err(error) => {
                 failed += 1;
                 if first_failure.is_none() {
@@ -1286,7 +1329,6 @@ fn setup_workdir_watch_with_limit(
         );
     }
     WatchSetupOutcome::Watching {
-        watched_dirs: watched,
         failed_dirs: failed,
     }
 }
@@ -1294,6 +1336,7 @@ fn setup_workdir_watch_with_limit(
 #[cfg(not(target_os = "linux"))]
 fn setup_workdir_watch(
     watcher: &mut RecommendedWatcher,
+    _watched_dirs: &mut HashSet<PathBuf>,
     workdir: &Path,
     _git_dir: Option<&Path>,
     _gitignore: &mut GitignoreRules,
@@ -1313,11 +1356,8 @@ fn setup_workdir_watch(
         );
         return WatchSetupOutcome::RootWatchFailed;
     }
-    // Other backends use a single recursive watch with no per-directory budget.
-    WatchSetupOutcome::Watching {
-        watched_dirs: 0,
-        failed_dirs: 0,
-    }
+    // Other backends use a single recursive watch with no per-directory budget (the set stays empty).
+    WatchSetupOutcome::Watching { failed_dirs: 0 }
 }
 
 /// Whether an event introduces a new directory whose future contents we may need to watch.
@@ -1337,7 +1377,7 @@ fn event_brings_in_new_dir(event: &notify::Event) -> bool {
 #[cfg(target_os = "linux")]
 fn watch_created_dirs(
     watcher: &mut RecommendedWatcher,
-    watched_dirs: &mut usize,
+    watched_dirs: &mut HashSet<PathBuf>,
     max_dirs: usize,
     workdir: &Path,
     git_dir: Option<&Path>,
@@ -1368,7 +1408,7 @@ fn watch_created_dirs(
 #[cfg(not(target_os = "linux"))]
 fn watch_created_dirs(
     _watcher: &mut RecommendedWatcher,
-    _watched_dirs: &mut usize,
+    _watched_dirs: &mut HashSet<PathBuf>,
     _max_dirs: usize,
     _workdir: &Path,
     _git_dir: Option<&Path>,
@@ -1376,6 +1416,23 @@ fn watch_created_dirs(
     _event: &notify::Event,
 ) {
 }
+
+/// Drops directories that were removed (or renamed away) from the tracked watch set so the live-watch
+/// count reflects reality. The kernel auto-removes the inotify watch when a watched directory is
+/// deleted, but our budget counter would otherwise keep counting it and prematurely refuse new
+/// watches. No-op off Linux (no per-directory set is tracked there).
+#[cfg(target_os = "linux")]
+fn prune_removed_worktree_dirs(watched_dirs: &mut HashSet<PathBuf>, event: &notify::Event) {
+    if !matches!(event.kind, notify::EventKind::Remove(_)) {
+        return;
+    }
+    for path in &event.paths {
+        watched_dirs.retain(|watched| watched != path && !watched.starts_with(path));
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prune_removed_worktree_dirs(_watched_dirs: &mut HashSet<PathBuf>, _event: &notify::Event) {}
 
 /// Adds a recursive watch for a git-dir subdirectory that appears at runtime — e.g. `rebase-merge/`,
 /// `rebase-apply/`, or `sequencer/`, created when an interactive rebase / cherry-pick / revert
@@ -2180,12 +2237,13 @@ mod tests {
             matches!(
                 setup_workdir_watch(
                     &mut watcher,
+                    &mut HashSet::default(),
                     &workdir,
                     git_dir.as_deref(),
                     &mut gitignore,
                     RepoId(1),
                 ),
-                WatchSetupOutcome::Watching { failed_dirs: 0, .. }
+                WatchSetupOutcome::Watching { failed_dirs: 0 }
             ),
             "a small worktree should be fully watched with no failures"
         );
@@ -2262,12 +2320,13 @@ mod tests {
             matches!(
                 setup_workdir_watch(
                     &mut ignore_watcher,
+                    &mut HashSet::default(),
                     &workdir,
                     git_dir.as_deref(),
                     &mut gitignore,
                     RepoId(1),
                 ),
-                WatchSetupOutcome::Watching { failed_dirs: 0, .. }
+                WatchSetupOutcome::Watching { failed_dirs: 0 }
             ),
             "a small worktree should be fully watched with no failures"
         );
@@ -2338,6 +2397,7 @@ mod tests {
 
         let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
         let monitor_enabled = Arc::new(AtomicBool::new(true));
+        let mut watched_dirs: HashSet<PathBuf> = HashSet::default();
 
         // vendor/ is not yet ignored, so the initial setup watches it.
         let (_initial, _) = build_workdir_watcher(
@@ -2345,10 +2405,15 @@ mod tests {
             &workdir,
             git_dir.as_deref(),
             &mut gitignore,
+            &mut watched_dirs,
             &monitor_tx,
             &monitor_enabled,
         )
         .expect("initial watcher build must succeed");
+        assert!(
+            watched_dirs.contains(&workdir.join("vendor")),
+            "vendor/ must be watched before it is ignored"
+        );
 
         // vendor/ becomes gitignored; re-initiate the worktree watches exactly like the monitor
         // loop does: reload the rules and rebuild the watcher. Dropping `_initial` (via the rebind
@@ -2360,11 +2425,16 @@ mod tests {
             &workdir,
             git_dir.as_deref(),
             &mut gitignore,
+            &mut watched_dirs,
             &monitor_tx,
             &monitor_enabled,
         )
         .expect("rebuilt watcher must succeed");
         drop(_initial);
+        assert!(
+            !watched_dirs.contains(&workdir.join("vendor")),
+            "rebuilding after the ignore edit must drop vendor/ from the watched set"
+        );
 
         std::thread::sleep(Duration::from_millis(300));
         while monitor_rx.try_recv().is_ok() {}
@@ -2427,10 +2497,7 @@ mod tests {
         assert_eq!(
             watch_degraded_transition(
                 &mut degraded,
-                WatchSetupOutcome::Watching {
-                    watched_dirs: 10,
-                    failed_dirs: 0
-                }
+                WatchSetupOutcome::Watching { failed_dirs: 0 }
             ),
             None
         );
@@ -2439,10 +2506,7 @@ mod tests {
         assert_eq!(
             watch_degraded_transition(
                 &mut degraded,
-                WatchSetupOutcome::Watching {
-                    watched_dirs: 100,
-                    failed_dirs: 7
-                }
+                WatchSetupOutcome::Watching { failed_dirs: 7 }
             ),
             Some(RepoWatchDegradedReason::WatchLimitReached { unwatched_dirs: 7 })
         );
@@ -2450,13 +2514,117 @@ mod tests {
         assert_eq!(
             watch_degraded_transition(
                 &mut degraded,
-                WatchSetupOutcome::Watching {
-                    watched_dirs: 100,
-                    failed_dirs: 3
-                }
+                WatchSetupOutcome::Watching { failed_dirs: 3 }
             ),
             None
         );
+    }
+
+    #[test]
+    fn degraded_watch_recheck_is_throttled() {
+        // Reproduces the "reload ignore rules every idle tick (30s) while degraded" cost: the
+        // recovery re-check must be rate-limited, not run on every tick. With no prior attempt it is
+        // due; immediately after an attempt it is not; only after the interval elapses is it due again.
+        let interval = Duration::from_secs(120);
+        let base = Instant::now();
+        assert!(
+            recovery_recheck_due(None, base, interval),
+            "first re-check (no prior attempt) must be due"
+        );
+        assert!(
+            !recovery_recheck_due(Some(base), base + Duration::from_secs(30), interval),
+            "a re-check 30s after the last attempt must be throttled (not due)"
+        );
+        assert!(
+            recovery_recheck_due(Some(base), base + interval, interval),
+            "a re-check after the full interval must be due again"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watch_budget_count_does_not_inflate_on_rewatch() {
+        // Reproduces the budget-counter drift: re-watching a directory that is already watched must
+        // not grow the live-watch count, otherwise create/re-create churn inflates the count past
+        // the real number of watches and the monitor refuses new watches while still under budget.
+        let dir = unique_temp_dir("gitcomet-monitor-rewatch");
+        let workdir = dir.path().join("repo");
+        init_repo_for_ignore_tests(&workdir);
+        fs::create_dir_all(workdir.join("src").join("sub")).expect("create src/sub");
+        let git_dir = resolve_git_dir(&workdir);
+        let mut gitignore = GitignoreRules::load(&workdir);
+
+        let (_tx, _rx) = mpsc::channel::<notify::Event>();
+        let mut watcher =
+            notify::recommended_watcher(move |_res: notify::Result<notify::Event>| {})
+                .expect("create watcher");
+
+        let mut watched: HashSet<PathBuf> = HashSet::default();
+        add_subtree_watches(
+            &mut watcher,
+            &mut watched,
+            1000,
+            &workdir.join("src"),
+            &workdir,
+            git_dir.as_deref(),
+            &mut gitignore,
+        );
+        let after_first = watched.len();
+        assert!(after_first >= 2, "src + src/sub should be watched");
+        assert!(watched.contains(&workdir.join("src")));
+
+        add_subtree_watches(
+            &mut watcher,
+            &mut watched,
+            1000,
+            &workdir.join("src"),
+            &workdir,
+            git_dir.as_deref(),
+            &mut gitignore,
+        );
+        assert_eq!(
+            watched.len(),
+            after_first,
+            "re-watching already-watched directories must not inflate the live-watch count"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn prune_removed_worktree_dirs_drops_deleted_subtree() {
+        // A deleted directory (and its descendants) must be dropped from the tracked watch set so the
+        // budget reflects reality — the kernel auto-removes the inotify watch, but the set would
+        // otherwise keep counting it and prematurely refuse new watches.
+        let root = PathBuf::from("/repo");
+        let mut watched: HashSet<PathBuf> = HashSet::default();
+        watched.insert(root.join("src"));
+        watched.insert(root.join("src/sub"));
+        watched.insert(root.join("docs"));
+
+        let remove = notify::Event {
+            kind: notify::EventKind::Remove(notify::event::RemoveKind::Folder),
+            paths: vec![root.join("src")],
+            attrs: Default::default(),
+        };
+        prune_removed_worktree_dirs(&mut watched, &remove);
+
+        assert!(
+            !watched.contains(&root.join("src")) && !watched.contains(&root.join("src/sub")),
+            "the removed dir and its descendants must be pruned"
+        );
+        assert!(
+            watched.contains(&root.join("docs")),
+            "unrelated watched dirs must be kept"
+        );
+
+        // A non-remove event must not prune anything.
+        let create = notify::Event {
+            kind: notify::EventKind::Create(notify::event::CreateKind::Folder),
+            paths: vec![root.join("docs")],
+            attrs: Default::default(),
+        };
+        prune_removed_worktree_dirs(&mut watched, &create);
+        assert!(watched.contains(&root.join("docs")));
     }
 
     #[cfg(target_os = "linux")]
@@ -2482,8 +2650,10 @@ mod tests {
         .expect("create watcher");
 
         // Budget of 0 forces the "too many folders" path: any worktree subdir exceeds it.
+        let mut watched_dirs: HashSet<PathBuf> = HashSet::default();
         let outcome = setup_workdir_watch_with_limit(
             &mut watcher,
+            &mut watched_dirs,
             &workdir,
             git_dir.as_deref(),
             &mut gitignore,
@@ -2493,6 +2663,10 @@ mod tests {
         assert!(
             matches!(outcome, WatchSetupOutcome::WorktreeSubdirsSkipped { .. }),
             "over-budget worktrees must skip source-folder watches, got {outcome:?}"
+        );
+        assert!(
+            watched_dirs.is_empty(),
+            "no worktree subdirs should be tracked in the over-budget mode"
         );
 
         std::thread::sleep(Duration::from_millis(300));
