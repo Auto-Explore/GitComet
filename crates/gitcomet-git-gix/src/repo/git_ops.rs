@@ -399,6 +399,7 @@ fn repo_file_stamp(path: &Path) -> RepoFileStamp {
             exists: true,
             len: metadata.len(),
             modified: metadata.modified().ok(),
+            ..RepoFileStamp::default()
         },
         Err(_) => RepoFileStamp::default(),
     }

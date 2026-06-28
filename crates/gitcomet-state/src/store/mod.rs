@@ -683,18 +683,33 @@ impl AppStore {
                         );
                     }
                     Msg::RepoActivated { repo_id } => {
-                        if repo_monitors.is_running(repo_id) {
+                        // Always refresh on activation (window focus). The filesystem monitor is
+                        // best-effort and cannot be the sole refresh trigger: in sandboxed/Flatpak
+                        // runs an external editor's writes to the bind-mounted repo do not propagate
+                        // inotify events into the sandbox, so the monitor never sees them and the
+                        // working-changes view would stay stale forever. Refreshing on focus keeps
+                        // it correct regardless of whether the watcher is delivering events.
+                        //
+                        // When the monitor is running we only need the lightweight working-changes
+                        // (staged + unstaged) refresh; when it is unavailable we also refresh the
+                        // broader git-state, since nothing else updates it.
+                        let change = if repo_monitors.is_running(repo_id) {
                             repo_load_trace::trace!(
-                                "repo_activated_monitor_active_skip_refresh repo_id={:?} monitor_running=true",
+                                "repo_activated_status_refresh repo_id={:?} monitor_running=true",
                                 repo_id
                             );
-                            continue;
-                        }
-
-                        repo_load_trace::trace!(
-                            "repo_activated_monitor_unavailable_fallback_refresh repo_id={:?} monitor_running=false",
-                            repo_id
-                        );
+                            RepoExternalChange {
+                                worktree: true,
+                                index: true,
+                                git_state: false,
+                            }
+                        } else {
+                            repo_load_trace::trace!(
+                                "repo_activated_monitor_unavailable_fallback_refresh repo_id={:?} monitor_running=false",
+                                repo_id
+                            );
+                            RepoExternalChange::GitState
+                        };
                         let effects = {
                             let mut app_state =
                                 thread_state.write().unwrap_or_else(|e| e.into_inner());
@@ -704,10 +719,7 @@ impl AppStore {
                                 &mut repos,
                                 &id_alloc,
                                 app_state,
-                                Msg::RepoExternallyChanged {
-                                    repo_id,
-                                    change: RepoExternalChange::GitState,
-                                },
+                                Msg::RepoExternallyChanged { repo_id, change },
                             );
                             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects

@@ -59,6 +59,26 @@ struct RepoFileStamp {
     exists: bool,
     len: u64,
     modified: Option<std::time::SystemTime>,
+    /// Content fingerprint of the file, when one is captured (currently only for
+    /// `.git/index`, via its trailing hash). `len`/`modified` are a cheap change
+    /// hint, but they are not reliable: an atomic index rewrite can land with an
+    /// identical length (same tracked entries) and an unchanged mtime (coarse or
+    /// cached filesystem timestamps, e.g. f2fs), which would otherwise let the
+    /// staged-status cache serve a stale result. The content id makes the stamp
+    /// content-exact. `None` for files where no fingerprint is read, and also when
+    /// the trailer is the null hash (`index.skipHash`/`feature.manyFiles` write a
+    /// null trailer regardless of content, so it cannot distinguish index states —
+    /// the stat discriminators below cover that case instead).
+    content_id: Option<gix::ObjectId>,
+    /// Inode of `.git/index` (Unix only). Git rewrites the index atomically via a
+    /// lock file + rename, so every rewrite yields a fresh inode. This detects index
+    /// changes even when the content fingerprint is unavailable (`skipHash`) and the
+    /// length + mtime collide. `None` for generic stamps and on non-Unix platforms.
+    inode: Option<u64>,
+    /// Change-time (ctime) of `.git/index` in nanoseconds (Unix only). Updated on
+    /// every metadata/content change including the rename above, so it backs up the
+    /// inode against reuse. `None` for generic stamps and on non-Unix platforms.
+    ctime_nanos: Option<i128>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

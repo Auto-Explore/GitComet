@@ -144,6 +144,13 @@ pub enum Msg {
         repo_id: RepoId,
         change: RepoExternalChange,
     },
+    /// The file-system watcher disabled live watching of the worktree because it has too many
+    /// folders to watch within the kernel inotify limit. Carries the directory count for the
+    /// user-facing warning; the repository still refreshes when the window regains focus.
+    RepoWatchDegraded {
+        repo_id: RepoId,
+        dir_count: usize,
+    },
     SetHistoryScope {
         repo_id: RepoId,
         scope: LogScope,

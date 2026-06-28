@@ -278,10 +278,14 @@ fn repo_monitor_manager_reports_running_enabled_monitors() {
 }
 
 #[test]
-fn repo_monitor_active_repo_activation_skips_refresh_effects() {
+fn repo_monitor_active_repo_activation_coalesces_with_in_flight_refresh() {
+    // Activation (window focus) always refreshes the working-changes status now — the filesystem
+    // monitor cannot be the sole trigger because it does not see external edits in sandboxed/Flatpak
+    // runs. But when a refresh is already in flight, that activation refresh must coalesce rather
+    // than schedule duplicate status/log/branch loads.
     let repo_id = RepoId(21);
-    let workdir = unique_repo_monitor_test_path("activation-skip");
-    std::fs::create_dir_all(&workdir).expect("create activation skip workdir");
+    let workdir = unique_repo_monitor_test_path("activation-coalesce");
+    std::fs::create_dir_all(&workdir).expect("create activation coalesce workdir");
     let calls = std::sync::Arc::new(RepoActivationCallCounts::default());
     let state = {
         let mut state = active_ready_repo_state(repo_id, workdir.clone());
@@ -310,7 +314,7 @@ fn repo_monitor_active_repo_activation_skips_refresh_effects() {
     assert_eq!(
         calls.refresh_call_counts(),
         (0, 0, 0, 0),
-        "activation with a running monitor should not schedule status, log, branch, or remote-branch loads"
+        "activation while a primary refresh is already in flight must coalesce, not schedule duplicate loads"
     );
 }
 

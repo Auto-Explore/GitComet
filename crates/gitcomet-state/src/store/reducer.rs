@@ -788,6 +788,19 @@ fn reduce_inner(
         Msg::RepoExternallyChanged { repo_id, change } => {
             external_and_history::repo_externally_changed(state, repo_id, change)
         }
+        Msg::RepoWatchDegraded { repo_id: _, dir_count } => {
+            util::push_notification(
+                state,
+                crate::model::AppNotificationKind::Warning,
+                format!(
+                    "This repository has {dir_count} folders — live file watching is disabled to \
+                     stay within system limits. Changes refresh when the window regains focus. Add \
+                     build/output dirs to .gitignore or raise fs.inotify.max_user_watches to \
+                     re-enable."
+                ),
+            );
+            Vec::new()
+        }
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
         }
@@ -1885,6 +1898,26 @@ mod nav_history_tests {
 
     fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
         state.repos.iter().find(|r| r.id == repo_id).unwrap()
+    }
+
+    #[test]
+    fn repo_watch_degraded_pushes_warning_notification() {
+        let mut state = AppState::default();
+        dispatch(
+            &mut state,
+            Msg::RepoWatchDegraded {
+                repo_id: RepoId(1),
+                dir_count: 9000,
+            },
+        );
+        assert_eq!(state.notifications.len(), 1);
+        let note = &state.notifications[0];
+        assert_eq!(note.kind, crate::model::AppNotificationKind::Warning);
+        assert!(
+            note.message.contains("9000"),
+            "warning should mention the folder count: {}",
+            note.message
+        );
     }
 
     #[test]
