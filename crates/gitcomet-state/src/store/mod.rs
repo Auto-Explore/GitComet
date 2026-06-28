@@ -683,18 +683,22 @@ impl AppStore {
                         );
                     }
                     Msg::RepoActivated { repo_id } => {
-                        if repo_monitors.is_running(repo_id) {
-                            repo_load_trace::trace!(
-                                "repo_activated_monitor_active_skip_refresh repo_id={:?} monitor_running=true",
-                                repo_id
-                            );
-                            continue;
-                        }
-
+                        // Do a FULL refresh on activation (window focus). The filesystem monitor is
+                        // best-effort and cannot be the sole refresh trigger: in sandboxed/Flatpak
+                        // runs an external editor's or terminal's writes to the bind-mounted repo do
+                        // not propagate inotify events into the sandbox, so the monitor — even when
+                        // its thread is "running" — sees neither worktree edits NOR git-state changes
+                        // (commits, checkouts, fetches). Refreshing only the working-changes lanes
+                        // here would leave the log/branches/HEAD/divergence stale forever in exactly
+                        // that case. A full refresh keeps every view correct regardless of whether,
+                        // or how reliably, the watcher is delivering events; activation is throttled
+                        // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
                         repo_load_trace::trace!(
-                            "repo_activated_monitor_unavailable_fallback_refresh repo_id={:?} monitor_running=false",
-                            repo_id
+                            "repo_activated_full_refresh repo_id={:?} monitor_running={}",
+                            repo_id,
+                            repo_monitors.is_running(repo_id)
                         );
+                        let change = RepoExternalChange::all();
                         let effects = {
                             let mut app_state =
                                 thread_state.write().unwrap_or_else(|e| e.into_inner());
@@ -704,10 +708,7 @@ impl AppStore {
                                 &mut repos,
                                 &id_alloc,
                                 app_state,
-                                Msg::RepoExternallyChanged {
-                                    repo_id,
-                                    change: RepoExternalChange::GitState,
-                                },
+                                Msg::RepoExternallyChanged { repo_id, change },
                             );
                             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
