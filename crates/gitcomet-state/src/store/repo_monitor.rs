@@ -3083,7 +3083,7 @@ mod tests {
             paths: vec![git_dir.join("refs").join("tags").join("v1.0.0")],
             attrs: Default::default(),
         };
-        let change = classify_repo_event(&workdir, Some(&git_dir), &mut rules, &tag_event);
+        let change = classify_change(&workdir, Some(&git_dir), &mut rules, &tag_event);
         assert_eq!(
             change,
             Some(RepoExternalChange {
@@ -3100,7 +3100,7 @@ mod tests {
             paths: vec![git_dir.join("packed-refs")],
             attrs: Default::default(),
         };
-        let change = classify_repo_event(&workdir, Some(&git_dir), &mut rules, &packed_event);
+        let change = classify_change(&workdir, Some(&git_dir), &mut rules, &packed_event);
         assert_eq!(
             change,
             Some(RepoExternalChange {
@@ -3117,7 +3117,7 @@ mod tests {
             paths: vec![git_dir.join("refs").join("heads").join("main")],
             attrs: Default::default(),
         };
-        let change = classify_repo_event(&workdir, Some(&git_dir), &mut rules, &branch_event);
+        let change = classify_change(&workdir, Some(&git_dir), &mut rules, &branch_event);
         assert_eq!(
             change,
             Some(RepoExternalChange {
