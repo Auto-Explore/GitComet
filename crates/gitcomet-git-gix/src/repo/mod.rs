@@ -681,8 +681,9 @@ impl GitRepository for GixRepo {
         name: &str,
         target: &str,
         message: Option<&str>,
+        annotated: bool,
     ) -> Result<CommandOutput> {
-        self.create_tag_with_output_impl(name, target, message)
+        self.create_tag_with_output_impl(name, target, message, annotated)
     }
 
     fn delete_tag_with_output(&self, name: &str) -> Result<CommandOutput> {

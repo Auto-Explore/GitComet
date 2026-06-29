@@ -5247,6 +5247,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 name: "v1.0.0".to_string(),
                 target: "HEAD".to_string(),
                 message: None,
+                annotated: false,
             },
             1,
         ),

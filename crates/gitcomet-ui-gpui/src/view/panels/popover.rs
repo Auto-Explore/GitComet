@@ -182,6 +182,8 @@ pub(in super::super) struct PopoverHost {
     create_branch_from_ref_checkout_focus_handle: FocusHandle,
     create_branch_from_ref_cancel_focus_handle: FocusHandle,
     create_branch_from_ref_submit_focus_handle: FocusHandle,
+    create_tag_annotated: bool,
+    create_tag_annotated_focus_handle: FocusHandle,
     checkout_remote_branch_cancel_focus_handle: FocusHandle,
     checkout_remote_branch_submit_focus_handle: FocusHandle,
     stash_message_input: Entity<components::TextInput>,
@@ -1032,6 +1034,7 @@ impl PopoverHost {
         let clone_repo_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_edit_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -1118,6 +1121,8 @@ impl PopoverHost {
             create_branch_from_ref_checkout_focus_handle,
             create_branch_from_ref_cancel_focus_handle,
             create_branch_from_ref_submit_focus_handle,
+            create_tag_annotated: false,
+            create_tag_annotated_focus_handle,
             checkout_remote_branch_cancel_focus_handle,
             checkout_remote_branch_submit_focus_handle,
             stash_message_input,
@@ -1473,13 +1478,14 @@ impl PopoverHost {
             return;
         }
 
-        let message = self
-            .create_tag_message_input
-            .read_with(cx, |input, _| input.text().trim().to_string());
-        let message = if message.is_empty() {
-            None
+        let annotated = self.create_tag_annotated;
+        let message = if annotated {
+            let msg = self
+                .create_tag_message_input
+                .read_with(cx, |input, _| input.text().trim().to_string());
+            Some(msg)
         } else {
-            Some(message)
+            None
         };
 
         self.store.dispatch(Msg::CreateTag {
@@ -1487,6 +1493,7 @@ impl PopoverHost {
             name,
             target,
             message,
+            annotated,
         });
         self.close_popover(cx);
     }
@@ -1976,6 +1983,8 @@ impl PopoverHost {
                 }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
+                    self.create_tag_annotated =
+                        matches!(self.state.default_tag_type, DefaultTagType::Annotated);
                     self.create_tag_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
                         input.set_theme(theme, cx);

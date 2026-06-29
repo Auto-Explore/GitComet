@@ -175,20 +175,25 @@ impl GixRepo {
         name: &str,
         target: &str,
         message: Option<&str>,
+        annotated: bool,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(name, "tag name")?;
         validate_ref_like_arg(target, "tag target")?;
 
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c").arg("alias.tag=").arg("tag");
-        if let Some(msg) = message {
-            cmd.arg("-m").arg(msg);
+        cmd.arg("-c").arg("alias.tag=");
+        if !annotated {
+            cmd.arg("-c").arg("tag.gpgsign=false");
+        }
+        cmd.arg("tag");
+        if annotated {
+            cmd.arg("-m").arg(message.unwrap_or(""));
         }
         cmd.arg("--").arg(name).arg(target);
-        let label = if message.is_some() {
+        let label = if annotated {
             format!("git tag -m <message> -- {name} {target}")
         } else {
-            format!("git tag -- {name} {target}")
+            format!("git tag -c tag.gpgsign=false -- {name} {target}")
         };
         run_git_with_output(cmd, &label)
     }

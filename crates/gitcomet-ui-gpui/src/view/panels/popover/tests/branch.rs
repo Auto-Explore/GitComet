@@ -206,6 +206,7 @@ impl GitRepository for TrackingRepo {
         name: &str,
         target: &str,
         _message: Option<&str>,
+        _annotated: bool,
     ) -> Result<CommandOutput> {
         self.actions
             .lock()

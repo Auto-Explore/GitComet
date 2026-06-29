@@ -1,4 +1,4 @@
-use crate::model::{AppState, GitLogTagFetchMode, RepoId};
+use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::{HistoryMode, LogScope};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,7 @@ pub struct UiSession {
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
+    pub default_tag_type: Option<DefaultTagType>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -179,6 +180,7 @@ struct UiSessionFile {
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
+    default_tag_type: Option<DefaultTagType>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
@@ -283,6 +285,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
+        default_tag_type: file.default_tag_type,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -587,6 +590,7 @@ pub struct UiSettings {
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
+    pub default_tag_type: Option<DefaultTagType>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
@@ -713,6 +717,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.commit_push_after_enabled {
             file.commit_push_after_enabled = Some(value);
+        }
+        if let Some(value) = settings.default_tag_type {
+            file.default_tag_type = Some(value);
         }
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));

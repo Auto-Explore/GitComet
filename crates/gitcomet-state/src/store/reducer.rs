@@ -381,11 +381,13 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             name,
             target,
             message,
+            annotated,
         } => Msg::CreateTag {
             repo_id,
             name,
             target,
             message,
+            annotated,
         },
         RepoCommandKind::DeleteTag { name } => Msg::DeleteTag { repo_id, name },
         RepoCommandKind::PushTag { remote, name } => Msg::PushTag {
@@ -768,6 +770,10 @@ fn reduce_inner(
         } => {
             state.git_log_settings.show_history_tags = show_history_tags;
             state.git_log_settings.tag_fetch_mode = tag_fetch_mode;
+            Vec::new()
+        }
+        Msg::SetDefaultTagType(tag_type) => {
+            state.default_tag_type = tag_type;
             Vec::new()
         }
         Msg::SetActiveRepo { repo_id } => repo_management::set_active_repo(state, repo_id),
@@ -1329,9 +1335,10 @@ fn reduce_inner(
             name,
             target,
             message,
+            annotated,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::create_tag(repo_id, name, target, message)
+            actions_emit_effects::create_tag(repo_id, name, target, message, annotated)
         }
         Msg::DeleteTag { repo_id, name } => {
             begin_local_action(state, repo_id);

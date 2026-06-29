@@ -997,6 +997,7 @@ fn send_unavailable_git_effect_result(
             name,
             target,
             message,
+            annotated,
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -1004,6 +1005,7 @@ fn send_unavailable_git_effect_result(
                     name,
                     target,
                     message,
+                    annotated,
                 },
                 result: Err(git_unavailable_error(runtime)),
             },
@@ -2062,8 +2064,9 @@ pub(super) fn schedule_effect(
             name,
             target,
             message,
+            annotated,
         } => repo_commands::schedule_create_tag(
-            executor, repos, msg_tx, repo_id, name, target, message,
+            executor, repos, msg_tx, repo_id, name, target, message, annotated,
         ),
         Effect::DeleteTag { repo_id, name } => {
             repo_commands::schedule_delete_tag(executor, repos, msg_tx, repo_id, name);

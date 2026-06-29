@@ -931,6 +931,7 @@ pub(super) fn schedule_create_tag(
     name: String,
     target: String,
     message: Option<String>,
+    annotated: bool,
 ) {
     let command_name = name.clone();
     let command_target = target.clone();
@@ -944,8 +945,9 @@ pub(super) fn schedule_create_tag(
             name: command_name,
             target: command_target,
             message: command_message,
+            annotated,
         },
-        move |repo| repo.create_tag_with_output(&name, &target, message.as_deref()),
+        move |repo| repo.create_tag_with_output(&name, &target, message.as_deref(), annotated),
     );
 }
 

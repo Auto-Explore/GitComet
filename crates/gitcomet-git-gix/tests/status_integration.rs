@@ -5986,7 +5986,7 @@ fn create_and_delete_local_tag() {
     // No message => lightweight tag (a ref pointing straight at the commit),
     // matching `git tag <name>` semantics.
     opened
-        .create_tag_with_output("v1.0.0", "HEAD", None)
+        .create_tag_with_output("v1.0.0", "HEAD", None, false)
         .unwrap();
     run_git(
         repo,
@@ -6044,7 +6044,7 @@ fn create_annotated_tag_includes_message() {
 
     // A message => annotated tag object that stores the message.
     opened
-        .create_tag_with_output("v1.0.0", "HEAD", Some("Release 1.0"))
+        .create_tag_with_output("v1.0.0", "HEAD", Some("Release 1.0"), true)
         .unwrap();
 
     let tag_type = git_command()
@@ -6109,7 +6109,7 @@ fn create_tag_respects_tag_gpgsign_config() {
     let opened = backend.open(repo).unwrap();
     // Signing only applies to annotated tags, so request one with a message.
     let err = opened
-        .create_tag_with_output("v1.0.0", "HEAD", Some("Release 1.0"))
+        .create_tag_with_output("v1.0.0", "HEAD", Some("Release 1.0"), true)
         .expect_err("tag creation should fail when signing is required and gpg is missing");
 
     match err.kind() {
@@ -6279,7 +6279,7 @@ fn push_and_delete_remote_tag() {
     let opened = backend.open(&repo).unwrap();
 
     opened
-        .create_tag_with_output("v1.0.0", "HEAD", None)
+        .create_tag_with_output("v1.0.0", "HEAD", None, false)
         .unwrap();
     opened.push_tag_with_output("origin", "v1.0.0").unwrap();
     run_git(

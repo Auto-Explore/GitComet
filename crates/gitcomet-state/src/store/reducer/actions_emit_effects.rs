@@ -489,12 +489,14 @@ pub(super) fn create_tag(
     name: String,
     target: String,
     message: Option<String>,
+    annotated: bool,
 ) -> Vec<Effect> {
     vec![Effect::CreateTag {
         repo_id,
         name,
         target,
         message,
+        annotated,
     }]
 }
 

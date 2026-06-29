@@ -589,6 +589,7 @@ pub trait GitRepository: Send + Sync {
         _name: &str,
         _target: &str,
         _message: Option<&str>,
+        _annotated: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git tag creation is not implemented for this backend",

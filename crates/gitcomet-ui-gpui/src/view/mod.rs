@@ -18,8 +18,8 @@ use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
-    Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DefaultTagType,
+    DiagnosticKind, Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{Msg, StoreEvent};
 use gitcomet_state::session;
@@ -1600,10 +1600,12 @@ impl GitCometView {
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
+        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
         });
+        store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
@@ -2577,6 +2579,14 @@ impl GitCometView {
             }
         }
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_default_tag_type_preference(
+        &mut self,
+        tag_type: DefaultTagType,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
     fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {
@@ -3945,9 +3955,9 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.render_command_palette(cx))
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_overlay_view(self.toast_host.clone()))
-            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
         root = root.child(chrome::window_frame(

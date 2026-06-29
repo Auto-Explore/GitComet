@@ -1062,11 +1062,12 @@ fn create_and_delete_tag_emit_effects() {
             name: "v1.0.0".to_string(),
             target: "HEAD".to_string(),
             message: None,
+            annotated: false,
         },
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: None }] if name == "v1.0.0" && target == "HEAD"
+        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: None, annotated: false }] if name == "v1.0.0" && target == "HEAD"
     ));
 
     let effects = reduce(
@@ -3936,8 +3937,11 @@ fn create_tag_command_finished_reloads_tags() {
                 name: "v2.0.0".to_string(),
                 target: "HEAD".to_string(),
                 message: None,
+                annotated: false,
             },
-            result: Ok(CommandOutput::empty_success("git tag -- v2.0.0 HEAD")),
+            result: Ok(CommandOutput::empty_success(
+                "git tag -c tag.gpgsign=false -- v2.0.0 HEAD",
+            )),
         }),
     );
 
@@ -4037,6 +4041,7 @@ fn create_tag_failed_does_not_reload_tags() {
                 name: "v2.0.0".to_string(),
                 target: "HEAD".to_string(),
                 message: None,
+                annotated: false,
             },
             result: Err(gitcomet_core::error::Error::new(
                 gitcomet_core::error::ErrorKind::Backend("tag already exists".to_string()),
@@ -4072,12 +4077,13 @@ fn create_tag_with_message_propagates_to_effect() {
             name: "v1.0.0".to_string(),
             target: "HEAD".to_string(),
             message: Some("Release 1.0".to_string()),
+            annotated: true,
         },
     );
 
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg) }]
+        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg), annotated: true }]
             if name == "v1.0.0" && target == "HEAD" && msg == "Release 1.0"
     ));
 }

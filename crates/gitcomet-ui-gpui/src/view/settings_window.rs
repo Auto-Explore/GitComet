@@ -4,7 +4,7 @@ use gitcomet_core::domain::HistoryMode;
 use gitcomet_core::process::{
     GitExecutablePreference, GitRuntimeState, install_git_executable_path, refresh_git_runtime,
 };
-use gitcomet_state::model::GitLogTagFetchMode;
+use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
 use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
 use std::path::PathBuf;
@@ -289,6 +289,7 @@ pub(crate) struct SettingsWindowView {
     history_show_tags: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
+    default_tag_type: DefaultTagType,
     current_view: SettingsView,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
@@ -655,6 +656,7 @@ impl SettingsWindowView {
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
+        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
         let external_editor_setting = initial_external_editor_setting(&ui_session);
         let external_editor_options: Arc<[crate::external_editor::ExternalEditorOption]> =
             crate::external_editor::external_editor_options(external_editor_setting.as_ref())
@@ -852,6 +854,7 @@ impl SettingsWindowView {
             history_show_tags,
             history_tag_fetch_mode,
             default_history_mode,
+            default_tag_type,
             current_view: SettingsView::Root,
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
@@ -932,6 +935,7 @@ impl SettingsWindowView {
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
+            default_tag_type: Some(self.default_tag_type),
             commit_push_after_enabled: None,
             git_executable_path: Some(applied_git_executable_path(&self.runtime_info.git.runtime)),
             terminal_external_mode: None,
@@ -1704,6 +1708,19 @@ impl SettingsWindowView {
         self.default_history_mode = mode;
         self.expanded_section = None;
         self.persist_preferences(cx);
+        cx.notify();
+    }
+
+    fn set_default_tag_type(&mut self, tag_type: DefaultTagType, cx: &mut gpui::Context<Self>) {
+        if self.default_tag_type == tag_type {
+            return;
+        }
+
+        self.default_tag_type = tag_type;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_default_tag_type_preference(tag_type, cx);
+        });
         cx.notify();
     }
 
@@ -4239,6 +4256,39 @@ impl Render for SettingsWindowView {
                         }
                     }
 
+                    let tags_card = self
+                        .card("settings_window_tags_card", "Tags", theme)
+                        .child(
+                            self.option_row(
+                                "settings_window_tags_default_lightweight",
+                                "Lightweight",
+                                Some(
+                                    "A simple tag pointing directly to a commit. No message, no GPG signing."
+                                        .into(),
+                                ),
+                                self.default_tag_type == DefaultTagType::Lightweight,
+                                theme,
+                            )
+                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                this.set_default_tag_type(DefaultTagType::Lightweight, cx);
+                            })),
+                        )
+                        .child(
+                            self.option_row(
+                                "settings_window_tags_default_annotated",
+                                "Annotated",
+                                Some(
+                                    "Stores tag author, date, and an optional message. Supports GPG signing."
+                                        .into(),
+                                ),
+                                self.default_tag_type == DefaultTagType::Annotated,
+                                theme,
+                            )
+                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                this.set_default_tag_type(DefaultTagType::Annotated, cx);
+                            })),
+                        );
+
                     let system_git_row = self
                         .option_row(
                             "settings_window_git_executable_system",
@@ -4482,6 +4532,7 @@ impl Render for SettingsWindowView {
                     .child(change_tracking_card)
                     .child(diff_card)
                     .child(git_log_card)
+                    .child(tags_card)
                     .child(git_executable_card)
                     .child(environment_card)
                     .child(links_card);
