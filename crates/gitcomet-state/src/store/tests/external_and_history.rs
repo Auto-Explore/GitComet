@@ -1899,3 +1899,49 @@ fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
         "tags should remain Ready when tags flag is not set"
     );
 }
+
+#[test]
+fn external_tags_change_without_git_state_flag_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_tags(Loadable::Ready(vec![gitcomet_core::domain::Tag {
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+
+    // The `tags` flag must drive a tag reload independently of `git_state`, so a
+    // change that only sets `tags` still refreshes them.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange {
+                git_state: false,
+                tags: true,
+                ..Default::default()
+            },
+        },
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded when only the tags flag is set"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect when only the tags flag is set"
+    );
+}
