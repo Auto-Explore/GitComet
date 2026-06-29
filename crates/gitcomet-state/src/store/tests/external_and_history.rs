@@ -1891,9 +1891,7 @@ fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
     );
 
     assert!(
-        !effects
-            .iter()
-            .any(|e| matches!(e, Effect::LoadTags { .. })),
+        !effects.iter().any(|e| matches!(e, Effect::LoadTags { .. })),
         "LoadTags should not fire for a git_state change without tags flag"
     );
     assert!(

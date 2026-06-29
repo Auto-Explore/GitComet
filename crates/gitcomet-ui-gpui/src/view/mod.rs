@@ -1353,6 +1353,12 @@ impl GitCometView {
         }
     }
 
+    /// Whether a popover, dialog, prompt, or context menu is currently open
+    /// (all are tracked as a `PopoverKind` by the popover host).
+    pub(in crate::view) fn is_overlay_open(&self, cx: &App) -> bool {
+        self.popover_host.read(cx).is_open()
+    }
+
     pub(in crate::view) fn show_history_refs_hover(
         &mut self,
         repo_id: RepoId,
@@ -1363,6 +1369,15 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Don't surface the refs hover while an overlay (popover, dialog, or
+        // context menu) is open on top of the history view — the history canvas
+        // handles mouse-move at the window level, so it still fires under the
+        // overlay. If the open overlay is the hover's own item menu, leave the
+        // existing hover in place.
+        if self.is_overlay_open(cx) && !self.history_refs_hover_host.read(cx).is_item_menu_open() {
+            self.close_history_refs_hover(cx);
+            return;
+        }
         self.history_refs_hover_host.update(cx, |host, cx| {
             host.show(
                 repo_id,

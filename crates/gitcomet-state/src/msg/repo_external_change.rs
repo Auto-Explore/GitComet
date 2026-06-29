@@ -14,8 +14,6 @@ impl RepoExternalChange {
     #[allow(non_upper_case_globals)]
     pub const GitState: Self = Self::git_state();
     #[allow(non_upper_case_globals)]
-    pub const Tags: Self = Self::tags();
-    #[allow(non_upper_case_globals)]
     pub const Both: Self = Self::all();
 
     pub const fn worktree() -> Self {
@@ -42,15 +40,6 @@ impl RepoExternalChange {
             index: false,
             git_state: true,
             tags: false,
-        }
-    }
-
-    pub const fn tags() -> Self {
-        Self {
-            worktree: false,
-            index: false,
-            git_state: true,
-            tags: true,
         }
     }
 

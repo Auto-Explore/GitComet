@@ -377,7 +377,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::RebaseContinue => Msg::RebaseContinue { repo_id },
         RepoCommandKind::RebaseAbort => Msg::RebaseAbort { repo_id },
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
-        RepoCommandKind::CreateTag { name, target, message } => Msg::CreateTag {
+        RepoCommandKind::CreateTag {
+            name,
+            target,
+            message,
+        } => Msg::CreateTag {
             repo_id,
             name,
             target,

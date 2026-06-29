@@ -375,10 +375,10 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
         cx.open_window(Default::default(), |window, cx| {
             cx.new(|cx| {
                 components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Commit message".into(),
-                    ..Default::default()
-                },
+                    components::TextInputOptions {
+                        placeholder: "Commit message".into(),
+                        ..Default::default()
+                    },
                     window,
                     cx,
                 )
@@ -3000,10 +3000,10 @@ impl PickerPromptScrollbarTestView {
     fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
         let input = cx.new(|cx| {
             components::TextInput::new(
-            components::TextInputOptions {
-                placeholder: "Filter commits".into(),
-                ..Default::default()
-            },
+                components::TextInputOptions {
+                    placeholder: "Filter commits".into(),
+                    ..Default::default()
+                },
                 window,
                 cx,
             )

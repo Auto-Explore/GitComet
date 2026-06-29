@@ -233,12 +233,12 @@ impl DetailsPaneView {
         let commit_message_scroll = ScrollHandle::new();
         let commit_message_input = cx.new(|cx| {
             let mut input = components::TextInput::new(
-            components::TextInputOptions {
-                placeholder: "Enter commit message".into(),
-                multiline: true,
-                soft_wrap: true,
-                ..Default::default()
-            },
+                components::TextInputOptions {
+                    placeholder: "Enter commit message".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    ..Default::default()
+                },
                 window,
                 cx,
             );

@@ -753,7 +753,8 @@ impl PopoverHost {
                 components::TextInputOptions {
                     placeholder: "Annotation message (optional)".into(),
                     multiline: true,
-                    chromeless: true,
+                    soft_wrap: true,
+                    min_lines: 3,
                     ..Default::default()
                 },
                 window,
@@ -1266,7 +1267,6 @@ impl PopoverHost {
         }
     }
 
-    #[cfg(test)]
     pub(in super::super) fn is_open(&self) -> bool {
         self.popover.is_some()
     }
@@ -1476,7 +1476,11 @@ impl PopoverHost {
         let message = self
             .create_tag_message_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        let message = if message.is_empty() { None } else { Some(message) };
+        let message = if message.is_empty() {
+            None
+        } else {
+            Some(message)
+        };
 
         self.store.dispatch(Msg::CreateTag {
             repo_id,
@@ -2526,7 +2530,7 @@ impl PopoverHost {
                 mode,
             } => reset_prompt::panel(self, repo_id, target, mode, cx),
             PopoverKind::CreateTagPrompt { repo_id, target } => {
-                create_tag_prompt::panel(self, repo_id, target, window, cx)
+                create_tag_prompt::panel(self, repo_id, target, cx)
             }
             PopoverKind::Repo { repo_id, kind } => match kind {
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {

@@ -135,6 +135,15 @@ impl HistoryRefsHoverHost {
                 if !next.source_bounds.contains(&this.last_mouse_pos) {
                     return;
                 }
+                // An overlay may have opened during the open delay (e.g. a
+                // right-click context menu); don't pop the hover under it.
+                if this
+                    .root_view
+                    .upgrade()
+                    .is_some_and(|root| root.read(cx).is_overlay_open(cx))
+                {
+                    return;
+                }
                 this.state = Some(next);
                 this.item_menu_open = false;
                 this.pinned_item_ix = None;
@@ -289,6 +298,10 @@ impl HistoryRefsHoverHost {
             });
         })
         .detach();
+    }
+
+    pub(in crate::view) fn is_item_menu_open(&self) -> bool {
+        self.item_menu_open
     }
 
     pub(in crate::view) fn set_item_menu_open(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
