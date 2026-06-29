@@ -584,7 +584,13 @@ pub trait GitRepository: Send + Sync {
         Ok(message)
     }
 
-    fn create_tag_with_output(&self, _name: &str, _target: &str) -> Result<CommandOutput> {
+    fn create_tag_with_output(
+        &self,
+        _name: &str,
+        _target: &str,
+        _message: Option<&str>,
+        _annotated: bool,
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git tag creation is not implemented for this backend",
         )))

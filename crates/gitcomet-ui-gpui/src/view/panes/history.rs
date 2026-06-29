@@ -3949,6 +3949,103 @@ mod tests {
     }
 
     #[gpui::test]
+    fn history_refs_hover_does_not_open_while_overlay_is_open(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let page = Arc::new(log_page(vec![commit("c00", &[], "commit 00")], None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-refs-hover-overlay"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+
+        wait_until(cx, "history row with displayed refs", |cx| {
+            cx.debug_bounds("history_row_0").is_some()
+        });
+
+        let row = cx
+            .debug_bounds("history_row_0")
+            .expect("history row should be rendered");
+        let refs_column_point = point(row.left() + px(24.0), row.center().y);
+
+        // Open a context menu (an overlay) via right-click, away from the refs column.
+        let menu_point = point(row.right() - px(8.0), row.center().y);
+        cx.simulate_mouse_down(
+            menu_point,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.simulate_mouse_up(
+            menu_point,
+            gpui::MouseButton::Right,
+            gpui::Modifiers::default(),
+        );
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.update(|_window, app| {
+            assert!(
+                crate::view::test_support::popover_is_open(view.read(app), app),
+                "right-click should have opened a context menu overlay"
+            );
+        });
+
+        // Hovering the refs column while the overlay is open must not open the hover:
+        // the history canvas handles mouse-move at the window level, so it still fires
+        // under the overlay, but the trigger is now guarded.
+        cx.simulate_mouse_move(refs_column_point, None, gpui::Modifiers::default());
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let hover_open = cx.update(|_window, app| {
+            crate::view::test_support::history_refs_hover_is_open(view.read(app), app)
+        });
+        assert!(
+            !hover_open,
+            "history refs hover must not open while an overlay is open on top of it"
+        );
+        assert!(cx.debug_bounds("history_refs_hover_panel").is_none());
+    }
+
+    #[gpui::test]
     fn history_refs_hover_closes_when_click_selects_another_commit_without_mouse_move(
         cx: &mut gpui::TestAppContext,
     ) {

@@ -484,11 +484,19 @@ pub(super) fn merge_abort(repo_id: RepoId) -> Vec<Effect> {
     vec![Effect::MergeAbort { repo_id }]
 }
 
-pub(super) fn create_tag(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
+pub(super) fn create_tag(
+    repo_id: RepoId,
+    name: String,
+    target: String,
+    message: Option<String>,
+    annotated: bool,
+) -> Vec<Effect> {
     vec![Effect::CreateTag {
         repo_id,
         name,
         target,
+        message,
+        annotated,
     }]
 }
 
@@ -877,6 +885,13 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let refresh_tags = command_succeeded
+        && matches!(
+            &command,
+            RepoCommandKind::CreateTag { .. }
+                | RepoCommandKind::DeleteTag { .. }
+                | RepoCommandKind::PruneLocalTags
+        );
     let mut clear_banner = false;
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -986,6 +1001,12 @@ pub(super) fn repo_command_finished(
             .request(RepoLoadsInFlight::SUBMODULES)
         {
             extra_effects.push(Effect::LoadSubmodules { repo_id });
+        }
+    }
+    if refresh_tags {
+        repo_state.set_tags(Loadable::NotLoaded);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            extra_effects.push(Effect::LoadTags { repo_id });
         }
     }
     if matches!(

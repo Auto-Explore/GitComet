@@ -154,10 +154,7 @@ impl SmokeView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Enter".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -258,9 +255,8 @@ impl TextInputCursorScrollView {
                     components::TextInputOptions {
                         placeholder: "Enter".into(),
                         multiline: true,
-                        read_only: false,
-                        chromeless: false,
                         soft_wrap: true,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -321,10 +317,7 @@ impl TextInputHostView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Enter".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -384,10 +377,7 @@ fn text_input_constructs_without_panicking(cx: &mut gpui::TestAppContext) {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Commit message".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -3012,10 +3002,7 @@ impl PickerPromptScrollbarTestView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Filter commits".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,

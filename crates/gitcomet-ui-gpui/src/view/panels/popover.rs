@@ -170,6 +170,8 @@ pub(in super::super) struct PopoverHost {
     clone_repo_parent_dir_input: Entity<components::TextInput>,
     rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
+    create_tag_message_input: Entity<components::TextInput>,
+    create_tag_message_scroll: ScrollHandle,
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
@@ -180,6 +182,8 @@ pub(in super::super) struct PopoverHost {
     create_branch_from_ref_checkout_focus_handle: FocusHandle,
     create_branch_from_ref_cancel_focus_handle: FocusHandle,
     create_branch_from_ref_submit_focus_handle: FocusHandle,
+    create_tag_annotated: bool,
+    create_tag_annotated_focus_handle: FocusHandle,
     checkout_remote_branch_cancel_focus_handle: FocusHandle,
     checkout_remote_branch_submit_focus_handle: FocusHandle,
     stash_message_input: Entity<components::TextInput>,
@@ -671,10 +675,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -685,10 +686,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/parent/folder".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -733,10 +731,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "origin/main".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -747,24 +742,35 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "v1.0.0".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
             )
         });
 
+        let create_tag_message_scroll = ScrollHandle::new();
+        let create_tag_message_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Annotation message (optional)".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 3,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(create_tag_message_scroll.clone()));
+            input
+        });
+
         let remote_name_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "origin".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -775,10 +781,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -789,10 +792,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -803,10 +803,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -817,10 +814,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Stash message".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -887,9 +881,8 @@ impl PopoverHost {
                 components::TextInputOptions {
                     placeholder: "Commit message".into(),
                     multiline: true,
-                    read_only: false,
-                    chromeless: false,
                     soft_wrap: true,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -902,10 +895,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -916,10 +906,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/worktree".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -930,10 +917,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-or-commit".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -944,10 +928,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "https://example.com/org/repo.git".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -958,10 +939,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "path/in/repo".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -972,10 +950,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "branch-or-commit".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -986,10 +961,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "submodule-logical-name".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1000,10 +972,7 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "feature".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1065,6 +1034,7 @@ impl PopoverHost {
         let clone_repo_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_edit_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -1139,6 +1109,8 @@ impl PopoverHost {
             clone_repo_parent_dir_input,
             rebase_onto_input,
             create_tag_input,
+            create_tag_message_input,
+            create_tag_message_scroll,
             remote_name_input,
             remote_url_input,
             remote_url_edit_input,
@@ -1149,6 +1121,8 @@ impl PopoverHost {
             create_branch_from_ref_checkout_focus_handle,
             create_branch_from_ref_cancel_focus_handle,
             create_branch_from_ref_submit_focus_handle,
+            create_tag_annotated: false,
+            create_tag_annotated_focus_handle,
             checkout_remote_branch_cancel_focus_handle,
             checkout_remote_branch_submit_focus_handle,
             stash_message_input,
@@ -1298,7 +1272,6 @@ impl PopoverHost {
         }
     }
 
-    #[cfg(test)]
     pub(in super::super) fn is_open(&self) -> bool {
         self.popover.is_some()
     }
@@ -1505,10 +1478,22 @@ impl PopoverHost {
             return;
         }
 
+        let annotated = self.create_tag_annotated;
+        let message = if annotated {
+            let msg = self
+                .create_tag_message_input
+                .read_with(cx, |input, _| input.text().trim().to_string());
+            Some(msg)
+        } else {
+            None
+        };
+
         self.store.dispatch(Msg::CreateTag {
             repo_id,
             name,
             target,
+            message,
+            annotated,
         });
         self.close_popover(cx);
     }
@@ -1998,8 +1983,15 @@ impl PopoverHost {
                 }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
+                    self.create_tag_annotated =
+                        matches!(self.state.default_tag_type, DefaultTagType::Annotated);
                     self.create_tag_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.create_tag_message_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
                         input.set_text("", cx);
                         cx.notify();

@@ -125,10 +125,8 @@ impl SidebarPaneView {
             TextInput::new_inert(
                 TextInputOptions {
                     placeholder: "Search files...".into(),
-                    multiline: false,
-                    read_only: false,
                     chromeless: true,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 cx,
             )

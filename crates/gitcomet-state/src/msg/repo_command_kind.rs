@@ -60,6 +60,8 @@ pub enum RepoCommandKind {
     CreateTag {
         name: String,
         target: String,
+        message: Option<String>,
+        annotated: bool,
     },
     DeleteTag {
         name: String,

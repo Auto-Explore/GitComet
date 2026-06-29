@@ -55,6 +55,15 @@ impl Default for GitLogSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum DefaultTagType {
+    #[default]
+    Lightweight,
+    Annotated,
+}
+
 impl GitLogSettings {
     pub fn auto_fetch_tags_on_repo_activation(self) -> bool {
         matches!(
@@ -478,6 +487,7 @@ pub struct AppState {
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
     pub sidebar_mode: SidebarMode,
+    pub default_tag_type: DefaultTagType,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

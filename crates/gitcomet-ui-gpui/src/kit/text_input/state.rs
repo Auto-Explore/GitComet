@@ -313,6 +313,8 @@ pub struct TextInputOptions {
     pub read_only: bool,
     pub chromeless: bool,
     pub soft_wrap: bool,
+    /// Minimum number of visible text rows. Only effective when `multiline: true`.
+    pub min_lines: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -455,6 +457,9 @@ pub(super) struct InteractionState {
     pub(super) vertical_motion_x: Option<Pixels>,
     pub(super) vertical_scroll_handle: Option<ScrollHandle>,
     pub(super) pending_cursor_autoscroll: bool,
+    /// Set after a stale-max_offset retry so the next attempt always clears the flag,
+    /// preventing an infinite notify loop when cursor_bottom sits at the viewport edge.
+    pub(super) cursor_autoscroll_retry_exhausted: bool,
     pub(super) has_focus: bool,
     pub(super) cursor_blink_visible: bool,
     pub(super) cursor_blink_task: Option<gpui::Task<()>>,
@@ -476,6 +481,7 @@ impl InteractionState {
             vertical_motion_x: None,
             vertical_scroll_handle: None,
             pending_cursor_autoscroll: false,
+            cursor_autoscroll_retry_exhausted: false,
             has_focus: false,
             cursor_blink_visible: true,
             cursor_blink_task: None,
@@ -498,6 +504,7 @@ pub struct TextInput {
     pub(super) read_only: bool,
     pub(super) chromeless: bool,
     pub(super) soft_wrap: bool,
+    pub(super) min_lines: u32,
     pub(super) display_truncation: Option<TextTruncationProfile>,
     pub(super) masked: bool,
     pub(super) line_ending: &'static str,

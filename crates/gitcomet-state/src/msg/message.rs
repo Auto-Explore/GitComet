@@ -1,5 +1,5 @@
 use crate::model::GitLogTagFetchMode;
-use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest, SidebarMode};
+use crate::model::{ConflictFileLoadMode, DefaultTagType, RepoId, SidebarDataRequest, SidebarMode};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
@@ -138,6 +138,7 @@ pub enum Msg {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
     },
+    SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
     },
@@ -568,6 +569,8 @@ pub enum Msg {
         repo_id: RepoId,
         name: String,
         target: String,
+        message: Option<String>,
+        annotated: bool,
     },
     DeleteTag {
         repo_id: RepoId,

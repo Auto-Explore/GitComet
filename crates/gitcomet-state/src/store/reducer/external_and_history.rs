@@ -146,6 +146,16 @@ pub(super) fn repo_externally_changed(
         effects
     };
 
+    // Tag reloads are driven by the `tags` flag alone, independent of
+    // `git_state`, so any change that sets `tags` refreshes them regardless of
+    // which other lanes the event touched.
+    if change.tags {
+        repo_state.set_tags(Loadable::NotLoaded);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            effects.push(Effect::LoadTags { repo_id });
+        }
+    }
+
     let should_reload_diff = repo_state
         .diff_state
         .diff_target

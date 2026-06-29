@@ -151,6 +151,7 @@ impl GitCometView {
                             }),
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
+                            default_tag_type: None,
                             git_executable_path: None,
                             external_code_editor: None,
                         };

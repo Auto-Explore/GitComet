@@ -1519,6 +1519,7 @@ fn merge_change(a: RepoExternalChange, b: RepoExternalChange) -> RepoExternalCha
         worktree: a.worktree || b.worktree,
         index: a.index || b.index,
         git_state: a.git_state || b.git_state,
+        tags: a.tags || b.tags,
     }
 }
 
@@ -1585,6 +1586,7 @@ fn classify_repo_event(
     let mut saw_worktree = false;
     let mut saw_index = false;
     let mut saw_git_state = false;
+    let mut saw_tags = false;
     let is_dir_hint = path_dir_hint(event);
 
     for path in &event.paths {
@@ -1596,6 +1598,9 @@ fn classify_repo_event(
                 saw_index = true;
             } else {
                 saw_git_state = true;
+                if is_git_tags_path(workdir, git_dir, path) {
+                    saw_tags = true;
+                }
             }
         } else {
             if is_ignored_worktree_path_with_hint(workdir, gitignore, path, is_dir_hint) {
@@ -1609,6 +1614,7 @@ fn classify_repo_event(
         worktree: saw_worktree,
         index: saw_index,
         git_state: saw_git_state,
+        tags: saw_tags,
     };
     ClassifiedEvent {
         change: (!change.is_empty()).then_some(change),
@@ -1651,6 +1657,23 @@ fn is_git_index_lock_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -
         return true;
     }
 
+    false
+}
+
+fn is_git_tags_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool {
+    let dot_git = workdir.join(".git");
+    let tags_dir = dot_git.join("refs").join("tags");
+    let packed_refs = dot_git.join("packed-refs");
+    if path.starts_with(&tags_dir) || path == packed_refs {
+        return true;
+    }
+    if let Some(git_dir) = git_dir {
+        let tags_dir = git_dir.join("refs").join("tags");
+        let packed_refs = git_dir.join("packed-refs");
+        if path.starts_with(&tags_dir) || path == packed_refs {
+            return true;
+        }
+    }
     false
 }
 
@@ -1707,7 +1730,7 @@ fn path_dir_hint(event: &notify::Event) -> Option<bool> {
 mod tests {
     use super::*;
     use notify::EventKind;
-    use notify::event::{AccessKind, AccessMode, CreateKind, RemoveKind};
+    use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind};
     use std::fs;
     use std::process::Command;
     use std::sync::{OnceLock, atomic::AtomicBool, mpsc};
@@ -1846,6 +1869,7 @@ mod tests {
                 worktree: true,
                 index: false,
                 git_state: true,
+                tags: false,
             }
         );
         assert_eq!(
@@ -1854,6 +1878,7 @@ mod tests {
                 worktree: true,
                 index: false,
                 git_state: true,
+                tags: false,
             }
         );
         assert_eq!(
@@ -1918,6 +1943,7 @@ mod tests {
                 worktree: true,
                 index: false,
                 git_state: true,
+                tags: false,
             })
         );
     }
@@ -3040,5 +3066,66 @@ mod tests {
             super::super::send_diagnostics::SendFailureKind::RepoMonitorMessage,
         );
         assert!(after > before);
+    }
+
+    #[test]
+    fn classify_repo_event_detects_tag_file_changes() {
+        let dir = unique_temp_dir("gitcomet-monitor-test");
+        let workdir = dir.path().join("repo");
+        let git_dir = workdir.join(".git");
+        let _ = fs::create_dir_all(git_dir.join("refs").join("tags"));
+
+        let mut rules = GitignoreRules::default();
+
+        // Loose tag file → tags: true
+        let tag_event = notify::Event {
+            kind: EventKind::Create(CreateKind::File),
+            paths: vec![git_dir.join("refs").join("tags").join("v1.0.0")],
+            attrs: Default::default(),
+        };
+        let change = classify_change(&workdir, Some(&git_dir), &mut rules, &tag_event);
+        assert_eq!(
+            change,
+            Some(RepoExternalChange {
+                git_state: true,
+                tags: true,
+                ..Default::default()
+            }),
+            "tag ref file should produce tags: true"
+        );
+
+        // packed-refs → tags: true
+        let packed_event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            paths: vec![git_dir.join("packed-refs")],
+            attrs: Default::default(),
+        };
+        let change = classify_change(&workdir, Some(&git_dir), &mut rules, &packed_event);
+        assert_eq!(
+            change,
+            Some(RepoExternalChange {
+                git_state: true,
+                tags: true,
+                ..Default::default()
+            }),
+            "packed-refs should produce tags: true"
+        );
+
+        // Branch ref file → tags: false
+        let branch_event = notify::Event {
+            kind: EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+            paths: vec![git_dir.join("refs").join("heads").join("main")],
+            attrs: Default::default(),
+        };
+        let change = classify_change(&workdir, Some(&git_dir), &mut rules, &branch_event);
+        assert_eq!(
+            change,
+            Some(RepoExternalChange {
+                git_state: true,
+                tags: false,
+                ..Default::default()
+            }),
+            "branch ref file should produce tags: false"
+        );
     }
 }

@@ -13,10 +13,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter repositories".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -98,10 +95,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter recent repositories".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -188,10 +182,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter branches".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -330,10 +321,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter worktrees".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -467,10 +455,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter submodules".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -591,10 +576,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter stashes".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -710,10 +692,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Filter commits".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,

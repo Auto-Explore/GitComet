@@ -312,11 +312,11 @@ impl ToastHost {
         let input = cx.new(|cx| {
             components::TextInput::new_inert(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
                     chromeless: true,
                     soft_wrap: true,
+                    ..Default::default()
                 },
                 cx,
             )

@@ -989,11 +989,9 @@ impl MainPaneView {
         let diff_raw_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1004,11 +1002,8 @@ impl MainPaneView {
                 cx.new(|cx| {
                     let mut input = components::TextInput::new(
                         components::TextInputOptions {
-                            placeholder: "".into(),
-                            multiline: false,
                             read_only: true,
-                            chromeless: false,
-                            soft_wrap: false,
+                            ..Default::default()
                         },
                         window,
                         cx,
@@ -1024,9 +1019,8 @@ impl MainPaneView {
                 components::TextInputOptions {
                     placeholder: "Resolve file contents…".into(),
                     multiline: true,
-                    read_only: false,
                     chromeless: true,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1077,9 +1071,7 @@ impl MainPaneView {
                 components::TextInputOptions {
                     placeholder: "Search diff".into(),
                     multiline: true,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,

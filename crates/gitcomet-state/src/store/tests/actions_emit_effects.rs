@@ -1061,11 +1061,13 @@ fn create_and_delete_tag_emit_effects() {
             repo_id: RepoId(1),
             name: "v1.0.0".to_string(),
             target: "HEAD".to_string(),
+            message: None,
+            annotated: false,
         },
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateTag { repo_id: RepoId(1), name, target }] if name == "v1.0.0" && target == "HEAD"
+        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: None, annotated: false }] if name == "v1.0.0" && target == "HEAD"
     ));
 
     let effects = reduce(
@@ -3900,4 +3902,188 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
             .all(|effect| !matches!(effect, Effect::LoadDiffFile { .. })),
         "png reload should not request text diff"
     );
+}
+
+fn repo_state_with_tags_loaded(repo_id: RepoId) -> RepoState {
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.local_actions_in_flight = 1;
+    repo_state.set_tags(Loadable::Ready(vec![gitcomet_core::domain::Tag {
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+    repo_state
+}
+
+#[test]
+fn create_tag_command_finished_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CreateTag {
+                name: "v2.0.0".to_string(),
+                target: "HEAD".to_string(),
+                message: None,
+                annotated: false,
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git tag -c tag.gpgsign=false -- v2.0.0 HEAD",
+            )),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded after CreateTag"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect after CreateTag"
+    );
+}
+
+#[test]
+fn delete_tag_command_finished_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::DeleteTag {
+                name: "v1.0.0".to_string(),
+            },
+            result: Ok(CommandOutput::empty_success("git tag -d v1.0.0")),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded after DeleteTag"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect after DeleteTag"
+    );
+}
+
+#[test]
+fn prune_local_tags_command_finished_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+    state.repos[0].local_actions_in_flight = 0;
+    state.repos[0].pull_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::PruneLocalTags,
+            result: Ok(CommandOutput::empty_success("git tag prune")),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded after PruneLocalTags"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect after PruneLocalTags"
+    );
+}
+
+#[test]
+fn create_tag_failed_does_not_reload_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CreateTag {
+                name: "v2.0.0".to_string(),
+                target: "HEAD".to_string(),
+                message: None,
+                annotated: false,
+            },
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("tag already exists".to_string()),
+            )),
+        }),
+    );
+
+    assert!(
+        !matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should not be reset when CreateTag fails"
+    );
+}
+
+#[test]
+fn create_tag_with_message_propagates_to_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateTag {
+            repo_id: RepoId(1),
+            name: "v1.0.0".to_string(),
+            target: "HEAD".to_string(),
+            message: Some("Release 1.0".to_string()),
+            annotated: true,
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg), annotated: true }]
+            if name == "v1.0.0" && target == "HEAD" && msg == "Release 1.0"
+    ));
 }

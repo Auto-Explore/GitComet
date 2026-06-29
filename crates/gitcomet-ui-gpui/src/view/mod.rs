@@ -18,8 +18,8 @@ use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
-    Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DefaultTagType,
+    DiagnosticKind, Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{Msg, StoreEvent};
 use gitcomet_state::session;
@@ -582,10 +582,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Type to search commands...".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1356,6 +1353,12 @@ impl GitCometView {
         }
     }
 
+    /// Whether a popover, dialog, prompt, or context menu is currently open
+    /// (all are tracked as a `PopoverKind` by the popover host).
+    pub(in crate::view) fn is_overlay_open(&self, cx: &App) -> bool {
+        self.popover_host.read(cx).is_open()
+    }
+
     pub(in crate::view) fn show_history_refs_hover(
         &mut self,
         repo_id: RepoId,
@@ -1366,6 +1369,15 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Don't surface the refs hover while an overlay (popover, dialog, or
+        // context menu) is open on top of the history view — the history canvas
+        // handles mouse-move at the window level, so it still fires under the
+        // overlay. If the open overlay is the hover's own item menu, leave the
+        // existing hover in place.
+        if self.is_overlay_open(cx) && !self.history_refs_hover_host.read(cx).is_item_menu_open() {
+            self.close_history_refs_hover(cx);
+            return;
+        }
         self.history_refs_hover_host.update(cx, |host, cx| {
             host.show(
                 repo_id,
@@ -1588,10 +1600,12 @@ impl GitCometView {
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
+        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
         });
+        store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
@@ -1838,10 +1852,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/repo".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1851,11 +1862,10 @@ impl GitCometView {
         let error_banner_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1866,10 +1876,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Username".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1880,10 +1887,7 @@ impl GitCometView {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Password / passphrase / confirmation".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -2575,6 +2579,14 @@ impl GitCometView {
             }
         }
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_default_tag_type_preference(
+        &mut self,
+        tag_type: DefaultTagType,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
     fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {
@@ -3943,9 +3955,9 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.render_command_palette(cx))
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_overlay_view(self.toast_host.clone()))
-            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
         root = root.child(chrome::window_frame(
