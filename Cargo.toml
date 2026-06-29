@@ -72,7 +72,7 @@ strsim = "0.11.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.9"
+tree-sitter = "0.26.10"
 tree-sitter-bash = "0.25.1"
 tree-sitter-bicep = "1.1.0"
 tree-sitter-c = "0.24.2"
