@@ -23,12 +23,12 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.15"
+version = "0.1.16"
 edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.95.0"
+rust-version = "1.96.0"
 
 [workspace.dependencies]
 # Internal crates
