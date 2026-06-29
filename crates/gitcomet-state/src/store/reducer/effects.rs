@@ -785,7 +785,7 @@ pub(super) fn status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let should_replay_pending = match result {
+        match result {
             Ok(next) => {
                 let status_unchanged = matches!(
                     &repo_state.status,
@@ -795,27 +795,21 @@ pub(super) fn status_loaded(
                     repo_state.set_status(Loadable::Ready(Arc::new(next)));
                 }
                 clear_resolved_conflict_context(repo_state);
-                !status_unchanged
             }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_status(Loadable::Error(e.to_string()));
-                true
             }
-        };
+        }
         finish_status_lane_replay(
             repo_state,
             RepoLoadsInFlight::WORKTREE_STATUS,
-            repo_id,
-            should_replay_pending,
             Effect::LoadWorktreeStatus { repo_id },
             &mut effects,
         );
         finish_status_lane_replay(
             repo_state,
             RepoLoadsInFlight::STAGED_STATUS,
-            repo_id,
-            should_replay_pending,
             Effect::LoadStagedStatus { repo_id },
             &mut effects,
         );
@@ -830,26 +824,22 @@ pub(super) fn worktree_status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let should_replay_pending = match result {
+        match result {
             Ok(next) => {
                 let status_unchanged = matches!(&repo_state.worktree_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
                 if !status_unchanged {
                     repo_state.set_worktree_status(Loadable::Ready(next));
                 }
                 clear_resolved_conflict_context(repo_state);
-                !status_unchanged
             }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_worktree_status(Loadable::Error(e.to_string()));
-                true
             }
-        };
+        }
         finish_status_lane_replay(
             repo_state,
             RepoLoadsInFlight::WORKTREE_STATUS,
-            repo_id,
-            should_replay_pending,
             Effect::LoadWorktreeStatus { repo_id },
             &mut effects,
         );
@@ -864,25 +854,21 @@ pub(super) fn staged_status_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let should_replay_pending = match result {
+        match result {
             Ok(next) => {
                 let status_unchanged = matches!(&repo_state.staged_status, Loadable::Ready(prev) if prev.as_slice() == next.as_slice());
                 if !status_unchanged {
                     repo_state.set_staged_status(Loadable::Ready(next));
                 }
-                !status_unchanged
             }
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 repo_state.set_staged_status(Loadable::Error(e.to_string()));
-                true
             }
-        };
+        }
         finish_status_lane_replay(
             repo_state,
             RepoLoadsInFlight::STAGED_STATUS,
-            repo_id,
-            should_replay_pending,
             Effect::LoadStagedStatus { repo_id },
             &mut effects,
         );
@@ -893,21 +879,22 @@ pub(super) fn staged_status_loaded(
 fn finish_status_lane_replay(
     repo_state: &mut crate::model::RepoState,
     flag: u32,
-    _repo_id: RepoId,
-    should_replay_pending: bool,
     replay_effect: Effect,
     effects: &mut Vec<Effect>,
 ) {
-    // Replaying an unchanged status payload can self-sustain refresh loops when file-system
-    // events are produced by the status read itself (for example `.git/index` churn).
+    // A pending request means a refresh was coalesced while this load was in flight — a genuine
+    // external change or a just-completed action. Always replay it, even when the loaded payload
+    // matches what is currently displayed: the in-flight load may have read the working tree or
+    // index just *before* the change landed, so the coalesced refresh is the only chance to
+    // observe it. Suppressing it on an unchanged payload (as a previous revision did) drops real
+    // external changes and leaves stale entries in the uncommitted view.
+    //
+    // This cannot self-sustain a refresh loop: status reads are read-only (the gix backend's
+    // `maybe_persist_*` helpers never rewrite `.git/index`, and worktree reads emit only ignored
+    // `Access` events), so a completed status load never manufactures the filesystem event that
+    // would set `pending` again.
     if repo_state.loads_in_flight.finish(flag) {
-        if should_replay_pending {
-            effects.push(replay_effect);
-        } else {
-            // `finish` marks the flag back as in-flight when there was pending work. We are
-            // intentionally dropping that replay request, so clear the in-flight bit too.
-            let _ = repo_state.loads_in_flight.finish(flag);
-        }
+        effects.push(replay_effect);
     }
 }
 
@@ -2039,6 +2026,56 @@ mod tests {
         assert!(matches!(
             repo_mut(&mut state, repo_id).remote_tags,
             Loadable::Ready(_)
+        ));
+    }
+
+    #[test]
+    fn status_lanes_replay_pending_refresh_even_when_payload_unchanged() {
+        // A refresh coalesced while a status load was in flight must still be replayed when the
+        // load completes with an unchanged payload: the in-flight read may have observed the
+        // working tree/index just before an external change landed, so the coalesced refresh is
+        // the only chance to pick it up. Dropping it (as a previous revision did) left stale
+        // entries in the uncommitted view.
+        let repo_id = RepoId(1);
+
+        // Combined status load: an unchanged payload still replays the coalesced refresh and
+        // re-arms the lane.
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
+        let effects = status_loaded(&mut state, repo_id, Ok(RepoStatus::default()));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        ));
+        assert!(
+            repo_mut(&mut state, repo_id)
+                .loads_in_flight
+                .is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS),
+            "the replayed load should re-arm the lane"
+        );
+
+        // Worktree-only lane.
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).set_worktree_status(Loadable::Ready(Vec::new()));
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::WORKTREE_STATUS);
+        let effects = worktree_status_loaded(&mut state, repo_id, Ok(Vec::new()));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadWorktreeStatus { repo_id: rid } if rid == repo_id
+        ));
+
+        // Staged-only lane.
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).set_staged_status(Loadable::Ready(Vec::new()));
+        mark_pending(&mut state, repo_id, RepoLoadsInFlight::STAGED_STATUS);
+        let effects = staged_status_loaded(&mut state, repo_id, Ok(Vec::new()));
+        assert_eq!(effects.len(), 1);
+        assert!(matches!(
+            effects[0],
+            Effect::LoadStagedStatus { repo_id: rid } if rid == repo_id
         ));
     }
 

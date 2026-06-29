@@ -194,6 +194,234 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
 }
 
 #[test]
+fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
+    // An external `git add` / `git reset` / `git restore --staged` rewrites `.git/index` without
+    // touching any worktree file, so the monitor reports an index-only change. The index is one
+    // side of BOTH the staged (HEAD↔index) and unstaged (index↔worktree) diffs, so both lanes
+    // must refresh; otherwise a file that moved between the staged and unstaged sections lingers
+    // (stale) in the lane that was not reloaded.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    // Complete the initial open-repo refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "an index-only external change must refresh both the staged and unstaged lanes, got {effects:?}"
+    );
+}
+
+#[test]
+fn external_index_change_reloads_open_working_tree_diff() {
+    // With a staged file's diff open, an external `git add` / `git reset` (index-only change)
+    // must reload that working-tree diff so it reflects the new index content rather than showing
+    // a stale diff.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Staged,
+            },
+        },
+    );
+
+    // Complete the initial open-repo refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id: rid, .. } if *rid == repo_id)),
+        "an index change must reload the open staged working-tree diff, got {effects:?}"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiffFile { repo_id: rid, .. } if *rid == repo_id)),
+        "an index change must reload the open diff's file content, got {effects:?}"
+    );
+}
+
+#[test]
+fn external_index_change_must_not_refresh_only_the_staged_lane() {
+    // Regression test that fails against the previous behavior: an index-only external change
+    // (`git add` / `git reset` / `git restore --staged`) used to emit exactly
+    // `[LoadStagedStatus]`, refreshing only the staged lane and leaving a moved file stale in the
+    // unstaged section. The change must also pursue the unstaged (worktree) lane.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+    // Settle the initial refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+
+    // The unstaged lane must be refreshed — either by the combined status load or a direct
+    // worktree load.
+    assert!(
+        has_combined_status_effect(&effects, repo_id)
+            || has_worktree_status_effect(&effects, repo_id),
+        "an index-only change must refresh the unstaged lane, got {effects:?}"
+    );
+    // The exact old-behavior shape (staged lane only) must not occur.
+    let staged_lane_only = has_staged_status_effect(&effects, repo_id)
+        && !has_combined_status_effect(&effects, repo_id)
+        && !has_worktree_status_effect(&effects, repo_id);
+    assert!(
+        !staged_lane_only,
+        "an index-only change must not refresh only the staged lane, got {effects:?}"
+    );
+}
+
+#[test]
 fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -601,7 +829,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
 }
 
 #[test]
-fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop() {
+fn external_worktree_refresh_replays_coalesced_change_then_settles() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -643,6 +871,32 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         "expected in-flight coalescing while status load is running, got {effects:?}"
     );
 
+    // The in-flight load completes with an unchanged payload, but a second worktree event was
+    // coalesced while it ran. That event is a genuine external change the load may have read just
+    // before it landed, so the coalesced refresh must be replayed (not dropped) — otherwise the
+    // uncommitted view keeps showing stale entries.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert!(
+        has_worktree_status_effect(&effects, repo_id),
+        "coalesced external change must replay a status load even when the payload is unchanged, got {effects:?}"
+    );
+    assert!(
+        state.repos[0]
+            .loads_in_flight
+            .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREE_STATUS),
+        "the replayed load should re-arm the worktree status lane"
+    );
+
+    // The replayed load completes and nothing new is pending, so the lane settles instead of
+    // looping forever (status reads are read-only and cannot manufacture their own events).
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -656,11 +910,11 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         effects
             .iter()
             .all(|e| !matches!(e, Effect::LoadWorktreeStatus { repo_id: rid } if *rid == repo_id)),
-        "unchanged status payload should not replay another status load, got {effects:?}"
+        "with no pending change the lane should stop replaying, got {effects:?}"
     );
     assert!(
         !state.repos[0].loads_in_flight.any_in_flight(),
-        "in-flight flags should settle after unchanged status load"
+        "in-flight flags should settle once no refresh is pending"
     );
 
     let effects = reduce(

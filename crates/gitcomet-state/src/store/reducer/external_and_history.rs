@@ -129,7 +129,12 @@ pub(super) fn repo_externally_changed(
         effects
     } else {
         let mut effects = Vec::new();
-        if change.worktree && change.index {
+        if change.index {
+            // The index is one side of BOTH the staged (HEAD↔index) and unstaged (index↔worktree)
+            // diffs, so an index change must refresh both lanes — even when no worktree file
+            // changed. An external `git add` / `git reset` / `git restore --staged` moves a file
+            // between the staged and unstaged sections; refreshing only the staged lane would
+            // leave the file lingering (stale) in the unstaged section (or vice-versa).
             append_requested_status_refresh_effects(repo_state, &mut effects);
         } else if change.worktree
             && repo_state
@@ -137,12 +142,6 @@ pub(super) fn repo_externally_changed(
                 .request(RepoLoadsInFlight::WORKTREE_STATUS)
         {
             effects.push(Effect::LoadWorktreeStatus { repo_id });
-        } else if change.index
-            && repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::STAGED_STATUS)
-        {
-            effects.push(Effect::LoadStagedStatus { repo_id });
         }
         effects
     };

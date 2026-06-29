@@ -1,4 +1,4 @@
-use super::{BranchTrackingConfigCacheEntry, GixRepo, RepoFileStamp, oid_to_arc_str};
+use super::{BranchTrackingConfigCacheEntry, GixRepo, oid_to_arc_str, repo_file_stamp};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
 use gitcomet_core::domain::{Branch, CommitId, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -391,17 +391,6 @@ fn parse_upstream_short(s: &str) -> Option<Upstream> {
         remote: remote.to_string(),
         branch: branch.to_string(),
     })
-}
-
-fn repo_file_stamp(path: &Path) -> RepoFileStamp {
-    match std::fs::metadata(path) {
-        Ok(metadata) => RepoFileStamp {
-            exists: true,
-            len: metadata.len(),
-            modified: metadata.modified().ok(),
-        },
-        Err(_) => RepoFileStamp::default(),
-    }
 }
 
 fn repo_has_branch_tracking_config(repo: &gix::Repository) -> bool {
