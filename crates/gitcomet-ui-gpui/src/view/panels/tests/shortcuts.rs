@@ -995,7 +995,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S"]);
+    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S", "B"]);
     assert_shortcut_action!(
         local_branch_model,
         "Enter",
@@ -1026,6 +1026,13 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             reference
         } if *rid == repo_id && reference == "feature"
     );
+    assert_shortcut_action!(
+        local_branch_model,
+        "B",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
+        } if *rid == repo_id && onto == "feature"
+    );
 
     let remote_branch_name = "origin/feature".to_string();
     let remote_branch_model = cx.update(|_window, app| {
@@ -1039,7 +1046,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "F"]);
+    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "B", "F"]);
     assert_shortcut_action!(
         remote_branch_model,
         "Enter",
@@ -1075,6 +1082,13 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             repo_id: rid,
             reference
         } if *rid == repo_id && reference == "origin/feature"
+    );
+    assert_shortcut_action!(
+        remote_branch_model,
+        "B",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
+        } if *rid == repo_id && onto == "origin/feature"
     );
     assert_shortcut_action!(
         remote_branch_model,
@@ -1201,7 +1215,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R"]);
+    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R", "B", "I"]);
     assert_shortcut_action!(
         commit_model,
         "Enter",
@@ -1243,6 +1257,19 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             repo_id: rid,
             commit_id: cid
         } if *rid == repo_id && cid == &commit_id
+    );
+    assert_shortcut_action!(
+        commit_model,
+        "B",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
+        } if *rid == repo_id && onto == commit_id.as_ref()
+    );
+    assert_shortcut_action!(
+        commit_model,
+        "I",
+        ContextMenuAction::LoadInteractiveRebaseSetup { repo_id: rid, base }
+            if *rid == repo_id && base == commit_id.as_ref()
     );
 
     let commit_file_model = cx.update(|_window, app| {

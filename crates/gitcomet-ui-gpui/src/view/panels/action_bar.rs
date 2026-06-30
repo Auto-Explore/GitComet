@@ -280,6 +280,9 @@ impl Render for ActionBarView {
         let is_rebase_or_apply_in_progress = self
             .active_repo()
             .is_some_and(|r| matches!(&r.rebase_in_progress, Loadable::Ready(true)));
+        let rebase_has_unstaged_conflicts = self
+            .active_repo()
+            .is_some_and(|r| r.has_unstaged_conflicts);
 
         let (pull_count, push_count) = self
             .active_repo()
@@ -737,6 +740,25 @@ impl Render for ActionBarView {
                                                 );
                                             }
                                         }),
+                                )
+                                .child(
+                                    components::Button::new("continue_rebase_or_apply", "Continue")
+                                        .style(components::ButtonStyle::Outlined)
+                                        .disabled(rebase_has_unstaged_conflicts)
+                                        .on_click(theme, cx, |this, _e, _w, _cx| {
+                                            if let Some(repo_id) = this.active_repo_id() {
+                                                this.store
+                                                    .dispatch(Msg::RebaseContinue { repo_id });
+                                            }
+                                        })
+                                        .gitcomet_tooltip(
+                                            theme,
+                                            if rebase_has_unstaged_conflicts {
+                                                "Resolve all conflicts before continuing".into()
+                                            } else {
+                                                "Continue the in-progress rebase or apply".into()
+                                            },
+                                        ),
                                 ),
                         )
                     }),

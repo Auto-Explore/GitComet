@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
@@ -200,6 +201,14 @@ pub(in crate::view) enum ContextMenuAction {
     },
     OpenPopover {
         kind: PopoverKind,
+    },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    SetInteractiveRebaseAction {
+        ix: usize,
+        action: InteractiveRebaseAction,
     },
     ConflictResolverPick {
         target: ResolverPickTarget,

@@ -9,10 +9,11 @@ use super::util::{
     push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
+use crate::model::{AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
+use gitcomet_core::services::InteractiveRebaseEntry;
 use std::sync::Arc;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
@@ -275,6 +276,25 @@ pub(super) fn rebase_state_loaded(
         }
     }
     effects
+}
+
+pub(super) fn interactive_rebase_setup_loaded(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    base: String,
+    result: std::result::Result<Vec<InteractiveRebaseEntry>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let entries = match result {
+            Ok(v) => Loadable::Ready(v),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup { base, entries });
+    }
+    vec![]
 }
 
 pub(super) fn merge_commit_message_loaded(

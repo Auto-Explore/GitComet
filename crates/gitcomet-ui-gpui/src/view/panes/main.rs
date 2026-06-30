@@ -9,6 +9,7 @@ pub(in crate::view) mod diff_cache;
 pub(in crate::view) mod diff_search;
 mod diff_text;
 mod helpers;
+mod interactive_rebase;
 mod preview;
 
 #[cfg(feature = "benchmarks")]
@@ -81,8 +82,13 @@ impl Render for MainPaneView {
             .active_repo()
             .and_then(|r| r.diff_state.diff_target.as_ref())
             .is_some();
+        let in_rebase = self
+            .active_repo()
+            .is_some_and(|r| r.interactive_rebase_setup.is_some());
         let inner = if show_diff {
             self.diff_view(window, cx).into_any_element()
+        } else if in_rebase {
+            self.interactive_rebase_view(window, cx).into_any_element()
         } else {
             self.history_view.clone().into_any_element()
         };

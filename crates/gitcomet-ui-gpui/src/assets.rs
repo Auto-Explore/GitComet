@@ -19,6 +19,9 @@ impl GitCometAssets {
             "gitcomet_logo.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../../../assets/gitcomet_logo.svg"
             ))),
+            "icons/squash_arrow.svg" => Some(Cow::Borrowed(include_bytes!(
+                "../assets/icons/squash_arrow.svg"
+            ))),
             "icons/arrow_down.svg" => Some(Cow::Borrowed(include_bytes!(
                 "../assets/icons/arrow_down.svg"
             ))),

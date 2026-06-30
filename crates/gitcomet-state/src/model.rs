@@ -7,7 +7,8 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{
-    BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
+    BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext,
+    SubmoduleTrustTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -636,6 +637,12 @@ fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
 }
 
 #[derive(Clone, Debug)]
+pub struct InteractiveRebaseSetup {
+    pub base: String,
+    pub entries: Loadable<Vec<InteractiveRebaseEntry>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -685,6 +692,7 @@ pub struct RepoState {
     pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
+    pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub merge_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
@@ -765,6 +773,7 @@ impl RepoState {
             recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            interactive_rebase_setup: None,
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,

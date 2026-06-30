@@ -141,6 +141,49 @@ pub enum RemoteUrlKind {
     Push,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractiveRebaseAction {
+    Pick,
+    Reword,
+    Edit,
+    Squash,
+    Fixup,
+    Drop,
+}
+
+impl InteractiveRebaseAction {
+    pub fn to_todo_str(self) -> &'static str {
+        match self {
+            Self::Pick => "pick",
+            Self::Reword => "reword",
+            Self::Edit => "edit",
+            Self::Squash => "squash",
+            Self::Fixup => "fixup",
+            Self::Drop => "drop",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pick => "Pick",
+            Self::Reword => "Reword",
+            Self::Edit => "Edit",
+            Self::Squash => "Squash",
+            Self::Fixup => "Fixup",
+            Self::Drop => "Drop",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveRebaseEntry {
+    pub action: InteractiveRebaseAction,
+    pub commit_id: String,
+    pub summary: String,
+    /// New commit message, used only when action is Reword.
+    pub new_message: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubmoduleTrustTarget {
     pub submodule_path: PathBuf,
@@ -537,6 +580,24 @@ pub trait GitRepository: Send + Sync {
     fn rebase_abort_with_output(&self) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase --abort is not implemented for this backend",
+        )))
+    }
+    fn list_commits_for_interactive_rebase(
+        &self,
+        _base: &str,
+    ) -> Result<Vec<InteractiveRebaseEntry>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "listing commits for interactive rebase is not implemented for this backend",
+        )))
+    }
+    fn interactive_rebase_with_output(
+        &self,
+        _base: &str,
+        _entries: &[InteractiveRebaseEntry],
+        _autosquash: bool,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git rebase -i is not implemented for this backend",
         )))
     }
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

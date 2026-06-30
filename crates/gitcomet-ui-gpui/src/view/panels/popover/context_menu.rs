@@ -383,6 +383,9 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
+            PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, can_drop } => {
+                Some(interactive_rebase_action_menu_model(*ix, *is_bottom, *can_drop))
+            }
             _ => None,
         }
     }
@@ -870,6 +873,43 @@ impl PopoverHost {
                     crate::app::set_app_ui_scale_percent(cx, percent);
                 });
             }
+            ContextMenuAction::LoadInteractiveRebaseSetup { repo_id, base } => {
+                self.store
+                    .dispatch(Msg::LoadInteractiveRebaseSetup { repo_id, base });
+            }
+            ContextMenuAction::SetInteractiveRebaseAction { ix, action } => {
+                let root_view = self.root_view.clone();
+                let was_reword = action == InteractiveRebaseAction::Reword;
+                let reword_msg = if was_reword {
+                    self.main_pane.read_with(cx, |pane, _| {
+                        pane.interactive_rebase_entries.get(ix).map(|e| {
+                            e.new_message.as_ref().unwrap_or(&e.summary).clone()
+                        })
+                    })
+                } else {
+                    None
+                };
+                let _ = self.main_pane.update(cx, |pane, cx| {
+                    pane.set_rebase_action(ix, action, cx);
+                });
+                if let Some(msg) = reword_msg {
+                    let wh = window.window_handle();
+                    cx.defer(move |cx| {
+                        let _ = wh.update(cx, |_, window, cx| {
+                            let _ = root_view.update(cx, |root, cx| {
+                                root.open_popover_centered(
+                                    PopoverKind::RebaseReword {
+                                        ix,
+                                        original_message: msg,
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                    });
+                }
+            }
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self
                     .popover_anchor
@@ -1352,9 +1392,78 @@ impl PopoverHost {
     }
 }
 
+fn interactive_rebase_action_menu_model(ix: usize, is_bottom: bool, can_drop: bool) -> ContextMenuModel {
+    let mut items = vec![
+        ContextMenuItem::Entry {
+            label: "pick".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
+                ix,
+                action: InteractiveRebaseAction::Pick,
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: "reword".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
+                ix,
+                action: InteractiveRebaseAction::Reword,
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: "edit".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
+                ix,
+                action: InteractiveRebaseAction::Edit,
+            }),
+        },
+        ContextMenuItem::Entry {
+            label: "drop".into(),
+            icon: None,
+            shortcut: None,
+            disabled: !can_drop,
+            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
+                ix,
+                action: InteractiveRebaseAction::Drop,
+            }),
+        },
+    ];
+    if !is_bottom {
+        items.push(ContextMenuItem::Entry {
+            label: "squash".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
+                ix,
+                action: InteractiveRebaseAction::Squash,
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
+            label: "fixup".into(),
+            icon: None,
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
+                ix,
+                action: InteractiveRebaseAction::Fixup,
+            }),
+        });
+    }
+    ContextMenuModel::new(items)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+use super::*;
+use gitcomet_core::services::InteractiveRebaseAction;
 
     #[test]
     fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {

@@ -2638,6 +2638,19 @@ pub(super) enum PopoverKind {
     DiffContentModeSettings,
     ChangeTrackingSettings,
     UiScalePicker,
+    RebaseOntoConfirm {
+        repo_id: RepoId,
+        onto: String,
+    },
+    RebaseReword {
+        ix: usize,
+        original_message: String,
+    },
+    InteractiveRebaseActionMenu {
+        ix: usize,
+        is_bottom: bool,
+        can_drop: bool,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

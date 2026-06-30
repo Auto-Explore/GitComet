@@ -96,6 +96,38 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
+    items.push(ContextMenuItem::Entry {
+        label: "Rebase onto this commit…".into(),
+        icon: Some("icons/arrow_up.svg".into()),
+        shortcut: Some("B".into()),
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm {
+                repo_id,
+                onto: sha.clone(),
+            },
+        }),
+    });
+    let current_branch = this
+        .active_repo()
+        .and_then(|r| match &r.head_branch {
+            Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => {
+                Some(head.as_str().into())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| short.clone());
+
+    items.push(ContextMenuItem::Entry {
+        label: format!("Interactive rebase {current_branch} onto {short}").into(),
+        icon: Some("icons/refresh.svg".into()),
+        shortcut: Some("I".into()),
+        disabled: false,
+        action: Box::new(ContextMenuAction::LoadInteractiveRebaseSetup {
+            repo_id,
+            base: sha.clone(),
+        }),
+    });
 
     items.push(ContextMenuItem::Separator);
     for (label, icon, mode) in [

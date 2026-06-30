@@ -757,6 +757,25 @@ impl MainPaneView {
             commit_details_rev.hash(&mut hasher);
             // The historical-browse purple frame keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
+
+            match &repo.interactive_rebase_setup {
+                Some(setup) => {
+                    1u8.hash(&mut hasher);
+                    setup.base.hash(&mut hasher);
+                    match &setup.entries {
+                        Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                        Loadable::Loading => 1u8.hash(&mut hasher),
+                        Loadable::Ready(_) => 2u8.hash(&mut hasher),
+                        Loadable::Error(err) => {
+                            3u8.hash(&mut hasher);
+                            err.hash(&mut hasher);
+                        }
+                    }
+                }
+                None => {
+                    0u8.hash(&mut hasher);
+                }
+            }
         }
 
         hasher.finish()
@@ -1330,6 +1349,11 @@ impl MainPaneView {
             conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
+            interactive_rebase_entries: Vec::new(),
+            interactive_rebase_original_entries: Vec::new(),
+            interactive_rebase_selected_ix: None,
+            interactive_rebase_autosquash: false,
+            interactive_rebase_drag_state: None,
         };
 
         pane.set_theme(theme, cx);
@@ -3664,6 +3688,41 @@ impl MainPaneView {
         }
 
         self.ensure_rendered_patch_diff_cache(cx);
+
+        // Lazy populate / clear interactive rebase entries based on state.
+        // Clone early so the shared borrow on `self` via `active_repo()` ends before
+        // any mutable field assignments below.
+        let rebase_action: Option<Result<Vec<_>, ()>> =
+            self.active_repo().map(|repo| match &repo.interactive_rebase_setup {
+                Some(setup) => {
+                    if let Loadable::Ready(entries) = &setup.entries {
+                        if self.interactive_rebase_entries.is_empty() {
+                            Ok(entries.clone())
+                        } else {
+                            Err(())
+                        }
+                    } else {
+                        Err(())
+                    }
+                }
+                None => Err(()),
+            });
+        match rebase_action {
+            Some(Ok(entries)) => {
+                self.interactive_rebase_entries = entries.clone();
+                self.interactive_rebase_original_entries = entries;
+            }
+            None => {
+                if !self.interactive_rebase_entries.is_empty() {
+                    self.interactive_rebase_entries.clear();
+                    self.interactive_rebase_original_entries.clear();
+                    self.interactive_rebase_selected_ix = None;
+                    self.interactive_rebase_autosquash = false;
+                    self.interactive_rebase_drag_state = None;
+                }
+            }
+            Some(Err(())) => {}
+        }
 
         // History caches are now managed by HistoryView.
     }

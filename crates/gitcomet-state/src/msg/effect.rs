@@ -2,8 +2,8 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{
-    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
-    SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -430,6 +430,16 @@ pub enum Effect {
     RebaseAbort {
         repo_id: RepoId,
     },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    InteractiveRebase {
+        repo_id: RepoId,
+        base: String,
+        entries: Vec<InteractiveRebaseEntry>,
+        autosquash: bool,
+    }, // entries held here so the effect dispatcher can pass them to the scheduler
     MergeAbort {
         repo_id: RepoId,
     },

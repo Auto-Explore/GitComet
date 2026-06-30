@@ -310,6 +310,20 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Worktrees",
         requires_repo: true,
     },
+    CommandEntry {
+        id: "rebase-continue",
+        label: "Continue Rebase",
+        shortcut: "",
+        category: "Rebase",
+        requires_repo: true,
+    },
+    CommandEntry {
+        id: "rebase-abort",
+        label: "Abort Rebase",
+        shortcut: "",
+        category: "Rebase",
+        requires_repo: true,
+    },
     // TODO: "undo"              - Undo (Edit)
     // TODO: "redo"              - Redo (Edit)
     // TODO: "keyboard-shortcuts" - Keyboard Shortcuts (Help)
@@ -323,8 +337,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "delete-remote-branch"   - Delete Remote Branch
     // TODO: "merge"                  - Merge Branch/Ref
     // TODO: "rebase"                 - Rebase Onto
-    // TODO: "rebase-continue"        - Continue Rebase (Merge/Rebase)
-    // TODO: "rebase-abort"           - Abort Rebase (Merge/Rebase)
     // TODO: "delete-tag"             - Delete Tag
     // TODO: "remove-remote"          - Remove Remote
     // TODO: "edit-remote-url"        - Edit Remote URL

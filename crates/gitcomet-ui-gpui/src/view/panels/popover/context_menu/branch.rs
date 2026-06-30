@@ -113,6 +113,18 @@ pub(super) fn model(
                     reference: name.clone(),
                 }),
             });
+            items.push(ContextMenuItem::Entry {
+                label: "Rebase onto this".into(),
+                icon: Some("icons/arrow_up.svg".into()),
+                shortcut: Some("B".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenPopover {
+                    kind: PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name.clone(),
+                    },
+                }),
+            });
         }
         items.push(ContextMenuItem::Entry {
             label: "Delete branch".into(),
@@ -158,6 +170,18 @@ pub(super) fn model(
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
                     reference: name.clone(),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: "Rebase onto this".into(),
+                icon: Some("icons/arrow_up.svg".into()),
+                shortcut: Some("B".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenPopover {
+                    kind: PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name.clone(),
+                    },
                 }),
             });
             items.push(ContextMenuItem::Separator);

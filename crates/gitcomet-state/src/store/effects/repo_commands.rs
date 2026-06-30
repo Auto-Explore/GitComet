@@ -4,8 +4,9 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, ForcePushLease, GitRepository, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
+    SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -904,6 +905,26 @@ pub(super) fn schedule_rebase_abort(
         repo_id,
         RepoCommandKind::RebaseAbort,
         |repo| repo.rebase_abort_with_output(),
+    );
+}
+
+pub(super) fn schedule_interactive_rebase(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    base: String,
+    entries: Vec<InteractiveRebaseEntry>,
+    autosquash: bool,
+) {
+    let base_for_cmd = base.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::InteractiveRebase { base: base_for_cmd },
+        move |repo| repo.interactive_rebase_with_output(&base, &entries, autosquash),
     );
 }
 

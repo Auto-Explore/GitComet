@@ -164,6 +164,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::Rebase { .. }
             | Msg::RebaseContinue { .. }
             | Msg::RebaseAbort { .. }
+            | Msg::InteractiveRebase { .. }
             | Msg::MergeAbort { .. }
             | Msg::CreateTag { .. }
             | Msg::DeleteTag { .. }
@@ -459,7 +460,8 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
-        | RepoCommandKind::ApplyWorktreePatch { .. } => return None,
+        | RepoCommandKind::ApplyWorktreePatch { .. }
+        | RepoCommandKind::InteractiveRebase { .. } => return None,
     })
 }
 
@@ -1183,6 +1185,21 @@ pub(super) fn reduce(
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase_abort(repo_id)
         }
+        Msg::LoadInteractiveRebaseSetup { repo_id, base } => {
+            actions_emit_effects::load_interactive_rebase_setup(state, repo_id, base)
+        }
+        Msg::InteractiveRebase {
+            repo_id,
+            base,
+            entries,
+            autosquash,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::interactive_rebase(repo_id, base, entries, autosquash)
+        }
+        Msg::CancelInteractiveRebaseSetup { repo_id } => {
+            actions_emit_effects::cancel_interactive_rebase_setup(state, repo_id)
+        }
         Msg::MergeAbort { repo_id } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::merge_abort(repo_id)
@@ -1411,6 +1428,11 @@ pub(super) fn reduce(
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded { repo_id, result }) => {
             external_and_history::rebase_state_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
+            repo_id,
+            base,
+            result,
+        }) => external_and_history::interactive_rebase_setup_loaded(state, repo_id, base, result),
         Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
             external_and_history::merge_commit_message_loaded(state, repo_id, result)
         }

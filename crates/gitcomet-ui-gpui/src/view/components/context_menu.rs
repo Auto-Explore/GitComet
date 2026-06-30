@@ -207,20 +207,22 @@ pub fn context_menu_entry(
                 .gap(scaled_px(8.0))
                 .flex_1()
                 .min_w(px(0.0))
-                .child(
-                    div()
-                        .w(scaled_px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when_some(icon_path, |this, path| {
-                            this.child(crate::view::icons::svg_icon(
-                                path,
-                                icon_color,
-                                scaled_px(13.0),
-                            ))
-                        }),
-                )
+                .when(icon.is_some(), |row| {
+                    row.child(
+                        div()
+                            .w(scaled_px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(icon_path, |this, path| {
+                                this.child(crate::view::icons::svg_icon(
+                                    path,
+                                    icon_color,
+                                    scaled_px(13.0),
+                                ))
+                            }),
+                    )
+                })
                 .child(
                     div()
                         .flex_1()
