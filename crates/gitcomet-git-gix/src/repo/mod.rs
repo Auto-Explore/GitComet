@@ -1,9 +1,9 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, Diff, DiffPreviewTextSide, DiffTarget, FileDiffImage,
-    FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage, ReflogEntry,
-    Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
+    Branch, Commit, CommitDetails, CommitId, Diff, DiffArea, DiffPreviewTextSide, DiffTarget,
+    FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage,
+    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
     SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
@@ -60,6 +60,61 @@ struct RepoFileStamp {
     exists: bool,
     len: u64,
     modified: Option<std::time::SystemTime>,
+    /// Content fingerprint of the file, when one is captured (currently only for
+    /// `.git/index`, via its trailing hash). `len`/`modified` are a cheap change
+    /// hint, but they are not reliable: an atomic index rewrite can land with an
+    /// identical length (same tracked entries) and an unchanged mtime (coarse or
+    /// cached filesystem timestamps, e.g. f2fs), which would otherwise let the
+    /// staged-status cache serve a stale result. The content id makes the stamp
+    /// content-exact. `None` for files where no fingerprint is read, and also when
+    /// the trailer is the null hash (`index.skipHash`/`feature.manyFiles` write a
+    /// null trailer regardless of content, so it cannot distinguish index states —
+    /// the stat discriminators below cover that case instead).
+    content_id: Option<gix::ObjectId>,
+    /// Inode of `.git/index` (Unix only). Git rewrites the index atomically via a
+    /// lock file + rename, so every rewrite yields a fresh inode. This detects index
+    /// changes even when the content fingerprint is unavailable (`skipHash`) and the
+    /// length + mtime collide. `None` for generic stamps and on non-Unix platforms.
+    inode: Option<u64>,
+    /// Change-time (ctime) of `.git/index` in nanoseconds (Unix only). Updated on
+    /// every metadata/content change including the rename above, so it backs up the
+    /// inode against reuse. `None` for generic stamps and on non-Unix platforms.
+    ctime_nanos: Option<i128>,
+    /// Set (to a process-unique value) only when a stamp could not be computed reliably — e.g.
+    /// `.git/index` exists but is momentarily unreadable (a permission flip, or a Windows sharing
+    /// / AV lock). A fresh value on every such call guarantees two of these stamps never compare
+    /// equal, forcing a cache miss (a fresh read) instead of risking a stale cache hit from a weak
+    /// length+mtime stamp that could collide with an atomic rewrite. `None` for every normally
+    /// computed stamp.
+    uncacheable_nonce: Option<u64>,
+}
+
+impl RepoFileStamp {
+    /// A stamp that never compares equal to any other (not even another uncacheable one). Used when
+    /// a file's real fingerprint cannot be read, so the cache treats it as changed rather than risk
+    /// serving a stale result. See [`RepoFileStamp::uncacheable_nonce`].
+    fn uncacheable() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self {
+            uncacheable_nonce: Some(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)),
+            ..Self::default()
+        }
+    }
+}
+
+/// Cheap stat-based file stamp (existence, length, mtime). A reliable change *hint* but not
+/// content-exact — `.git/index` uses the hardened `repo_index_stamp` instead. Shared by the status
+/// and git-ops cache keys (do not duplicate this mapping; see `status.rs` / `git_ops.rs`).
+fn repo_file_stamp(path: &Path) -> RepoFileStamp {
+    match std::fs::metadata(path) {
+        Ok(metadata) => RepoFileStamp {
+            exists: true,
+            len: metadata.len(),
+            modified: metadata.modified().ok(),
+            ..RepoFileStamp::default()
+        },
+        Err(_) => RepoFileStamp::default(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -638,8 +693,14 @@ impl GitRepository for GixRepo {
         Ok(message)
     }
 
-    fn create_tag_with_output(&self, name: &str, target: &str) -> Result<CommandOutput> {
-        self.create_tag_with_output_impl(name, target)
+    fn create_tag_with_output(
+        &self,
+        name: &str,
+        target: &str,
+        message: Option<&str>,
+        annotated: bool,
+    ) -> Result<CommandOutput> {
+        self.create_tag_with_output_impl(name, target, message, annotated)
     }
 
     fn delete_tag_with_output(&self, name: &str) -> Result<CommandOutput> {
@@ -710,6 +771,19 @@ impl GitRepository for GixRepo {
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
         self.blame_file_impl(path, rev)
+    }
+
+    fn blame_worktree_file(&self, path: &Path, area: DiffArea) -> Result<Vec<BlameLine>> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
+        self.blame_worktree_file_impl(path, area)
+    }
+
+    fn resolve_file_path_at_commit(
+        &self,
+        path: &Path,
+        commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        self.resolve_file_path_at_commit_impl(path, commit)
     }
 
     fn checkout_conflict_side(&self, path: &Path, side: ConflictSide) -> Result<CommandOutput> {

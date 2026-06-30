@@ -313,6 +313,14 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
             history_show_author: Some(false),
             history_show_date: Some(true),
             history_show_sha: Some(false),
+            terminal_external_mode: Some("custom_program".to_string()),
+            terminal_external_program: Some("wezterm".to_string()),
+            terminal_external_args: Some(vec![
+                "start".to_string(),
+                "--cwd".to_string(),
+                "{cwd}".to_string(),
+            ]),
+            terminal_action_bar_target: Some("external".to_string()),
             history_show_tags: Some(false),
             history_tag_fetch_mode: Some(gitcomet_state::model::GitLogTagFetchMode::Disabled),
             git_executable_path: None,
@@ -350,6 +358,23 @@ fn persist_ui_settings_to_path_updates_optional_fields_and_requires_both_window_
     assert_eq!(loaded.history_show_author, Some(false));
     assert_eq!(loaded.history_show_date, Some(true));
     assert_eq!(loaded.history_show_sha, Some(false));
+    assert_eq!(
+        loaded.terminal_external_mode.as_deref(),
+        Some("custom_program")
+    );
+    assert_eq!(loaded.terminal_external_program.as_deref(), Some("wezterm"));
+    assert_eq!(
+        loaded.terminal_external_args,
+        Some(vec![
+            "start".to_string(),
+            "--cwd".to_string(),
+            "{cwd}".to_string()
+        ])
+    );
+    assert_eq!(
+        loaded.terminal_action_bar_target.as_deref(),
+        Some("external")
+    );
     assert_eq!(loaded.history_show_tags, Some(false));
     assert_eq!(
         loaded.history_tag_fetch_mode,

@@ -325,14 +325,16 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
-        Effect::LoadBlame { repo_id, path, rev } => {
-            send(Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
-                repo_id,
-                path,
-                rev,
-                result: Err(git_unavailable_error(runtime)),
-            }))
-        }
+        Effect::LoadBlame {
+            repo_id,
+            path,
+            source,
+        } => send(Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
+            repo_id,
+            path,
+            source,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadWorktrees { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded {
                 repo_id,
@@ -407,6 +409,9 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::OpenFileAtCommitParent { .. } | Effect::OpenFileAtCommit { .. } => {
+            // No git backend available; nothing to resolve.
+        }
         Effect::LoadDiff { repo_id, target } => {
             send(Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
                 repo_id,
@@ -1010,10 +1015,17 @@ fn send_unavailable_git_effect_result(
             repo_id,
             name,
             target,
+            message,
+            annotated,
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
-                command: RepoCommandKind::CreateTag { name, target },
+                command: RepoCommandKind::CreateTag {
+                    name,
+                    target,
+                    message,
+                    annotated,
+                },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1471,11 +1483,15 @@ pub(super) fn schedule_effect(
                 );
             }
         }
-        Effect::LoadBlame { repo_id, path, rev } => {
+        Effect::LoadBlame {
+            repo_id,
+            path,
+            source,
+        } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
-                repo_load::schedule_load_blame(executor, repos, msg_tx, repo_id, path, rev);
+                repo_load::schedule_load_blame(executor, repos, msg_tx, repo_id, path, source);
             }
         }
         Effect::LoadWorktrees { repo_id } => {
@@ -1577,6 +1593,32 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_load_commit_details(
                     executor, repos, msg_tx, repo_id, commit_id,
+                );
+            }
+        }
+        Effect::OpenFileAtCommitParent {
+            repo_id,
+            commit_id,
+            path,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_open_file_at_commit_parent(
+                    executor, repos, msg_tx, repo_id, commit_id, path,
+                );
+            }
+        }
+        Effect::OpenFileAtCommit {
+            repo_id,
+            commit_id,
+            path,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_open_file_at_commit(
+                    executor, repos, msg_tx, repo_id, commit_id, path,
                 );
             }
         }
@@ -2059,7 +2101,11 @@ pub(super) fn schedule_effect(
             repo_id,
             name,
             target,
-        } => repo_commands::schedule_create_tag(executor, repos, msg_tx, repo_id, name, target),
+            message,
+            annotated,
+        } => repo_commands::schedule_create_tag(
+            executor, repos, msg_tx, repo_id, name, target, message, annotated,
+        ),
         Effect::DeleteTag { repo_id, name } => {
             repo_commands::schedule_delete_tag(executor, repos, msg_tx, repo_id, name);
         }

@@ -324,14 +324,32 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         category: "Rebase",
         requires_repo: true,
     },
+    CommandEntry {
+        id: "blame",
+        label: "Blame / Annotate",
+        shortcut: "Alt+B",
+        category: "History",
+        requires_repo: true,
+    },
+    CommandEntry {
+        id: "back",
+        label: "Navigate Back",
+        shortcut: "Alt+Left",
+        category: "Navigation",
+        requires_repo: true,
+    },
+    CommandEntry {
+        id: "forward",
+        label: "Navigate Forward",
+        shortcut: "Alt+Right",
+        category: "Navigation",
+        requires_repo: true,
+    },
     // TODO: "undo"              - Undo (Edit)
     // TODO: "redo"              - Redo (Edit)
     // TODO: "keyboard-shortcuts" - Keyboard Shortcuts (Help)
-    // TODO: "blame"            - Blame / Annotate (History)
     // TODO: "file-history"     - File History (History)
     // TODO: "search-commits"   - Search Commits (Navigation)
-    // TODO: "back"            - Back (Navigation)       Alt+Left
-    // TODO: "forward"         - Forward (Navigation)    Alt+Right
     // TODO: "rename-branch"    - Rename Branch (Branch)
     // TODO: "checkout-remote-branch" - Checkout Remote Branch
     // TODO: "delete-remote-branch"   - Delete Remote Branch

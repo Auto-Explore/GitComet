@@ -27,11 +27,12 @@ use executor::StoreExecutorPool;
 use executor::{
     TaskExecutor, default_worker_threads, metadata_worker_threads, repo_load_worker_threads,
 };
+#[cfg(feature = "benchmarks")]
+use reducer::fill_select_diff_inline;
 use reducer::{
-    fill_reorder_repo_tabs_inline, fill_select_diff_inline, fill_set_active_repo_inline,
-    fill_stage_path_inline, fill_stage_paths_inline, fill_unstage_path_inline,
-    fill_unstage_paths_inline, reduce, reset_conflict_resolutions_inline,
-    set_conflict_region_choice_inline,
+    fill_reorder_repo_tabs_inline, fill_set_active_repo_inline, fill_stage_path_inline,
+    fill_stage_paths_inline, fill_unstage_path_inline, fill_unstage_paths_inline, reduce,
+    reset_conflict_resolutions_inline, set_conflict_region_choice_inline,
 };
 use repo_monitor::RepoMonitorManager;
 use send_diagnostics::try_send_state_changed_or_log;
@@ -500,41 +501,6 @@ impl AppStore {
                             },
                         );
                     }
-                    Msg::SelectDiff { repo_id, target } => {
-                        let mut effects = reducer::SelectDiffEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
-                            fill_select_diff_inline(
-                                app_state,
-                                repo_id,
-                                target,
-                                false,
-                                &mut effects,
-                            );
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                            effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
-                    }
                     Msg::StagePath { repo_id, path } => {
                         let mut effects = reducer::SinglePathActionEffects::new();
                         let effects = {
@@ -717,18 +683,22 @@ impl AppStore {
                         );
                     }
                     Msg::RepoActivated { repo_id } => {
-                        if repo_monitors.is_running(repo_id) {
-                            repo_load_trace::trace!(
-                                "repo_activated_monitor_active_skip_refresh repo_id={:?} monitor_running=true",
-                                repo_id
-                            );
-                            continue;
-                        }
-
+                        // Do a FULL refresh on activation (window focus). The filesystem monitor is
+                        // best-effort and cannot be the sole refresh trigger: in sandboxed/Flatpak
+                        // runs an external editor's or terminal's writes to the bind-mounted repo do
+                        // not propagate inotify events into the sandbox, so the monitor — even when
+                        // its thread is "running" — sees neither worktree edits NOR git-state changes
+                        // (commits, checkouts, fetches). Refreshing only the working-changes lanes
+                        // here would leave the log/branches/HEAD/divergence stale forever in exactly
+                        // that case. A full refresh keeps every view correct regardless of whether,
+                        // or how reliably, the watcher is delivering events; activation is throttled
+                        // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
                         repo_load_trace::trace!(
-                            "repo_activated_monitor_unavailable_fallback_refresh repo_id={:?} monitor_running=false",
-                            repo_id
+                            "repo_activated_full_refresh repo_id={:?} monitor_running={}",
+                            repo_id,
+                            repo_monitors.is_running(repo_id)
                         );
+                        let change = RepoExternalChange::all();
                         let effects = {
                             let mut app_state =
                                 thread_state.write().unwrap_or_else(|e| e.into_inner());
@@ -738,10 +708,7 @@ impl AppStore {
                                 &mut repos,
                                 &id_alloc,
                                 app_state,
-                                Msg::RepoExternallyChanged {
-                                    repo_id,
-                                    change: RepoExternalChange::GitState,
-                                },
+                                Msg::RepoExternallyChanged { repo_id, change },
                             );
                             reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects

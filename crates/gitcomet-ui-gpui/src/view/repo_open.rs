@@ -106,6 +106,11 @@ impl GitCometView {
             return false;
         };
 
+        if self.request_terminal_shutdown_action(TerminalShutdownAction::CloseRepo { repo_id }, cx)
+        {
+            return true;
+        }
+
         self.store.dispatch(Msg::CloseRepo { repo_id });
         cx.notify();
         true

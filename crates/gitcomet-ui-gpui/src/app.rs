@@ -6,9 +6,10 @@ use crate::view::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
     GitCometViewMode, InitialRepositoryLaunchMode, MainPaneView, OpenActiveViewSearch,
     PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
-    StartupCrashReport, TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
-    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
-    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
+    StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit,
+    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
+    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
+    ToggleCommandPalette, is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -379,6 +380,7 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
             }
         }
         bind_text_input_keys(cx);
+        bind_terminal_keys(cx);
 
         open_gitcomet_window(cx, Arc::clone(&backend), &launch);
 
@@ -438,7 +440,14 @@ fn open_gitcomet_window(
             })
         },
     )
-    .expect("failed to open main GitComet window")
+    .unwrap_or_else(|err| {
+        panic!(
+            "failed to open main GitComet window: {err}\n\
+             This is usually a GPU/display problem, not a GitComet bug. \
+             If you just updated your system (kernel, mesa, or vulkan drivers), reboot. \
+             For per-adapter details, relaunch with RUST_LOG=info."
+        )
+    })
 }
 
 fn current_or_default_ui_scale_percent(cx: &mut App) -> u32 {
@@ -543,12 +552,12 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
                 update_active_normal_gitcomet_window(cx, |view, cx| view.close_active_repo_tab(cx))
                     .unwrap_or(false);
             if !handled {
-                close_active_window(cx);
+                close_active_window_or_warn(cx);
             }
         });
     });
     cx.on_action(|_: &CloseWindow, cx| {
-        cx.defer(close_active_window);
+        cx.defer(close_active_window_or_warn);
     });
     cx.on_action(|_: &PreviousRepository, cx| {
         cx.defer(|cx| {
@@ -611,7 +620,7 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &Hide, cx| cx.defer(|cx| cx.hide()));
     cx.on_action(|_: &HideOthers, cx| cx.defer(|cx| cx.hide_other_apps()));
     cx.on_action(|_: &ShowAll, cx| cx.defer(|cx| cx.unhide_other_apps()));
-    cx.on_action(|_: &Quit, cx| cx.defer(|cx| cx.quit()));
+    cx.on_action(|_: &Quit, cx| cx.defer(quit_app_or_warn));
 }
 
 fn install_global_diff_shortcut_fallback(cx: &mut App) {
@@ -619,6 +628,7 @@ fn install_global_diff_shortcut_fallback(cx: &mut App) {
         if !is_diff_shortcut_candidate(&event.keystroke)
             || event.context_stack.iter().any(|context| {
                 context.contains("TextInput")
+                    || context.contains("Terminal")
                     || context.contains("ContextMenu")
                     || context.contains("PopoverPrompt")
             })
@@ -972,6 +982,15 @@ fn active_normal_gitcomet_window(cx: &mut App) -> Option<GitCometWindowEntry> {
     (entry.view_mode == GitCometViewMode::Normal).then_some(entry)
 }
 
+fn normal_gitcomet_window_by_id(
+    cx: &mut App,
+    window_id: gpui::WindowId,
+) -> Option<GitCometWindowEntry> {
+    gitcomet_window_entries(cx).into_iter().find(|entry| {
+        entry.handle.window_id() == window_id && entry.view_mode == GitCometViewMode::Normal
+    })
+}
+
 fn update_active_normal_gitcomet_window<R>(
     cx: &mut App,
     f: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) -> R,
@@ -990,6 +1009,85 @@ fn close_active_window(cx: &mut App) {
         let _ = window.update(cx, |_root, window, _cx| {
             window.remove_window();
         });
+    }
+}
+
+pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
+    let window_id = window.window_handle().window_id();
+    let handled = normal_gitcomet_window_by_id(cx, window_id)
+        .and_then(|entry| {
+            entry
+                .view
+                .update(cx, |view, cx| view.request_close_window_or_warn(cx))
+                .ok()
+        })
+        .unwrap_or(false);
+    if !handled {
+        window.remove_window();
+    }
+}
+
+pub(crate) fn close_active_window_or_warn(cx: &mut App) {
+    let handled =
+        update_active_normal_gitcomet_window(cx, |view, cx| view.request_close_window_or_warn(cx))
+            .unwrap_or(false);
+    if !handled {
+        close_active_window(cx);
+    }
+}
+
+pub(crate) fn quit_app_or_warn(cx: &mut App) {
+    let entries: Vec<_> = gitcomet_window_entries(cx)
+        .into_iter()
+        .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
+        .collect();
+    if entries.is_empty() {
+        cx.quit();
+        return;
+    }
+
+    let mut terminal_count = 0usize;
+    let mut running_command_count = 0usize;
+    let mut repo_names: Vec<String> = Vec::new();
+    for entry in &entries {
+        if let Ok(summary) = entry
+            .view
+            .read_with(cx, |view, _cx| view.running_terminal_summary())
+        {
+            terminal_count += summary.terminal_count;
+            running_command_count += summary.running_command_count;
+            repo_names.extend(summary.repo_names);
+        }
+    }
+
+    if running_command_count == 0 {
+        cx.quit();
+        return;
+    }
+
+    let active_window_id = cx.active_window().map(|window| window.window_id());
+    let prompt_entry = active_window_id
+        .and_then(|active_window_id| {
+            entries
+                .iter()
+                .find(|entry| entry.handle.window_id() == active_window_id)
+                .cloned()
+        })
+        .or_else(|| entries.first().cloned());
+
+    if let Some(entry) = prompt_entry {
+        let all_views: Vec<_> = entries.iter().map(|e| e.view.clone()).collect();
+        let _ = entry.view.update(cx, |view, cx| {
+            view.request_quit_or_warn(
+                terminal_count,
+                running_command_count,
+                repo_names,
+                all_views,
+                cx,
+            );
+        });
+    } else {
+        cx.quit();
     }
 }
 
@@ -1455,6 +1553,23 @@ fn bind_text_input_keys(cx: &mut App) {
     ]);
 }
 
+fn bind_terminal_keys(cx: &mut App) {
+    cx.bind_keys([
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-c", TerminalCopy, Some("Terminal")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-v", TerminalPaste, Some("Terminal")),
+        #[cfg(target_os = "macos")]
+        KeyBinding::new("cmd-a", TerminalSelectAll, Some("Terminal")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-c", TerminalCopy, Some("Terminal")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-v", TerminalPaste, Some("Terminal")),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-a", TerminalSelectAll, Some("Terminal")),
+    ]);
+}
+
 #[cfg(test)]
 pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
     bind_text_input_keys(cx);
@@ -1463,6 +1578,11 @@ pub(crate) fn bind_text_input_keys_for_test(cx: &mut App) {
 #[cfg(test)]
 pub(crate) fn bind_app_keys_for_test(cx: &mut App) {
     bind_app_keys(cx);
+}
+
+#[cfg(test)]
+pub(crate) fn bind_terminal_keys_for_test(cx: &mut App) {
+    bind_terminal_keys(cx);
 }
 
 #[cfg(test)]
@@ -1655,6 +1775,9 @@ mod tests {
                 .on_action(record_action_listener!(CloseWindow))
                 .on_action(record_action_listener!(PreviousRepository))
                 .on_action(record_action_listener!(NextRepository))
+                .on_action(record_action_listener!(TerminalCopy))
+                .on_action(record_action_listener!(TerminalPaste))
+                .on_action(record_action_listener!(TerminalSelectAll))
                 .on_action(record_action_listener!(MinimizeWindow))
                 .on_action(record_action_listener!(ZoomWindow))
                 .on_action(record_action_listener!(ToggleFullScreen))
@@ -1876,6 +1999,70 @@ mod tests {
                 actual_actions,
                 vec![expected_action.to_string()],
                 "expected `{keystroke}` to resolve only to the TextInput-scoped diff action"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
+        let observed_actions: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            KeyBindingProbe::new(Some("Terminal"), Arc::clone(&observed_actions), cx)
+        });
+
+        cx.update(|window, app| {
+            app.clear_key_bindings();
+            bind_terminal_keys_for_test(app);
+            let focus = view.update(app, |view, _cx| view.focus_handle());
+            window.focus(&focus, app);
+            let _ = window.draw(app);
+        });
+
+        #[cfg(target_os = "macos")]
+        let cases = [
+            ("cmd-c", TerminalCopy.name()),
+            ("cmd-v", TerminalPaste.name()),
+            ("cmd-a", TerminalSelectAll.name()),
+        ];
+
+        #[cfg(not(target_os = "macos"))]
+        let cases = [
+            ("ctrl-shift-c", TerminalCopy.name()),
+            ("ctrl-shift-v", TerminalPaste.name()),
+            ("ctrl-shift-a", TerminalSelectAll.name()),
+        ];
+
+        for (keystroke, expected_action) in cases {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_action = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .last()
+                .cloned();
+            assert_eq!(
+                actual_action.as_deref(),
+                Some(expected_action),
+                "expected `{keystroke}` to resolve to `{expected_action}`"
+            );
+        }
+
+        for keystroke in ["ctrl-c", "ctrl-v", "ctrl-a"] {
+            observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            cx.simulate_keystrokes(keystroke);
+            let actual_actions = observed_actions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            assert!(
+                actual_actions.is_empty(),
+                "expected `{keystroke}` to remain shell input, got {actual_actions:?}"
             );
         }
     }

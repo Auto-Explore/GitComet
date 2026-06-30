@@ -161,13 +161,13 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::BlameLoaded {
                 repo_id,
                 path,
-                rev,
+                source,
                 result,
             } => f
                 .debug_struct("BlameLoaded")
                 .field("repo_id", repo_id)
                 .field("path", path)
-                .field("rev", rev)
+                .field("source", source)
                 .field("result", result)
                 .finish(),
             InternalMsg::ConflictFileLoaded {

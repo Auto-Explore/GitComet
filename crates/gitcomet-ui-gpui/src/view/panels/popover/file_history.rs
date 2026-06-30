@@ -1,9 +1,16 @@
 use super::*;
 
-fn file_history_item(commit: &gitcomet_core::domain::Commit) -> components::PickerPromptItem {
+fn file_history_item(
+    commit: &gitcomet_core::domain::Commit,
+    is_current: bool,
+) -> components::PickerPromptItem {
     let sha = commit.id.as_ref();
     let short = sha.get(0..8).unwrap_or(sha).to_owned();
+    // A fixed-width marker on the row currently shown in the viewer ("you are
+    // here"); a blank marker on the others keeps the SHA column aligned.
+    let marker = if is_current { "▶ " } else { "  " };
     components::PickerPromptItem::from_parts([
+        components::PickerPromptItemPart::new(marker).flexible(false),
         components::PickerPromptItemPart::new(short)
             .profile(components::TextTruncationProfile::End)
             .flexible(false),
@@ -23,6 +30,12 @@ pub(super) fn panel(
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
+    // The commit the viewer currently shows this file at, so its row can be
+    // marked "you are here". `None` for the working-tree view.
+    let current_commit = repo.and_then(|r| match &r.diff_state.diff_target {
+        Some(DiffTarget::Commit { commit_id, .. }) => Some(commit_id.clone()),
+        _ => None,
+    });
     let title: SharedString = path.display().to_string().into();
 
     let header = div()
@@ -104,7 +117,7 @@ pub(super) fn panel(
             let items = page
                 .commits
                 .iter()
-                .map(file_history_item)
+                .map(|c| file_history_item(c, current_commit.as_ref() == Some(&c.id)))
                 .collect::<Vec<_>>();
 
             if let Some(search) = this.file_history_search_input.clone() {
@@ -118,16 +131,15 @@ pub(super) fn panel(
                         let Some(commit_id) = commit_ids.get(ix).cloned() else {
                             return;
                         };
-                        this.store.dispatch(Msg::SelectCommit {
+                        // Open the file's *content* at the chosen commit (which
+                        // also records the view in the back/forward history),
+                        // rather than showing that commit's diff. Routed through
+                        // `OpenFileAtCommit` so the path is resolved to the name
+                        // the file had at that commit, following renames.
+                        this.store.dispatch(Msg::OpenFileAtCommit {
                             repo_id,
-                            commit_id: commit_id.clone(),
-                        });
-                        this.store.dispatch(Msg::SelectDiff {
-                            repo_id,
-                            target: DiffTarget::Commit {
-                                commit_id,
-                                path: Some(path.clone()),
-                            },
+                            commit_id,
+                            path: path.clone(),
                         });
                         this.close_popover(cx);
                     })

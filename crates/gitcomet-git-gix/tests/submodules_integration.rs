@@ -18,13 +18,18 @@ fn git_command() -> Command {
 }
 
 fn run_git(repo: &Path, args: &[&str]) {
-    let status = git_command()
+    let output = git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
-        .status()
+        .output()
         .expect("git command to run");
-    assert!(status.success(), "git {:?} failed", args);
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn git_output(repo: &Path, args: &[&str]) -> Output {
@@ -125,7 +130,11 @@ fn init_repo_with_seed(repo: &Path, file: &str, contents: &str, message: &str) {
     run_git(repo, &["config", "core.autocrlf", "false"]);
     run_git(repo, &["config", "core.eol", "lf"]);
 
-    fs::write(repo.join(file), contents).expect("write seed file");
+    {
+        let mut f = std::fs::File::create(repo.join(file)).expect("create seed file");
+        std::io::Write::write_all(&mut f, contents.as_bytes()).expect("write seed file");
+        f.sync_all().ok();
+    }
     run_git(repo, &["add", file]);
     run_git(
         repo,

@@ -711,9 +711,10 @@ impl DetailsPaneView {
                         ))
                         .style(components::ButtonStyle::Transparent)
                         .on_click(theme, cx, |this, _e, _w, cx| {
+                            // The commit details and diff views are independent
+                            // panels; closing details must not close the diff.
                             if let Some(repo_id) = this.active_repo_id() {
                                 this.store.dispatch(Msg::ClearCommitSelection { repo_id });
-                                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                             }
                             cx.notify();
                         })

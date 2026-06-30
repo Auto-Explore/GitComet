@@ -1,5 +1,56 @@
 use super::*;
 
+fn annotated_toggle(
+    theme: AppTheme,
+    enabled: bool,
+    focus_handle: &FocusHandle,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
+    let border = if enabled {
+        theme.colors.success
+    } else {
+        theme.colors.border
+    };
+    let background = if enabled {
+        with_alpha(
+            theme.colors.success,
+            if theme.is_dark { 0.18 } else { 0.12 },
+        )
+    } else {
+        gpui::rgba(0x00000000)
+    };
+
+    focusable_toggle_row(
+        "create_tag_annotated_toggle",
+        "create_tag_annotated_toggle",
+        theme,
+        focus_handle,
+        cx,
+    )
+    .flex()
+    .gap_2()
+    .justify_start()
+    .child(
+        div()
+            .size(px(16.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .border_1()
+            .border_color(border)
+            .rounded(px(4.0))
+            .bg(background)
+            .when(enabled, |this| {
+                this.child(crate::view::icons::svg_icon(
+                    "icons/check.svg",
+                    theme.colors.success,
+                    px(10.0),
+                ))
+            }),
+    )
+    .child(div().text_sm().child("Annotated tag"))
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     _repo_id: RepoId,
@@ -10,6 +61,8 @@ pub(super) fn panel(
     let can_create = this.can_submit_create_tag(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let message_scroll = this.create_tag_message_scroll.clone();
+    let annotated = this.create_tag_annotated;
 
     div()
         .flex()
@@ -40,6 +93,70 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.create_tag_input.clone()),
         )
+        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(
+            annotated_toggle(
+                theme,
+                annotated,
+                &this.create_tag_annotated_focus_handle,
+                cx,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+                this.create_tag_annotated = !this.create_tag_annotated;
+                cx.notify();
+            })),
+        )
+        .child(
+            div()
+                .px_2()
+                .pb_1()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child("Annotated tags can be GPG signed and include a message"),
+        )
+        .when(annotated, |panel| {
+            panel
+                .child(div().border_t_1().border_color(theme.colors.border))
+                .child(
+                    div()
+                        .px_2()
+                        .pt_1()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child("Annotation message"),
+                )
+                .child(
+                    div()
+                        .px_2()
+                        .pb_1()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .child(
+                            restrict_scroll_to_vertical_axis(
+                                div()
+                                    .id("create_tag_message_scroll_surface")
+                                    .relative()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .max_h(scaled_px(140.0))
+                                    .pr(components::Scrollbar::visible_gutter(
+                                        message_scroll.clone(),
+                                        components::ScrollbarAxis::Vertical,
+                                    ))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&message_scroll),
+                            )
+                            .child(this.create_tag_message_input.clone()),
+                        )
+                        .child(
+                            components::Scrollbar::new(
+                                "create_tag_message_scrollbar",
+                                message_scroll,
+                            )
+                            .render(theme),
+                        ),
+                )
+        })
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()

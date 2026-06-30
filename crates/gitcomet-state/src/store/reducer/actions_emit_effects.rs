@@ -523,11 +523,19 @@ pub(super) fn cancel_interactive_rebase_setup(
     vec![]
 }
 
-pub(super) fn create_tag(repo_id: RepoId, name: String, target: String) -> Vec<Effect> {
+pub(super) fn create_tag(
+    repo_id: RepoId,
+    name: String,
+    target: String,
+    message: Option<String>,
+    annotated: bool,
+) -> Vec<Effect> {
     vec![Effect::CreateTag {
         repo_id,
         name,
         target,
+        message,
+        annotated,
     }]
 }
 
@@ -633,6 +641,19 @@ pub(super) fn drop_stash(repo_id: RepoId, index: usize) -> Vec<Effect> {
     vec![Effect::DropStash { repo_id, index }]
 }
 
+/// Drop any loaded blame after a working-tree mutation (stage/unstage/apply
+/// patch/commit). The blame annotation column is derived from the same content
+/// the diff shows, which is being reloaded; leaving blame `Ready` would make
+/// `request_blame_for_current_target` treat the target as already attempted and
+/// keep painting stale attribution and staged/unstaged labels. `blame_path` and
+/// `blame_source` are intentionally preserved so the view reloads the same
+/// target's blame against the new content.
+pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
+    if !matches!(repo_state.history_state.blame, Loadable::NotLoaded) {
+        repo_state.history_state.blame = Loadable::NotLoaded;
+    }
+}
+
 pub(super) fn commit_finished(
     state: &mut AppState,
     repo_id: RepoId,
@@ -658,6 +679,7 @@ pub(super) fn commit_finished(
             repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
+            invalidate_loaded_blame(repo_state);
             push_action_log(
                 repo_state,
                 true,
@@ -711,6 +733,7 @@ pub(super) fn commit_amend_finished(
             repo_state.diff_state.inline_submodule_diff = None;
             repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
             repo_state.bump_diff_state_rev();
+            invalidate_loaded_blame(repo_state);
             push_action_log(
                 repo_state,
                 true,
@@ -903,6 +926,13 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::RemoveSubmodule { .. }
     ) && result.is_ok();
     let command_succeeded = result.is_ok();
+    let refresh_tags = command_succeeded
+        && matches!(
+            &command,
+            RepoCommandKind::CreateTag { .. }
+                | RepoCommandKind::DeleteTag { .. }
+                | RepoCommandKind::PruneLocalTags
+        );
     let mut clear_banner = false;
 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
@@ -1015,6 +1045,12 @@ pub(super) fn repo_command_finished(
             extra_effects.push(Effect::LoadSubmodules { repo_id });
         }
     }
+    if refresh_tags {
+        repo_state.set_tags(Loadable::NotLoaded);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            extra_effects.push(Effect::LoadTags { repo_id });
+        }
+    }
     if matches!(
         &command,
         RepoCommandKind::StageHunk
@@ -1022,6 +1058,9 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::ApplyWorktreePatch { .. }
     ) && let Some(target) = repo_state.diff_state.diff_target.clone()
     {
+        // The annotation column is recomputed from the same content the diff
+        // shows, so staging/unstaging/patching must invalidate blame too.
+        invalidate_loaded_blame(repo_state);
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;

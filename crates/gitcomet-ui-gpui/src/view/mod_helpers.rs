@@ -1,6 +1,8 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
 
+type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
+
 pub(super) fn toast_fade_in_duration() -> Duration {
     Duration::from_millis(TOAST_FADE_IN_MS)
 }
@@ -444,6 +446,19 @@ pub(super) struct DiffSplitResizeState {
 }
 
 pub(super) use ResizeDragGhost as DiffSplitResizeDragGhost;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum AnnotateResizeHandle {
+    Divider,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct AnnotateResizeState {
+    pub(in crate::view) start_x: Pixels,
+    pub(in crate::view) start_width: f32,
+}
+
+pub(in crate::view) use ResizeDragGhost as AnnotateResizeDragGhost;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ConflictVSplitResizeHandle {
@@ -2438,6 +2453,13 @@ pub(super) enum ResolverPickTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct TerminalMenuContext {
+    pub(super) has_session: bool,
+    pub(super) has_selection: bool,
+    pub(super) connected: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BranchPickerPurpose {
     Checkout,
@@ -2549,6 +2571,11 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     AppMenu,
+    TerminalShutdownConfirm(TerminalShutdownPrompt),
+    TerminalMenu {
+        repo_id: RepoId,
+        context: TerminalMenuContext,
+    },
     DiffActionMenu,
     DiffHunkMenu {
         repo_id: RepoId,
@@ -2957,6 +2984,161 @@ pub(super) fn canonicalize_path(path: std::path::PathBuf) -> std::path::PathBuf 
     canonicalize_or_original(path)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct TerminalTextMetrics {
+    pub(super) font_size: Pixels,
+    pub(super) line_height: Pixels,
+    pub(super) cell_width: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TerminalGridSize {
+    pub(super) rows: u16,
+    pub(super) cols: u16,
+    pub(super) pixel_width: u16,
+    pub(super) pixel_height: u16,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TerminalLayoutKey {
+    pub(super) font_size_bits: u32,
+    pub(super) line_height_bits: u32,
+    pub(super) cell_width_bits: u32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TerminalLayoutCache {
+    pub(super) rem_size: Pixels,
+    pub(super) key: TerminalLayoutKey,
+    pub(super) base_style: gpui::TextStyle,
+    pub(super) metrics: TerminalTextMetrics,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct TerminalCachedRow {
+    pub(super) fingerprint: u64,
+    pub(super) layout_key: TerminalLayoutKey,
+    pub(super) shaped: Option<ShapedLine>,
+    pub(super) background_rects: Vec<super::terminal_alacritty::TerminalBackgroundRect>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct TerminalViewportCacheKey {
+    pub(super) content_epoch: u64,
+    pub(super) scrollback: usize,
+    pub(super) rows: u16,
+    pub(super) cols: u16,
+    pub(super) layout_key: TerminalLayoutKey,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct TerminalRenderCache {
+    pub(super) viewport_key: Option<TerminalViewportCacheKey>,
+    pub(super) rows: Vec<TerminalCachedRow>,
+}
+
+pub(super) struct TerminalViewportView {
+    pub(super) theme: AppTheme,
+    pub(super) focus_handle: FocusHandle,
+    pub(super) term_lock: Option<AlacrittyTermLock>,
+    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(super) layout_cache: Option<TerminalLayoutCache>,
+    pub(super) render_cache: TerminalRenderCache,
+    pub(super) cursor_blink_visible: bool,
+    pub(super) cursor_blink_hold_until: Instant,
+    pub(super) cursor_blink_active: bool,
+    pub(super) cursor_blink_task_scheduled: bool,
+    pub(super) cursor_blink_seq: u64,
+    pub(super) content_epoch: u64,
+    pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
+    pub(super) viewport_bounds: Option<Bounds<Pixels>>,
+    pub(super) pressed_mouse_button: Option<gpui::MouseButton>,
+    /// Last grid cell `(row, col)` reported to the PTY for mouse-motion tracking.
+    /// Used to dedupe motion reports so a TUI in any-event mode (1003) receives at
+    /// most one report per cell instead of one per pixel-level move event.
+    pub(super) last_motion_cell: Option<(u16, u16)>,
+    pub(super) was_focused: bool,
+    pub(super) selection_start: Option<TerminalGridPoint>,
+    pub(super) selection_end: Option<TerminalGridPoint>,
+    /// Set by "select all" so Copy grabs the entire buffer (including scrollback
+    /// history, which the `u16` grid-point selection cannot represent). Cleared
+    /// as soon as a manual selection begins.
+    pub(super) select_all_active: bool,
+    pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
+}
+
+/// A single terminal (one PTY + alacritty + rendered viewport). A repo can hold
+/// several of these as tabs.
+pub(super) struct TerminalInstance {
+    pub(super) focus_handle: FocusHandle,
+    pub(super) pty_sender: Option<super::terminal_alacritty::PtySender>,
+    pub(super) child_pid: Option<u32>,
+    pub(super) events_rx:
+        Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
+    pub(super) connected: bool,
+    pub(super) exit_status: Option<String>,
+    pub(super) viewport: Entity<TerminalViewportView>,
+    pub(super) session_seq: u64,
+    pub(super) title: String,
+}
+
+pub(super) struct RepoTerminalSession {
+    pub(super) workdir: std::path::PathBuf,
+    pub(super) repo_name: String,
+    pub(super) instances: Vec<TerminalInstance>,
+    pub(super) active_index: usize,
+}
+
+impl RepoTerminalSession {
+    pub(super) fn active_instance(&self) -> Option<&TerminalInstance> {
+        self.instances.get(self.active_index)
+    }
+
+    pub(super) fn instance_by_seq_mut(&mut self, seq: u64) -> Option<&mut TerminalInstance> {
+        self.instances.iter_mut().find(|i| i.session_seq == seq)
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct TerminalShutdownSummary {
+    pub(crate) terminal_count: usize,
+    pub(crate) running_command_count: usize,
+    pub(crate) repo_names: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum TerminalShutdownAction {
+    CloseRepo { repo_id: RepoId },
+    CloseTerminalForRepo { repo_id: RepoId },
+    CloseTerminalTab { repo_id: RepoId, index: usize },
+    CloseWindow,
+    QuitApp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct TerminalShutdownPrompt {
+    pub(in crate::view) action: TerminalShutdownAction,
+    pub(in crate::view) summary: TerminalShutdownSummary,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TerminalPanelResizeState {
+    pub(super) start_y: Pixels,
+    pub(super) start_height: Pixels,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) struct TerminalGridPoint {
+    pub(super) row: u16,
+    pub(super) col: u16,
+}
+
+impl TerminalGridPoint {
+    pub(super) fn new(row: u16, col: u16) -> Self {
+        Self { row, col }
+    }
+}
+
 pub(super) fn focused_mergetool_bootstrap_action(
     state: &AppState,
     bootstrap: &FocusedMergetoolBootstrap,
@@ -3300,6 +3482,7 @@ pub struct GitCometView {
     pub(super) _ui_model_subscription: gpui::Subscription,
     pub(super) _activation_subscription: gpui::Subscription,
     pub(super) _appearance_subscription: gpui::Subscription,
+    pub(super) _terminal_keystroke_interceptor: gpui::Subscription,
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
@@ -3336,11 +3519,22 @@ pub struct GitCometView {
     pub(super) timezone: Timezone,
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
+    pub(super) terminal_preferences: TerminalPreferences,
+    pub(super) terminal_sessions: HashMap<RepoId, RepoTerminalSession>,
+    pub(super) terminal_panel_height: Pixels,
+    pub(super) terminal_panel_resize: Option<TerminalPanelResizeState>,
+    pub(super) next_terminal_session_seq: u64,
+    pub(super) terminal_cursor_blink_visible: bool,
+    pub(super) terminal_cursor_blink_hold_until: Instant,
+    pub(super) terminal_cursor_blink_active: bool,
+    pub(super) terminal_cursor_blink_task_scheduled: bool,
+    pub(super) terminal_cursor_blink_seq: u64,
     pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
+    pub(super) annotate_enabled: bool,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
@@ -3366,6 +3560,8 @@ pub struct GitCometView {
     pub(super) pane_resize: Option<PaneResizeState>,
 
     pub(super) last_mouse_pos: Point<Pixels>,
+    pub(super) pending_terminal_shutdown_prompt: Option<TerminalShutdownPrompt>,
+    pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,
     pub(super) pending_force_delete_branch_centered: bool,

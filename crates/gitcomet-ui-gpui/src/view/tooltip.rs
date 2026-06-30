@@ -126,6 +126,7 @@ impl GitCometView {
                                 this.diff_whitespace_mode.key().to_string(),
                             ),
                             diff_view_mode: Some(this.diff_view_mode.key().to_string()),
+                            annotate_enabled: Some(this.annotate_enabled),
                             diff_reveal_whitespace_chars: Some(
                                 this.diff_reveal_whitespace_chars,
                             ),
@@ -137,6 +138,10 @@ impl GitCometView {
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            terminal_external_mode: None,
+                            terminal_external_program: None,
+                            terminal_external_args: None,
+                            terminal_action_bar_target: None,
                             history_show_tags: Some(history_show_tags),
                             history_tag_fetch_mode: Some(if history_auto_fetch_tags_on_repo_activation
                             {
@@ -146,6 +151,7 @@ impl GitCometView {
                             }),
                             default_history_mode: None,
                             commit_push_after_enabled: Some(this.commit_push_after_enabled),
+                            default_tag_type: None,
                             git_executable_path: None,
                             external_code_editor: None,
                         };

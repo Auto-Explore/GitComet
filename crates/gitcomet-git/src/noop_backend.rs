@@ -256,7 +256,7 @@ mod tests {
         assert_unsupported(repo.merge_abort_with_output());
         assert!(!repo.rebase_in_progress().unwrap());
         assert_eq!(repo.merge_commit_message().unwrap(), None);
-        assert_unsupported(repo.create_tag_with_output("v1.0.0", "HEAD"));
+        assert_unsupported(repo.create_tag_with_output("v1.0.0", "HEAD", None, false));
         assert_unsupported(repo.delete_tag_with_output("v1.0.0"));
         assert_unsupported(repo.prune_merged_branches_with_output());
         assert_unsupported(repo.prune_local_tags_with_output());

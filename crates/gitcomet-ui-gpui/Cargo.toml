@@ -68,9 +68,12 @@ syntax-repo = [
 ]
 
 [dependencies]
+alacritty_terminal = { workspace = true }
 fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-core = { workspace = true }
+libc = { workspace = true }
+parking_lot = { workspace = true }
 gitcomet-tree-sitter-alloc = { path = "../gitcomet-tree-sitter-alloc" }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
@@ -91,6 +94,7 @@ serde_json = { workspace = true }
 smallvec = { workspace = true }
 smol = { workspace = true }
 stats_alloc = { workspace = true }
+sysinfo = { workspace = true }
 tempfile = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true, optional = true }
@@ -134,8 +138,11 @@ tree-sitter-zig = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
+# Used to SIGTERM the terminal child process group on Linux and macOS.
 rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
 x11-clipboard = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -146,6 +153,7 @@ gitcomet-win32-window-utils = { path = "../win32-window-utils" }
 raw-window-handle = { workspace = true }
 
 [dev-dependencies]
+anyhow = "1"
 gitcomet-core = { workspace = true, features = ["test-support"] }
 gitcomet-state = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }

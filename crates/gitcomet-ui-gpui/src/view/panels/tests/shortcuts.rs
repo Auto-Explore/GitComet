@@ -2053,6 +2053,7 @@ fn commit_message_text_input_f2_prefers_previous_diff_search_match(cx: &mut gpui
 #[gpui::test]
 fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
@@ -2093,6 +2094,14 @@ fn commit_message_text_input_secondary_enter_commits_staged_changes(cx: &mut gpu
 
     cx.simulate_keystrokes("secondary-enter");
     draw_and_drain_test_window(cx);
+
+    wait_until(cx, "commit to be dispatched to store", |_cx| {
+        let snapshot = store_for_assert.snapshot();
+        snapshot
+            .repos
+            .iter()
+            .any(|repo| repo.id == repo_id && repo.commit_in_flight > 0)
+    });
 
     cx.update(|window, app| {
         let root = view.read(app);
@@ -5240,6 +5249,22 @@ fn ctrl_s_stages_last_file_and_clears_diff(cx: &mut gpui::TestAppContext) {
 
     cx.simulate_keystrokes("ctrl-s");
     draw_and_drain_test_window(cx);
+    wait_until(
+        cx,
+        "store diff target to clear after staging last file",
+        |cx| {
+            cx.update(|_window, app| {
+                let snapshot = view.read(app).store.snapshot();
+                let Some(repo_id) = snapshot.active_repo else {
+                    return false;
+                };
+                let Some(repo) = snapshot.repos.iter().find(|r| r.id == repo_id) else {
+                    return false;
+                };
+                repo.diff_state.diff_target.is_none()
+            })
+        },
+    );
     sync_store_snapshot(cx, &view);
 
     assert_eq!(

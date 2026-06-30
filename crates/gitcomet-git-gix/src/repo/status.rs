@@ -1,6 +1,7 @@
 use super::{
     GitlinkStatusCapabilityCacheEntry, GixRepo, RepoFileStamp, TreeIndexCacheEntry,
     conflict_stages::conflict_kind_from_stage_mask, git_ops::head_upstream_divergence,
+    repo_file_stamp,
 };
 use crate::util::{git_workdir_cmd_for, path_buf_from_git_bytes, run_git_raw_output};
 use gitcomet_core::domain::{
@@ -14,9 +15,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 impl GixRepo {
-    fn may_have_gitlink_status_supplement(&self, repo: &gix::Repository) -> bool {
+    fn may_have_gitlink_status_supplement(
+        &self,
+        repo: &gix::Repository,
+        index_stamp: &RepoFileStamp,
+    ) -> bool {
         let gitmodules = repo_file_stamp(self.spec.workdir.join(".gitmodules").as_path());
-        let index = repo_file_stamp(repo.index_path().as_path());
+        // Key on the content-exact index stamp (not the collision-prone length/mtime one) so the
+        // gitlink-capability cache cannot be served stale on an index rewrite whose length and
+        // mtime collide — the same hardening the staged-status cache relies on. The caller already
+        // computed this stamp (also used for the staged cache), so reuse it rather than re-reading
+        // `.git/index`.
+        let index = index_stamp.clone();
 
         if let Some(cached) = self
             .gitlink_status_capability
@@ -63,7 +73,8 @@ impl GixRepo {
     ) -> Result<RepoStatus> {
         cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
-        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
+        let index_stamp = repo_index_stamp(&repo);
+        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         cancellation.check_cancelled()?;
 
         // Check whether HEAD and the index file are unchanged since the last
@@ -71,7 +82,6 @@ impl GixRepo {
         // identical and we can skip the tree comparison entirely, using the
         // cheaper index-worktree-only iterator.
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
-        let index_stamp = repo_file_stamp(repo.index_path().as_path());
         cancellation.check_cancelled()?;
 
         let cached_staged = {
@@ -186,7 +196,8 @@ impl GixRepo {
     ) -> Result<Vec<FileStatus>> {
         cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
-        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo);
+        let index_stamp = repo_index_stamp(&repo);
+        let may_have_gitlinks = self.may_have_gitlink_status_supplement(&repo, &index_stamp);
         let mut unstaged = Vec::new();
         let direct = collect_index_worktree_status_direct(&repo, &mut unstaged, may_have_gitlinks)?;
         cancellation.check_cancelled()?;
@@ -223,7 +234,7 @@ impl GixRepo {
         cancellation.check_cancelled()?;
         let repo = self._repo.to_thread_local();
         let head_oid = super::history::gix_head_id_or_none(&repo)?;
-        let index_stamp = repo_file_stamp(repo.index_path().as_path());
+        let index_stamp = repo_index_stamp(&repo);
         cancellation.check_cancelled()?;
 
         if let Some(cached) = self.cached_staged_status(head_oid, &index_stamp) {
@@ -241,7 +252,7 @@ impl GixRepo {
         let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
         let mut staged = collect_staged_status_from_tree_index(&repo, &head_tree_id)?;
         cancellation.check_cancelled()?;
-        if self.may_have_gitlink_status_supplement(&repo) {
+        if self.may_have_gitlink_status_supplement(&repo, &index_stamp) {
             supplement_gitlink_status_from_porcelain(
                 &self.spec.workdir,
                 &mut staged,
@@ -426,16 +437,85 @@ fn remove_conflicted_paths_from_staged(
     }
 }
 
-fn repo_file_stamp(path: &Path) -> RepoFileStamp {
-    match std::fs::metadata(path) {
-        Ok(metadata) => RepoFileStamp {
-            exists: true,
-            len: metadata.len(),
-            modified: metadata.modified().ok(),
-        },
-        Err(_) => RepoFileStamp::default(),
-    }
+/// File stamp for `.git/index`, hardened so the staged-status cache is invalidated
+/// whenever the index changes even when length and mtime collide (atomic rewrite of
+/// the same tracked entries on a filesystem with coarse or cached timestamps, e.g.
+/// f2fs). Combines the trailing content hash (content-exact when present) with the
+/// inode + ctime, which change on every lock-file + rename index rewrite and so also
+/// cover `index.skipHash` repositories whose trailer is a useless null hash.
+///
+/// Opens `.git/index` a single time and derives every field from that one handle.
+fn repo_index_stamp(repo: &gix::Repository) -> RepoFileStamp {
+    index_stamp_for(repo.index_path().as_path(), repo.object_hash())
 }
+
+fn index_stamp_for(path: &Path, hash_kind: gix::hash::Kind) -> RepoFileStamp {
+    // A genuinely-absent index is a stable state, so the all-empty default (exists=false) is a safe,
+    // cacheable stamp. But if the index *exists yet is momentarily unreadable* (a permission flip, or
+    // a Windows sharing / AV lock) we must NOT fall back to the length+mtime stat stamp: during that
+    // window an atomic rewrite with an identical length and unchanged/coarse mtime would make two
+    // such stamps compare equal and serve a stale cache hit — the exact collision this stamp exists
+    // to prevent. Return an uncacheable stamp so the read is forced fresh until the index is
+    // readable again.
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RepoFileStamp::default();
+        }
+        Err(_) => return RepoFileStamp::uncacheable(),
+    };
+    let Ok(metadata) = file.metadata() else {
+        return RepoFileStamp::uncacheable();
+    };
+
+    let mut stamp = RepoFileStamp {
+        exists: true,
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+        content_id: read_index_trailing_hash(&mut file, metadata.len(), hash_kind),
+        ..RepoFileStamp::default()
+    };
+    set_index_stat_discriminators(&mut stamp, &metadata);
+    stamp
+}
+
+/// Reads the trailing checksum that git/gix append to `.git/index` (a hash over the
+/// entire index content), from an already-open handle. Returns `None` if the file is
+/// truncated, the trailer cannot be read, or it is the null hash (written by
+/// `index.skipHash`, where it cannot distinguish index states). Callers then rely on
+/// the stat discriminators / length / mtime, which only risk a redundant recompute,
+/// never a stale cache hit.
+fn read_index_trailing_hash(
+    file: &mut std::fs::File,
+    len: u64,
+    hash_kind: gix::hash::Kind,
+) -> Option<gix::ObjectId> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let hash_len = hash_kind.len_in_bytes();
+    if len < hash_len as u64 {
+        return None;
+    }
+    file.seek(SeekFrom::End(-(hash_len as i64))).ok()?;
+    // Stack buffer sized for the longest supported hash (SHA-256 = 32 bytes); avoids a heap
+    // allocation on this per-status-refresh path. `get_mut` also guards `hash_len <= 32`.
+    let mut buf = [0u8; 32];
+    let buf = buf.get_mut(..hash_len)?;
+    file.read_exact(buf).ok()?;
+    let oid = gix::ObjectId::try_from(&*buf).ok()?;
+    (!oid.is_null()).then_some(oid)
+}
+
+#[cfg(unix)]
+fn set_index_stat_discriminators(stamp: &mut RepoFileStamp, metadata: &std::fs::Metadata) {
+    use std::os::unix::fs::MetadataExt;
+    stamp.inode = Some(metadata.ino());
+    stamp.ctime_nanos =
+        Some((metadata.ctime() as i128) * 1_000_000_000 + metadata.ctime_nsec() as i128);
+}
+
+#[cfg(not(unix))]
+fn set_index_stat_discriminators(_stamp: &mut RepoFileStamp, _metadata: &std::fs::Metadata) {}
 
 fn gix_unmerged_conflicts(repo: &gix::Repository) -> Result<Vec<(PathBuf, FileConflictKind)>> {
     let index = repo
@@ -927,9 +1007,14 @@ fn maybe_persist_status_outcome_changes(
     _outcome: Option<gix::status::Outcome>,
     _index_path: &Path,
 ) -> Option<RepoFileStamp> {
-    // Avoid rewriting `.git/index` during status reads. The repo monitor maps index updates to
-    // worktree refreshes, so gix's stat write-back can self-trigger a refresh loop even when the
-    // status payload itself is unchanged.
+    // INVARIANT: status reads must not rewrite `.git/index`. The repo monitor maps index updates
+    // to refreshes, so gix's stat write-back would self-trigger a refresh loop even when the
+    // status payload is unchanged.
+    //
+    // The reducer relies on this: `finish_status_lane_replay` (gitcomet-state) now *always*
+    // replays a coalesced refresh, on the assumption that a completed status read produces no
+    // filesystem events. If this ever returns `Some(..)` (persisting a write-back), revisit that
+    // reducer logic first or the loop returns.
     None
 }
 
@@ -938,8 +1023,9 @@ fn maybe_persist_direct_index_changes(
     _index: &gix::worktree::Index,
     _index_changes: Vec<IndexWorktreeApplyChange>,
 ) -> Option<RepoFileStamp> {
-    // Same rationale as `maybe_persist_status_outcome_changes`: keep status collection read-only
-    // so monitor-driven refreshes do not recursively manufacture new worktree events.
+    // Same invariant as `maybe_persist_status_outcome_changes`: keep status collection read-only
+    // so monitor-driven refreshes do not recursively manufacture new worktree events, which the
+    // reducer's unconditional replay depends on.
     None
 }
 
@@ -1748,6 +1834,48 @@ mod tests {
     }
 
     #[test]
+    fn file_edited_after_staging_appears_in_both_staged_and_unstaged_lanes() {
+        // Reproduces the reported state: a file that is staged AND then edited again in the
+        // worktree (`MM` in `git status`) must appear in BOTH the staged and the unstaged lanes —
+        // not only staged. This is the backend truth the UI's Unstaged section must reflect once
+        // the file-watcher delivers the edit event.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "foo.txt", "v0\n");
+        git_success(workdir, &["add", "foo.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        // Stage a modification...
+        write_file(workdir, "foo.txt", "staged change\n");
+        git_success(workdir, &["add", "foo.txt"]);
+        // ...then edit the worktree again WITHOUT staging -> `MM`.
+        write_file(workdir, "foo.txt", "further worktree edit\n");
+
+        let gix_repo = open_repo(workdir);
+        let status = gix_repo.status_impl().expect("combined status");
+        assert_eq!(
+            status.staged,
+            vec![file_status("foo.txt", FileStatusKind::Modified)],
+            "a staged-and-re-edited file must appear in the staged lane"
+        );
+        assert_eq!(
+            status.unstaged,
+            vec![file_status("foo.txt", FileStatusKind::Modified)],
+            "the further worktree edit must also appear in the unstaged lane"
+        );
+        // The per-lane entry points must agree with the combined status.
+        assert_eq!(
+            gix_repo.staged_status_impl().expect("staged lane"),
+            status.staged
+        );
+        assert_eq!(
+            gix_repo.worktree_status_impl().expect("worktree lane"),
+            status.unstaged
+        );
+    }
+
+    #[test]
     fn staged_status_impl_on_unborn_head_uses_combined_status() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let workdir = tmp.path();
@@ -1820,5 +1948,315 @@ mod tests {
         assert_eq!(staged.len(), 1);
         assert_eq!(staged[0].path, PathBuf::from("tracked.txt"));
         assert_eq!(staged[0].kind, FileStatusKind::Modified);
+    }
+
+    #[test]
+    fn read_index_trailing_hash_distinguishes_content_and_rejects_unusable_trailers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("index");
+        let hash_len = gix::hash::Kind::Sha1.len_in_bytes();
+
+        let trailing_hash = |bytes: &[u8]| {
+            fs::write(&path, bytes).expect("write index");
+            let mut file = std::fs::File::open(&path).expect("open index");
+            super::read_index_trailing_hash(&mut file, bytes.len() as u64, gix::hash::Kind::Sha1)
+        };
+
+        // A plausible index layout: some body bytes followed by the trailing hash.
+        let mut bytes = vec![7u8; 16 + hash_len];
+        let trailer_start = bytes.len() - hash_len;
+        bytes[trailer_start..].copy_from_slice(&[1u8; 20]);
+        let hash_a = trailing_hash(&bytes).expect("trailing hash a");
+
+        // Same length and (re)written file, but different trailing content.
+        bytes[trailer_start..].copy_from_slice(&[2u8; 20]);
+        let hash_b = trailing_hash(&bytes).expect("trailing hash b");
+        assert_ne!(
+            hash_a, hash_b,
+            "different index content must yield different fingerprints"
+        );
+
+        // A null trailer (index.skipHash) is not a usable fingerprint and must be rejected so it
+        // cannot make distinct index states compare equal.
+        bytes[trailer_start..].copy_from_slice(&[0u8; 20]);
+        assert!(
+            trailing_hash(&bytes).is_none(),
+            "a null trailing hash must be treated as absent"
+        );
+
+        // Files shorter than the hash length cannot carry a trailer.
+        assert!(trailing_hash(&[0u8; 4]).is_none());
+
+        // Missing files have no fingerprint.
+        assert!(std::fs::File::open(tmp.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn gitlink_capability_cache_invalidates_on_index_content_change_with_matching_len_and_mtime() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "tracked.txt", "base\n");
+        git_success(workdir, &["add", "tracked.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        let gix_repo = open_repo(workdir);
+        let repo = gix_repo.reopen_repo().expect("reopen repo");
+
+        // Real state: no .gitmodules and no gitlink entries → no submodule supplement needed.
+        assert!(
+            !gix_repo.may_have_gitlink_status_supplement(&repo, &super::repo_index_stamp(&repo)),
+            "a plain repo should not need the gitlink/submodule supplement"
+        );
+
+        // Poison the capability cache to simulate a stale `may_have_gitlinks = true` that was
+        // computed from a *different* index content sharing the current length + mtime (an atomic
+        // rewrite that collided on a coarse/cached-timestamp filesystem such as f2fs). A
+        // len+mtime-only stamp cannot tell the two index states apart.
+        let stale_index_stamp = super::repo_file_stamp(repo.index_path().as_path());
+        let gitmodules_stamp = super::repo_file_stamp(workdir.join(".gitmodules").as_path());
+        *gix_repo
+            .gitlink_status_capability
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(super::super::GitlinkStatusCapabilityCacheEntry {
+                gitmodules: gitmodules_stamp,
+                index: stale_index_stamp,
+                may_have_gitlinks: true,
+            });
+
+        // The index fingerprint must reject the stale entry and recompute the real (false) answer
+        // rather than serving the poisoned value.
+        assert!(
+            !gix_repo.may_have_gitlink_status_supplement(&repo, &super::repo_index_stamp(&repo)),
+            "gitlink capability must not be served stale on an index len+mtime collision"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_stamp_is_uncacheable_when_index_is_present_but_unreadable() {
+        // A unix socket is a deterministic stand-in for "the index exists and is stat-able, but
+        // File::open fails" (the real-world cases being a momentary permission flip or a Windows
+        // sharing/AV lock). open() on a socket fails with ENXIO even for root, while stat()
+        // succeeds. A stat-only (len+mtime) fallback could collide with an atomic index rewrite of
+        // the same length and an unchanged/coarse mtime and false-hit the cache — exactly the bug
+        // the content discriminators exist to prevent. So an unreadable-but-present index must
+        // instead yield an *uncacheable* stamp: two such stamps must never compare equal, forcing a
+        // fresh read until the index is readable again.
+        use std::os::unix::net::UnixListener;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("index");
+        let _listener = UnixListener::bind(&path).expect("bind unix socket as fake index");
+        assert!(
+            std::fs::File::open(&path).is_err(),
+            "precondition: opening the socket file must fail"
+        );
+        assert!(
+            std::fs::metadata(&path).is_ok(),
+            "precondition: stat-ing the socket file must succeed"
+        );
+
+        let first = super::index_stamp_for(&path, gix::hash::Kind::Sha1);
+        let second = super::index_stamp_for(&path, gix::hash::Kind::Sha1);
+        assert_ne!(
+            first, second,
+            "two stamps taken while the index is unreadable must never compare equal, so the cache \
+             is forced to miss rather than risk a stale hit"
+        );
+        assert_ne!(
+            first,
+            super::super::RepoFileStamp::default(),
+            "an unreadable-index stamp must also differ from the absent-index default"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn index_stamp_detects_rewrites_without_content_hash_via_stat() {
+        // Stand in for an `index.skipHash` repository (null trailer → no content fingerprint):
+        // force `content_id` to `None` and confirm the inode/ctime discriminators still tell two
+        // index revisions apart, so the staged cache cannot serve stale results there.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "tracked.txt", "base\n");
+        git_success(workdir, &["add", "tracked.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        let gix_repo = open_repo(workdir);
+        let stamp_before = super::repo_index_stamp(&gix_repo.reopen_repo().expect("reopen repo"));
+        assert!(
+            stamp_before.inode.is_some() && stamp_before.ctime_nanos.is_some(),
+            "the index stamp should carry inode + ctime discriminators on Unix"
+        );
+
+        // Rewrite the index by staging a same-length change to the tracked file.
+        write_file(workdir, "tracked.txt", "next\n");
+        git_success(workdir, &["add", "tracked.txt"]);
+        let stamp_after = super::repo_index_stamp(&gix_repo.reopen_repo().expect("reopen repo"));
+
+        let without_hash_before = super::super::RepoFileStamp {
+            content_id: None,
+            ..stamp_before
+        };
+        let without_hash_after = super::super::RepoFileStamp {
+            content_id: None,
+            ..stamp_after
+        };
+        assert_ne!(
+            without_hash_before, without_hash_after,
+            "an index rewrite must change the stamp even without the content hash (skipHash case)"
+        );
+    }
+
+    #[test]
+    fn staged_cache_invalidates_on_index_content_change_with_matching_len_and_mtime() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "tracked.txt", "base\n");
+        git_success(workdir, &["add", "tracked.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        let gix_repo = open_repo(workdir);
+        let repo = gix_repo.reopen_repo().expect("reopen repo");
+        let head_oid = super::super::history::gix_head_id_or_none(&repo).expect("head lookup");
+        let clean_stamp = super::repo_index_stamp(&repo);
+        assert!(
+            clean_stamp.content_id.is_some(),
+            "the index fingerprint should be captured for a real repository"
+        );
+
+        // With a clean index nothing is staged; this also primes the cache.
+        assert!(
+            gix_repo
+                .staged_status_impl()
+                .expect("staged status")
+                .is_empty()
+        );
+
+        // Reproduce the bug's precondition: a cached staged result whose stamp matches the
+        // current index in length + mtime but reflects *different* index content (an atomic
+        // rewrite that collided on a coarse/cached-timestamp filesystem such as f2fs). Only the
+        // content fingerprint distinguishes the two.
+        let stale_stamp = super::super::RepoFileStamp {
+            content_id: Some(
+                gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111")
+                    .expect("placeholder oid"),
+            ),
+            ..clean_stamp.clone()
+        };
+        *gix_repo
+            .tree_index_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(super::super::TreeIndexCacheEntry {
+                head_oid,
+                index_stamp: stale_stamp,
+                staged: vec![file_status("tracked.txt", FileStatusKind::Modified)],
+            });
+
+        // The content fingerprint differs, so the stale entry is rejected and the staged lane is
+        // recomputed as empty instead of being served from the cache.
+        assert!(
+            gix_repo
+                .staged_status_impl()
+                .expect("recomputed staged status")
+                .is_empty(),
+            "a content-exact stamp must invalidate a stale staged cache on len+mtime collisions"
+        );
+
+        // The cache still works for an exact (content-matching) entry: a poisoned entry whose
+        // stamp fully matches the current index is served verbatim, confirming we did not simply
+        // disable caching.
+        *gix_repo
+            .tree_index_cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(super::super::TreeIndexCacheEntry {
+                head_oid,
+                index_stamp: clean_stamp,
+                staged: vec![file_status("sentinel.txt", FileStatusKind::Added)],
+            });
+        assert_eq!(
+            gix_repo.staged_status_impl().expect("cached staged status"),
+            vec![file_status("sentinel.txt", FileStatusKind::Added)],
+            "an exact stamp match should still hit the staged cache"
+        );
+    }
+
+    #[test]
+    fn status_lanes_track_external_stage_unstage_transitions_across_the_cache() {
+        // End-to-end check on a real repo: as external `git add` / `git reset` rewrite `.git/index`,
+        // a file must move between the staged and unstaged lanes, and the staged cache (populated by
+        // each `status_impl` call) must invalidate on every index rewrite so it never serves a
+        // stale lane. This reproduces the original "file stuck in the wrong section" symptom.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        write_file(workdir, "foo.txt", "v0\n");
+        git_success(workdir, &["add", "foo.txt"]);
+        git_success(workdir, &["commit", "-m", "initial"]);
+
+        let gix_repo = open_repo(workdir);
+        let modified = |kind| vec![file_status("foo.txt", kind)];
+
+        // Stage a modification: foo is staged, nothing unstaged. Primes the staged cache.
+        write_file(workdir, "foo.txt", "v1\n");
+        git_success(workdir, &["add", "foo.txt"]);
+        let status = gix_repo.status_impl().expect("status after staging");
+        assert_eq!(status.staged, modified(FileStatusKind::Modified));
+        assert!(status.unstaged.is_empty());
+
+        // Edit the worktree again WITHOUT staging: foo is now in BOTH lanes. The index is unchanged,
+        // so the staged lane is served from the cache while the unstaged lane is recomputed.
+        write_file(workdir, "foo.txt", "v2\n");
+        let status = gix_repo.status_impl().expect("status with worktree edit");
+        assert_eq!(
+            status.staged,
+            modified(FileStatusKind::Modified),
+            "an unstaged worktree edit must not disturb the staged lane (served from cache)"
+        );
+        assert_eq!(
+            status.unstaged,
+            modified(FileStatusKind::Modified),
+            "the new worktree edit must appear in the unstaged lane"
+        );
+
+        // Externally stage the new content (`git add`): foo leaves the unstaged lane but stays
+        // staged. The index changed, so the cached staged result must be invalidated and recomputed.
+        git_success(workdir, &["add", "foo.txt"]);
+        let status = gix_repo.status_impl().expect("status after restaging");
+        assert_eq!(status.staged, modified(FileStatusKind::Modified));
+        assert!(
+            status.unstaged.is_empty(),
+            "staging the worktree edit must clear the unstaged lane (cache must invalidate)"
+        );
+
+        // Externally unstage (`git reset`): foo leaves the staged lane and (re)enters the unstaged
+        // lane — the exact transition the freshness bug got wrong. Again the cache must invalidate.
+        git_success(workdir, &["reset", "HEAD", "--", "foo.txt"]);
+        let status = gix_repo.status_impl().expect("status after unstaging");
+        assert!(
+            status.staged.is_empty(),
+            "unstaging must remove foo from the staged lane (stale cache would keep it)"
+        );
+        assert_eq!(
+            status.unstaged,
+            modified(FileStatusKind::Modified),
+            "the unstaged file must appear in the unstaged lane"
+        );
+
+        // The per-lane entry points must agree with the combined status after all the churn.
+        assert_eq!(
+            gix_repo.staged_status_impl().expect("staged lane"),
+            status.staged
+        );
+        assert_eq!(
+            gix_repo.worktree_status_impl().expect("worktree lane"),
+            status.unstaged
+        );
     }
 }

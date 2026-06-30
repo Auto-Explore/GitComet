@@ -18,8 +18,8 @@ use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DiagnosticKind,
-    Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DefaultTagType,
+    DiagnosticKind, Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{Msg, StoreEvent};
 use gitcomet_state::session;
@@ -63,6 +63,9 @@ actions!(
         PopoverPromptDismiss,
         PopoverPromptTabNext,
         PopoverPromptTabPrev,
+        TerminalCopy,
+        TerminalPaste,
+        TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
     ]
@@ -81,7 +84,7 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.control
             && !mods.platform
             && !mods.function
-            && matches!(key, "i" | "s" | "w" | "up" | "down"))
+            && matches!(key, "i" | "s" | "w" | "up" | "down" | "left" | "right"))
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
@@ -149,6 +152,9 @@ mod settings_window;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
+mod terminal_alacritty;
+mod terminal_panel;
+mod terminal_preferences;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod toast_host;
@@ -176,6 +182,11 @@ use date_time::{DateTimeFormat, Timezone, format_datetime_into};
 use diff_preview::build_new_file_preview_from_diff;
 use patch_split::build_patch_split_rows;
 use poller::Poller;
+pub(in crate::view) use terminal_preferences::{
+    ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
+    TerminalPreferences, launch_external_terminal_from_preferences, parse_terminal_args_multiline,
+    resolve_embedded_shell_program,
+};
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
 #[cfg(test)]
@@ -195,6 +206,7 @@ use file_diff_display::{
     file_diff_display_len, file_diff_display_text, should_truncate_file_diff_display,
 };
 use history_refs_hover::{HISTORY_REFS_HOVER_MENU_INVOKER_PREFIX, HistoryRefsHoverHost};
+pub(crate) use mod_helpers::TerminalPanelResizeState;
 use mod_helpers::*;
 pub use mod_helpers::{
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
@@ -253,6 +265,8 @@ const DIFF_TEXT_LAYOUT_CACHE_PRUNE_OVERAGE: usize = 256;
 const TOAST_FADE_IN_MS: u64 = 180;
 const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
+const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
+const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
 pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
 
 pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: E) -> E {
@@ -568,10 +582,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Type to search commands...".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1335,14 +1346,27 @@ impl GitCometView {
             "remove-worktree" => {
                 // TODO: Implement remove worktree
             }
+            "blame" => {
+                self.set_annotate_enabled(!self.annotate_enabled, cx);
+            }
             "back" => {
-                // TODO: Implement navigate back
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::GlobalNavBack { repo_id });
+                }
             }
             "forward" => {
-                // TODO: Implement navigate forward
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::GlobalNavForward { repo_id });
+                }
             }
             _ => {}
         }
+    }
+
+    /// Whether a popover, dialog, prompt, or context menu is currently open
+    /// (all are tracked as a `PopoverKind` by the popover host).
+    pub(in crate::view) fn is_overlay_open(&self, cx: &App) -> bool {
+        self.popover_host.read(cx).is_open()
     }
 
     pub(in crate::view) fn show_history_refs_hover(
@@ -1355,6 +1379,15 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Don't surface the refs hover while an overlay (popover, dialog, or
+        // context menu) is open on top of the history view — the history canvas
+        // handles mouse-move at the window level, so it still fires under the
+        // overlay. If the open overlay is the hover's own item menu, leave the
+        // existing hover in place.
+        if self.is_overlay_open(cx) && !self.history_refs_hover_host.read(cx).is_item_menu_open() {
+            self.close_history_refs_hover(cx);
+            return;
+        }
         self.history_refs_hover_host.update(cx, |host, cx| {
             host.show(
                 repo_id,
@@ -1542,6 +1575,7 @@ impl GitCometView {
             .as_deref()
             .and_then(ChangeTrackingView::from_key)
             .unwrap_or_default();
+        let terminal_preferences = TerminalPreferences::from_ui_session(&ui_session);
         let diff_scroll_sync = ui_session
             .diff_scroll_sync
             .as_deref()
@@ -1562,6 +1596,7 @@ impl GitCometView {
             .as_deref()
             .and_then(DiffViewMode::from_key)
             .unwrap_or(DiffViewMode::Split);
+        let annotate_enabled = ui_session.annotate_enabled.unwrap_or(false);
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
         let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
@@ -1575,10 +1610,12 @@ impl GitCometView {
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
+        let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
         store.dispatch(Msg::SetGitLogSettings {
             show_history_tags: history_show_tags,
             tag_fetch_mode: history_tag_fetch_mode,
         });
+        store.dispatch(Msg::SetDefaultTagType(default_tag_type));
         let saved_open_repos = ui_session.open_repos.clone();
         let saved_active_repo = ui_session.active_repo.clone();
         let mut startup_repo_bootstrap_pending = false;
@@ -1703,6 +1740,7 @@ impl GitCometView {
                 diff_content_mode,
                 diff_whitespace_mode,
                 diff_view_mode,
+                annotate_enabled,
                 diff_reveal_whitespace_chars,
                 diff_word_wrap,
                 diff_show_line_numbers,
@@ -1824,10 +1862,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "/path/to/repo".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1837,11 +1872,10 @@ impl GitCometView {
         let error_banner_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
                     chromeless: true,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1852,10 +1886,7 @@ impl GitCometView {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Username".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1866,10 +1897,7 @@ impl GitCometView {
             let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Password / passphrase / confirmation".into(),
-                    multiline: false,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1924,6 +1952,8 @@ impl GitCometView {
         let initial_sidebar_width = scale.px(initial_sidebar_width_design);
         let initial_details_width = scale.px(initial_details_width_design);
 
+        let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
+
         let mut view = Self {
             state: Arc::clone(&initial_state),
             window_handle: window.window_handle(),
@@ -1933,6 +1963,7 @@ impl GitCometView {
             _ui_model_subscription: ui_model_subscription,
             _activation_subscription: activation_subscription,
             _appearance_subscription: appearance_subscription,
+            _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
@@ -1966,11 +1997,22 @@ impl GitCometView {
             timezone,
             show_timezone,
             change_tracking_view,
+            terminal_preferences,
+            terminal_sessions: HashMap::default(),
+            terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
+            terminal_panel_resize: None,
+            next_terminal_session_seq: 1,
+            terminal_cursor_blink_visible: true,
+            terminal_cursor_blink_hold_until: Instant::now(),
+            terminal_cursor_blink_active: false,
+            terminal_cursor_blink_task_scheduled: false,
+            terminal_cursor_blink_seq: 0,
             commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
             diff_whitespace_mode,
             diff_view_mode,
+            annotate_enabled,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
@@ -1992,6 +2034,8 @@ impl GitCometView {
             details_width_animating: false,
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
+            pending_terminal_shutdown_prompt: None,
+            pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
             pending_force_delete_branch_centered: false,
@@ -2009,6 +2053,7 @@ impl GitCometView {
         };
 
         view.set_theme(initial_theme, cx);
+        view.sync_action_bar_terminal_target(cx);
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         view.maybe_auto_install_linux_desktop_integration(cx);
@@ -2036,6 +2081,13 @@ impl GitCometView {
 
     fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        for session in self.terminal_sessions.values() {
+            for instance in &session.instances {
+                instance.viewport.update(cx, |viewport, cx| {
+                    viewport.set_theme(theme, cx);
+                });
+            }
+        }
         self.title_bar
             .update(cx, |bar, cx| bar.set_theme(theme, cx));
         self.sidebar_pane
@@ -2069,9 +2121,17 @@ impl GitCometView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.auth_prompt_secret_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        cx.notify();
     }
 
     fn notify_font_preferences_changed(&mut self, cx: &mut gpui::Context<Self>) {
+        for session in self.terminal_sessions.values() {
+            for instance in &session.instances {
+                instance.viewport.update(cx, |viewport, cx| {
+                    viewport.invalidate_layout(cx);
+                });
+            }
+        }
         self.title_bar.update(cx, |_bar, cx| cx.notify());
         self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
         self.main_pane
@@ -2275,6 +2335,21 @@ impl GitCometView {
         self.diff_view_mode = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_annotate_enabled(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.annotate_enabled == next {
+            return;
+        }
+
+        self.annotate_enabled = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -2514,6 +2589,14 @@ impl GitCometView {
             }
         }
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_default_tag_type_preference(
+        &mut self,
+        tag_type: DefaultTagType,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        self.store.dispatch(Msg::SetDefaultTagType(tag_type));
     }
 
     fn refresh_main_pane_after_panel_animation(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2852,6 +2935,11 @@ impl GitCometView {
 
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
+    }
+
+    fn active_repo(&self) -> Option<&RepoState> {
+        let repo_id = self.active_repo_id()?;
+        self.state.repos.iter().find(|repo| repo.id == repo_id)
     }
 
     fn drive_focused_mergetool_bootstrap(&mut self) {
@@ -3195,6 +3283,22 @@ impl GitCometView {
         });
     }
 
+    /// Mouse back/forward side buttons: step the active repo's global navigation
+    /// history (diffs, file content, commit selections). Active anywhere in the
+    /// window.
+    fn dispatch_global_nav(&self, forward: bool, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.main_pane.read(cx).active_repo_id() else {
+            return;
+        };
+        let msg = if forward {
+            Msg::GlobalNavForward { repo_id }
+        } else {
+            Msg::GlobalNavBack { repo_id }
+        };
+        self.store.dispatch(msg);
+        cx.notify();
+    }
+
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
@@ -3226,6 +3330,11 @@ impl GitCometView {
     #[allow(dead_code)]
     pub(in crate::view) fn change_tracking_view_for_test(&self) -> ChangeTrackingView {
         self.change_tracking_view
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn terminal_preferences_for_test(&self) -> &TerminalPreferences {
+        &self.terminal_preferences
     }
 
     fn resume_after_git_runtime_recovery(&mut self) {
@@ -3288,6 +3397,19 @@ impl Render for GitCometView {
             self.open_popover_at(
                 PopoverKind::PullReconcilePrompt { repo_id },
                 self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        if let Some(prompt) = self.pending_terminal_shutdown_prompt.take() {
+            let anchor = point(
+                self.last_window_size.width / 2.0,
+                self.last_window_size.height / 2.0,
+            );
+            self.open_popover_at(
+                PopoverKind::TerminalShutdownConfirm(prompt),
+                anchor,
                 window,
                 cx,
             );
@@ -3795,6 +3917,19 @@ impl Render for GitCometView {
         root = root.on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
             this.dismiss_history_refs_menus(cx);
         }));
+        root = root
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Back),
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                    this.dispatch_global_nav(false, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                    this.dispatch_global_nav(true, cx);
+                }),
+            );
         if tiling.is_some() {
             root = root.on_mouse_down(
                 MouseButton::Left,
@@ -3830,9 +3965,9 @@ impl Render for GitCometView {
             .left_0()
             .size_full()
             .child(self.render_command_palette(cx))
+            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_overlay_view(self.toast_host.clone()))
-            .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));
 
         root = root.child(chrome::window_frame(

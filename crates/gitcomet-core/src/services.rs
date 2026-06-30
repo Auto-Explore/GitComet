@@ -203,7 +203,24 @@ pub struct BlameLine {
     pub author: Arc<str>,
     pub author_time_unix: Option<i64>,
     pub summary: Arc<str>,
+    pub body: Option<Arc<str>>,
     pub line: String,
+    /// Whether the blamed file existed in the first parent of `commit_id`.
+    /// When `false`, "view file at parent commit" is a dead end (this commit
+    /// introduced the file), so the UI hides that affordance.
+    pub prior_exists: bool,
+    /// The file's path at `commit_id`, when it differs from the blamed path
+    /// because the file was renamed at/after that commit. `None` means the path
+    /// is the same as the blamed path. Used so "view file at this commit" and
+    /// "prior revision" navigate using the historical name rather than the
+    /// current one (which may not exist in that older tree).
+    pub source_path: Option<PathBuf>,
+    /// For uncommitted ("Not Committed Yet") lines, the commit the working-tree
+    /// change is based on (git blame porcelain `previous`), i.e. the revision to
+    /// open for "view file at parent commit". `None` for committed lines (which
+    /// resolve their parent from `commit_id`) and for uncommitted lines with no
+    /// base (newly added files).
+    pub prior_commit: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -628,7 +645,13 @@ pub trait GitRepository: Send + Sync {
         Ok(message)
     }
 
-    fn create_tag_with_output(&self, _name: &str, _target: &str) -> Result<CommandOutput> {
+    fn create_tag_with_output(
+        &self,
+        _name: &str,
+        _target: &str,
+        _message: Option<&str>,
+        _annotated: bool,
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git tag creation is not implemented for this backend",
         )))
@@ -815,6 +838,30 @@ pub trait GitRepository: Send + Sync {
     fn blame_file(&self, _path: &Path, _rev: Option<&str>) -> Result<Vec<BlameLine>> {
         Err(Error::new(ErrorKind::Unsupported(
             "git blame is not implemented for this backend",
+        )))
+    }
+
+    /// Resolve the path of the file currently known as `path` (at some revision)
+    /// to the name it has in `commit`'s tree, following renames. Returns `None`
+    /// when it cannot be determined (the caller should then fall back to `path`).
+    ///
+    /// This lets "view file at this commit" navigate across renames: a file's
+    /// name in an older/newer commit may differ from the path the caller holds,
+    /// and opening the wrong name would fail because it is absent from that tree.
+    fn resolve_file_path_at_commit(
+        &self,
+        _path: &Path,
+        _commit: &CommitId,
+    ) -> Result<Option<PathBuf>> {
+        Ok(None)
+    }
+
+    /// Blame the working-tree content shown on the new side of a staged/unstaged
+    /// diff. Lines matching committed history are attributed to their commit;
+    /// lines not yet committed are returned as "Not Committed Yet" entries.
+    fn blame_worktree_file(&self, _path: &Path, _area: DiffArea) -> Result<Vec<BlameLine>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git blame of working-tree content is not implemented for this backend",
         )))
     }
 
@@ -1462,7 +1509,11 @@ mod tests {
             author: "Alice".into(),
             author_time_unix: Some(1_700_000_000),
             summary: "Initial import".into(),
+            body: Some("detailed body".into()),
             line: "hello".to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
         };
 
         let cloned = line.clone();

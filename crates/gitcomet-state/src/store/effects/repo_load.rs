@@ -842,16 +842,20 @@ pub(super) fn schedule_load_blame(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     path: PathBuf,
-    rev: Option<String>,
+    source: gitcomet_core::domain::BlameSource,
 ) {
+    use gitcomet_core::domain::BlameSource;
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let result = repo.blame_file(&path, rev.as_deref());
+        let result = match &source {
+            BlameSource::Revision(rev) => repo.blame_file(&path, rev.as_deref()),
+            BlameSource::WorkingTree(area) => repo.blame_worktree_file(&path, *area),
+        };
         send_or_log(
             &msg_tx,
             Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
                 repo_id,
                 path: path.clone(),
-                rev: rev.clone(),
+                source: source.clone(),
                 result,
             }),
         );
@@ -1105,6 +1109,82 @@ pub(super) fn schedule_load_commit_details(
                 result: repo.commit_details(&commit_id),
             }),
         );
+    });
+}
+
+pub(super) fn schedule_open_file_at_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    path: std::path::PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        // Resolve the file's name in the target commit (it may differ from the
+        // path we hold due to a rename), then open content there. On failure or
+        // when no mapping is found, fall back to the path as-is.
+        let resolved = repo
+            .resolve_file_path_at_commit(&path, &commit_id)
+            .ok()
+            .flatten()
+            .unwrap_or(path);
+        send_or_log(
+            &msg_tx,
+            Msg::OpenFileContent {
+                repo_id,
+                source: gitcomet_core::domain::FileSource::Commit(commit_id),
+                path: resolved,
+            },
+        );
+    });
+}
+
+pub(super) fn schedule_open_file_at_commit_parent(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    path: std::path::PathBuf,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        match repo.commit_details(&commit_id) {
+            Ok(details) => {
+                if let Some(parent) = details.parent_ids.first() {
+                    // Resolve the file's name in the parent (it may differ from
+                    // the path we hold due to a rename), mirroring
+                    // `schedule_open_file_at_commit`. Falls back to the path
+                    // as-is on failure or when no mapping is found.
+                    let resolved = repo
+                        .resolve_file_path_at_commit(&path, parent)
+                        .ok()
+                        .flatten()
+                        .unwrap_or(path);
+                    send_or_log(
+                        &msg_tx,
+                        Msg::OpenFileContent {
+                            repo_id,
+                            source: gitcomet_core::domain::FileSource::Commit(parent.clone()),
+                            path: resolved,
+                        },
+                    );
+                }
+                // Root commit: no prior revision to open.
+            }
+            Err(e) => {
+                // Could not resolve the commit's parent (e.g. backend/object
+                // error). The affordance was shown, so surface the failure
+                // instead of silently doing nothing.
+                send_or_log(
+                    &msg_tx,
+                    Msg::ShowBannerError {
+                        repo_id: Some(repo_id),
+                        message: format!("Could not open file at parent commit: {e}"),
+                    },
+                );
+            }
+        }
     });
 }
 

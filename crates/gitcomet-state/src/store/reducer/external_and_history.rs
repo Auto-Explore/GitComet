@@ -1,3 +1,4 @@
+use super::actions_emit_effects::invalidate_loaded_blame;
 use super::effects::append_ensure_sidebar_data_effects;
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
@@ -80,13 +81,18 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.history_state.file_history_path = None;
     repo_state.history_state.file_history = Loadable::NotLoaded;
     repo_state.history_state.blame_path = None;
-    repo_state.history_state.blame_rev = None;
+    repo_state.history_state.blame_source = None;
     repo_state.history_state.blame = Loadable::NotLoaded;
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
     repo_state.clear_head_dependent_cached_state();
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
+    // A full reload may rewrite history (rebase/amend/branch switch underneath),
+    // so back/forward snapshots can reference commits or file revisions that no
+    // longer resolve. Start the navigation stacks fresh.
+    repo_state.nav_history.clear();
+    repo_state.view_history.clear();
 
     let mut effects = refresh_full_effects(repo_state, git_log_settings);
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
@@ -124,7 +130,12 @@ pub(super) fn repo_externally_changed(
         effects
     } else {
         let mut effects = Vec::new();
-        if change.worktree && change.index {
+        if change.index {
+            // The index is one side of BOTH the staged (HEAD↔index) and unstaged (index↔worktree)
+            // diffs, so an index change must refresh both lanes — even when no worktree file
+            // changed. An external `git add` / `git reset` / `git restore --staged` moves a file
+            // between the staged and unstaged sections; refreshing only the staged lane would
+            // leave the file lingering (stale) in the unstaged section (or vice-versa).
             append_requested_status_refresh_effects(repo_state, &mut effects);
         } else if change.worktree
             && repo_state
@@ -132,15 +143,19 @@ pub(super) fn repo_externally_changed(
                 .request(RepoLoadsInFlight::WORKTREE_STATUS)
         {
             effects.push(Effect::LoadWorktreeStatus { repo_id });
-        } else if change.index
-            && repo_state
-                .loads_in_flight
-                .request(RepoLoadsInFlight::STAGED_STATUS)
-        {
-            effects.push(Effect::LoadStagedStatus { repo_id });
         }
         effects
     };
+
+    // Tag reloads are driven by the `tags` flag alone, independent of
+    // `git_state`, so any change that sets `tags` refreshes them regardless of
+    // which other lanes the event touched.
+    if change.tags {
+        repo_state.set_tags(Loadable::NotLoaded);
+        if repo_state.loads_in_flight.request(RepoLoadsInFlight::TAGS) {
+            effects.push(Effect::LoadTags { repo_id });
+        }
+    }
 
     let should_reload_diff = repo_state
         .diff_state
@@ -158,6 +173,12 @@ pub(super) fn repo_externally_changed(
         && let Some(target) = repo_state.diff_state.diff_target.clone()
         && matches!(target, DiffTarget::WorkingTree { .. })
     {
+        // The working-tree content changed underneath us and the diff is being
+        // reloaded; the annotation column is derived from that same content, so
+        // drop loaded blame too. `blame_path`/`blame_source` are preserved, so
+        // `request_blame_for_current_target` reloads the same target's blame
+        // against the new content instead of painting stale attribution.
+        invalidate_loaded_blame(repo_state);
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             match conflict_target {
                 SelectedConflictTarget::Current => {

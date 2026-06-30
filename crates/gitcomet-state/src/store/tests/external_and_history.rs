@@ -194,6 +194,234 @@ fn external_worktree_change_refreshes_status_and_selected_diff() {
 }
 
 #[test]
+fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
+    // An external `git add` / `git reset` / `git restore --staged` rewrites `.git/index` without
+    // touching any worktree file, so the monitor reports an index-only change. The index is one
+    // side of BOTH the staged (HEAD↔index) and unstaged (index↔worktree) diffs, so both lanes
+    // must refresh; otherwise a file that moved between the staged and unstaged sections lingers
+    // (stale) in the lane that was not reloaded.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    // Complete the initial open-repo refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "an index-only external change must refresh both the staged and unstaged lanes, got {effects:?}"
+    );
+}
+
+#[test]
+fn external_index_change_reloads_open_working_tree_diff() {
+    // With a staged file's diff open, an external `git add` / `git reset` (index-only change)
+    // must reload that working-tree diff so it reflects the new index content rather than showing
+    // a stale diff.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Staged,
+            },
+        },
+    );
+
+    // Complete the initial open-repo refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id: rid, .. } if *rid == repo_id)),
+        "an index change must reload the open staged working-tree diff, got {effects:?}"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiffFile { repo_id: rid, .. } if *rid == repo_id)),
+        "an index change must reload the open diff's file content, got {effects:?}"
+    );
+}
+
+#[test]
+fn external_index_change_must_not_refresh_only_the_staged_lane() {
+    // Regression test that fails against the previous behavior: an index-only external change
+    // (`git add` / `git reset` / `git restore --staged`) used to emit exactly
+    // `[LoadStagedStatus]`, refreshing only the staged lane and leaving a moved file stale in the
+    // unstaged section. The change must also pursue the unstaged (worktree) lane.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+    // Settle the initial refresh so the external-change refresh isn't coalesced away.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::StagedStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+
+    // The unstaged lane must be refreshed — either by the combined status load or a direct
+    // worktree load.
+    assert!(
+        has_combined_status_effect(&effects, repo_id)
+            || has_worktree_status_effect(&effects, repo_id),
+        "an index-only change must refresh the unstaged lane, got {effects:?}"
+    );
+    // The exact old-behavior shape (staged lane only) must not occur.
+    let staged_lane_only = has_staged_status_effect(&effects, repo_id)
+        && !has_combined_status_effect(&effects, repo_id)
+        && !has_worktree_status_effect(&effects, repo_id);
+    assert!(
+        !staged_lane_only,
+        "an index-only change must not refresh only the staged lane, got {effects:?}"
+    );
+}
+
+#[test]
 fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -601,7 +829,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
 }
 
 #[test]
-fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop() {
+fn external_worktree_refresh_replays_coalesced_change_then_settles() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -643,6 +871,32 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         "expected in-flight coalescing while status load is running, got {effects:?}"
     );
 
+    // The in-flight load completes with an unchanged payload, but a second worktree event was
+    // coalesced while it ran. That event is a genuine external change the load may have read just
+    // before it landed, so the coalesced refresh must be replayed (not dropped) — otherwise the
+    // uncommitted view keeps showing stale entries.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeStatusLoaded {
+            repo_id,
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert!(
+        has_worktree_status_effect(&effects, repo_id),
+        "coalesced external change must replay a status load even when the payload is unchanged, got {effects:?}"
+    );
+    assert!(
+        state.repos[0]
+            .loads_in_flight
+            .is_in_flight(crate::model::RepoLoadsInFlight::WORKTREE_STATUS),
+        "the replayed load should re-arm the worktree status lane"
+    );
+
+    // The replayed load completes and nothing new is pending, so the lane settles instead of
+    // looping forever (status reads are read-only and cannot manufacture their own events).
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -656,11 +910,11 @@ fn external_worktree_refresh_with_unchanged_status_settles_without_replay_loop()
         effects
             .iter()
             .all(|e| !matches!(e, Effect::LoadWorktreeStatus { repo_id: rid } if *rid == repo_id)),
-        "unchanged status payload should not replay another status load, got {effects:?}"
+        "with no pending change the lane should stop replaying, got {effects:?}"
     );
     assert!(
         !state.repos[0].loads_in_flight.any_in_flight(),
-        "in-flight flags should settle after unchanged status load"
+        "in-flight flags should settle once no refresh is pending"
     );
 
     let effects = reduce(
@@ -819,6 +1073,152 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
             Effect::LoadSubmodules { repo_id } if *repo_id == RepoId(1)
         )),
         "submodules should auto-load in the background on repo reload"
+    );
+}
+
+#[test]
+fn repo_externally_changed_invalidates_loaded_blame() {
+    // Regression: an external edit/stage reloads the working-tree diff, and the
+    // blame annotation column is derived from that same content. Leaving blame
+    // `Ready` would make `request_blame_for_current_target` treat the target as
+    // already attempted and keep painting stale attribution over the new lines.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].history_state.blame_source = Some(
+        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
+    );
+    state.repos[0].history_state.blame = Loadable::Ready(std::sync::Arc::new(vec![
+        gitcomet_core::services::BlameLine {
+            commit_id: Arc::from("1111111111111111111111111111111111111111"),
+            author: Arc::from("Ada"),
+            author_time_unix: Some(1_700_000_000),
+            summary: Arc::from("initial"),
+            body: None,
+            line: "let x = 1;".to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
+        },
+    ]));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+
+    // The working-tree diff reloads against the new content...
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id: id, .. } if *id == repo_id)),
+        "external worktree change must reload the diff"
+    );
+    // ...and blame is dropped so it reloads too, with the target preserved.
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        "blame must be invalidated when the working-tree diff reloads externally"
+    );
+    assert_eq!(
+        state.repos[0].history_state.blame_path.as_deref(),
+        Some(std::path::Path::new("src/lib.rs"))
+    );
+    assert_eq!(
+        state.repos[0].history_state.blame_source,
+        Some(gitcomet_core::domain::BlameSource::WorkingTree(
+            DiffArea::Unstaged
+        ))
+    );
+}
+
+#[test]
+fn reload_repo_clears_stale_navigation_history() {
+    // Regression: a full reload may rewrite history (rebase/amend), so saved
+    // back/forward snapshots can reference commits that no longer resolve. The
+    // nav stacks must start fresh rather than letting Back restore a dead view.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+
+    let commit_a = CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    let commit_b = CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+    let snap = |c: &CommitId| crate::model::MainViewSnapshot {
+        diff_target: Some(DiffTarget::Commit {
+            commit_id: c.clone(),
+            path: Some(PathBuf::from("src/lib.rs")),
+        }),
+        content_preview: false,
+        selected_commit: Some(c.clone()),
+    };
+    state.repos[0].nav_history.record(snap(&commit_a));
+    state.repos[0].nav_history.record(snap(&commit_b));
+    state.repos[0]
+        .view_history
+        .record(crate::model::ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::Commit(commit_a.clone()),
+            path: PathBuf::from("src/lib.rs"),
+        });
+    // Make the live view match the nav tail so the reduce-wrapper's reconcile is
+    // a no-op and the stack survives intact up to the point ReloadRepo runs.
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::Commit {
+        commit_id: commit_b.clone(),
+        path: Some(PathBuf::from("src/lib.rs")),
+    });
+    state.repos[0].set_selected_commit(Some(commit_b.clone()));
+    assert_eq!(state.repos[0].nav_history.entries.len(), 2);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReloadRepo { repo_id },
+    );
+
+    // The stale back-stack entry (commit A) must be gone — without the clear it
+    // would survive as `entries[0]` while only the tail gets folded over.
+    assert!(
+        !state.repos[0]
+            .nav_history
+            .entries
+            .iter()
+            .any(|s| s.selected_commit.as_ref() == Some(&commit_a)),
+        "stale nav back-stack entry must be cleared on reload"
+    );
+    assert!(
+        state.repos[0].nav_history.entries.len() <= 1,
+        "only the post-reload current view may remain in nav_history"
+    );
+    assert!(
+        state.repos[0].view_history.entries.is_empty(),
+        "view_history must be cleared on reload"
     );
 }
 
@@ -1669,5 +2069,133 @@ fn status_loaded_bumps_status_rev() {
     assert!(
         state.repos[0].status_rev > status_before,
         "status_rev should bump after StatusLoaded"
+    );
+}
+
+#[test]
+fn external_tags_change_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_tags(Loadable::Ready(vec![gitcomet_core::domain::Tag {
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange {
+                git_state: true,
+                tags: true,
+                ..Default::default()
+            },
+        },
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded on external tags change"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect on external tags change"
+    );
+}
+
+#[test]
+fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_tags(Loadable::Ready(vec![gitcomet_core::domain::Tag {
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::LoadTags { .. })),
+        "LoadTags should not fire for a git_state change without tags flag"
+    );
+    assert!(
+        !matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should remain Ready when tags flag is not set"
+    );
+}
+
+#[test]
+fn external_tags_change_without_git_state_flag_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].set_tags(Loadable::Ready(vec![gitcomet_core::domain::Tag {
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+
+    // The `tags` flag must drive a tag reload independently of `git_state`, so a
+    // change that only sets `tags` still refreshes them.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange {
+                git_state: false,
+                tags: true,
+                ..Default::default()
+            },
+        },
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded when only the tags flag is set"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect when only the tags flag is set"
     );
 }

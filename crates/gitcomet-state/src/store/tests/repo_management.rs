@@ -2977,7 +2977,9 @@ fn set_active_repo_reloads_cancelled_history_panes_for_existing_selection() {
         repo1_state.history_state.file_history_path = Some(history_path.clone());
         repo1_state.history_state.file_history = Loadable::Loading;
         repo1_state.history_state.blame_path = Some(blame_path.clone());
-        repo1_state.history_state.blame_rev = Some("HEAD~1".to_string());
+        repo1_state.history_state.blame_source = Some(
+            gitcomet_core::domain::BlameSource::Revision(Some("HEAD~1".to_string())),
+        );
         repo1_state.history_state.blame = Loadable::Loading;
         repo1_state.set_selected_commit(Some(selected_commit.clone()));
         repo1_state.set_commit_details(Loadable::Loading);
@@ -3048,10 +3050,10 @@ fn set_active_repo_reloads_cancelled_history_panes_for_existing_selection() {
     )));
     assert!(reactivate_effects.iter().any(|effect| matches!(
         effect,
-        Effect::LoadBlame { repo_id, path, rev }
+        Effect::LoadBlame { repo_id, path, source: gitcomet_core::domain::BlameSource::Revision(Some(rev)) }
             if *repo_id == repo1
                 && path == &blame_path
-                && rev.as_deref() == Some("HEAD~1")
+                && rev == "HEAD~1"
     )));
     assert!(reactivate_effects.iter().any(|effect| matches!(
         effect,
@@ -3961,6 +3963,9 @@ fn repo_action_finished_reissues_inflight_blame_and_commit_details() {
 
     // The user has a blame and a commit-details view open and still loading.
     state.repos[0].history_state.blame_path = Some(PathBuf::from("src/main.rs"));
+    state.repos[0].history_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
+        Some("HEAD".to_string()),
+    ));
     state.repos[0].history_state.blame = Loadable::Loading;
     state.repos[0].history_state.selected_commit = Some(CommitId("abc123".into()));
     state.repos[0].history_state.commit_details = Loadable::Loading;
@@ -4070,6 +4075,9 @@ fn repo_action_finished_invalidates_but_does_not_reissue_views_for_non_active_re
         .request(RepoLoadsInFlight::BRANCHES);
     state.repos[0].branches = Loadable::Loading;
     state.repos[0].history_state.blame_path = Some(PathBuf::from("src/main.rs"));
+    state.repos[0].history_state.blame_source = Some(gitcomet_core::domain::BlameSource::Revision(
+        Some("HEAD".to_string()),
+    ));
     state.repos[0].history_state.blame = Loadable::Loading;
     let old_epoch = state.repos[0].load_epoch;
 

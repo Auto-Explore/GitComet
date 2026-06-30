@@ -56,6 +56,15 @@ impl Default for GitLogSettings {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[derive(Default)]
+pub enum DefaultTagType {
+    #[default]
+    Lightweight,
+    Annotated,
+}
+
 impl GitLogSettings {
     pub fn auto_fetch_tags_on_repo_activation(self) -> bool {
         matches!(
@@ -313,6 +322,158 @@ impl FileBrowserState {
     }
 }
 
+// ── Navigation history ──────────────────────────────────────────
+
+/// Maximum number of entries remembered per back/forward navigation stack.
+pub const NAV_HISTORY_CAP: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewNavDir {
+    Back,
+    Forward,
+}
+
+/// One opened file-content view, enough to replay it: the source revision and
+/// the path. (Working-tree previews use [`FileSource::WorkingDirectory`].)
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ViewHistoryEntry {
+    pub source: FileSource,
+    pub path: PathBuf,
+}
+
+/// A snapshot of the main content view for the broad, global navigation history
+/// (the mouse back/forward stack). Captures everything that decides what the
+/// main pane shows: the diff/file target (`None` = history log view), whether it
+/// is a full-content preview, and the selected commit. Replaying a snapshot only
+/// restores view/selection state; it never re-runs operations like a checkout.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MainViewSnapshot {
+    pub diff_target: Option<DiffTarget>,
+    pub content_preview: bool,
+    pub selected_commit: Option<CommitId>,
+}
+
+/// Browser-style back/forward stack. `cursor` indexes the currently shown entry
+/// within `entries`.
+#[derive(Clone, Debug)]
+pub struct NavStack<T> {
+    pub entries: Vec<T>,
+    pub cursor: usize,
+}
+
+impl<T> Default for NavStack<T> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            cursor: 0,
+        }
+    }
+}
+
+impl<T: Clone + PartialEq> NavStack<T> {
+    /// Record a freshly visited entry. Drops any forward history, dedupes a
+    /// repeat of the current entry, and caps the total length.
+    pub fn record(&mut self, entry: T) {
+        if self.entries.get(self.cursor) == Some(&entry) {
+            return;
+        }
+        self.entries.truncate(self.cursor.saturating_add(1));
+        self.entries.push(entry);
+        if self.entries.len() > NAV_HISTORY_CAP {
+            let overflow = self.entries.len() - NAV_HISTORY_CAP;
+            self.entries.drain(0..overflow);
+        }
+        self.cursor = self.entries.len() - 1;
+    }
+
+    /// Keep the stack in sync with the currently displayed `cur` view.
+    ///
+    /// This is called after every reduce so the cursor never goes stale: when
+    /// the view changed since the last entry, a `push` navigation appends it as
+    /// a new destination (truncating any forward history), while a non-`push`
+    /// (background) change rewrites the *live tail* entry in place — keeping
+    /// back/forward consistent without recording a spurious step.
+    ///
+    /// When the cursor is parked on a historical entry (the user has navigated
+    /// Back/Forward and is sitting mid-stack), a non-`push` change must not
+    /// touch the saved stack at all: rewriting or truncating it there would
+    /// silently drop forward history or corrupt a snapshot the user navigated
+    /// to. The next user navigation branches cleanly from the current cursor.
+    pub fn reconcile(&mut self, cur: T, push: bool) {
+        if self.entries.get(self.cursor) == Some(&cur) {
+            return;
+        }
+        if self.entries.is_empty() {
+            self.entries.push(cur);
+            self.cursor = 0;
+            return;
+        }
+        if push {
+            self.entries.truncate(self.cursor.saturating_add(1));
+            self.entries.push(cur);
+            if self.entries.len() > NAV_HISTORY_CAP {
+                let overflow = self.entries.len() - NAV_HISTORY_CAP;
+                self.entries.drain(0..overflow);
+            }
+            self.cursor = self.entries.len() - 1;
+            return;
+        }
+        // Non-`push` (background) change. Only fold it into the live tail; when
+        // parked mid-stack leave saved history untouched.
+        if self.cursor + 1 < self.entries.len() {
+            return;
+        }
+        if self.cursor > 0 && self.entries.get(self.cursor - 1) == Some(&cur) {
+            // Folding in-place made this entry match the previous one;
+            // collapse to avoid a consecutive duplicate that would require
+            // two back clicks to step past a closed/cleared view.
+            self.entries.truncate(self.cursor);
+            self.cursor -= 1;
+        } else {
+            self.entries[self.cursor] = cur;
+        }
+    }
+
+    /// Reset to an empty stack. Used when the repo's history becomes invalid
+    /// (full reload / reopen): saved snapshots may reference commits or file
+    /// revisions that no longer resolve, so back/forward must start fresh.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.cursor = 0;
+    }
+
+    /// Move the cursor one step in `dir` and return the entry to replay, or
+    /// `None` if already at the corresponding end.
+    pub fn step(&mut self, dir: ViewNavDir) -> Option<T> {
+        match dir {
+            ViewNavDir::Back if self.can_back() => self.cursor -= 1,
+            ViewNavDir::Forward if self.can_forward() => self.cursor += 1,
+            _ => return None,
+        }
+        self.entries.get(self.cursor).cloned()
+    }
+
+    /// Align the cursor with an entry restored by a *different* navigation
+    /// stack. If `entry` is already present, move the cursor onto it without
+    /// mutating the stack; otherwise record it as a fresh entry. Used so the
+    /// in-viewer file-version history follows along when the global (mouse)
+    /// back/forward navigation lands on a file-content view.
+    pub fn seek_or_record(&mut self, entry: T) {
+        match self.entries.iter().position(|e| *e == entry) {
+            Some(idx) => self.cursor = idx,
+            None => self.record(entry),
+        }
+    }
+
+    pub fn can_back(&self) -> bool {
+        self.cursor > 0
+    }
+
+    pub fn can_forward(&self) -> bool {
+        self.cursor + 1 < self.entries.len()
+    }
+}
+
 // ── App state ───────────────────────────────────────────────────
 
 #[derive(Clone, Debug, Default)]
@@ -327,6 +488,7 @@ pub struct AppState {
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
     pub sidebar_mode: SidebarMode,
+    pub default_tag_type: DefaultTagType,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -487,7 +649,7 @@ pub struct HistoryState {
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
     pub blame_path: Option<PathBuf>,
-    pub blame_rev: Option<String>,
+    pub blame_source: Option<BlameSource>,
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
@@ -506,7 +668,7 @@ impl Default for HistoryState {
             file_history_path: None,
             file_history: Loadable::NotLoaded,
             blame_path: None,
-            blame_rev: None,
+            blame_source: None,
             blame: Loadable::NotLoaded,
             selected_commit: None,
             selected_commit_rev: 0,
@@ -707,6 +869,13 @@ pub struct RepoState {
     /// historical point). The current point is `file_browser.source`; this is the
     /// stack the badge dropdown lists. Cleared by "Go live".
     pub browse_history: Vec<CommitId>,
+    /// Browser-style back/forward stack of opened file-content views, shared
+    /// across files. Drives the viewer header's back/forward controls.
+    pub view_history: NavStack<ViewHistoryEntry>,
+    /// Broader, global back/forward stack of main-content-view snapshots
+    /// (diffs, file content, the history log, commit selections). Drives the
+    /// mouse side buttons.
+    pub nav_history: NavStack<MainViewSnapshot>,
 
     pub diff_state: DiffState,
     pub conflict_state: ConflictState,
@@ -784,6 +953,8 @@ impl RepoState {
             branch_sidebar_rev: 0,
             file_browser: FileBrowserState::default(),
             browse_history: Vec::new(),
+            view_history: NavStack::default(),
+            nav_history: NavStack::default(),
             diff_state: DiffState::default(),
             conflict_state: ConflictState::default(),
             open_rev: 0,
@@ -1197,6 +1368,25 @@ impl RepoState {
         self.conflict_state.conflict_rev = self.conflict_state.conflict_rev.wrapping_add(1);
     }
 
+    /// Snapshot the state that decides what the main content pane shows, for the
+    /// global back/forward history.
+    pub(crate) fn main_view_snapshot(&self) -> MainViewSnapshot {
+        MainViewSnapshot {
+            diff_target: self.diff_state.diff_target.clone(),
+            content_preview: self.diff_state.content_preview,
+            selected_commit: self.history_state.selected_commit.clone(),
+        }
+    }
+
+    /// Whether the current main view equals `other`, compared by borrow so the
+    /// nav-history reconcile can skip cloning a `MainViewSnapshot` (which owns a
+    /// `PathBuf`) on the common path where the view did not move.
+    pub(crate) fn main_view_snapshot_matches(&self, other: &MainViewSnapshot) -> bool {
+        self.diff_state.diff_target == other.diff_target
+            && self.diff_state.content_preview == other.content_preview
+            && self.history_state.selected_commit == other.selected_commit
+    }
+
     pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
         if self.diff_state.diff_target != target {
             self.diff_state.diff_target_rev = self.diff_state.diff_target_rev.wrapping_add(1);
@@ -1263,6 +1453,287 @@ mod tests {
     use super::*;
     use std::time::SystemTime;
 
+    fn entry(name: &str) -> ViewHistoryEntry {
+        ViewHistoryEntry {
+            source: FileSource::Commit(crate::model::CommitId(name.into())),
+            path: PathBuf::from("src/lib.rs"),
+        }
+    }
+
+    #[test]
+    fn nav_stack_reconcile_seeds_origin_pushes_and_updates_in_place() {
+        let history_view = MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: None,
+        };
+        let commit_view = MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: Some(CommitId("aaa".into())),
+        };
+        let file_view = MainViewSnapshot {
+            diff_target: Some(DiffTarget::Commit {
+                commit_id: CommitId("aaa".into()),
+                path: Some(PathBuf::from("src/lib.rs")),
+            }),
+            content_preview: false,
+            selected_commit: Some(CommitId("aaa".into())),
+        };
+
+        let mut h: NavStack<MainViewSnapshot> = NavStack::default();
+        // Pre-change sync on the first navigation seeds the origin (history log).
+        h.reconcile(history_view.clone(), false);
+        // Selecting a commit then opening a file each push a distinct step.
+        h.reconcile(commit_view.clone(), true);
+        h.reconcile(file_view.clone(), true);
+        assert_eq!(
+            h.entries,
+            vec![history_view.clone(), commit_view.clone(), file_view.clone()]
+        );
+        assert_eq!(h.cursor, 2);
+
+        // Back steps one-by-one: file diff → commit details → history log.
+        assert_eq!(h.step(ViewNavDir::Back), Some(commit_view.clone()));
+        assert_eq!(h.step(ViewNavDir::Back), Some(history_view.clone()));
+        assert!(!h.can_back());
+        // Forward reopens them one-by-one.
+        assert_eq!(h.step(ViewNavDir::Forward), Some(commit_view.clone()));
+        assert_eq!(h.step(ViewNavDir::Forward), Some(file_view.clone()));
+
+        // A non-push (background) change folds into the current entry without
+        // adding a step or dropping forward history.
+        let reloaded_file_view = MainViewSnapshot {
+            content_preview: true,
+            ..file_view.clone()
+        };
+        h.reconcile(reloaded_file_view.clone(), false);
+        assert_eq!(h.entries.len(), 3, "in-place update must not add a step");
+        assert_eq!(h.entries[2], reloaded_file_view);
+        assert_eq!(h.cursor, 2);
+    }
+
+    #[test]
+    fn view_history_records_and_navigates() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        assert!(!h.can_back());
+        assert!(!h.can_forward());
+
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.record(entry("c"));
+        assert_eq!(h.cursor, 2);
+        assert!(h.can_back());
+        assert!(!h.can_forward());
+
+        // Step back to b, then a.
+        assert_eq!(h.step(ViewNavDir::Back), Some(entry("b")));
+        assert_eq!(h.step(ViewNavDir::Back), Some(entry("a")));
+        assert!(!h.can_back());
+        // Clamped at the start.
+        assert_eq!(h.step(ViewNavDir::Back), None);
+
+        // Forward again to b.
+        assert_eq!(h.step(ViewNavDir::Forward), Some(entry("b")));
+        assert!(h.can_forward());
+    }
+
+    #[test]
+    fn view_history_new_open_truncates_forward() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.record(entry("c"));
+        // Go back to a, then open a new view: forward (b, c) is dropped.
+        h.step(ViewNavDir::Back);
+        h.step(ViewNavDir::Back);
+        h.record(entry("d"));
+        assert_eq!(
+            h.entries,
+            vec![entry("a"), entry("d")],
+            "forward history past the cursor is truncated on a new open"
+        );
+        assert_eq!(h.cursor, 1);
+        assert!(!h.can_forward());
+    }
+
+    #[test]
+    fn seek_or_record_moves_cursor_to_existing_entry_without_mutating() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.record(entry("c"));
+        // Realign onto an entry already present: only the cursor moves.
+        h.seek_or_record(entry("a"));
+        assert_eq!(h.cursor, 0);
+        assert_eq!(h.entries, vec![entry("a"), entry("b"), entry("c")]);
+        assert!(h.can_forward());
+    }
+
+    #[test]
+    fn seek_or_record_appends_when_entry_absent() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        // An entry not in the stack is recorded as a fresh destination.
+        h.seek_or_record(entry("z"));
+        assert_eq!(h.entries, vec![entry("a"), entry("b"), entry("z")]);
+        assert_eq!(h.cursor, 2);
+    }
+
+    #[test]
+    fn view_history_dedupes_repeat_of_current() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("a"));
+        assert_eq!(h.entries, vec![entry("a")]);
+        assert_eq!(h.cursor, 0);
+    }
+
+    #[test]
+    fn view_history_caps_length() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        for i in 0..(NAV_HISTORY_CAP + 5) {
+            h.record(entry(&format!("c{i}")));
+        }
+        assert_eq!(h.entries.len(), NAV_HISTORY_CAP);
+        assert_eq!(h.cursor, NAV_HISTORY_CAP - 1);
+        // Oldest entries were evicted; newest is current.
+        assert_eq!(
+            h.entries.last(),
+            Some(&entry(&format!("c{}", NAV_HISTORY_CAP + 4)))
+        );
+    }
+
+    #[test]
+    fn reconcile_leaves_history_intact_when_parked_mid_stack() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.record(entry("c"));
+        // Navigate back to the middle entry "b".
+        assert_eq!(h.step(ViewNavDir::Back), Some(entry("b")));
+        assert_eq!(h.cursor, 1);
+
+        // A background (non-push) change to a different snapshot must not rewrite
+        // the historical entry nor drop the forward entry "c".
+        h.reconcile(entry("x"), false);
+        assert_eq!(
+            h.entries,
+            vec![entry("a"), entry("b"), entry("c")],
+            "background change while parked mid-stack must not mutate saved history"
+        );
+        assert_eq!(h.cursor, 1);
+        assert!(h.can_forward());
+        assert_eq!(h.step(ViewNavDir::Forward), Some(entry("c")));
+    }
+
+    #[test]
+    fn reconcile_folds_background_change_into_live_tail() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        // At the live tail a background change still folds in place (no new step).
+        h.reconcile(entry("b2"), false);
+        assert_eq!(h.entries, vec![entry("a"), entry("b2")]);
+        assert_eq!(h.cursor, 1);
+    }
+
+    #[test]
+    fn clear_resets_stack() {
+        let mut h: NavStack<ViewHistoryEntry> = NavStack::default();
+        h.record(entry("a"));
+        h.record(entry("b"));
+        h.clear();
+        assert!(h.entries.is_empty());
+        assert_eq!(h.cursor, 0);
+        assert!(!h.can_back());
+        assert!(!h.can_forward());
+    }
+
+    #[test]
+    fn reconcile_fold_collapses_consecutive_duplicate() {
+        let history_log = MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: None,
+        };
+        let commit_view = MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: Some(CommitId("aaa".into())),
+        };
+        let file_diff = MainViewSnapshot {
+            diff_target: Some(DiffTarget::Commit {
+                commit_id: CommitId("aaa".into()),
+                path: Some(PathBuf::from("src/lib.rs")),
+            }),
+            content_preview: false,
+            selected_commit: Some(CommitId("aaa".into())),
+        };
+
+        let mut h: NavStack<MainViewSnapshot> = NavStack::default();
+        h.reconcile(history_log.clone(), false);
+        h.reconcile(commit_view.clone(), true);
+        h.reconcile(file_diff.clone(), true);
+        assert_eq!(h.cursor, 2);
+        assert_eq!(h.entries.len(), 3);
+
+        // Folding the cleared-diff state in-place makes it match the
+        // previous entry (commit details), so the stack collapses back
+        // to that entry instead of creating a consecutive duplicate.
+        h.reconcile(commit_view.clone(), false);
+        assert_eq!(
+            h.entries.len(),
+            2,
+            "duplicate entries collapsed into original"
+        );
+        assert_eq!(h.cursor, 1);
+        assert_eq!(h.entries[1], commit_view);
+    }
+
+    #[test]
+    fn reconcile_fold_no_collapse_when_not_adjacent_duplicate() {
+        let view_a = MainViewSnapshot {
+            diff_target: Some(DiffTarget::WorkingTree {
+                path: PathBuf::from("a.txt"),
+                area: DiffArea::Unstaged,
+            }),
+            content_preview: false,
+            selected_commit: None,
+        };
+        let view_b = MainViewSnapshot {
+            diff_target: Some(DiffTarget::WorkingTree {
+                path: PathBuf::from("b.txt"),
+                area: DiffArea::Unstaged,
+            }),
+            content_preview: false,
+            selected_commit: None,
+        };
+
+        let mut h: NavStack<MainViewSnapshot> = NavStack::default();
+        let empty = MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: None,
+        };
+        h.reconcile(empty.clone(), false);
+        h.reconcile(view_a.clone(), true);
+        h.reconcile(view_b.clone(), true);
+        assert_eq!(h.entries.len(), 3);
+
+        // Folding into an adjacent entry that is *different* does not
+        // collapse — it overwrites in place.
+        let changed = MainViewSnapshot {
+            content_preview: true,
+            ..view_b.clone()
+        };
+        h.reconcile(changed.clone(), false);
+        assert_eq!(h.entries.len(), 3, "no collapse when adjacent differs");
+        assert_eq!(h.entries[2], changed);
+        assert_eq!(h.cursor, 2);
+    }
+
     #[test]
     fn browsing_commit_reflects_file_browser_source() {
         let mut repo = RepoState::new_opening(
@@ -1311,7 +1782,11 @@ mod tests {
             author: "a".into(),
             author_time_unix: None,
             summary: "s1".into(),
+            body: None,
             line: "line".to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
         }]));
         repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
             id: CommitId("c1".into()),

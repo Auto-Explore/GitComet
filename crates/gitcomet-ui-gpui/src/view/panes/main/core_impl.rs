@@ -692,6 +692,43 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
     }
 }
 
+/// Resolve the file path and blame source for a diff target, or `None` for
+/// targets that do not support blame annotation (e.g. whole-commit diffs with no
+/// selected path).
+///
+/// Committed-file diffs blame the committed revision shown on the new side.
+/// Working-tree diffs blame the displayed new-side content for their area (see
+/// [`gitcomet_core::services::Repo::blame_worktree_file`]); lines not yet
+/// committed are surfaced as "Not Committed Yet". In both cases blame is
+/// computed against the exact content rendered on the new side, so the 1:1
+/// `new_line` mapping in the annotation column stays correct.
+fn blame_path_rev_for_target(
+    target: &DiffTarget,
+) -> Option<(std::path::PathBuf, gitcomet_core::domain::BlameSource)> {
+    use gitcomet_core::domain::BlameSource;
+    match target {
+        DiffTarget::WorkingTree { path, area } => {
+            Some((path.clone(), BlameSource::WorkingTree(*area)))
+        }
+        DiffTarget::Commit {
+            commit_id,
+            path: Some(path),
+        } => Some((
+            path.clone(),
+            BlameSource::Revision(Some(commit_id.0.to_string())),
+        )),
+        DiffTarget::CommitRange {
+            to_commit_id,
+            path: Some(path),
+            ..
+        } => Some((
+            path.clone(),
+            BlameSource::Revision(Some(to_commit_id.0.to_string())),
+        )),
+        _ => None,
+    }
+}
+
 impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -776,6 +813,15 @@ impl MainPaneView {
                     0u8.hash(&mut hasher);
                 }
             }
+            // Blame/annotate data — when blame loads for the first time or changes
+            // target, the annotation sidebar needs to repaint.
+            repo.history_state.blame_path.hash(&mut hasher);
+            repo.history_state.blame_source.hash(&mut hasher);
+            matches!(
+                &repo.history_state.blame,
+                gitcomet_state::model::Loadable::Ready(_)
+            )
+            .hash(&mut hasher);
         }
 
         hasher.finish()
@@ -925,6 +971,7 @@ impl MainPaneView {
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
         diff_view_mode: DiffViewMode,
+        annotate_enabled: bool,
         diff_reveal_whitespace_chars: bool,
         diff_word_wrap: bool,
         diff_show_line_numbers: bool,
@@ -960,11 +1007,9 @@ impl MainPaneView {
         let diff_raw_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
-                    placeholder: "".into(),
                     multiline: true,
                     read_only: true,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -975,11 +1020,8 @@ impl MainPaneView {
                 cx.new(|cx| {
                     let mut input = components::TextInput::new(
                         components::TextInputOptions {
-                            placeholder: "".into(),
-                            multiline: false,
                             read_only: true,
-                            chromeless: false,
-                            soft_wrap: false,
+                            ..Default::default()
                         },
                         window,
                         cx,
@@ -995,9 +1037,8 @@ impl MainPaneView {
                 components::TextInputOptions {
                     placeholder: "Resolve file contents…".into(),
                     multiline: true,
-                    read_only: false,
                     chromeless: true,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1048,9 +1089,7 @@ impl MainPaneView {
                 components::TextInputOptions {
                     placeholder: "Search diff".into(),
                     multiline: true,
-                    read_only: false,
-                    chromeless: false,
-                    soft_wrap: false,
+                    ..Default::default()
                 },
                 window,
                 cx,
@@ -1144,6 +1183,11 @@ impl MainPaneView {
             layout_details_collapsed: false,
             reveal_whitespace_chars: diff_reveal_whitespace_chars,
             diff_view: diff_view_mode,
+            annotate_enabled,
+            annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
+            annotate_resize: None,
+            blame_annot_hover: None,
+            blame_time_range_cache: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2807,6 +2851,113 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_annotate_enabled(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.annotate_enabled == next {
+            return;
+        }
+
+        self.annotate_enabled = next;
+        // The annotation column changes the available text width, so word-wrap
+        // column counts and wrapped-row projection must be recomputed.
+        self.invalidate_diff_wrap_visible_cache();
+        if next {
+            // An explicit toggle on: retry a previously failed blame for the same
+            // target (force = true). The per-frame Render path never forces.
+            self.request_blame_for_current_target(true, cx);
+        }
+        cx.notify();
+    }
+
+    /// Scaled pixel width of the annotation column at the current ui scale.
+    pub(in crate::view) fn annotate_column_width_px(&self, ui_scale_percent: u32) -> Pixels {
+        crate::ui_scale::design_px_from_percent(self.annotate_column_width, ui_scale_percent)
+    }
+
+    /// Whether the annotation column should be shown for the currently rendered
+    /// diff target. Requires the user toggle to be on AND the target to support
+    /// blame (committed-file and working-tree views — see
+    /// [`blame_path_rev_for_target`]).
+    pub(in crate::view) fn annotation_active(&self) -> bool {
+        self.annotate_enabled
+            && self
+                .rendered_diff_target()
+                .and_then(blame_path_rev_for_target)
+                .is_some()
+    }
+
+    /// Record the hovered blame annotation sub-area and drive the shared tooltip
+    /// host. `next` is the (row, area) now hovered, or `None` when leaving; the
+    /// blame canvas repaints on `notify` and renders the accent highlight from
+    /// this state. Callers gate this so it only runs when the hover changes.
+    pub(in crate::view) fn update_blame_annot_hover(
+        &mut self,
+        next: Option<(usize, rows::AnnotArea)>,
+        tooltip: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.blame_annot_hover == next {
+            return;
+        }
+        self.blame_annot_hover = next;
+        if let Some(host) = self.tooltip_host.upgrade() {
+            host.update(cx, |host, cx| match tooltip {
+                Some(text) => {
+                    host.set_tooltip_text_if_changed(Some(text), cx);
+                }
+                None => {
+                    host.clear_tooltip(cx);
+                }
+            });
+        }
+        cx.notify();
+    }
+
+    /// Drop the cached wrapped-row projection so it is recomputed against the
+    /// current text width (which depends on whether the annotation column is
+    /// shown).
+    pub(in crate::view) fn invalidate_diff_wrap_visible_cache(&mut self) {
+        self.diff_wrap_visible_rows.clear();
+        self.diff_wrap_visible_cache_key = None;
+    }
+
+    /// When annotate is on, ensure blame for the currently displayed file/rev is
+    /// loaded. Derives the path and revision from the rendered diff target and
+    /// dispatches `LoadBlame`, skipping redundant loads.
+    pub(in crate::view) fn request_blame_for_current_target(
+        &mut self,
+        force: bool,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let Some((path, source)) = self
+            .rendered_diff_target()
+            .and_then(blame_path_rev_for_target)
+        else {
+            return;
+        };
+
+        if let Some(repo) = self.active_repo() {
+            let history = &repo.history_state;
+            let same_target = history.blame_path.as_deref() == Some(path.as_path())
+                && history.blame_source.as_ref() == Some(&source);
+            if !should_request_blame(same_target, &history.blame, force) {
+                return;
+            }
+        }
+
+        self.store.dispatch(Msg::LoadBlame {
+            repo_id,
+            path,
+            source,
+        });
+    }
+
     pub(in crate::view) fn set_diff_content_mode(
         &mut self,
         next: DiffContentMode,
@@ -4151,12 +4302,24 @@ impl MainPaneView {
         } else {
             pad
         };
-        let inline_columns =
-            diff_wrap_columns_for_width(content_width - inline_text_start - pad, char_width);
+        // Inline annotate reserves a fixed column at the left, narrowing the
+        // available text width for word wrapping.
+        let annotation_width = if self.annotation_active() {
+            self.annotate_column_width_px(ui_scale_percent)
+        } else {
+            px(0.0)
+        };
+        let inline_columns = diff_wrap_columns_for_width(
+            content_width - annotation_width - inline_text_start - pad,
+            char_width,
+        );
 
         let (left_w, right_w) =
             crate::view::diff_split_column_widths(content_width, self.diff_split_ratio);
-        let split_text_width = left_w.min(right_w).max(px(0.0)) - single_text_start - pad;
+        // The annotation column narrows the left split column; subtract it from
+        // the shared wrap width so wrapped text stays within the left column.
+        let split_text_width =
+            left_w.min(right_w).max(px(0.0)) - annotation_width - single_text_start - pad;
         let split_columns = diff_wrap_columns_for_width(split_text_width, char_width);
         (inline_columns, split_columns)
     }
@@ -4682,9 +4845,76 @@ impl MainPaneView {
     }
 }
 
+/// Decide whether a blame (re)load should be dispatched for the rendered target.
+///
+/// `same_target` is whether the currently loaded blame is for the same
+/// file/source. `force` requests a retry of a previous failure (an explicit user
+/// toggle); the per-frame Render path passes `false` so a persistent error does
+/// not cause a dispatch-every-frame loop.
+fn should_request_blame<T>(
+    same_target: bool,
+    blame: &gitcomet_state::model::Loadable<T>,
+    force: bool,
+) -> bool {
+    use gitcomet_state::model::Loadable;
+    if !same_target {
+        // A new or changed target always (re)loads.
+        return true;
+    }
+    match blame {
+        // Already loaded or in flight for this target: nothing to do.
+        Loadable::Ready(_) | Loadable::Loading => false,
+        // A previous attempt failed: retry only on an explicit user toggle.
+        Loadable::Error(_) => force,
+        Loadable::NotLoaded => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn should_request_blame_retries_failure_only_when_forced() {
+        use gitcomet_state::model::Loadable;
+        // A new/changed target always loads, regardless of state or force.
+        assert!(should_request_blame(
+            false,
+            &Loadable::<()>::Ready(()),
+            false
+        ));
+        assert!(should_request_blame(
+            false,
+            &Loadable::<()>::Error("x".into()),
+            false
+        ));
+        // Same target, healthy or in flight: never reload (even when forced), so a
+        // toggle-on doesn't re-blame an already-loaded file.
+        assert!(!should_request_blame(
+            true,
+            &Loadable::<()>::Ready(()),
+            true
+        ));
+        assert!(!should_request_blame(true, &Loadable::<()>::Loading, true));
+        // Same target, not yet loaded: load.
+        assert!(should_request_blame(
+            true,
+            &Loadable::<()>::NotLoaded,
+            false
+        ));
+        // Same target, failed: never retry from the per-frame Render path
+        // (force=false), but retry on an explicit toggle (force=true).
+        assert!(!should_request_blame(
+            true,
+            &Loadable::<()>::Error("e".into()),
+            false
+        ));
+        assert!(should_request_blame(
+            true,
+            &Loadable::<()>::Error("e".into()),
+            true
+        ));
+    }
 
     #[test]
     fn clamp_raw_scroll_y_limits_scroll_without_flipping_direction() {

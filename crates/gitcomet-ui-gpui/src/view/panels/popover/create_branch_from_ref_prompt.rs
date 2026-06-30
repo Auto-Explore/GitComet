@@ -38,6 +38,7 @@ fn checkout_toggle(
     )
     .flex()
     .gap_2()
+    .justify_start()
     .child(
         div()
             .size(px(16.0))

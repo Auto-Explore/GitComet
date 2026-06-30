@@ -2397,6 +2397,154 @@ fn closing_last_repository_tab_returns_to_splash_screen(cx: &mut gpui::TestAppCo
 }
 
 #[gpui::test]
+fn request_quit_or_warn_queues_terminal_shutdown_prompt(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(this.request_quit_or_warn(2, 1, vec![], vec![], cx));
+            let prompt = this
+                .pending_terminal_shutdown_prompt
+                .as_ref()
+                .expect("expected a queued terminal shutdown prompt");
+            assert!(matches!(prompt.action, TerminalShutdownAction::QuitApp));
+            assert_eq!(prompt.summary.terminal_count, 2);
+            assert_eq!(prompt.summary.running_command_count, 1);
+        });
+    });
+}
+
+#[gpui::test]
+fn confirm_terminal_shutdown_close_window_removes_the_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    assert_eq!(cx.update(|_window, app| app.windows().len()), 1);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.confirm_terminal_shutdown(
+                TerminalShutdownPrompt {
+                    action: TerminalShutdownAction::CloseWindow,
+                    summary: TerminalShutdownSummary {
+                        terminal_count: 1,
+                        running_command_count: 1,
+                        repo_names: vec![],
+                    },
+                },
+                window,
+                cx,
+            );
+        });
+    });
+
+    assert_eq!(cx.cx.update(|app| app.windows().len()), 0);
+}
+
+#[gpui::test]
+fn cancel_pending_terminal_shutdown_clears_prompt(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(this.request_quit_or_warn(2, 1, vec![], vec![], cx));
+            assert!(this.pending_terminal_shutdown_prompt.is_some());
+            this.clear_pending_terminal_shutdown_prompt(cx);
+            assert!(this.pending_terminal_shutdown_prompt.is_none());
+        });
+    });
+}
+
+#[gpui::test]
+fn request_close_window_or_warn_returns_false_without_terminals(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(!this.request_close_window_or_warn(cx));
+        });
+    });
+}
+
+#[gpui::test]
+fn request_quit_or_warn_returns_false_when_no_running_commands(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(!this.request_quit_or_warn(1, 0, vec![], vec![], cx));
+            assert!(this.pending_terminal_shutdown_prompt.is_none());
+        });
+    });
+}
+
+#[gpui::test]
+fn quit_or_warn_stores_other_window_views(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let fake_views: Vec<gpui::WeakEntity<GitCometView>> = vec![
+        gpui::WeakEntity::new_invalid(),
+        gpui::WeakEntity::new_invalid(),
+    ];
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            assert!(this.request_quit_or_warn(1, 2, vec![], fake_views, cx));
+            assert_eq!(this.pending_quit_other_views.len(), 2);
+        });
+    });
+}
+
+#[gpui::test]
+fn confirm_quit_app_terminates_other_window_terminals(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let fake_views: Vec<gpui::WeakEntity<GitCometView>> = vec![gpui::WeakEntity::new_invalid()];
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.pending_quit_other_views = fake_views;
+            this.confirm_terminal_shutdown(
+                TerminalShutdownPrompt {
+                    action: TerminalShutdownAction::QuitApp,
+                    summary: TerminalShutdownSummary {
+                        terminal_count: 1,
+                        running_command_count: 1,
+                        repo_names: vec![],
+                    },
+                },
+                window,
+                cx,
+            );
+            assert!(
+                this.pending_quit_other_views.is_empty(),
+                "other views must be drained after confirm"
+            );
+        });
+    });
+}
+
+#[gpui::test]
 fn closing_popover_clears_truncated_text_tooltip(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
@@ -2455,8 +2603,15 @@ fn removed_repo_tab_tooltip_does_not_reappear_after_hover_target_disappears(
     cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
     test_support::wait_for_native_tooltip(cx);
 
-    let expected_tooltip =
-        path_display::path_display_string(Path::new("/tmp/splash-tooltip-clear-test"));
+    let expected_tooltip = {
+        let snapshot = store_for_assert.snapshot();
+        let workdir = snapshot
+            .repos
+            .first()
+            .map(|r| r.spec.workdir.clone())
+            .unwrap_or_else(|| PathBuf::from("/tmp/splash-tooltip-clear-test"));
+        path_display::path_display_string(&workdir)
+    };
     assert_eq!(
         test_support::tooltip_text(cx, &view).map(|text| text.to_string()),
         Some(expected_tooltip)

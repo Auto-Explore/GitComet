@@ -27,6 +27,7 @@ mod submodule;
 mod submodule_inner_diff;
 mod submodule_section;
 mod tag;
+mod terminal;
 mod ui_scale_picker;
 mod worktree;
 mod worktree_section;
@@ -385,6 +386,9 @@ impl PopoverHost {
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, can_drop } => {
                 Some(interactive_rebase_action_menu_model(*ix, *is_bottom, *can_drop))
+            }
+            PopoverKind::TerminalMenu { repo_id, context } => {
+                Some(terminal::model(*repo_id, *context, cx))
             }
             _ => None,
         }
@@ -952,6 +956,32 @@ impl PopoverHost {
                 window.activate_window();
                 self.main_pane.update(cx, |pane, cx| {
                     pane.copy_diff_text_for_context_menu_to_clipboard(visible_ix, region, cx);
+                });
+            }
+            ContextMenuAction::TerminalCopy { repo_id } => {
+                window.activate_window();
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.copy_terminal_selection_for_repo(repo_id, window, cx);
+                });
+            }
+            ContextMenuAction::TerminalPaste { repo_id } => {
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.paste_terminal_clipboard_for_repo(repo_id, window, cx);
+                });
+            }
+            ContextMenuAction::TerminalSelectAll { repo_id } => {
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.select_all_terminal_for_repo(repo_id, window, cx);
+                });
+            }
+            ContextMenuAction::TerminalClear { repo_id } => {
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.clear_terminal_for_repo(repo_id, window, cx);
+                });
+            }
+            ContextMenuAction::TerminalOpenExternal { repo_id } => {
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.open_external_terminal_from_menu(repo_id, window, cx);
                 });
             }
             ContextMenuAction::ApplyIndexPatch {

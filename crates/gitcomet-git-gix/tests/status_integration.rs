@@ -5983,7 +5983,11 @@ fn create_and_delete_local_tag() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    opened.create_tag_with_output("v1.0.0", "HEAD").unwrap();
+    // No message => lightweight tag (a ref pointing straight at the commit),
+    // matching `git tag <name>` semantics.
+    opened
+        .create_tag_with_output("v1.0.0", "HEAD", None, false)
+        .unwrap();
     run_git(
         repo,
         &["show-ref", "--verify", "--quiet", "refs/tags/v1.0.0"],
@@ -5998,7 +6002,11 @@ fn create_and_delete_local_tag() {
         tag_type.status.success(),
         "expected refs/tags/v1.0.0 to exist"
     );
-    assert_eq!(String::from_utf8_lossy(&tag_type.stdout).trim(), "tag");
+    assert_eq!(
+        String::from_utf8_lossy(&tag_type.stdout).trim(),
+        "commit",
+        "a tag created without a message should be lightweight"
+    );
 
     opened.delete_tag_with_output("v1.0.0").unwrap();
     let deleted = git_command()
@@ -6008,6 +6016,68 @@ fn create_and_delete_local_tag() {
         .status()
         .expect("show-ref");
     assert!(!deleted.success(), "expected tag to be deleted");
+}
+
+#[test]
+fn create_annotated_tag_includes_message() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(repo, &["config", "tag.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // A message => annotated tag object that stores the message.
+    opened
+        .create_tag_with_output("v1.0.0", "HEAD", Some("Release 1.0"), true)
+        .unwrap();
+
+    let tag_type = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args(["cat-file", "-t", "refs/tags/v1.0.0"])
+        .output()
+        .expect("cat-file");
+    assert!(
+        tag_type.status.success(),
+        "expected refs/tags/v1.0.0 to exist"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&tag_type.stdout).trim(),
+        "tag",
+        "a tag created with a message should be annotated"
+    );
+
+    let contents = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "for-each-ref",
+            "--format=%(contents:subject)",
+            "refs/tags/v1.0.0",
+        ])
+        .output()
+        .expect("for-each-ref");
+    assert_eq!(
+        String::from_utf8_lossy(&contents.stdout).trim(),
+        "Release 1.0",
+        "annotated tag should carry the provided message"
+    );
 }
 
 #[test]
@@ -6037,16 +6107,17 @@ fn create_tag_respects_tag_gpgsign_config() {
 
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
+    // Signing only applies to annotated tags, so request one with a message.
     let err = opened
-        .create_tag_with_output("v1.0.0", "HEAD")
+        .create_tag_with_output("v1.0.0", "HEAD", Some("Release 1.0"), true)
         .expect_err("tag creation should fail when signing is required and gpg is missing");
 
     match err.kind() {
         ErrorKind::Git(failure) => {
-            assert_eq!(failure.command(), "git tag -m v1.0.0 -- v1.0.0 HEAD");
+            assert_eq!(failure.command(), "git tag -m <message> -- v1.0.0 HEAD");
             let msg = failure.to_string();
             assert!(
-                msg.contains("git tag -m v1.0.0 -- v1.0.0 HEAD failed"),
+                msg.contains("git tag -m <message> -- v1.0.0 HEAD failed"),
                 "unexpected git error: {msg}"
             );
             let lower = msg.to_ascii_lowercase();
@@ -6207,7 +6278,9 @@ fn push_and_delete_remote_tag() {
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
 
-    opened.create_tag_with_output("v1.0.0", "HEAD").unwrap();
+    opened
+        .create_tag_with_output("v1.0.0", "HEAD", None, false)
+        .unwrap();
     opened.push_tag_with_output("origin", "v1.0.0").unwrap();
     run_git(
         &origin,

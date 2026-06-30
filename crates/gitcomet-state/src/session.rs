@@ -1,4 +1,4 @@
-use crate::model::{AppState, GitLogTagFetchMode, RepoId};
+use crate::model::{AppState, DefaultTagType, GitLogTagFetchMode, RepoId};
 use gitcomet_core::domain::{HistoryMode, LogScope};
 use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,7 @@ pub struct UiSession {
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
     pub diff_view_mode: Option<String>,
+    pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
@@ -43,10 +44,15 @@ pub struct UiSession {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub terminal_external_mode: Option<String>,
+    pub terminal_external_program: Option<String>,
+    pub terminal_external_args: Option<Vec<String>>,
+    pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
+    pub default_tag_type: Option<DefaultTagType>,
     pub git_executable_path: Option<PathBuf>,
     pub external_code_editor: Option<ExternalCodeEditorSetting>,
 }
@@ -156,6 +162,7 @@ struct UiSessionFile {
     diff_content_mode: Option<String>,
     diff_whitespace_mode: Option<String>,
     diff_view_mode: Option<String>,
+    annotate_enabled: Option<bool>,
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
@@ -165,10 +172,15 @@ struct UiSessionFile {
     history_show_author: Option<bool>,
     history_show_date: Option<bool>,
     history_show_sha: Option<bool>,
+    terminal_external_mode: Option<String>,
+    terminal_external_program: Option<String>,
+    terminal_external_args: Option<Vec<String>>,
+    terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
+    default_tag_type: Option<DefaultTagType>,
     git_executable_path: Option<String>,
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
@@ -255,6 +267,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_content_mode: file.diff_content_mode,
         diff_whitespace_mode: file.diff_whitespace_mode,
         diff_view_mode: file.diff_view_mode,
+        annotate_enabled: file.annotate_enabled,
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
@@ -264,10 +277,15 @@ pub fn load_from_path(path: &Path) -> UiSession {
         history_show_author: file.history_show_author,
         history_show_date: file.history_show_date,
         history_show_sha: file.history_show_sha,
+        terminal_external_mode: file.terminal_external_mode,
+        terminal_external_program: file.terminal_external_program,
+        terminal_external_args: file.terminal_external_args,
+        terminal_action_bar_target: file.terminal_action_bar_target,
         history_show_tags: file.history_show_tags,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
+        default_tag_type: file.default_tag_type,
         git_executable_path: file
             .git_executable_path
             .as_deref()
@@ -554,6 +572,7 @@ pub struct UiSettings {
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
     pub diff_view_mode: Option<String>,
+    pub annotate_enabled: Option<bool>,
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
@@ -563,10 +582,15 @@ pub struct UiSettings {
     pub history_show_author: Option<bool>,
     pub history_show_date: Option<bool>,
     pub history_show_sha: Option<bool>,
+    pub terminal_external_mode: Option<String>,
+    pub terminal_external_program: Option<String>,
+    pub terminal_external_args: Option<Vec<String>>,
+    pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
+    pub default_tag_type: Option<DefaultTagType>,
     pub git_executable_path: Option<Option<PathBuf>>,
     pub external_code_editor: Option<Option<ExternalCodeEditorSetting>>,
 }
@@ -635,6 +659,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         if let Some(value) = settings.diff_view_mode {
             file.diff_view_mode = Some(value);
         }
+        if let Some(value) = settings.annotate_enabled {
+            file.annotate_enabled = Some(value);
+        }
         if let Some(value) = settings.diff_reveal_whitespace_chars {
             file.diff_reveal_whitespace_chars = Some(value);
         }
@@ -662,6 +689,23 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         if let Some(value) = settings.history_show_sha {
             file.history_show_sha = Some(value);
         }
+        if let Some(value) = settings.terminal_external_mode {
+            file.terminal_external_mode = Some(value);
+        }
+        if let Some(value) = settings.terminal_external_program {
+            file.terminal_external_program = Some(value);
+        }
+        if let Some(value) = settings.terminal_external_args {
+            let values = value
+                .into_iter()
+                .map(|arg| arg.trim().to_string())
+                .filter(|arg| !arg.is_empty())
+                .collect::<Vec<_>>();
+            file.terminal_external_args = Some(values);
+        }
+        if let Some(value) = settings.terminal_action_bar_target {
+            file.terminal_action_bar_target = Some(value);
+        }
         if let Some(value) = settings.history_show_tags {
             file.history_show_tags = Some(value);
         }
@@ -673,6 +717,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.commit_push_after_enabled {
             file.commit_push_after_enabled = Some(value);
+        }
+        if let Some(value) = settings.default_tag_type {
+            file.default_tag_type = Some(value);
         }
         if let Some(path) = settings.git_executable_path {
             file.git_executable_path = path.map(|path| path_storage_key(&path));
@@ -3336,6 +3383,66 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.theme_mode.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_terminal_preferences() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                terminal_external_mode: Some("custom_program".to_string()),
+                terminal_external_program: Some("wezterm".to_string()),
+                terminal_external_args: Some(vec![
+                    "start".to_string(),
+                    "--cwd".to_string(),
+                    "{cwd}".to_string(),
+                ]),
+                terminal_action_bar_target: Some("external".to_string()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.terminal_external_mode.as_deref(),
+            Some("custom_program")
+        );
+        assert_eq!(loaded.terminal_external_program.as_deref(), Some("wezterm"));
+        assert_eq!(
+            loaded.terminal_external_args,
+            Some(vec![
+                "start".to_string(),
+                "--cwd".to_string(),
+                "{cwd}".to_string()
+            ])
+        );
+        assert_eq!(
+            loaded.terminal_action_bar_target.as_deref(),
+            Some("external")
+        );
     }
 
     #[test]

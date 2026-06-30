@@ -792,7 +792,7 @@ impl GitCometView {
 
     pub(super) fn center_content(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
@@ -809,138 +809,152 @@ impl GitCometView {
         }
 
         if renders_full_chrome(self.view_mode) {
-            let content = div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .child(stable_cached_fixed_height_view(
-                    self.repo_tabs_bar.clone(),
-                    components::Tab::container_height(self.ui_scale_percent),
-                ))
-                .child(self.open_repo_panel(cx))
-                .child(stable_cached_fixed_height_view(
-                    self.action_bar.clone(),
-                    action_bar_height(cx),
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .child(
-                            div()
-                                .id("sidebar_pane")
-                                .relative()
-                                .w(self.sidebar_render_width)
-                                .min_h(px(0.0))
-                                .bg(theme.colors.surface_bg)
-                                .when(self.sidebar_collapsed, |d| {
-                                    d.border_r_1().border_color(theme.colors.border)
-                                })
-                                .when(!self.sidebar_collapsed, |d| {
-                                    d.child(self.sidebar_pane.clone())
-                                })
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .bottom(px(6.0))
-                                        .right(px(PANE_TOGGLE_EDGE_INSET_PX))
-                                        .child(
-                                            components::Button::new("sidebar_toggle", "")
-                                                .start_slot(svg_icon(
-                                                    if self.sidebar_collapsed {
-                                                        "icons/arrow_right.svg"
-                                                    } else {
-                                                        "icons/arrow_left.svg"
-                                                    },
-                                                    theme.colors.text_muted,
-                                                    scaled_px(12.0),
-                                                ))
-                                                .style(components::ButtonStyle::Transparent)
-                                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                                    this.set_sidebar_collapsed(
-                                                        !this.sidebar_collapsed,
-                                                        cx,
-                                                    );
-                                                }),
-                                        ),
-                                ),
-                        )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_sidebar",
-                            PaneResizeHandle::Sidebar,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .min_h(px(0.0))
-                                .child(stable_cached_fill_view(self.main_pane.clone())),
-                        )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_details",
-                            PaneResizeHandle::Details,
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .id("details_pane")
-                                .relative()
-                                .w(self.details_render_width)
-                                .min_h(px(0.0))
-                                .flex()
-                                .flex_col()
-                                .when(self.details_collapsed, |d| {
-                                    d.border_l_1().border_color(theme.colors.border)
-                                })
-                                .when(!self.details_collapsed, |d| {
-                                    d.child(
+            let terminal_panel = self.render_terminal_panel(theme, window, cx);
+            let has_terminal_panel = terminal_panel.is_some();
+            let content =
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(stable_cached_fixed_height_view(
+                        self.repo_tabs_bar.clone(),
+                        components::Tab::container_height(self.ui_scale_percent),
+                    ))
+                    .child(self.open_repo_panel(cx))
+                    .child(stable_cached_fixed_height_view(
+                        self.action_bar.clone(),
+                        action_bar_height(cx),
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .flex_1()
+                            .min_h(px(0.0))
+                            .child(
+                                div()
+                                    .id("sidebar_pane")
+                                    .relative()
+                                    .w(self.sidebar_render_width)
+                                    .min_h(px(0.0))
+                                    .bg(theme.colors.surface_bg)
+                                    .when(self.sidebar_collapsed, |d| {
+                                        d.border_r_1().border_color(theme.colors.border)
+                                    })
+                                    .when(!self.sidebar_collapsed, |d| {
+                                        d.child(self.sidebar_pane.clone())
+                                    })
+                                    .child(
                                         div()
-                                            .flex_1()
-                                            .min_h(px(0.0))
-                                            .child(self.details_pane.clone()),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .bottom(px(6.0))
-                                        .left(px(PANE_TOGGLE_EDGE_INSET_PX))
-                                        .child(
-                                            components::Button::new("details_toggle", "")
-                                                .start_slot(svg_icon(
-                                                    if self.details_collapsed {
-                                                        "icons/arrow_left.svg"
-                                                    } else {
-                                                        "icons/arrow_right.svg"
-                                                    },
-                                                    theme.colors.text_muted,
-                                                    scaled_px(12.0),
-                                                ))
-                                                .style(components::ButtonStyle::Transparent)
-                                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                                    this.set_details_collapsed(
-                                                        !this.details_collapsed,
-                                                        cx,
-                                                    );
-                                                }),
-                                        ),
-                                ),
-                        ),
-                )
-                .child(
-                    // Keep the bottom bar uncached. It paints after the details pane,
-                    // so reusing its cached paint range can replay a stale input-handler
-                    // index while a focused TextInput is temporarily detached during a
-                    // Wayland text-input redraw.
-                    self.bottom_status_bar.clone(),
-                )
-                .into_any_element();
+                                            .absolute()
+                                            .bottom(px(6.0))
+                                            .right(px(PANE_TOGGLE_EDGE_INSET_PX))
+                                            .child(
+                                                components::Button::new("sidebar_toggle", "")
+                                                    .start_slot(svg_icon(
+                                                        if self.sidebar_collapsed {
+                                                            "icons/arrow_right.svg"
+                                                        } else {
+                                                            "icons/arrow_left.svg"
+                                                        },
+                                                        theme.colors.text_muted,
+                                                        scaled_px(12.0),
+                                                    ))
+                                                    .style(components::ButtonStyle::Transparent)
+                                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                                        this.set_sidebar_collapsed(
+                                                            !this.sidebar_collapsed,
+                                                            cx,
+                                                        );
+                                                    }),
+                                            ),
+                                    ),
+                            )
+                            .child(self.pane_resize_handle(
+                                theme,
+                                "pane_resize_sidebar",
+                                PaneResizeHandle::Sidebar,
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .min_h(px(0.0))
+                                    .when_some(terminal_panel, |d, terminal_panel| {
+                                        d.flex()
+                                            .flex_col()
+                                            .child(div().flex_1().min_h(px(0.0)).child(
+                                                stable_cached_fill_view(self.main_pane.clone()),
+                                            ))
+                                            .child(self.terminal_panel_resize_handle(theme, cx))
+                                            .child(terminal_panel)
+                                    })
+                                    .when(!has_terminal_panel, |d| {
+                                        d.child(stable_cached_fill_view(self.main_pane.clone()))
+                                    }),
+                            )
+                            .child(self.pane_resize_handle(
+                                theme,
+                                "pane_resize_details",
+                                PaneResizeHandle::Details,
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .id("details_pane")
+                                    .relative()
+                                    .w(self.details_render_width)
+                                    .min_h(px(0.0))
+                                    .flex()
+                                    .flex_col()
+                                    .when(self.details_collapsed, |d| {
+                                        d.border_l_1().border_color(theme.colors.border)
+                                    })
+                                    .when(!self.details_collapsed, |d| {
+                                        d.child(
+                                            div()
+                                                .flex_1()
+                                                .min_h(px(0.0))
+                                                .child(self.details_pane.clone()),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .bottom(px(6.0))
+                                            .left(px(PANE_TOGGLE_EDGE_INSET_PX))
+                                            .child(
+                                                components::Button::new("details_toggle", "")
+                                                    .start_slot(svg_icon(
+                                                        if self.details_collapsed {
+                                                            "icons/arrow_left.svg"
+                                                        } else {
+                                                            "icons/arrow_right.svg"
+                                                        },
+                                                        theme.colors.text_muted,
+                                                        scaled_px(12.0),
+                                                    ))
+                                                    .style(components::ButtonStyle::Transparent)
+                                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                                        this.set_details_collapsed(
+                                                            !this.details_collapsed,
+                                                            cx,
+                                                        );
+                                                    }),
+                                            ),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        // Keep the bottom bar uncached. It paints after the details pane,
+                        // so reusing its cached paint range can replay a stale input-handler
+                        // index while a focused TextInput is temporarily detached during a
+                        // Wayland text-input redraw.
+                        self.bottom_status_bar.clone(),
+                    )
+                    .into_any_element();
 
             if self.should_show_git_unavailable_overlay() {
                 return div()

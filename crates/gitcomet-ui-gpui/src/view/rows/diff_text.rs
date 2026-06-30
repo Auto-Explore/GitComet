@@ -16,6 +16,7 @@ use build::*;
 pub(in crate::view) use build::PreparedDocumentByteRangeHighlights;
 #[cfg(feature = "benchmarks")]
 pub(super) use build::build_cached_diff_styled_text_with_palette;
+pub(in crate::view::rows) use build::hash_rgba_bits;
 pub(in crate::view) use build::syntax_highlights_for_line;
 pub(super) use build::{
     build_cached_diff_query_overlay_styled_text, build_cached_diff_styled_text,

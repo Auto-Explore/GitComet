@@ -59,6 +59,8 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
+    open_terminal_repo_ids: HashSet<RepoId>,
+    action_bar_terminal_target: ActionBarTerminalTarget,
 }
 
 impl ActionBarView {
@@ -79,6 +81,9 @@ impl ActionBarView {
             // The historical-browse badge keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
             repo.loads_in_flight.any_in_flight().hash(&mut hasher);
+            // Global back/forward buttons enable/disable with nav stack position.
+            repo.nav_history.cursor.hash(&mut hasher);
+            repo.nav_history.entries.len().hash(&mut hasher);
         }
 
         hasher.finish()
@@ -112,6 +117,8 @@ impl ActionBarView {
             root_view,
             notify_fingerprint,
             active_context_menu_invoker: None,
+            open_terminal_repo_ids: HashSet::default(),
+            action_bar_terminal_target: ActionBarTerminalTarget::default(),
         }
     }
 
@@ -129,6 +136,30 @@ impl ActionBarView {
             return;
         }
         self.active_context_menu_invoker = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_open_terminal_repo_ids(
+        &mut self,
+        next: HashSet<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.open_terminal_repo_ids == next {
+            return;
+        }
+        self.open_terminal_repo_ids = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_action_bar_terminal_target(
+        &mut self,
+        target: ActionBarTerminalTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.action_bar_terminal_target == target {
+            return;
+        }
+        self.action_bar_terminal_target = target;
         cx.notify();
     }
 
@@ -322,6 +353,55 @@ impl Render for ActionBarView {
                 || repo.push_in_flight > 0
         });
 
+        // Global back/forward navigation, mirroring the mouse side-buttons and
+        // Alt+Left / Alt+Right. Sits at the very start of the action bar.
+        let (nav_can_back, nav_can_forward) = self
+            .active_repo()
+            .map(|repo| (repo.nav_history.can_back(), repo.nav_history.can_forward()))
+            .unwrap_or((false, false));
+        let nav_back = components::Button::new("global_nav_back", "")
+            .start_slot(icon(
+                "icons/arrow_left.svg",
+                if nav_can_back {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                },
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .disabled(!nav_can_back)
+            .on_click(theme, cx, |this, _e, _w, _cx| {
+                if let Some(repo_id) = this.active_repo_id() {
+                    this.store.dispatch(Msg::GlobalNavBack { repo_id });
+                }
+            })
+            .gitcomet_tooltip(theme, "Navigate Back (Alt+Left)".into());
+        let nav_forward = components::Button::new("global_nav_forward", "")
+            .start_slot(icon(
+                "icons/arrow_right.svg",
+                if nav_can_forward {
+                    theme.colors.text
+                } else {
+                    theme.colors.text_muted
+                },
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .disabled(!nav_can_forward)
+            .on_click(theme, cx, |this, _e, _w, _cx| {
+                if let Some(repo_id) = this.active_repo_id() {
+                    this.store.dispatch(Msg::GlobalNavForward { repo_id });
+                }
+            })
+            .gitcomet_tooltip(theme, "Navigate Forward (Alt+Right)".into());
+        let global_nav = div()
+            .id("global_nav")
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .flex_none()
+            .child(nav_back)
+            .child(nav_forward);
+
         let repo_picker = div()
             .id("repo_picker")
             .debug_selector(|| "repo_picker".to_string())
@@ -491,6 +571,31 @@ impl Render for ActionBarView {
         } else {
             icon_muted
         };
+        let terminal_opens_external =
+            self.action_bar_terminal_target == ActionBarTerminalTarget::External;
+        let terminal_is_open = !terminal_opens_external
+            && self
+                .active_repo_id()
+                .is_some_and(|repo_id| self.open_terminal_repo_ids.contains(&repo_id));
+        let terminal_tooltip: SharedString = if terminal_opens_external {
+            "Open external terminal".into()
+        } else if terminal_is_open {
+            "Hide terminal".into()
+        } else {
+            "Show terminal".into()
+        };
+        let terminal = components::Button::new("terminal", "Terminal")
+            .start_slot(icon("icons/terminal.svg", icon_primary))
+            .style(components::ButtonStyle::Outlined)
+            .selected(terminal_is_open)
+            .selected_bg(menu_selected_bg)
+            .disabled(self.active_repo_id().is_none())
+            .on_click(theme, cx, move |this, _e, window, cx| {
+                let _ = this.root_view.update(cx, |root, cx| {
+                    root.activate_terminal_button_for_active_repo(window, cx);
+                });
+            })
+            .gitcomet_tooltip(theme, terminal_tooltip);
         let mut push_main = components::Button::new("push_main", "Push")
             .borderless()
             .start_slot(if push_loading {
@@ -682,6 +787,7 @@ impl Render for ActionBarView {
                     .items_center()
                     .gap_2()
                     .flex_1()
+                    .child(global_nav)
                     .child(repo_picker)
                     .child(branch_picker)
                     .children(historical_badge)
@@ -770,6 +876,7 @@ impl Render for ActionBarView {
                     .gap_2()
                     .child(pull)
                     .child(push)
+                    .child(terminal)
                     .child(create_branch)
                     .child(stash),
             )

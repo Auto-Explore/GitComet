@@ -1,5 +1,5 @@
 use crate::model::GitLogTagFetchMode;
-use crate::model::{ConflictFileLoadMode, RepoId, SidebarDataRequest, SidebarMode};
+use crate::model::{ConflictFileLoadMode, DefaultTagType, RepoId, SidebarDataRequest, SidebarMode};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
@@ -95,6 +95,17 @@ impl ConflictAutosolveStats {
     }
 }
 
+/// Why the file-system watcher is in a degraded state (carried by [`Msg::RepoWatchDegraded`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RepoWatchDegradedReason {
+    /// The worktree has more non-ignored folders than the watch budget, so its source folders are
+    /// not watched live at all. Carries the folder count.
+    TooManyFolders { dir_count: usize },
+    /// Some per-directory watches could not be added (the kernel inotify limit was reached), so part
+    /// of the worktree is not watched live. Carries the number of folders left unwatched.
+    WatchLimitReached { unwatched_dirs: usize },
+}
+
 #[derive(Debug)]
 pub enum Msg {
     OpenRepo(PathBuf),
@@ -127,6 +138,7 @@ pub enum Msg {
         show_history_tags: bool,
         tag_fetch_mode: GitLogTagFetchMode,
     },
+    SetDefaultTagType(DefaultTagType),
     SetActiveRepo {
         repo_id: RepoId,
     },
@@ -143,6 +155,13 @@ pub enum Msg {
     RepoExternallyChanged {
         repo_id: RepoId,
         change: RepoExternalChange,
+    },
+    /// The file-system watcher could not fully watch the worktree, so live change detection is
+    /// degraded. The repository still refreshes when the window regains focus; the `reason` carries
+    /// the detail for the user-facing warning.
+    RepoWatchDegraded {
+        repo_id: RepoId,
+        reason: RepoWatchDegradedReason,
     },
     SetHistoryScope {
         repo_id: RepoId,
@@ -214,7 +233,7 @@ pub enum Msg {
     LoadBlame {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
     },
     LoadWorktrees {
         repo_id: RepoId,
@@ -252,11 +271,47 @@ pub enum Msg {
         source: FileSource,
         path: PathBuf,
     },
+    /// Open the given file as it was in the parent of `commit_id` (the
+    /// revision just before that commit's change). The parent is resolved
+    /// asynchronously; if `commit_id` is a root commit this is a no-op.
+    OpenFileAtCommitParent {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
+    /// Open the file's content at `commit_id`, resolving `path` to the name the
+    /// file has in that commit's tree (following renames) before opening. Used
+    /// by the file-history list so navigating across a rename does not look up a
+    /// name that is absent from the target commit's tree. Resolved
+    /// asynchronously; falls back to `path` when no rename mapping is found.
+    OpenFileAtCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        path: PathBuf,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
     },
     ResetBrowseToLive {
+        repo_id: RepoId,
+    },
+    /// Step back through the cross-file viewer history (browser-style),
+    /// replaying the previously viewed file/version without recording it.
+    ViewerNavBack {
+        repo_id: RepoId,
+    },
+    /// Step forward through the cross-file viewer history.
+    ViewerNavForward {
+        repo_id: RepoId,
+    },
+    /// Step back through the broad global navigation history (mouse back
+    /// button): diffs, file-content views, and commit selections.
+    GlobalNavBack {
+        repo_id: RepoId,
+    },
+    /// Step forward through the global navigation history (mouse forward button).
+    GlobalNavForward {
         repo_id: RepoId,
     },
     SetSidebarMode {
@@ -527,6 +582,8 @@ pub enum Msg {
         repo_id: RepoId,
         name: String,
         target: String,
+        message: Option<String>,
+        annotated: bool,
     },
     DeleteTag {
         repo_id: RepoId,
@@ -745,7 +802,7 @@ pub enum InternalMsg {
     BlameLoaded {
         repo_id: RepoId,
         path: PathBuf,
-        rev: Option<String>,
+        source: gitcomet_core::domain::BlameSource,
         result: Result<Vec<gitcomet_core::services::BlameLine>, Error>,
     },
     ConflictFileLoaded {

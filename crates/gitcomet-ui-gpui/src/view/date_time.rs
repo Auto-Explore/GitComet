@@ -257,7 +257,7 @@ pub(super) fn format_datetime_into(
 
     // Howard Hinnant's `civil_from_days` algorithm.
     fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
-        let z = days_since_epoch + 719_468;
+        let z = days_since_epoch.saturating_add(719_468);
         let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
         let doe = z - era * 146_097; // [0, 146096]
         let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
@@ -291,8 +291,12 @@ pub(super) fn format_datetime_into(
 
     #[inline(always)]
     fn write4_year(arr: &mut [u8; 19], pos: usize, y: i32) {
-        let y = y.unsigned_abs();
-        let hi = (y / 100) % 100;
+        // The fixed 4-digit field can only represent years 0..=9999; clamp so a
+        // corrupt or extreme timestamp shows a boundary value rather than
+        // silently dropping the sign or high digits (e.g. 12025 -> "2025",
+        // -44 -> "0044").
+        let y = y.clamp(0, 9999) as u32;
+        let hi = y / 100;
         let lo = y % 100;
         let p1 = DEC_PAIR[hi as usize];
         let p2 = DEC_PAIR[lo as usize];
@@ -305,7 +309,7 @@ pub(super) fn format_datetime_into(
     buf.clear();
 
     let offset = timezone.offset_seconds();
-    let secs = unix_seconds(time) + offset;
+    let secs = unix_seconds(time).saturating_add(offset);
     let days = floor_div(secs, 86_400);
     let sec_of_day = secs - days * 86_400;
     let sec_of_day: i64 = if sec_of_day < 0 {
@@ -391,6 +395,58 @@ pub(super) fn format_datetime_into(
 #[cfg(test)]
 pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
     format_datetime(time, format, Timezone::Utc, true)
+}
+
+/// Format a unix timestamp (seconds) as a coarse relative duration such as
+/// `just now`, `30 mins ago`, `2 hours ago`, `5 months ago`.
+///
+/// Used by the blame/annotate column. Future or zero deltas render as
+/// `just now`. The breakpoints intentionally favour readable approximations
+/// (30-day months, 365-day years) over calendar accuracy.
+pub(super) fn format_relative_time(unix_secs: i64, now: std::time::SystemTime) -> String {
+    use std::time::UNIX_EPOCH;
+
+    let now_secs = match now.duration_since(UNIX_EPOCH) {
+        Ok(d) => d.as_secs() as i64,
+        Err(e) => -(e.duration().as_secs() as i64),
+    };
+
+    // `unix_secs` is an untrusted i64 straight from a git author timestamp; a
+    // corrupt/crafted commit near i64::MIN would overflow a plain subtraction
+    // (debug-build panic, release wrap). Saturate so the worst case is a
+    // clamped-but-finite delta.
+    let delta = now_secs.saturating_sub(unix_secs);
+    if delta < 10 {
+        return "just now".to_string();
+    }
+
+    fn unit(value: i64, singular: &str, plural: &str) -> String {
+        if value == 1 {
+            format!("1 {singular} ago")
+        } else {
+            format!("{value} {plural} ago")
+        }
+    }
+
+    let mins = delta / 60;
+    let hours = delta / 3_600;
+    let days = delta / 86_400;
+
+    if delta < 60 {
+        unit(delta, "sec", "secs")
+    } else if mins < 60 {
+        unit(mins, "min", "mins")
+    } else if hours < 24 {
+        unit(hours, "hour", "hours")
+    } else if days < 7 {
+        unit(days, "day", "days")
+    } else if days < 30 {
+        unit(days / 7, "week", "weeks")
+    } else if days < 365 {
+        unit(days / 30, "month", "months")
+    } else {
+        unit(days / 365, "year", "years")
+    }
 }
 
 #[cfg(test)]
@@ -488,5 +544,77 @@ mod tests {
             ),
             format!("12/31/1969 20:30 UTC\u{2212}3:30")
         );
+    }
+
+    #[test]
+    fn format_relative_time_covers_all_breakpoints() {
+        let now = UNIX_EPOCH + Duration::from_secs(10_000_000_000);
+        let at = |secs_ago: i64| {
+            let now_secs = 10_000_000_000_i64;
+            format_relative_time(now_secs - secs_ago, now)
+        };
+
+        assert_eq!(at(0), "just now");
+        assert_eq!(at(5), "just now");
+        assert_eq!(at(30), "30 secs ago");
+        assert_eq!(at(60), "1 min ago");
+        assert_eq!(at(120), "2 mins ago");
+        assert_eq!(at(3_600), "1 hour ago");
+        assert_eq!(at(7_200), "2 hours ago");
+        assert_eq!(at(86_400), "1 day ago");
+        assert_eq!(at(3 * 86_400), "3 days ago");
+        assert_eq!(at(7 * 86_400), "1 week ago");
+        assert_eq!(at(30 * 86_400), "1 month ago");
+        assert_eq!(at(60 * 86_400), "2 months ago");
+        assert_eq!(at(365 * 86_400), "1 year ago");
+        assert_eq!(at(800 * 86_400), "2 years ago");
+    }
+
+    #[test]
+    fn format_relative_time_treats_future_as_just_now() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        assert_eq!(format_relative_time(5_000, now), "just now");
+    }
+
+    #[test]
+    fn format_relative_time_saturates_on_extreme_timestamps() {
+        // `unix_secs` is an untrusted git author timestamp. A plain
+        // `now_secs - unix_secs` would overflow i64 at the extremes (debug panic
+        // / release wrap); saturating arithmetic must keep it finite.
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        // i64::MIN in the past -> enormous positive delta -> "years ago".
+        assert!(
+            format_relative_time(i64::MIN, now).ends_with("years ago"),
+            "extreme-past timestamp must not panic and reads as long ago"
+        );
+        // i64::MAX in the future -> negative delta saturates -> "just now".
+        assert_eq!(format_relative_time(i64::MAX, now), "just now");
+    }
+
+    #[test]
+    fn format_datetime_clamps_out_of_range_years() {
+        // ~year 11476 — past the 4-digit field. Must clamp to 9999 rather than
+        // render a misleading truncated year (e.g. 11476 -> "1476") or panic.
+        let far_future = UNIX_EPOCH + Duration::from_secs(300_000_000_000);
+        let s = format_datetime(far_future, DateTimeFormat::YmdHm, Timezone::Utc, false);
+        assert!(s.starts_with("9999-"), "got {s:?}");
+
+        // A negative civil year (pre-year-1) must clamp to 0000, not drop its
+        // sign via unsigned_abs (e.g. -44 -> "0044").
+        // Windows SystemTime only goes back to 1601-01-01, so this assertion
+        // is only meaningful on platforms that can represent pre-epoch times.
+        #[cfg(not(windows))]
+        {
+            let far_past = UNIX_EPOCH - Duration::from_secs(100_000_000_000);
+            let s = format_datetime(far_past, DateTimeFormat::YmdHm, Timezone::Utc, false);
+            assert!(s.starts_with("0000-"), "got {s:?}");
+        }
+        // On Windows, verify clamping with a safe pre-epoch value.
+        #[cfg(windows)]
+        {
+            let far_past = UNIX_EPOCH - Duration::from_secs(11_600_000_000);
+            let s = format_datetime(far_past, DateTimeFormat::YmdHm, Timezone::Utc, false);
+            assert!(s.starts_with("160"), "expected early-1600s year, got {s:?}");
+        }
     }
 }

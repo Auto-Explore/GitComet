@@ -125,6 +125,10 @@ impl Render for TextInput {
                     window,
                 ))
             })
+            .when(multiline && self.min_lines > 0, |d| {
+                let line_height = self.effective_line_height(window);
+                d.min_h(line_height * self.min_lines as f32 + pad_y * 2.0)
+            })
             .when(!multiline, |d| d.items_center())
             .when(multiline, |d| d.items_start())
             .child(text_surface);

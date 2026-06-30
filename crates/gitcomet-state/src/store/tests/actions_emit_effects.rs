@@ -1061,11 +1061,13 @@ fn create_and_delete_tag_emit_effects() {
             repo_id: RepoId(1),
             name: "v1.0.0".to_string(),
             target: "HEAD".to_string(),
+            message: None,
+            annotated: false,
         },
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::CreateTag { repo_id: RepoId(1), name, target }] if name == "v1.0.0" && target == "HEAD"
+        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: None, annotated: false }] if name == "v1.0.0" && target == "HEAD"
     ));
 
     let effects = reduce(
@@ -1790,6 +1792,114 @@ fn repo_command_finished_stage_hunk_triggers_diff_reload_effects() {
             target: DiffTarget::WorkingTree { path, .. },
         } if *id == repo_id && path == &PathBuf::from("src/lib.rs")
     )));
+}
+
+fn ready_working_tree_blame() -> Loadable<std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>> {
+    Loadable::Ready(std::sync::Arc::new(vec![
+        gitcomet_core::services::BlameLine {
+            commit_id: Arc::from("1111111111111111111111111111111111111111"),
+            author: Arc::from("Ada"),
+            author_time_unix: Some(1_700_000_000),
+            summary: Arc::from("initial"),
+            body: None,
+            line: "let x = 1;".to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
+        },
+    ]))
+}
+
+#[test]
+fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
+    // Regression: staging recomputes the diff, and the blame annotation column is
+    // derived from the same content. Leaving blame `Ready` would make the view
+    // skip a reload (same target, already attempted) and paint stale attribution.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: DiffArea::Unstaged,
+    });
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].history_state.blame_source = Some(
+        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged),
+    );
+    state.repos[0].history_state.blame = ready_working_tree_blame();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::StageHunk,
+            result: Ok(CommandOutput::empty_success("git apply --cached")),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        "blame must be invalidated so the annotation column reloads after staging"
+    );
+    // The target is preserved so the reload re-blames the same file/source.
+    assert_eq!(
+        state.repos[0].history_state.blame_path.as_deref(),
+        Some(std::path::Path::new("src/lib.rs"))
+    );
+    assert_eq!(
+        state.repos[0].history_state.blame_source,
+        Some(gitcomet_core::domain::BlameSource::WorkingTree(
+            DiffArea::Unstaged
+        ))
+    );
+}
+
+#[test]
+fn commit_finished_invalidates_loaded_blame() {
+    // Regression: committing changes which lines are committed, so a stale blame
+    // would mislabel them. Blame must be dropped along with the diff.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].local_actions_in_flight = 1;
+    state.repos[0].commit_in_flight = 1;
+    state.repos[0].history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    state.repos[0].history_state.blame_source = Some(
+        gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Staged),
+    );
+    state.repos[0].history_state.blame = ready_working_tree_blame();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Ok(gitcomet_core::services::CommitOperationOutcome::default()),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
+        "blame must be invalidated after a commit so the annotation column reloads"
+    );
 }
 
 #[test]
@@ -3792,4 +3902,188 @@ fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
             .all(|effect| !matches!(effect, Effect::LoadDiffFile { .. })),
         "png reload should not request text diff"
     );
+}
+
+fn repo_state_with_tags_loaded(repo_id: RepoId) -> RepoState {
+    let mut repo_state = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.local_actions_in_flight = 1;
+    repo_state.set_tags(Loadable::Ready(vec![gitcomet_core::domain::Tag {
+        name: "v1.0.0".to_string(),
+        target: CommitId("abc123".into()),
+    }]));
+    repo_state
+}
+
+#[test]
+fn create_tag_command_finished_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CreateTag {
+                name: "v2.0.0".to_string(),
+                target: "HEAD".to_string(),
+                message: None,
+                annotated: false,
+            },
+            result: Ok(CommandOutput::empty_success(
+                "git tag -c tag.gpgsign=false -- v2.0.0 HEAD",
+            )),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded after CreateTag"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect after CreateTag"
+    );
+}
+
+#[test]
+fn delete_tag_command_finished_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::DeleteTag {
+                name: "v1.0.0".to_string(),
+            },
+            result: Ok(CommandOutput::empty_success("git tag -d v1.0.0")),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded after DeleteTag"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect after DeleteTag"
+    );
+}
+
+#[test]
+fn prune_local_tags_command_finished_reloads_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+    state.repos[0].local_actions_in_flight = 0;
+    state.repos[0].pull_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::PruneLocalTags,
+            result: Ok(CommandOutput::empty_success("git tag prune")),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should be reset to NotLoaded after PruneLocalTags"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
+        "expected LoadTags effect after PruneLocalTags"
+    );
+}
+
+#[test]
+fn create_tag_failed_does_not_reload_tags() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(repo_state_with_tags_loaded(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::CreateTag {
+                name: "v2.0.0".to_string(),
+                target: "HEAD".to_string(),
+                message: None,
+                annotated: false,
+            },
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("tag already exists".to_string()),
+            )),
+        }),
+    );
+
+    assert!(
+        !matches!(state.repos[0].tags, Loadable::NotLoaded),
+        "tags should not be reset when CreateTag fails"
+    );
+}
+
+#[test]
+fn create_tag_with_message_propagates_to_effect() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateTag {
+            repo_id: RepoId(1),
+            name: "v1.0.0".to_string(),
+            target: "HEAD".to_string(),
+            message: Some("Release 1.0".to_string()),
+            annotated: true,
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg), annotated: true }]
+            if name == "v1.0.0" && target == "HEAD" && msg == "Release 1.0"
+    ));
 }

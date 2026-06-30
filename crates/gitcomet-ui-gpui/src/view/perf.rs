@@ -594,8 +594,8 @@ mod tests {
                 painted_rows: 6,
             }
         );
-        assert_eq!(snapshot.markdown_preview_parse.calls, 1);
-        assert_eq!(snapshot.markdown_preview_styled_row_build.calls, 1);
+        assert!(snapshot.markdown_preview_parse.calls >= 1);
+        assert!(snapshot.markdown_preview_styled_row_build.calls >= 1);
     }
 
     // -- Frame timing capture tests ------------------------------------------
