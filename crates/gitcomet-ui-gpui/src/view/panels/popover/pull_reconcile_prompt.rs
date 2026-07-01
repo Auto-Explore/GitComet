@@ -57,8 +57,7 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("pull_reconcile_cancel", "Cancel")
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("pull_reconcile_cancel", "pull_reconcile_cancel_hint", theme)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;
                             this.popover_anchor = None;

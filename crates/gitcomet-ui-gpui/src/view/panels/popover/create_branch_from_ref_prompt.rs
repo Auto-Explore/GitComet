@@ -199,14 +199,8 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("create_branch_from_ref_cancel", "Cancel")
+                    cancel_button("create_branch_from_ref_cancel", "create_branch_from_ref_cancel_hint", theme)
                         .focus_handle(this.create_branch_from_ref_cancel_focus_handle.clone())
-                        .separated_end_slot(hotkey_hint(
-                            theme,
-                            "create_branch_from_ref_cancel_hint",
-                            "Esc",
-                        ))
-                        .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),

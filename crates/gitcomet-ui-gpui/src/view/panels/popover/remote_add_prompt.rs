@@ -63,9 +63,8 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("add_remote_cancel", "Cancel")
+                    cancel_button("add_remote_cancel", "add_remote_cancel_hint", theme)
                         .focus_handle(this.remote_add_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),

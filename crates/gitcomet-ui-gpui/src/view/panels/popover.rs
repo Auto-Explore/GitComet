@@ -376,6 +376,9 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
+            | PopoverKind::ResetPrompt { .. }
+            | PopoverKind::PullReconcilePrompt { .. }
+            | PopoverKind::TerminalShutdownConfirm(_)
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::RemoveConfirm { .. }),
                 ..
@@ -1570,6 +1573,11 @@ impl PopoverHost {
                     kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
                     ..
                 })
+                | Some(PopoverKind::Repo {
+                    kind:
+                        RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                    ..
+                })
         ) || self.popover.as_ref().is_some_and(popover_is_confirm_dialog)
     }
 
@@ -1641,7 +1649,12 @@ impl PopoverHost {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
             | Some(PopoverKind::StashPrompt)
             | Some(PopoverKind::CommitPrompt { .. })
-            | Some(PopoverKind::StashPickerPrompt { .. }) => {
+            | Some(PopoverKind::StashPickerPrompt { .. })
+            | Some(PopoverKind::Repo {
+                kind:
+                    RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                ..
+            }) => {
                 self.dismiss_inline_popover(window, cx)
             }
             Some(PopoverKind::CloneRepo)

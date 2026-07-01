@@ -189,9 +189,8 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("submodule_add_cancel", "Cancel")
+                    cancel_button("submodule_add_cancel", "submodule_add_cancel_hint", theme)
                         .focus_handle(this.submodule_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),

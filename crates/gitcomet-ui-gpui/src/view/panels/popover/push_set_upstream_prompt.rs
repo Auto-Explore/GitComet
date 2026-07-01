@@ -48,9 +48,8 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("push_upstream_cancel", "Cancel")
+                    cancel_button("push_upstream_cancel", "push_upstream_cancel_hint", theme)
                         .focus_handle(this.push_upstream_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),

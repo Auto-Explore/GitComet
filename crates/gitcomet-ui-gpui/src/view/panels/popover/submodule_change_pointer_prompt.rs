@@ -57,8 +57,7 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("submodule_change_pointer_cancel", "Cancel")
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("submodule_change_pointer_cancel", "submodule_change_pointer_cancel_hint", theme)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_inline_popover(window, cx);
                         }),

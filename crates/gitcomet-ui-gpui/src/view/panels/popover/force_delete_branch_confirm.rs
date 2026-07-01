@@ -55,13 +55,7 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("force_delete_branch_cancel", "Cancel")
-                        .separated_end_slot(super::hotkey_hint(
-                            theme,
-                            "force_delete_branch_cancel_hint",
-                            "Esc",
-                        ))
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("force_delete_branch_cancel", "force_delete_branch_cancel_hint", theme)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;
                             this.popover_anchor = None;

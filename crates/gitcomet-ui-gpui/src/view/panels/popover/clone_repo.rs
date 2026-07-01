@@ -103,14 +103,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("clone_repo_cancel", "Cancel")
+                    cancel_button("clone_repo_cancel", "clone_repo_cancel_hint", theme)
                         .focus_handle(this.clone_repo_cancel_focus_handle.clone())
-                        .separated_end_slot(super::hotkey_hint(
-                            theme,
-                            "clone_repo_cancel_hint",
-                            "Esc",
-                        ))
-                        .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),

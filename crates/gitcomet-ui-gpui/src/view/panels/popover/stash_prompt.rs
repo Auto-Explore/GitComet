@@ -35,10 +35,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("stash_cancel", "Cancel")
+                    cancel_button("stash_cancel", "stash_cancel_hint", theme)
                         .focus_handle(this.stash_cancel_focus_handle.clone())
-                        .separated_end_slot(super::hotkey_hint(theme, "stash_cancel_hint", "Esc"))
-                        .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
