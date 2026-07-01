@@ -2594,12 +2594,16 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) interactive_rebase_selected_ix: Option<usize>,
     pub(in crate::view) interactive_rebase_autosquash: bool,
     pub(in crate::view) interactive_rebase_drag_state: Option<IRebaseDragState>,
+    /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.
+    pub(in crate::view) interactive_rebase_reorder_anim: Option<(usize, usize, u32)>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::view) struct IRebaseDragState {
     pub(in crate::view) from_ix: usize,
     pub(in crate::view) to_ix: usize,
+    /// Incremented each time to_ix changes; used as animation key so the gap restarts.
+    pub(in crate::view) gap_version: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

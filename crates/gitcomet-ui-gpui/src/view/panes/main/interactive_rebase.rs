@@ -199,30 +199,165 @@ impl MainPaneView {
                     .and_then(|r| r.history_state.selected_commit.as_ref())
                     .map(|c| c.0.as_ref().to_owned());
 
-                let drag_state = self.interactive_rebase_drag_state.map(|s| (s.from_ix, s.to_ix));
+                let reorder_anim = self.interactive_rebase_reorder_anim;
+                let drag_state = self.interactive_rebase_drag_state;
                 let is_dragging = drag_state.is_some();
-                let (drag_from_ix, drag_to_ix) = drag_state.unwrap_or((usize::MAX, 0));
+                let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
+                let drag_to_ix = drag_state.map(|s| s.to_ix).unwrap_or(0);
+                let gap_version = drag_state.map(|s| s.gap_version).unwrap_or(0);
 
-                // Build display order: normally reversed (newest first). While dragging,
-                // pull the drag source out of its natural slot and insert it at the
-                // target slot so it visually follows the cursor.
-                let display_order: Vec<usize> = if is_dragging && drag_from_ix < entry_count {
-                    let from_display = (entry_count - 1).saturating_sub(drag_from_ix);
-                    let target_display = (entry_count - 1).saturating_sub(drag_to_ix);
-                    let mut order: Vec<usize> = (0..entry_count).rev().collect();
-                    order.remove(from_display);
-                    order.insert(target_display.min(order.len()), drag_from_ix);
-                    order
-                } else {
-                    (0..entry_count).rev().collect()
+                // Display order is always newest-first (reversed). During drag we keep items in
+                // their original slots — a collapsing source placeholder and an animated gap at
+                // the target slot provide the reorder feedback instead.
+                let display_order: Vec<usize> = (0..entry_count).rev().collect();
+
+                // Display positions for the source placeholder and the animated gap target.
+                let from_display_pos = (is_dragging && drag_from_ix < entry_count)
+                    .then(|| (entry_count - 1).saturating_sub(drag_from_ix));
+                let gap_display_pos = (is_dragging && drag_to_ix < entry_count)
+                    .then(|| (entry_count - 1).saturating_sub(drag_to_ix));
+
+                // Pre-extract the dragged item's display data so the gap can render it on rails.
+                let ghost_data = from_display_pos.map(|_| {
+                    let fix = drag_from_ix;
+                    let g_action = self.interactive_rebase_entries[fix].action;
+                    let g_sha = self.interactive_rebase_entries[fix]
+                        .commit_id
+                        .get(..8)
+                        .unwrap_or(&self.interactive_rebase_entries[fix].commit_id)
+                        .to_string();
+                    let g_summary = self.interactive_rebase_entries[fix]
+                        .new_message
+                        .as_deref()
+                        .and_then(|m| m.lines().next())
+                        .unwrap_or(&self.interactive_rebase_entries[fix].summary)
+                        .to_owned();
+                    (g_action, g_sha, g_summary)
+                });
+
+                // Builds the ghost row that appears in the animated gap — styled to match
+                // the real rows: gripper → (squash arrow) → static action button → sha → summary.
+                let build_ghost_row = |g_action: InteractiveRebaseAction, g_sha: &str, g_summary: &str| {
+                    let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
+                    let is_squash_like = matches!(
+                        g_action,
+                        InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+                    );
+                    let outlined_border = with_alpha(
+                        theme.colors.text_muted,
+                        if theme.is_dark { 0.38 } else { 0.28 },
+                    );
+                    div()
+                        .h(px(DRAG_ROW_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .px_2()
+                        .py_0p5()
+                        .rounded(px(theme.radii.row))
+                        .bg(with_alpha(theme.colors.accent, 0.12))
+                        .border_1()
+                        .border_color(with_alpha(theme.colors.accent, 0.4))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child("⠿"),
+                        )
+                        .when(is_squash_like, |d| {
+                            d.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .child(crate::view::icons::svg_icon(
+                                        "icons/squash_arrow.svg",
+                                        with_alpha(theme.colors.accent, 0.7),
+                                        px(14.0),
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .w(action_btn_w)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme.radii.row))
+                                .border_1()
+                                .border_color(outlined_border)
+                                .text_sm()
+                                .text_color(theme.colors.text)
+                                .child(format!("{} ▾", action_short_label(g_action))),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .font_family("monospace")
+                                .child(g_sha.to_owned()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .text_color(theme.colors.text)
+                                .overflow_x_hidden()
+                                .whitespace_nowrap()
+                                .child(g_summary.to_owned()),
+                        )
+                        .into_any_element()
                 };
 
-                let current_non_drop = non_drop_count(&self.interactive_rebase_entries);
+                // When dragging downward (source above gap) and the gap would land at the
+                // very last slot, the insert(to_ix=0, entry) pushes every other item UP,
+                // meaning the dragged item ends up BELOW the current last item — not above it.
+                // Inserting the gap before that last item would look wrong; append it after.
+                let append_gap_after = gap_display_pos == Some(entry_count - 1)
+                    && from_display_pos.map_or(false, |fdp| fdp < entry_count - 1);
 
-                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(entry_count);
+                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(entry_count + 1);
 
                 for (display_pos, &ix) in display_order.iter().enumerate() {
-                    let is_drag_source = is_dragging && ix == drag_from_ix;
+                    // Insert an animated slot at the target position. It renders the dragged
+                    // item's content so the ghost appears "on rails" within the list.
+                    if gap_display_pos == Some(display_pos) && !append_gap_after {
+                        let gap_anim_id = format!("irebase_gap_{gap_version}");
+                        let ghost_row = if let Some((g_action, ref g_sha, ref g_summary)) = ghost_data {
+                            build_ghost_row(g_action, g_sha, g_summary)
+                        } else {
+                            div().into_any_element()
+                        };
+                        rows.push(
+                            div()
+                                .w_full()
+                                .overflow_hidden()
+                                .child(ghost_row)
+                                .with_animation(
+                                    gap_anim_id,
+                                    Animation::new(Duration::from_millis(120))
+                                        .with_easing(gpui::ease_out_quint()),
+                                    |d, delta| d.h(px(DRAG_ROW_HEIGHT * delta)).opacity(delta),
+                                )
+                                .into_any_element(),
+                        );
+                    }
+
+                    // Collapse the source item — the ghost view follows the cursor instead.
+                    if from_display_pos == Some(display_pos) {
+                        rows.push(
+                            div()
+                                .id(("irebase_row", ix))
+                                .h(px(0.0))
+                                .overflow_hidden()
+                                .into_any_element(),
+                        );
+                        continue;
+                    }
+
+                    let is_drag_source = false;
                     let is_bottom = display_pos + 1 >= entry_count;
 
                     let action = self.interactive_rebase_entries[ix].action;
@@ -241,9 +376,6 @@ impl MainPaneView {
                         .as_deref()
                         .is_some_and(|s| s == self.interactive_rebase_entries[ix].commit_id);
                     let is_squash_like = matches!(action, InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup);
-
-                    // can_drop: allowed if this commit is already dropped, or there are >1 non-drop commits
-                    let can_drop = action == InteractiveRebaseAction::Drop || current_non_drop > 1;
 
                     let btn_bounds: Rc<RefCell<Option<gpui::Bounds<gpui::Pixels>>>> =
                         Rc::new(RefCell::new(None));
@@ -294,6 +426,7 @@ impl MainPaneView {
 
                     let up_btn = components::Button::new(format!("up_{ix}"), "▲")
                         .style(components::ButtonStyle::Subtle)
+                        .no_focus()
                         .disabled(display_pos == 0)
                         .render(theme, ui_scale_percent)
                         .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
@@ -303,12 +436,15 @@ impl MainPaneView {
                                 let swap_ix = len - 1 - (entry_display_pos - 1);
                                 this.interactive_rebase_entries.swap(ix, swap_ix);
                                 validate_squash_entries(&mut this.interactive_rebase_entries);
+                                let ver = this.interactive_rebase_reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                                this.interactive_rebase_reorder_anim = Some((ix, swap_ix, ver));
                             }
                             cx.notify();
                         }));
 
                     let down_btn = components::Button::new(format!("down_{ix}"), "▼")
                         .style(components::ButtonStyle::Subtle)
+                        .no_focus()
                         .disabled(display_pos + 1 >= entry_count)
                         .render(theme, ui_scale_percent)
                         .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
@@ -318,6 +454,8 @@ impl MainPaneView {
                                 let swap_ix = len - 1 - (entry_display_pos + 1);
                                 this.interactive_rebase_entries.swap(ix, swap_ix);
                                 validate_squash_entries(&mut this.interactive_rebase_entries);
+                                let ver = this.interactive_rebase_reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                                this.interactive_rebase_reorder_anim = Some((ix, swap_ix, ver));
                             }
                             cx.notify();
                         }));
@@ -433,7 +571,47 @@ impl MainPaneView {
                             }),
                         );
 
-                    rows.push(row_div.into_any_element());
+                    let row_element = if let Some((aix, bix, ver)) = reorder_anim {
+                        if ix == aix || ix == bix {
+                            row_div
+                                .with_animation(
+                                    format!("reorder_{ix}_{ver}"),
+                                    Animation::new(Duration::from_millis(200))
+                                        .with_easing(gpui::ease_out_quint()),
+                                    |d, delta| d.opacity(delta),
+                                )
+                                .into_any_element()
+                        } else {
+                            row_div.into_any_element()
+                        }
+                    } else {
+                        row_div.into_any_element()
+                    };
+                    rows.push(row_element);
+                }
+
+                // When dragging a higher item (lower data index) all the way to the bottom,
+                // the gap belongs AFTER the last rendered item, not before it.
+                if append_gap_after {
+                    let gap_anim_id = format!("irebase_gap_{gap_version}");
+                    let ghost_row = if let Some((g_action, ref g_sha, ref g_summary)) = ghost_data {
+                        build_ghost_row(g_action, g_sha, g_summary)
+                    } else {
+                        div().into_any_element()
+                    };
+                    rows.push(
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .child(ghost_row)
+                            .with_animation(
+                                gap_anim_id,
+                                Animation::new(Duration::from_millis(120))
+                                    .with_easing(gpui::ease_out_quint()),
+                                |d, delta| d.h(px(DRAG_ROW_HEIGHT * delta)).opacity(delta),
+                            )
+                            .into_any_element(),
+                    );
                 }
 
                 div()
@@ -463,8 +641,12 @@ impl MainPaneView {
                                 .interactive_rebase_drag_state
                                 .map_or(false, |s| s.from_ix == from_ix && s.to_ix == to_ix);
                             if !already_matches {
+                                let gap_version = this
+                                    .interactive_rebase_drag_state
+                                    .map(|s| if s.to_ix != to_ix { s.gap_version + 1 } else { s.gap_version })
+                                    .unwrap_or(0);
                                 this.interactive_rebase_drag_state =
-                                    Some(IRebaseDragState { from_ix, to_ix });
+                                    Some(IRebaseDragState { from_ix, to_ix, gap_version });
                                 cx.notify();
                             }
                         },
@@ -501,6 +683,13 @@ impl MainPaneView {
             .flex()
             .flex_col()
             .size_full()
+            // Safety net: clear drag state for drops that land outside the scroll container
+            // (e.g. releasing the mouse above the list when dragging the topmost item).
+            .can_drop(|dragged, _, _| dragged.downcast_ref::<IRebaseDragValue>().is_some())
+            .on_drop(cx.listener(|this, _: &IRebaseDragValue, _, cx| {
+                this.interactive_rebase_drag_state = None;
+                cx.notify();
+            }))
             .child(
                 div()
                     .px_2()

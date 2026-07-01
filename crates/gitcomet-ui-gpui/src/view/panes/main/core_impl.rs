@@ -1398,6 +1398,7 @@ impl MainPaneView {
             interactive_rebase_selected_ix: None,
             interactive_rebase_autosquash: false,
             interactive_rebase_drag_state: None,
+            interactive_rebase_reorder_anim: None,
         };
 
         pane.set_theme(theme, cx);
