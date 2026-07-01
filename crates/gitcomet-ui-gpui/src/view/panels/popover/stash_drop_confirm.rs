@@ -21,14 +21,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .min_w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Drop stash?"),
-        )
+        .child(popover_title("Drop stash?"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div().px_2().py_1().text_sm().child(

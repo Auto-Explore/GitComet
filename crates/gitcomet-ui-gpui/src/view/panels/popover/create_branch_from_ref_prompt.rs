@@ -1,14 +1,5 @@
 use super::*;
 
-fn hotkey_hint(theme: AppTheme, debug_selector: &'static str, label: &'static str) -> gpui::Div {
-    div()
-        .debug_selector(move || debug_selector.to_string())
-        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-        .text_xs()
-        .text_color(theme.colors.text_muted)
-        .child(label)
-}
-
 fn checkout_toggle(
     theme: AppTheme,
     enabled: bool,
@@ -152,24 +143,10 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(540.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Create branch"),
-        )
+        .child(popover_title("Create branch"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(source_row)
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("New branch name"),
-        )
+        .child(input_label(theme, "New branch name"))
         .child(
             div()
                 .px_2()
@@ -199,11 +176,15 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("create_branch_from_ref_cancel", "create_branch_from_ref_cancel_hint", theme)
-                        .focus_handle(this.create_branch_from_ref_cancel_focus_handle.clone())
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_prompt_popover(window, cx);
-                        }),
+                    cancel_button(
+                        "create_branch_from_ref_cancel",
+                        "create_branch_from_ref_cancel_hint",
+                        theme,
+                    )
+                    .focus_handle(this.create_branch_from_ref_cancel_focus_handle.clone())
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.dismiss_prompt_popover(window, cx);
+                    }),
                 )
                 .child(
                     components::Button::new("create_branch_from_ref_go", "Create")

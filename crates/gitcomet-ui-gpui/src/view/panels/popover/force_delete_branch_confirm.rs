@@ -14,14 +14,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .min_w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Delete branch anyway?"),
-        )
+        .child(popover_title("Delete branch anyway?"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(div().px_2().py_1().text_sm().child(
             div()

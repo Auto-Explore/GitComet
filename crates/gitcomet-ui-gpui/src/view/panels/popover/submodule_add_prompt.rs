@@ -70,23 +70,9 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Add submodule"),
-        )
+        .child(popover_title("Add submodule"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("URL"),
-        )
+        .child(input_label(theme, "URL"))
         .child(
             div()
                 .px_2()
@@ -95,14 +81,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.submodule_url_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Path (relative)"),
-        )
+        .child(input_label(theme, "Path (relative)"))
         .child(
             div()
                 .px_2()
@@ -111,14 +90,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.submodule_path_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Branch (optional)"),
-        )
+        .child(input_label(theme, "Branch (optional)"))
         .child(
             div()
                 .px_2()
@@ -141,14 +113,7 @@ pub(super) fn panel(
         )
         .when(advanced_expanded, |this_panel| {
             this_panel
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("Logical name (optional)"),
-                )
+                .child(input_label(theme, "Logical name (optional)"))
                 .child(
                     div()
                         .px_2()

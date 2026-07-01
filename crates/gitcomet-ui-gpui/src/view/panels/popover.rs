@@ -424,6 +424,25 @@ pub(super) fn cancel_button(
         .style(components::ButtonStyle::Outlined)
 }
 
+pub(super) fn popover_title(title: impl Into<SharedString>) -> gpui::Div {
+    let title: SharedString = title.into();
+    div()
+        .px_2()
+        .py_1()
+        .text_sm()
+        .font_weight(FontWeight::BOLD)
+        .child(title)
+}
+
+pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
+    div()
+        .px_2()
+        .py_1()
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
+}
+
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
@@ -1574,8 +1593,9 @@ impl PopoverHost {
                     ..
                 })
                 | Some(PopoverKind::Repo {
-                    kind:
-                        RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                    kind: RepoPopoverKind::Submodule(
+                        SubmodulePopoverKind::ChangePointerPrompt { .. }
+                    ),
                     ..
                 })
         ) || self.popover.as_ref().is_some_and(popover_is_confirm_dialog)
@@ -1651,12 +1671,9 @@ impl PopoverHost {
             | Some(PopoverKind::CommitPrompt { .. })
             | Some(PopoverKind::StashPickerPrompt { .. })
             | Some(PopoverKind::Repo {
-                kind:
-                    RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
                 ..
-            }) => {
-                self.dismiss_inline_popover(window, cx)
-            }
+            }) => self.dismiss_inline_popover(window, cx),
             Some(PopoverKind::CloneRepo)
             | Some(PopoverKind::RecentRepositoryPicker)
             | Some(PopoverKind::CreateTagPrompt { .. })

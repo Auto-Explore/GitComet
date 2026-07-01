@@ -15,14 +15,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Change submodule pointer"),
-        )
+        .child(popover_title("Change submodule pointer"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -32,14 +25,7 @@ pub(super) fn panel(
                 .text_color(theme.colors.text_muted)
                 .child(format!("Submodule: {}", path.display())),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Target ref / branch / tag / commit"),
-        )
+        .child(input_label(theme, "Target ref / branch / tag / commit"))
         .child(
             div()
                 .px_2()
@@ -57,10 +43,14 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("submodule_change_pointer_cancel", "submodule_change_pointer_cancel_hint", theme)
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_inline_popover(window, cx);
-                        }),
+                    cancel_button(
+                        "submodule_change_pointer_cancel",
+                        "submodule_change_pointer_cancel_hint",
+                        theme,
+                    )
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.dismiss_inline_popover(window, cx);
+                    }),
                 )
                 .child(
                     components::Button::new("submodule_change_pointer_go", "Change")

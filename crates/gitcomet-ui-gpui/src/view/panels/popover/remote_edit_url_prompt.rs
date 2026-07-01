@@ -19,14 +19,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(format!("Edit remote URL ({kind_label})")),
-        )
+        .child(popover_title(format!("Edit remote URL ({kind_label})")))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -53,11 +46,15 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("edit_remote_url_cancel", "edit_remote_url_cancel_hint", theme)
-                        .focus_handle(this.remote_edit_cancel_focus_handle.clone())
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_prompt_popover(window, cx);
-                        }),
+                    cancel_button(
+                        "edit_remote_url_cancel",
+                        "edit_remote_url_cancel_hint",
+                        theme,
+                    )
+                    .focus_handle(this.remote_edit_cancel_focus_handle.clone())
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.dismiss_prompt_popover(window, cx);
+                    }),
                 )
                 .child(
                     components::Button::new("edit_remote_url_go", "Save")

@@ -51,6 +51,7 @@ mod branch;
 mod browse_history;
 mod clone;
 mod context_shortcuts;
+mod dialog;
 mod file_actions;
 mod layout;
 mod picker;

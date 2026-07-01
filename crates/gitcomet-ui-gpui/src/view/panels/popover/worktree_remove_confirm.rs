@@ -25,14 +25,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .min_w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(header),
-        )
+        .child(popover_title(header))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -62,12 +55,16 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("worktree_remove_cancel", "worktree_remove_cancel_hint", theme)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
+                    cancel_button(
+                        "worktree_remove_cancel",
+                        "worktree_remove_cancel_hint",
+                        theme,
+                    )
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.popover = None;
+                        this.popover_anchor = None;
+                        cx.notify();
+                    }),
                 )
                 .child(
                     components::Button::new("worktree_remove_go", "Remove")

@@ -40,14 +40,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .min_w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Force push"),
-        )
+        .child(popover_title("Force push"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -75,12 +68,15 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("force_push_cancel", "force_push_cancel_hint", theme)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
+                    cancel_button("force_push_cancel", "force_push_cancel_hint", theme).on_click(
+                        theme,
+                        cx,
+                        |this, _e, _w, cx| {
                             this.popover = None;
                             this.popover_anchor = None;
                             cx.notify();
-                        }),
+                        },
+                    ),
                 )
                 .child(
                     components::Button::new("force_push_go", button_label)

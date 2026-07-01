@@ -10,23 +10,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Clone repository"),
-        )
+        .child(popover_title("Clone repository"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Repository URL / Path"),
-        )
+        .child(input_label(theme, "Repository URL / Path"))
         .child(
             div()
                 .px_2()
@@ -35,14 +21,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .min_w(px(0.0))
                 .child(this.clone_repo_url_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Destination parent folder"),
-        )
+        .child(input_label(theme, "Destination parent folder"))
         .child(
             div()
                 .px_2()

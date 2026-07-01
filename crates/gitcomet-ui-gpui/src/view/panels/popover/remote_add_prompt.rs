@@ -13,23 +13,9 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Add remote"),
-        )
+        .child(popover_title("Add remote"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Name"),
-        )
+        .child(input_label(theme, "Name"))
         .child(
             div()
                 .px_2()
@@ -38,14 +24,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.remote_name_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("URL"),
-        )
+        .child(input_label(theme, "URL"))
         .child(
             div()
                 .px_2()

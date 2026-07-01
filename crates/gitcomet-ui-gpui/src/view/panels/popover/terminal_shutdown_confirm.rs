@@ -45,14 +45,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .min_w(px(440.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        )
+        .child(popover_title(title))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -95,14 +88,18 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("terminal_shutdown_cancel", "terminal_shutdown_cancel_hint", theme)
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            let root_view = this.root_view.clone();
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.clear_pending_terminal_shutdown_prompt(cx);
-                            });
-                            this.close_popover(cx);
-                        }),
+                    cancel_button(
+                        "terminal_shutdown_cancel",
+                        "terminal_shutdown_cancel_hint",
+                        theme,
+                    )
+                    .on_click(theme, cx, |this, _e, _window, cx| {
+                        let root_view = this.root_view.clone();
+                        let _ = root_view.update(cx, |root, cx| {
+                            root.clear_pending_terminal_shutdown_prompt(cx);
+                        });
+                        this.close_popover(cx);
+                    }),
                 )
                 .child(
                     components::Button::new("terminal_shutdown_confirm", confirm_label)

@@ -14,14 +14,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Commit Changes"),
-        )
+        .child(popover_title("Commit Changes"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()

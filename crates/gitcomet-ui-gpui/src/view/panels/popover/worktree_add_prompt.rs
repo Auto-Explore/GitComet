@@ -74,23 +74,9 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Add worktree"),
-        )
+        .child(popover_title("Add worktree"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Worktree folder"),
-        )
+        .child(input_label(theme, "Worktree folder"))
         .child(
             div()
                 .px_2()

@@ -13,14 +13,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .min_w(scaled_px(440.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Pull: choose strategy"),
-        )
+        .child(popover_title("Pull: choose strategy"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()

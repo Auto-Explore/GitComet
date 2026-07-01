@@ -52,14 +52,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        )
+        .child(popover_title(title))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()

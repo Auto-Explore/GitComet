@@ -18,14 +18,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(540.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Checkout remote branch"),
-        )
+        .child(popover_title("Checkout remote branch"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -35,14 +28,7 @@ pub(super) fn panel(
                 .text_color(theme.colors.text_muted)
                 .child(format!("Remote branch: {upstream}")),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Local branch name"),
-        )
+        .child(input_label(theme, "Local branch name"))
         .child(
             div()
                 .px_2()
@@ -60,11 +46,15 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    cancel_button("checkout_remote_branch_cancel", "checkout_remote_branch_cancel_hint", theme)
-                        .focus_handle(this.checkout_remote_branch_cancel_focus_handle.clone())
-                        .on_click(theme, cx, |this, _e, window, cx| {
-                            this.dismiss_prompt_popover(window, cx);
-                        }),
+                    cancel_button(
+                        "checkout_remote_branch_cancel",
+                        "checkout_remote_branch_cancel_hint",
+                        theme,
+                    )
+                    .focus_handle(this.checkout_remote_branch_cancel_focus_handle.clone())
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.dismiss_prompt_popover(window, cx);
+                    }),
                 )
                 .child(
                     components::Button::new("checkout_remote_branch_go", "Checkout")
