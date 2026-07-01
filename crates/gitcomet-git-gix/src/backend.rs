@@ -1,6 +1,6 @@
 use crate::repo::GixRepo;
 use gitcomet_core::error::{Error, ErrorKind};
-use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
+use gitcomet_core::path_utils::{git_dir_for_workdir, strip_windows_verbatim_prefix};
 use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository, Result};
 use std::path::Path;
 use std::sync::Arc;
@@ -32,7 +32,8 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
-        let repo = gix::open(&workdir).map_err(|e| match e {
+        let git_dir = git_dir_for_workdir(&workdir);
+        let repo = gix::open(&git_dir).map_err(|e| match e {
             gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
             gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
             e => Error::new(ErrorKind::Backend(format!("gix open: {e}"))),

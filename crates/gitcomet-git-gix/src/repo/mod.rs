@@ -222,7 +222,8 @@ impl GixRepo {
     }
 
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
-        gix::open(&self.spec.workdir).map_err(|e| match e {
+        let git_dir = gitcomet_core::path_utils::git_dir_for_workdir(&self.spec.workdir);
+        gix::open(&git_dir).map_err(|e| match e {
             gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
             gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
             e => Error::new(ErrorKind::Backend(format!("gix open fresh repo: {e}"))),

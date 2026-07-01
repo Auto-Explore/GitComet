@@ -10,7 +10,7 @@ use gitcomet_core::domain::{
     SubmoduleStatus,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
-use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::path_utils::{canonicalize_or_original, git_dir_for_workdir};
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
@@ -1209,7 +1209,8 @@ fn cleanup_failed_submodule_add_error(
 }
 
 fn failed_submodule_add_left_clone_only_state(workdir: &Path, path: &Path) -> Result<bool> {
-    let repo = gix::open(workdir).map_err(|e| {
+    let git_dir = git_dir_for_workdir(workdir);
+    let repo = gix::open(&git_dir).map_err(|e| {
         Error::new(ErrorKind::Backend(format!(
             "open repo after failed submodule add {}: {e}",
             workdir.display()
@@ -1483,8 +1484,9 @@ fn open_gitlink_repo(
         return Ok(None);
     };
     let path = workdir.join(relative_path);
+    let git_dir = git_dir_for_workdir(&path);
 
-    match gix::open(&path) {
+    match gix::open(&git_dir) {
         Ok(repo) => Ok(Some(repo)),
         Err(gix::open::Error::NotARepository { .. }) => Ok(None),
         Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
