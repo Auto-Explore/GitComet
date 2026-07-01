@@ -996,7 +996,6 @@ fn send_unavailable_git_effect_result(
             repo_id,
             base,
             entries: _,
-            autosquash: _,
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -2084,7 +2083,6 @@ pub(super) fn schedule_effect(
             repo_id,
             base,
             entries,
-            autosquash,
         } => repo_commands::schedule_interactive_rebase(
             executor,
             repos,
@@ -2092,7 +2090,6 @@ pub(super) fn schedule_effect(
             repo_id,
             base,
             entries,
-            autosquash,
         ),
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)

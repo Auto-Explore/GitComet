@@ -1180,10 +1180,7 @@ impl PopoverHost {
                 components::TextInput::new(
                     components::TextInputOptions {
                         placeholder: "Commit subject".into(),
-                        multiline: false,
-                        read_only: false,
-                        chromeless: false,
-                        soft_wrap: false,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -1194,9 +1191,9 @@ impl PopoverHost {
                     components::TextInputOptions {
                         placeholder: "Description (optional)".into(),
                         multiline: true,
-                        read_only: false,
-                        chromeless: false,
                         soft_wrap: true,
+                        min_lines: 4,
+                        ..Default::default()
                     },
                     window,
                     cx,
@@ -2213,6 +2210,7 @@ impl PopoverHost {
                 }
                 PopoverKind::RebaseReword {
                     ix: _,
+                    original_action: _,
                     original_message,
                 } => {
                     let theme = self.theme;
@@ -2914,6 +2912,7 @@ impl PopoverHost {
             }
             PopoverKind::RebaseReword {
                 ix,
+                original_action,
                 original_message: _,
             } => {
                 let theme = self.theme;
@@ -2932,23 +2931,33 @@ impl PopoverHost {
                         format!("{subject}\n\n{body}")
                     };
                     let _ = main_pane.update(cx, |pane, cx| {
-                        if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
-                            entry.action = InteractiveRebaseAction::Reword;
-                            if !subject.is_empty() {
-                                entry.new_message = Some(new_message);
+                        if subject.is_empty() {
+                            // Empty subject → discard any previous override and revert
+                            // the action. Use set_rebase_action so side-effects
+                            // (squash-target cleanup, notify) are handled consistently.
+                            if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
+                                entry.new_message = None;
                             }
+                            pane.set_rebase_action(ix, original_action, cx);
+                        } else if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
+                            entry.action = InteractiveRebaseAction::Reword;
+                            entry.new_message = Some(new_message);
+                            cx.notify();
                         }
-                        cx.notify();
                     });
                     this.close_popover_and_restore_focus(window, cx);
                 });
-                let cancel = cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                let cancel = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                    let _ = this.main_pane.update(cx, |pane, cx| {
+                        pane.set_rebase_action(ix, original_action, cx);
+                    });
                     this.close_popover_and_restore_focus(window, cx);
                 });
 
                 div()
                     .flex()
                     .flex_col()
+                    .w(scaled_px(440.0))
                     .child(
                         div()
                             .px_2()
@@ -2992,7 +3001,6 @@ impl PopoverHost {
                                 div()
                                     .w_full()
                                     .min_w(px(0.0))
-                                    .h(px(96.0))
                                     .child(self.rebase_reword_description_input.clone()),
                             ),
                     )
@@ -3002,22 +3010,24 @@ impl PopoverHost {
                             .px_2()
                             .py_1()
                             .flex()
-                            .justify_end()
-                            .gap_1()
+                            .items_center()
+                            .justify_between()
                             .child(
                                 components::Button::new("reword_cancel", "Cancel")
+                                    .separated_end_slot(hotkey_hint(
+                                        theme,
+                                        "reword_cancel_hint",
+                                        "Esc",
+                                    ))
                                     .style(components::ButtonStyle::Outlined)
                                     .render(theme, ui_scale_percent)
                                     .on_click(cancel),
                             )
                             .child(
-                                components::Button::new(
-                                    submit_button_id,
-                                    "Save message",
-                                )
-                                .style(components::ButtonStyle::Filled)
-                                .render(theme, ui_scale_percent)
-                                .on_click(submit),
+                                components::Button::new(submit_button_id, "Save message")
+                                    .style(components::ButtonStyle::Filled)
+                                    .render(theme, ui_scale_percent)
+                                    .on_click(submit),
                             ),
                     )
             }

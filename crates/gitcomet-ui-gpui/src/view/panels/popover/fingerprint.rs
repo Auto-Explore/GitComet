@@ -660,15 +660,17 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             onto.hash(hasher);
         }
-        PopoverKind::RebaseReword { ix, original_message } => {
+        PopoverKind::RebaseReword { ix, original_action, original_message } => {
             77u8.hash(hasher);
             ix.hash(hasher);
+            (*original_action as u8).hash(hasher);
             original_message.hash(hasher);
         }
-        PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, .. } => {
+        PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, can_drop } => {
             78u8.hash(hasher);
             ix.hash(hasher);
             is_bottom.hash(hasher);
+            can_drop.hash(hasher);
         }
     }
 }

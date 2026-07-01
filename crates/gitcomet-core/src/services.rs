@@ -611,7 +611,6 @@ pub trait GitRepository: Send + Sync {
         &self,
         _base: &str,
         _entries: &[InteractiveRebaseEntry],
-        _autosquash: bool,
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase -i is not implemented for this backend",

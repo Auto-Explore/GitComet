@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::services::InteractiveRebaseAction;
 
 type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
 
@@ -2671,6 +2672,7 @@ pub(super) enum PopoverKind {
     },
     RebaseReword {
         ix: usize,
+        original_action: InteractiveRebaseAction,
         original_message: String,
     },
     InteractiveRebaseActionMenu {

@@ -385,7 +385,10 @@ impl PopoverHost {
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, can_drop } => {
-                Some(interactive_rebase_action_menu_model(*ix, *is_bottom, *can_drop))
+                let current_action = self.main_pane.read_with(cx, |pane, _| {
+                    pane.interactive_rebase_entries.get(*ix).map(|e| e.action)
+                });
+                Some(interactive_rebase_action_menu_model(*ix, *is_bottom, *can_drop, current_action))
             }
             PopoverKind::TerminalMenu { repo_id, context } => {
                 Some(terminal::model(*repo_id, *context, cx))
@@ -881,13 +884,22 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::LoadInteractiveRebaseSetup { repo_id, base });
             }
+            ContextMenuAction::ResetInteractiveRebaseEntry { ix } => {
+                let _ = self.main_pane.update(cx, |pane, cx| {
+                    if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
+                        entry.new_message = None;
+                    }
+                    pane.set_rebase_action(ix, InteractiveRebaseAction::Pick, cx);
+                });
+            }
             ContextMenuAction::SetInteractiveRebaseAction { ix, action } => {
                 let root_view = self.root_view.clone();
                 let was_reword = action == InteractiveRebaseAction::Reword;
-                let reword_msg = if was_reword {
+                let reword_state = if was_reword {
                     self.main_pane.read_with(cx, |pane, _| {
                         pane.interactive_rebase_entries.get(ix).map(|e| {
-                            e.new_message.as_ref().unwrap_or(&e.summary).clone()
+                            let msg = e.new_message.as_ref().unwrap_or(&e.summary).clone();
+                            (e.action, msg)
                         })
                     })
                 } else {
@@ -896,7 +908,7 @@ impl PopoverHost {
                 let _ = self.main_pane.update(cx, |pane, cx| {
                     pane.set_rebase_action(ix, action, cx);
                 });
-                if let Some(msg) = reword_msg {
+                if let Some((original_action, msg)) = reword_state {
                     let wh = window.window_handle();
                     cx.defer(move |cx| {
                         let _ = wh.update(cx, |_, window, cx| {
@@ -904,6 +916,7 @@ impl PopoverHost {
                                 root.open_popover_centered(
                                     PopoverKind::RebaseReword {
                                         ix,
+                                        original_action,
                                         original_message: msg,
                                     },
                                     window,
@@ -1422,7 +1435,7 @@ impl PopoverHost {
     }
 }
 
-fn interactive_rebase_action_menu_model(ix: usize, is_bottom: bool, can_drop: bool) -> ContextMenuModel {
+fn interactive_rebase_action_menu_model(ix: usize, is_bottom: bool, can_drop: bool, current_action: Option<InteractiveRebaseAction>) -> ContextMenuModel {
     let mut items = vec![
         ContextMenuItem::Entry {
             label: "pick".into(),
@@ -1487,6 +1500,15 @@ fn interactive_rebase_action_menu_model(ix: usize, is_bottom: bool, can_drop: bo
             }),
         });
     }
+    let is_reword = current_action == Some(InteractiveRebaseAction::Reword);
+    items.push(ContextMenuItem::Separator);
+    items.push(ContextMenuItem::Entry {
+        label: "Reset".into(),
+        icon: None,
+        shortcut: None,
+        disabled: !is_reword,
+        action: Box::new(ContextMenuAction::ResetInteractiveRebaseEntry { ix }),
+    });
     ContextMenuModel::new(items)
 }
 

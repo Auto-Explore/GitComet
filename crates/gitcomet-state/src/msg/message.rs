@@ -570,7 +570,6 @@ pub enum Msg {
         repo_id: RepoId,
         base: String,
         entries: Vec<InteractiveRebaseEntry>,
-        autosquash: bool,
     },
     CancelInteractiveRebaseSetup {
         repo_id: RepoId,

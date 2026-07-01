@@ -121,7 +121,6 @@ impl GixRepo {
         &self,
         base: &str,
         entries: &[InteractiveRebaseEntry],
-        autosquash: bool,
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(base, "interactive rebase base")?;
 
@@ -140,9 +139,6 @@ impl GixRepo {
             cmd.env("GITCOMET_GIT_DIR", repo.path());
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
-        if autosquash {
-            cmd.arg("--autosquash");
-        }
         cmd.args(["rebase", "-i", "--", base]);
 
         let label = format!("git rebase -i {base}");

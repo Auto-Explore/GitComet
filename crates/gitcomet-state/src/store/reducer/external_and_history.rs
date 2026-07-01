@@ -306,14 +306,23 @@ pub(super) fn interactive_rebase_setup_loaded(
     result: std::result::Result<Vec<InteractiveRebaseEntry>, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let entries = match result {
-            Ok(v) => Loadable::Ready(v),
-            Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
-            }
-        };
-        repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup { base, entries });
+        // Discard stale results: only write if setup is still active for this
+        // exact base. Guards against a cancelled setup being revived, or a
+        // result for commit X clobbering a newer load already in flight for Y.
+        if repo_state
+            .interactive_rebase_setup
+            .as_ref()
+            .map_or(false, |s| s.base == base)
+        {
+            let entries = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup { base, entries });
+        }
     }
     vec![]
 }

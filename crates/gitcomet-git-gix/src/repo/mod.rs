@@ -659,9 +659,8 @@ impl GitRepository for GixRepo {
         &self,
         base: &str,
         entries: &[InteractiveRebaseEntry],
-        autosquash: bool,
     ) -> Result<CommandOutput> {
-        self.interactive_rebase_with_output_impl(base, entries, autosquash)
+        self.interactive_rebase_with_output_impl(base, entries)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

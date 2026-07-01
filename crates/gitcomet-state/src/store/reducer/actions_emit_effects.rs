@@ -503,13 +503,11 @@ pub(super) fn interactive_rebase(
     repo_id: RepoId,
     base: String,
     entries: Vec<InteractiveRebaseEntry>,
-    autosquash: bool,
 ) -> Vec<Effect> {
     vec![Effect::InteractiveRebase {
         repo_id,
         base,
         entries,
-        autosquash,
     }]
 }
 

@@ -1259,17 +1259,6 @@ impl GitCometView {
                     self.store.dispatch(Msg::RebaseContinue { repo_id });
                 }
             }
-            "rebase-abort" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(window) = window
-                {
-                    self.open_popover_centered(
-                        PopoverKind::MergeAbortConfirm { repo_id },
-                        window,
-                        cx,
-                    );
-                }
-            }
             "create-tag" => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window

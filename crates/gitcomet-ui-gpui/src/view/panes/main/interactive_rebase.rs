@@ -12,6 +12,50 @@ fn squash_target(entries: &[InteractiveRebaseEntry], k: usize) -> Option<usize> 
     (0..k).rev().find(|&j| entries[j].action != InteractiveRebaseAction::Drop)
 }
 
+pub(super) fn apply_autosquash(entries: &mut Vec<InteractiveRebaseEntry>) {
+    let mut i = 0;
+    while i < entries.len() {
+        let (prefix_action, target_summary) = {
+            let s = &entries[i].summary;
+            if let Some(t) = s.strip_prefix("fixup! ") {
+                (InteractiveRebaseAction::Fixup, t.to_owned())
+            } else if let Some(t) = s.strip_prefix("squash! ") {
+                (InteractiveRebaseAction::Squash, t.to_owned())
+            } else {
+                i += 1;
+                continue;
+            }
+        };
+        let target_ix = (0..i).find(|&j| {
+            entries[j].summary.lines().next().unwrap_or("") == target_summary
+        });
+        if let Some(t) = target_ix {
+            entries[i].action = prefix_action;
+            let entry = entries.remove(i);
+            // Skip over already-grouped fixup/squash entries so that multiple
+            // fixup!/squash! commits targeting the same base don't swap each
+            // other back and forth indefinitely.
+            let mut insert_at = t + 1;
+            while insert_at < i
+                && matches!(
+                    entries[insert_at].action,
+                    InteractiveRebaseAction::Fixup | InteractiveRebaseAction::Squash
+                )
+            {
+                insert_at += 1;
+            }
+            entries.insert(insert_at, entry);
+            // If inserted at or past i, the same slot now holds an unprocessed entry.
+            if insert_at >= i {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    validate_squash_entries(entries);
+}
+
 fn validate_squash_entries(entries: &mut [InteractiveRebaseEntry]) {
     for k in 0..entries.len() {
         if !matches!(entries[k].action, InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup) {
@@ -89,7 +133,7 @@ impl MainPaneView {
                     matches!(self.interactive_rebase_entries[k].action, InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup)
                         && squash_target(&self.interactive_rebase_entries, k) == Some(j)
                 });
-                if !still_targeted {
+                if !still_targeted && self.interactive_rebase_entries[j].new_message.is_none() {
                     self.interactive_rebase_entries[j].action = InteractiveRebaseAction::Pick;
                 }
             }
@@ -187,7 +231,12 @@ impl MainPaneView {
                         .get(..8)
                         .unwrap_or(&self.interactive_rebase_entries[ix].commit_id)
                         .to_string();
-                    let summary = self.interactive_rebase_entries[ix].summary.clone();
+                    let summary = self.interactive_rebase_entries[ix]
+                        .new_message
+                        .as_deref()
+                        .and_then(|m| m.lines().next())
+                        .unwrap_or(&self.interactive_rebase_entries[ix].summary)
+                        .to_owned();
                     let is_selected = selected_commit_id
                         .as_deref()
                         .is_some_and(|s| s == self.interactive_rebase_entries[ix].commit_id);
@@ -503,6 +552,13 @@ impl MainPaneView {
                                             move |this, _e: &gpui::MouseDownEvent, _w, cx| {
                                                 this.interactive_rebase_autosquash =
                                                     !this.interactive_rebase_autosquash;
+                                                this.interactive_rebase_entries =
+                                                    this.interactive_rebase_original_entries.clone();
+                                                if this.interactive_rebase_autosquash {
+                                                    apply_autosquash(
+                                                        &mut this.interactive_rebase_entries,
+                                                    );
+                                                }
                                                 cx.notify();
                                             },
                                         ),
@@ -515,7 +571,7 @@ impl MainPaneView {
                             .flex()
                             .gap_1()
                             .child(
-                                components::Button::new("irebase_reset", "Reset")
+                                components::Button::new("irebase_reset", "Reset All")
                                     .style(components::ButtonStyle::Outlined)
                                     .disabled(!is_modified)
                                     .render(theme, ui_scale_percent)
@@ -523,6 +579,11 @@ impl MainPaneView {
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
                                             this.interactive_rebase_entries =
                                                 this.interactive_rebase_original_entries.clone();
+                                            if this.interactive_rebase_autosquash {
+                                                apply_autosquash(
+                                                    &mut this.interactive_rebase_entries,
+                                                );
+                                            }
                                             cx.notify();
                                         },
                                     )),
@@ -559,12 +620,10 @@ impl MainPaneView {
                                             let entries = std::mem::take(
                                                 &mut this.interactive_rebase_entries,
                                             );
-                                            let autosquash = this.interactive_rebase_autosquash;
                                             this.store.dispatch(Msg::InteractiveRebase {
                                                 repo_id,
                                                 base: base.clone(),
                                                 entries,
-                                                autosquash,
                                             });
                                             this.store.dispatch(
                                                 Msg::CancelInteractiveRebaseSetup { repo_id },

@@ -3843,9 +3843,11 @@ impl MainPaneView {
         // Lazy populate / clear interactive rebase entries based on state.
         // Clone early so the shared borrow on `self` via `active_repo()` ends before
         // any mutable field assignments below.
+        // Use and_then so that both "no active repo" and "setup was cancelled"
+        // (setup == None) collapse to None, hitting the clear arm below.
         let rebase_action: Option<Result<Vec<_>, ()>> =
-            self.active_repo().map(|repo| match &repo.interactive_rebase_setup {
-                Some(setup) => {
+            self.active_repo().and_then(|repo| {
+                repo.interactive_rebase_setup.as_ref().map(|setup| {
                     if let Loadable::Ready(entries) = &setup.entries {
                         if self.interactive_rebase_entries.is_empty() {
                             Ok(entries.clone())
@@ -3855,13 +3857,17 @@ impl MainPaneView {
                     } else {
                         Err(())
                     }
-                }
-                None => Err(()),
+                })
             });
         match rebase_action {
             Some(Ok(entries)) => {
-                self.interactive_rebase_entries = entries.clone();
-                self.interactive_rebase_original_entries = entries;
+                self.interactive_rebase_original_entries = entries.clone();
+                self.interactive_rebase_entries = entries;
+                if self.interactive_rebase_autosquash {
+                    super::interactive_rebase::apply_autosquash(
+                        &mut self.interactive_rebase_entries,
+                    );
+                }
             }
             None => {
                 if !self.interactive_rebase_entries.is_empty() {

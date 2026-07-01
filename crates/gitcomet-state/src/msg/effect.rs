@@ -448,7 +448,6 @@ pub enum Effect {
         repo_id: RepoId,
         base: String,
         entries: Vec<InteractiveRebaseEntry>,
-        autosquash: bool,
     }, // entries held here so the effect dispatcher can pass them to the scheduler
     MergeAbort {
         repo_id: RepoId,

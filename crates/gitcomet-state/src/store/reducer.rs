@@ -1335,10 +1335,9 @@ fn reduce_inner(
             repo_id,
             base,
             entries,
-            autosquash,
         } => {
             begin_local_action(state, repo_id);
-            actions_emit_effects::interactive_rebase(repo_id, base, entries, autosquash)
+            actions_emit_effects::interactive_rebase(repo_id, base, entries)
         }
         Msg::CancelInteractiveRebaseSetup { repo_id } => {
             actions_emit_effects::cancel_interactive_rebase_setup(state, repo_id)
