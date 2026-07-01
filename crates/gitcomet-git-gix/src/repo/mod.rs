@@ -10,10 +10,9 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
-    ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult,
-    PullMode, RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext,
-    SafePushAfterCommitDecision, SafePushAfterCommitTarget, SubmoduleTrustDecision,
-    SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult, PullMode,
+    RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;

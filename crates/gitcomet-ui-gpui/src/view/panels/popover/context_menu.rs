@@ -384,11 +384,20 @@ impl PopoverHost {
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
-            PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, can_drop } => {
+            PopoverKind::InteractiveRebaseActionMenu {
+                ix,
+                is_bottom,
+                can_drop,
+            } => {
                 let current_action = self.main_pane.read_with(cx, |pane, _| {
                     pane.interactive_rebase_entries.get(*ix).map(|e| e.action)
                 });
-                Some(interactive_rebase_action_menu_model(*ix, *is_bottom, *can_drop, current_action))
+                Some(interactive_rebase_action_menu_model(
+                    *ix,
+                    *is_bottom,
+                    *can_drop,
+                    current_action,
+                ))
             }
             PopoverKind::TerminalMenu { repo_id, context } => {
                 Some(terminal::model(*repo_id, *context, cx))
@@ -1233,66 +1242,70 @@ impl PopoverHost {
             .filter(|&ix| model.is_selectable(ix))
             .or_else(|| model.first_selectable());
 
-        components::context_menu(
-            theme,
-            div()
-                .w_full()
-                .min_w_full()
-                .flex()
-                .flex_col()
-                .items_stretch()
-                .track_focus(&focus)
-                .key_context("ContextMenu")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _e: &MouseDownEvent, window, cx| {
-                        window.focus(&this.context_menu_focus_handle, cx);
-                    }),
-                )
-                .on_key_down(
-                    cx.listener(move |this, e: &gpui::KeyDownEvent, window, cx| {
-                        let key = e.keystroke.key.as_str();
-                        let mods = e.keystroke.modifiers;
-                        if mods.control || mods.platform || mods.alt || mods.function {
-                            return;
-                        }
+        div()
+            .flex()
+            .flex_col()
+            .items_stretch()
+            .text_color(theme.colors.text)
+            .min_w(width.min_px(ui_scale))
+            .max_w(width.max_px(ui_scale))
+            .track_focus(&focus)
+            .key_context("ContextMenu")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                    window.focus(&this.context_menu_focus_handle, cx);
+                }),
+            )
+            .on_key_down(
+                cx.listener(move |this, e: &gpui::KeyDownEvent, window, cx| {
+                    let key = e.keystroke.key.as_str();
+                    let mods = e.keystroke.modifiers;
+                    if mods.control || mods.platform || mods.alt || mods.function {
+                        return;
+                    }
 
-                        match key {
-                            "escape" => {
-                                cx.stop_propagation();
-                                this.close_popover_and_restore_focus(window, cx);
-                            }
-                            "up" => {
-                                cx.stop_propagation();
-                                let next = model_for_keys
-                                    .next_selectable(this.context_menu_selected_ix, -1);
-                                this.context_menu_selected_ix = next;
-                                cx.notify();
-                            }
-                            "down" => {
-                                cx.stop_propagation();
-                                let next = model_for_keys
-                                    .next_selectable(this.context_menu_selected_ix, 1);
-                                this.context_menu_selected_ix = next;
-                                cx.notify();
-                            }
-                            "home" => {
-                                cx.stop_propagation();
-                                this.context_menu_selected_ix = model_for_keys.first_selectable();
-                                cx.notify();
-                            }
-                            "end" => {
-                                cx.stop_propagation();
-                                this.context_menu_selected_ix = model_for_keys.last_selectable();
-                                cx.notify();
-                            }
-                            "enter" => {
-                                let Some(ix) = context_menu_activate_entry_ix(
-                                    &model_for_keys,
-                                    this.context_menu_selected_ix,
-                                ) else {
-                                    return;
-                                };
+                    match key {
+                        "escape" => {
+                            cx.stop_propagation();
+                            this.close_popover_and_restore_focus(window, cx);
+                        }
+                        "up" => {
+                            cx.stop_propagation();
+                            let next =
+                                model_for_keys.next_selectable(this.context_menu_selected_ix, -1);
+                            this.context_menu_selected_ix = next;
+                            cx.notify();
+                        }
+                        "down" => {
+                            cx.stop_propagation();
+                            let next =
+                                model_for_keys.next_selectable(this.context_menu_selected_ix, 1);
+                            this.context_menu_selected_ix = next;
+                            cx.notify();
+                        }
+                        "home" => {
+                            cx.stop_propagation();
+                            this.context_menu_selected_ix = model_for_keys.first_selectable();
+                            cx.notify();
+                        }
+                        "end" => {
+                            cx.stop_propagation();
+                            this.context_menu_selected_ix = model_for_keys.last_selectable();
+                            cx.notify();
+                        }
+                        "enter" => {
+                            let Some(ix) = context_menu_activate_entry_ix(
+                                &model_for_keys,
+                                this.context_menu_selected_ix,
+                            ) else {
+                                return;
+                            };
+                            cx.stop_propagation();
+                            this.context_menu_activate_model_entry(&model_for_keys, ix, window, cx);
+                        }
+                        _ => {
+                            if let Some(ix) = context_menu_shortcut_entry_ix(&model_for_keys, key) {
                                 cx.stop_propagation();
                                 this.context_menu_activate_model_entry(
                                     &model_for_keys,
@@ -1301,141 +1314,129 @@ impl PopoverHost {
                                     cx,
                                 );
                             }
-                            _ => {
-                                if let Some(ix) =
-                                    context_menu_shortcut_entry_ix(&model_for_keys, key)
-                                {
+                        }
+                    }
+                }),
+            )
+            .children(model.items.into_iter().enumerate().map(move |(ix, item)| {
+                match item {
+                    ContextMenuItem::Separator => {
+                        components::context_menu_separator(theme, ui_scale)
+                            .id(("context_menu_sep", ix))
+                            .into_any_element()
+                    }
+                    ContextMenuItem::Header(title) => components::context_menu_header(
+                        theme,
+                        ui_scale,
+                        title,
+                        Some(tooltip_host.clone()),
+                        cx,
+                    )
+                    .id(("context_menu_header", ix))
+                    .into_any_element(),
+                    ContextMenuItem::Label(text) => components::context_menu_label(
+                        theme,
+                        ui_scale,
+                        text,
+                        Some(tooltip_host.clone()),
+                        cx,
+                    )
+                    .id(("context_menu_label", ix))
+                    .into_any_element(),
+                    ContextMenuItem::Entry {
+                        label,
+                        icon,
+                        shortcut,
+                        disabled,
+                        action,
+                    } => {
+                        let selected = selected_for_render == Some(ix);
+                        let debug_selector = context_menu_entry_debug_selector(label.as_ref());
+                        let tooltip_text = entry_tooltips
+                            .get(&ix)
+                            .cloned()
+                            .or_else(|| context_menu_entry_tooltip(action.as_ref()));
+                        let tooltip_host_for_move = tooltip_host.clone();
+                        let tooltip_text_for_move = tooltip_text.clone();
+                        let tooltip_host_for_hover = tooltip_host.clone();
+                        let activate_on_left_release = model_for_mouse.clone();
+                        let activate_on_right_release = model_for_mouse.clone();
+                        let row = components::context_menu_entry(
+                            ("context_menu_entry", ix),
+                            theme,
+                            ui_scale,
+                            selected,
+                            disabled,
+                            icon,
+                            label,
+                            shortcut,
+                        )
+                        .debug_selector(move || debug_selector.clone());
+
+                        row.on_mouse_move(cx.listener(
+                            move |this, event: &MouseMoveEvent, _w, cx| {
+                                this.context_menu_selected_ix = Some(ix);
+                                if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
+                                    let _ = tooltip_host_for_move.update(cx, |host, cx| {
+                                        host.on_mouse_moved(event.position, cx);
+                                        host.set_tooltip_text_if_changed(
+                                            Some(tooltip_text.clone()),
+                                            cx,
+                                        );
+                                    });
+                                }
+                                cx.notify();
+                            },
+                        ))
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            if *hovering {
+                                this.context_menu_selected_ix = Some(ix);
+                                cx.notify();
+                            } else if let Some(tooltip_text) = tooltip_text.as_ref() {
+                                let _ = tooltip_host_for_hover.update(cx, |host, cx| {
+                                    host.clear_tooltip_if_matches(tooltip_text, cx);
+                                });
+                            }
+                        }))
+                        .when(!disabled, |row| {
+                            row.on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
                                     cx.stop_propagation();
                                     this.context_menu_activate_model_entry(
-                                        &model_for_keys,
+                                        &activate_on_left_release,
                                         ix,
                                         window,
                                         cx,
                                     );
-                                }
-                            }
-                        }
-                    }),
-                )
-                .children(model.items.into_iter().enumerate().map(move |(ix, item)| {
-                    match item {
-                        ContextMenuItem::Separator => {
-                            components::context_menu_separator(theme, ui_scale)
-                                .id(("context_menu_sep", ix))
-                                .into_any_element()
-                        }
-                        ContextMenuItem::Header(title) => components::context_menu_header(
-                            theme,
-                            ui_scale,
-                            title,
-                            Some(tooltip_host.clone()),
-                            cx,
-                        )
-                        .id(("context_menu_header", ix))
-                        .into_any_element(),
-                        ContextMenuItem::Label(text) => components::context_menu_label(
-                            theme,
-                            ui_scale,
-                            text,
-                            Some(tooltip_host.clone()),
-                            cx,
-                        )
-                        .id(("context_menu_label", ix))
-                        .into_any_element(),
-                        ContextMenuItem::Entry {
-                            label,
-                            icon,
-                            shortcut,
-                            disabled,
-                            action,
-                        } => {
-                            let selected = selected_for_render == Some(ix);
-                            let debug_selector = context_menu_entry_debug_selector(label.as_ref());
-                            let tooltip_text = entry_tooltips
-                                .get(&ix)
-                                .cloned()
-                                .or_else(|| context_menu_entry_tooltip(action.as_ref()));
-                            let tooltip_host_for_move = tooltip_host.clone();
-                            let tooltip_text_for_move = tooltip_text.clone();
-                            let tooltip_host_for_hover = tooltip_host.clone();
-                            let activate_on_left_release = model_for_mouse.clone();
-                            let activate_on_right_release = model_for_mouse.clone();
-                            let row = components::context_menu_entry(
-                                ("context_menu_entry", ix),
-                                theme,
-                                ui_scale,
-                                selected,
-                                disabled,
-                                icon,
-                                label,
-                                shortcut,
+                                }),
                             )
-                            .debug_selector(move || debug_selector.clone());
-
-                            row.on_mouse_move(cx.listener(
-                                move |this, event: &MouseMoveEvent, _w, cx| {
-                                    this.context_menu_selected_ix = Some(ix);
-                                    if let Some(tooltip_text) = tooltip_text_for_move.as_ref() {
-                                        let _ = tooltip_host_for_move.update(cx, |host, cx| {
-                                            host.on_mouse_moved(event.position, cx);
-                                            host.set_tooltip_text_if_changed(
-                                                Some(tooltip_text.clone()),
-                                                cx,
-                                            );
-                                        });
-                                    }
-                                    cx.notify();
-                                },
-                            ))
-                            .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
-                                if *hovering {
-                                    this.context_menu_selected_ix = Some(ix);
-                                    cx.notify();
-                                } else if let Some(tooltip_text) = tooltip_text.as_ref() {
-                                    let _ = tooltip_host_for_hover.update(cx, |host, cx| {
-                                        host.clear_tooltip_if_matches(tooltip_text, cx);
-                                    });
-                                }
-                            }))
-                            .when(!disabled, |row| {
-                                row.on_mouse_up(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        this.context_menu_activate_model_entry(
-                                            &activate_on_left_release,
-                                            ix,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                )
-                                .on_mouse_up(
-                                    MouseButton::Right,
-                                    cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
-                                        cx.stop_propagation();
-                                        this.context_menu_activate_model_entry(
-                                            &activate_on_right_release,
-                                            ix,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                )
-                            })
-                            .into_any_element()
-                        }
+                            .on_mouse_up(
+                                MouseButton::Right,
+                                cx.listener(move |this, _e: &MouseUpEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.context_menu_activate_model_entry(
+                                        &activate_on_right_release,
+                                        ix,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            )
+                        })
+                        .into_any_element()
                     }
-                }))
-                .into_any_element(),
-        )
-        .w(width.preferred_px(ui_scale))
-        .min_w(width.min_px(ui_scale))
-        .max_w(width.max_px(ui_scale))
+                }
+            }))
     }
 }
 
-fn interactive_rebase_action_menu_model(ix: usize, is_bottom: bool, can_drop: bool, current_action: Option<InteractiveRebaseAction>) -> ContextMenuModel {
+fn interactive_rebase_action_menu_model(
+    ix: usize,
+    is_bottom: bool,
+    can_drop: bool,
+    current_action: Option<InteractiveRebaseAction>,
+) -> ContextMenuModel {
     let mut items = vec![
         ContextMenuItem::Entry {
             label: "pick".into(),
@@ -1514,8 +1515,8 @@ fn interactive_rebase_action_menu_model(ix: usize, is_bottom: bool, can_drop: bo
 
 #[cfg(test)]
 mod tests {
-use super::*;
-use gitcomet_core::services::InteractiveRebaseAction;
+    use super::*;
+    use gitcomet_core::services::InteractiveRebaseAction;
 
     #[test]
     fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {

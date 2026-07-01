@@ -164,7 +164,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
-        |         PopoverKind::CommitOptionsMenu { repo_id }
+        | PopoverKind::CommitOptionsMenu { repo_id }
         | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
         | PopoverKind::DiffEditorMenu { repo_id, .. }
@@ -660,13 +660,21 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             onto.hash(hasher);
         }
-        PopoverKind::RebaseReword { ix, original_action, original_message } => {
+        PopoverKind::RebaseReword {
+            ix,
+            original_action,
+            original_message,
+        } => {
             77u8.hash(hasher);
             ix.hash(hasher);
             (*original_action as u8).hash(hasher);
             original_message.hash(hasher);
         }
-        PopoverKind::InteractiveRebaseActionMenu { ix, is_bottom, can_drop } => {
+        PopoverKind::InteractiveRebaseActionMenu {
+            ix,
+            is_bottom,
+            can_drop,
+        } => {
             78u8.hash(hasher);
             ix.hash(hasher);
             is_bottom.hash(hasher);

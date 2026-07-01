@@ -99,8 +99,6 @@ pub fn context_menu_header<V: 'static>(
     let title = title.into();
     let max_lines = title.resolved_max_lines(1);
     div()
-        .w_full()
-        .self_stretch()
         .px(scaled_px(8.0))
         .py(scaled_px(4.0))
         .text_xs()
@@ -129,8 +127,6 @@ pub fn context_menu_label<V: 'static>(
     let text = text.into();
     let max_lines = text.resolved_max_lines(2);
     div()
-        .w_full()
-        .self_stretch()
         .px(scaled_px(8.0))
         .pb(scaled_px(4.0))
         .text_sm()
@@ -151,8 +147,6 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
     let ui_scale = ui_scale.into();
     let scaled_px = |value| ui_scale.px(value);
     div()
-        .w_full()
-        .self_stretch()
         .my(scaled_px(2.0))
         .border_t_1()
         .border_color(theme.colors.border)
@@ -184,14 +178,11 @@ pub fn context_menu_entry(
     let mut row = div()
         .id(id)
         .h(control_height_md(ui_scale))
-        .w_full()
-        .min_w_full()
-        .self_stretch()
         .px(scaled_px(8.0))
         .flex()
         .items_center()
         .justify_between()
-        .gap(scaled_px(8.0))
+        .gap(scaled_px(20.0))
         .rounded(px(theme.radii.row))
         .text_color(text_color)
         .when(selected, |s| s.bg(theme.colors.hover))
@@ -207,6 +198,7 @@ pub fn context_menu_entry(
                 .gap(scaled_px(8.0))
                 .flex_1()
                 .min_w(px(0.0))
+                .overflow_hidden()
                 .when(icon.is_some(), |row| {
                     row.child(
                         div()
@@ -230,7 +222,7 @@ pub fn context_menu_entry(
                         .text_sm()
                         .line_height(scaled_px(18.0))
                         .text_color(text_color)
-                        .line_clamp(1)
+                        .whitespace_nowrap()
                         .child(label),
                 ),
         );

@@ -2589,8 +2589,10 @@ pub(crate) struct MainPaneView {
 
     pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
 
-    pub(in crate::view) interactive_rebase_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) interactive_rebase_original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) interactive_rebase_entries:
+        Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) interactive_rebase_original_entries:
+        Vec<gitcomet_core::services::InteractiveRebaseEntry>,
     pub(in crate::view) interactive_rebase_selected_ix: Option<usize>,
     pub(in crate::view) interactive_rebase_autosquash: bool,
     pub(in crate::view) interactive_rebase_drag_state: Option<IRebaseDragState>,
@@ -2602,8 +2604,6 @@ pub(crate) struct MainPaneView {
 pub(in crate::view) struct IRebaseDragState {
     pub(in crate::view) from_ix: usize,
     pub(in crate::view) to_ix: usize,
-    /// Incremented each time to_ix changes; used as animation key so the gap restarts.
-    pub(in crate::view) gap_version: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

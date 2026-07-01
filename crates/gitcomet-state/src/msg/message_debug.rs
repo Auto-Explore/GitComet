@@ -137,7 +137,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
-            InternalMsg::InteractiveRebaseSetupLoaded { repo_id, base, result } => f
+            InternalMsg::InteractiveRebaseSetupLoaded {
+                repo_id,
+                base,
+                result,
+            } => f
                 .debug_struct("InteractiveRebaseSetupLoaded")
                 .field("repo_id", repo_id)
                 .field("base", base)

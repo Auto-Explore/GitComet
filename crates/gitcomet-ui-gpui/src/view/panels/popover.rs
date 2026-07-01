@@ -21,12 +21,12 @@ mod merge_abort_confirm;
 mod picker_nav;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
+mod rebase_onto_confirm;
 mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod repo_picker;
-mod rebase_onto_confirm;
 mod reset_prompt;
 mod search_inputs;
 mod stash_drop_confirm;
@@ -89,6 +89,7 @@ impl PopoverWidthSpec {
 }
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
+const COMMIT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 260.0, 480.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
 const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
@@ -526,12 +527,12 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
+        PopoverKind::CommitMenu { .. } => Some(COMMIT_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
-        | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -2224,12 +2225,13 @@ impl PopoverHost {
                         input.set_text(subject, cx);
                         cx.notify();
                     });
-                    self.rebase_reword_description_input.update(cx, |input, cx| {
-                        input.clear_transient_key_presses();
-                        input.set_theme(theme, cx);
-                        input.set_text(body, cx);
-                        cx.notify();
-                    });
+                    self.rebase_reword_description_input
+                        .update(cx, |input, cx| {
+                            input.clear_transient_key_presses();
+                            input.set_theme(theme, cx);
+                            input.set_text(body, cx);
+                            cx.notify();
+                        });
                     let focus = self
                         .rebase_reword_input
                         .read_with(cx, |i, _| i.focus_handle());

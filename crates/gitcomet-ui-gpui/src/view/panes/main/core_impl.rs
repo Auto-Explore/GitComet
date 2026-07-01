@@ -3846,20 +3846,19 @@ impl MainPaneView {
         // any mutable field assignments below.
         // Use and_then so that both "no active repo" and "setup was cancelled"
         // (setup == None) collapse to None, hitting the clear arm below.
-        let rebase_action: Option<Result<Vec<_>, ()>> =
-            self.active_repo().and_then(|repo| {
-                repo.interactive_rebase_setup.as_ref().map(|setup| {
-                    if let Loadable::Ready(entries) = &setup.entries {
-                        if self.interactive_rebase_entries.is_empty() {
-                            Ok(entries.clone())
-                        } else {
-                            Err(())
-                        }
+        let rebase_action: Option<Result<Vec<_>, ()>> = self.active_repo().and_then(|repo| {
+            repo.interactive_rebase_setup.as_ref().map(|setup| {
+                if let Loadable::Ready(entries) = &setup.entries {
+                    if self.interactive_rebase_entries.is_empty() {
+                        Ok(entries.clone())
                     } else {
                         Err(())
                     }
-                })
-            });
+                } else {
+                    Err(())
+                }
+            })
+        });
         match rebase_action {
             Some(Ok(entries)) => {
                 self.interactive_rebase_original_entries = entries.clone();

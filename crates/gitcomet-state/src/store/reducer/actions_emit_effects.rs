@@ -4,7 +4,9 @@ use super::util::{
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, InteractiveRebaseSetup, Loadable, RepoId, RepoLoadsInFlight, RepoState};
+use crate::model::{
+    AppState, InteractiveRebaseSetup, Loadable, RepoId, RepoLoadsInFlight, RepoState,
+};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};

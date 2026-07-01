@@ -311,9 +311,8 @@ impl Render for ActionBarView {
         let is_rebase_or_apply_in_progress = self
             .active_repo()
             .is_some_and(|r| matches!(&r.rebase_in_progress, Loadable::Ready(true)));
-        let rebase_has_unstaged_conflicts = self
-            .active_repo()
-            .is_some_and(|r| r.has_unstaged_conflicts);
+        let rebase_has_unstaged_conflicts =
+            self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
 
         let (pull_count, push_count) = self
             .active_repo()

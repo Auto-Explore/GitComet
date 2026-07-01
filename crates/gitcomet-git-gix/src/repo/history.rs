@@ -198,10 +198,7 @@ struct RebaseScripts {
 }
 
 impl RebaseScripts {
-    fn create(
-        entries: &[InteractiveRebaseEntry],
-        git_dir: PathBuf,
-    ) -> std::io::Result<Self> {
+    fn create(entries: &[InteractiveRebaseEntry], git_dir: PathBuf) -> std::io::Result<Self> {
         let dir = tempfile::tempdir()?;
 
         let todo_content = build_todo_content(entries);
@@ -219,7 +216,9 @@ impl RebaseScripts {
 
         let msgs_dir = dir.path().join("msgs");
         let mut msg_editor_path = None;
-        let has_reword = entries.iter().any(|e| e.action == InteractiveRebaseAction::Reword);
+        let has_reword = entries
+            .iter()
+            .any(|e| e.action == InteractiveRebaseAction::Reword);
         if has_reword {
             fs::create_dir_all(&msgs_dir)?;
             for entry in entries {

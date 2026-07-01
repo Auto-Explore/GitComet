@@ -16,9 +16,32 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         })
         .unwrap_or_default();
 
-    let mut items = vec![ContextMenuItem::Header(format!("Commit {short}").into())];
+    let branch_names: Vec<String> = this
+        .active_repo()
+        .and_then(|r| match &r.branches {
+            Loadable::Ready(branches) => Some(
+                branches
+                    .iter()
+                    .filter(|b| b.target == *commit_id)
+                    .map(|b| b.name.clone())
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    let header_text: SharedString = match branch_names.as_slice() {
+        [] => format!("Commit {short}").into(),
+        [name] => name.clone().into(),
+        names => names.join(", ").into(),
+    };
+    let mut items = vec![ContextMenuItem::Header(
+        components::ContextMenuText::new(header_text).max_lines(2),
+    )];
     if !commit_summary.is_empty() {
-        items.push(ContextMenuItem::Label(commit_summary.into()));
+        items.push(ContextMenuItem::Label(
+            components::ContextMenuText::new(commit_summary).max_lines(4),
+        ));
     }
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
@@ -118,8 +141,9 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         })
         .unwrap_or_else(|| short.clone());
 
+    let target_label = branch_names.first().map(|s| s.as_str()).unwrap_or(&short);
     items.push(ContextMenuItem::Entry {
-        label: format!("Interactive rebase {current_branch} onto {short}").into(),
+        label: format!("Interactive rebase {current_branch} onto {target_label}").into(),
         icon: Some("icons/refresh.svg".into()),
         shortcut: Some("I".into()),
         disabled: false,
