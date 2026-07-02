@@ -2593,9 +2593,9 @@ pub(crate) struct MainPaneView {
         Vec<gitcomet_core::services::InteractiveRebaseEntry>,
     pub(in crate::view) interactive_rebase_original_entries:
         Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) interactive_rebase_selected_ix: Option<usize>,
     pub(in crate::view) interactive_rebase_autosquash: bool,
     pub(in crate::view) interactive_rebase_drag_state: Option<IRebaseDragState>,
+    pub(in crate::view) interactive_rebase_scroll: gpui::ScrollHandle,
     /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.
     pub(in crate::view) interactive_rebase_reorder_anim: Option<(usize, usize, u32)>,
 }
@@ -2604,6 +2604,12 @@ pub(crate) struct MainPaneView {
 pub(in crate::view) struct IRebaseDragState {
     pub(in crate::view) from_ix: usize,
     pub(in crate::view) to_ix: usize,
+    pub(in crate::view) display_pos: usize,
+    /// The gap's previous display position, set once the gap has moved;
+    /// drives the paired shrink/grow animation of gap moves.
+    pub(in crate::view) prev_display_pos: Option<usize>,
+    /// Bumped on every gap move so the move animation replays.
+    pub(in crate::view) anim_ver: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

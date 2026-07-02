@@ -4,8 +4,8 @@ use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use std::{cell::RefCell, rc::Rc};
 
 const ACTION_BTN_W: f32 = 76.0;
-// Estimated row height used for gap animation. Does not need to be exact —
-// the gap grows/shrinks smoothly and any small mismatch is barely noticeable.
+// Fallback row height for drag hit-testing and the gap ghost, used only until
+// the first paint provides measured row bounds (see measured_drag_row_height).
 const DRAG_ROW_HEIGHT: f32 = 28.0;
 
 fn squash_target(entries: &[InteractiveRebaseEntry], k: usize) -> Option<usize> {
@@ -161,6 +161,39 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// Height of a real entry row measured from the last paint, so drag
+    /// hit-testing and the gap ghost track font size and UI scale. Falls back
+    /// to DRAG_ROW_HEIGHT before the first paint. The gap ghost and the
+    /// collapsed source row are always shorter than a real row, so the max
+    /// child height is a real row's height.
+    fn measured_drag_row_height(&self) -> f32 {
+        let mut max_h = 0f32;
+        let mut i = 0;
+        while let Some(b) = self.interactive_rebase_scroll.bounds_for_item(i) {
+            max_h = max_h.max(f32::from(b.size.height));
+            i += 1;
+        }
+        if max_h > 0.0 { max_h } else { DRAG_ROW_HEIGHT }
+    }
+
+    /// Commit the pending drag reorder. Shared by every way a drag can end
+    /// (drop on the list, drop outside it, mouse released out of the window)
+    /// so the paths cannot diverge. Returns true if there was a drag to end.
+    fn commit_interactive_rebase_drag(&mut self) -> bool {
+        let Some(state) = self.interactive_rebase_drag_state.take() else {
+            return false;
+        };
+        if state.from_ix != state.to_ix
+            && state.from_ix < self.interactive_rebase_entries.len()
+            && state.to_ix < self.interactive_rebase_entries.len()
+        {
+            let entry = self.interactive_rebase_entries.remove(state.from_ix);
+            self.interactive_rebase_entries.insert(state.to_ix, entry);
+            validate_squash_entries(&mut self.interactive_rebase_entries);
+        }
+        true
+    }
+
     pub(in crate::view) fn interactive_rebase_view(
         &mut self,
         _window: &mut Window,
@@ -210,6 +243,7 @@ impl MainPaneView {
                 .into_any_element(),
             Loadable::Ready(_) => {
                 let entry_count = self.interactive_rebase_entries.len();
+                let drag_row_h = self.measured_drag_row_height();
                 let selected_commit_id = self
                     .active_repo()
                     .and_then(|r| r.history_state.selected_commit.as_ref())
@@ -219,7 +253,7 @@ impl MainPaneView {
                 let drag_state = self.interactive_rebase_drag_state;
                 let is_dragging = drag_state.is_some();
                 let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
-                let drag_to_ix = drag_state.map(|s| s.to_ix).unwrap_or(0);
+                let drag_display_pos = drag_state.map(|s| s.display_pos).unwrap_or(0);
 
                 // Display order is always newest-first (reversed). During drag we keep items in
                 // their original slots — a collapsing source placeholder and an animated gap at
@@ -229,8 +263,7 @@ impl MainPaneView {
                 // Display positions for the source placeholder and the animated gap target.
                 let from_display_pos = (is_dragging && drag_from_ix < entry_count)
                     .then(|| (entry_count - 1).saturating_sub(drag_from_ix));
-                let gap_display_pos = (is_dragging && drag_to_ix < entry_count)
-                    .then(|| (entry_count - 1).saturating_sub(drag_to_ix));
+                let gap_display_pos = is_dragging.then_some(drag_display_pos);
 
                 // Pre-extract the dragged item's display data so the gap can render it on rails.
                 let ghost_data = from_display_pos.map(|_| {
@@ -264,7 +297,7 @@ impl MainPaneView {
                             if theme.is_dark { 0.38 } else { 0.28 },
                         );
                         div()
-                            .h(px(DRAG_ROW_HEIGHT))
+                            .h(px(drag_row_h))
                             .flex()
                             .items_center()
                             .gap_1()
@@ -323,16 +356,57 @@ impl MainPaneView {
                             .into_any_element()
                     };
 
-                // When dragging downward (source above gap) and the gap would land at the
-                // very last slot, the insert(to_ix=0, entry) pushes every other item UP,
-                // meaning the dragged item ends up BELOW the current last item — not above it.
-                // Inserting the gap before that last item would look wrong; append it after.
-                let append_gap_after = gap_display_pos == Some(entry_count - 1)
-                    && from_display_pos.map_or(false, |fdp| fdp < entry_count - 1);
+                // When dragging a higher item all the way to the bottom the drag
+                // slot falls past the last display position. In that case render
+                // the gap after all rows.
+                let append_gap_after = gap_display_pos == Some(entry_count);
 
-                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(entry_count + 1);
+                // Gap moves animate as a matched pair: a spacer shrinking where the
+                // gap left and the ghost growing where it landed. Identical duration
+                // and easing keep the two heights summing to exactly one row, so
+                // rows below both slots stay put and rows in between slide smoothly.
+                // At drag start there is no previous slot: the ghost renders at full
+                // height, replacing the collapsed source row in place with no shift.
+                let gap_prev_display_pos = drag_state.and_then(|s| s.prev_display_pos);
+                let gap_anim_ver = drag_state.map(|s| s.anim_ver).unwrap_or(0);
+                let animate_gap_move = gap_prev_display_pos.is_some();
+                let wrap_gap = move |ghost_row: gpui::AnyElement| -> gpui::AnyElement {
+                    if animate_gap_move {
+                        div()
+                            .w_full()
+                            .overflow_hidden()
+                            .child(ghost_row)
+                            .with_animation(
+                                format!("irebase_gap_in_{gap_anim_ver}"),
+                                Animation::new(Duration::from_millis(120))
+                                    .with_easing(gpui::ease_out_quint()),
+                                move |d, delta| d.h(px(drag_row_h * delta)),
+                            )
+                            .into_any_element()
+                    } else {
+                        ghost_row
+                    }
+                };
+                let build_gap_out_spacer = move || -> gpui::AnyElement {
+                    div()
+                        .w_full()
+                        .with_animation(
+                            format!("irebase_gap_out_{gap_anim_ver}"),
+                            Animation::new(Duration::from_millis(120))
+                                .with_easing(gpui::ease_out_quint()),
+                            move |d, delta| d.h(px(drag_row_h * (1.0 - delta))),
+                        )
+                        .into_any_element()
+                };
+
+                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(entry_count + 2);
 
                 for (display_pos, &ix) in display_order.iter().enumerate() {
+                    // The shrinking half of the gap-move animation.
+                    if gap_prev_display_pos == Some(display_pos) {
+                        rows.push(build_gap_out_spacer());
+                    }
+
                     // Insert an animated slot at the target position. It renders the dragged
                     // item's content so the ghost appears "on rails" within the list.
                     if gap_display_pos == Some(display_pos) && !append_gap_after {
@@ -342,19 +416,7 @@ impl MainPaneView {
                             } else {
                                 div().into_any_element()
                             };
-                        rows.push(
-                            div()
-                                .w_full()
-                                .overflow_hidden()
-                                .child(ghost_row)
-                                .with_animation(
-                                    "irebase_gap",
-                                    Animation::new(Duration::from_millis(120))
-                                        .with_easing(gpui::ease_out_quint()),
-                                    |d, delta| d.h(px(DRAG_ROW_HEIGHT * delta)).opacity(delta),
-                                )
-                                .into_any_element(),
-                        );
+                        rows.push(wrap_gap(ghost_row));
                     }
 
                     // Collapse the source item — the ghost view follows the cursor instead.
@@ -619,6 +681,11 @@ impl MainPaneView {
                     rows.push(row_element);
                 }
 
+                // The gap previously sat after the last row and has since moved up.
+                if gap_prev_display_pos == Some(entry_count) {
+                    rows.push(build_gap_out_spacer());
+                }
+
                 // When dragging a higher item (lower data index) all the way to the bottom,
                 // the gap belongs AFTER the last rendered item, not before it.
                 if append_gap_after {
@@ -627,19 +694,7 @@ impl MainPaneView {
                     } else {
                         div().into_any_element()
                     };
-                    rows.push(
-                        div()
-                            .w_full()
-                            .overflow_hidden()
-                            .child(ghost_row)
-                            .with_animation(
-                                "irebase_gap",
-                                Animation::new(Duration::from_millis(120))
-                                    .with_easing(gpui::ease_out_quint()),
-                                |d, delta| d.h(px(DRAG_ROW_HEIGHT * delta)).opacity(delta),
-                            )
-                            .into_any_element(),
-                    );
+                    rows.push(wrap_gap(ghost_row));
                 }
 
                 div()
@@ -648,6 +703,7 @@ impl MainPaneView {
                     .flex_col()
                     .flex_1()
                     .overflow_y_scroll()
+                    .track_scroll(&self.interactive_rebase_scroll)
                     .on_drag_move(cx.listener(
                         |this, e: &gpui::DragMoveEvent<IRebaseDragValue>, _w, cx| {
                             let from_ix = e.drag(cx).ix;
@@ -655,20 +711,106 @@ impl MainPaneView {
                             if entry_count == 0 {
                                 return;
                             }
-                            let drag_y = e.event.position.y - e.bounds.origin.y;
-                            // Count midpoints crossed to find the target display position.
-                            // Midpoint between display slot i and i+1 is at (i+0.5)*row_h.
-                            let display_pos = (0..entry_count.saturating_sub(1))
-                                .filter(|&i| drag_y > px((i as f32 + 0.5) * DRAG_ROW_HEIGHT))
-                                .count()
-                                .min(entry_count - 1);
-                            let to_ix = (entry_count - 1).saturating_sub(display_pos);
-                            let already_matches = this
-                                .interactive_rebase_drag_state
-                                .map_or(false, |s| s.from_ix == from_ix && s.to_ix == to_ix);
+                            let row_h = this.measured_drag_row_height();
+
+                            // Auto-scroll while the pointer is near the viewport
+                            // edges so items beyond the visible list are reachable.
+                            let viewport_h = f32::from(e.bounds.size.height);
+                            let pointer_vp_y = f32::from(e.event.position.y - e.bounds.origin.y);
+                            let mut offset_y = f32::from(this.interactive_rebase_scroll.offset().y);
+                            let max_down = f32::from(this.interactive_rebase_scroll.max_offset().y);
+                            if max_down > 0.0 {
+                                let edge = row_h.min(viewport_h / 4.0);
+                                let step = row_h / 2.0;
+                                let scrolled_y = if pointer_vp_y < edge {
+                                    (offset_y + step).min(0.0)
+                                } else if pointer_vp_y > viewport_h - edge {
+                                    (offset_y - step).max(-max_down)
+                                } else {
+                                    offset_y
+                                };
+                                if scrolled_y != offset_y {
+                                    offset_y = scrolled_y;
+                                    let mut o = this.interactive_rebase_scroll.offset();
+                                    o.y = px(offset_y);
+                                    this.interactive_rebase_scroll.set_offset(o);
+                                    cx.notify();
+                                }
+                            }
+
+                            // Pointer Y in content space; the scroll offset is <= 0
+                            // when scrolled down.
+                            let drag_y = e.event.position.y - e.bounds.origin.y - px(offset_y);
+
+                            let source_dp = (entry_count - 1).saturating_sub(from_ix);
+                            let current_state = this.interactive_rebase_drag_state;
+                            let gap_dp = current_state.map_or(source_dp, |s| s.display_pos);
+                            let append_gap =
+                                gap_dp == entry_count && source_dp < entry_count.saturating_sub(1);
+
+                            // Simulate the rendering layout to get visual Y start
+                            // of each non-source display slot. Gap inserted before
+                            // its slot (if not past the end) or after all (if at end).
+                            let mut slot_ys = vec![0f32; entry_count];
+                            let mut y = 0f32;
+                            let mut y_at_source = 0f32;
+                            for (dp, slot_y) in slot_ys.iter_mut().enumerate() {
+                                if dp == gap_dp && !append_gap {
+                                    y += row_h;
+                                }
+                                if dp == source_dp {
+                                    y_at_source = y;
+                                    continue;
+                                }
+                                *slot_y = y;
+                                y += row_h;
+                            }
+
+                            // Count row midpoints the pointer has crossed to find
+                            // the gap's display position; entry_count means the gap
+                            // goes after the last row.
+                            let display_pos = (0..entry_count)
+                                .filter(|&i| {
+                                    let mid = if i == source_dp {
+                                        y_at_source
+                                    } else if i == entry_count.saturating_sub(1) {
+                                        slot_ys[i] + row_h
+                                    } else {
+                                        slot_ys[i] + row_h / 2.0
+                                    };
+                                    drag_y > px(mid)
+                                })
+                                .count();
+
+                            // Map the gap's display position to the data index the
+                            // dragged entry will land on. When the gap sits below
+                            // the source, removing the source shifts the rows in
+                            // between up by one, hence the second branch.
+                            let to_ix = if display_pos <= source_dp {
+                                entry_count - 1 - display_pos
+                            } else {
+                                entry_count - display_pos
+                            };
+                            let already_matches = current_state.is_some_and(|s| {
+                                s.from_ix == from_ix && s.display_pos == display_pos
+                            });
                             if !already_matches {
-                                this.interactive_rebase_drag_state =
-                                    Some(IRebaseDragState { from_ix, to_ix });
+                                let (prev_display_pos, anim_ver) = match current_state {
+                                    Some(s) if s.display_pos != display_pos => {
+                                        (Some(s.display_pos), s.anim_ver.wrapping_add(1))
+                                    }
+                                    Some(s) => (s.prev_display_pos, s.anim_ver),
+                                    // A drag whose first event already lands away from
+                                    // the source slot still animates out of it.
+                                    None => ((display_pos != source_dp).then_some(source_dp), 0),
+                                };
+                                this.interactive_rebase_drag_state = Some(IRebaseDragState {
+                                    from_ix,
+                                    to_ix,
+                                    display_pos,
+                                    prev_display_pos,
+                                    anim_ver,
+                                });
                                 cx.notify();
                             }
                         },
@@ -676,21 +818,8 @@ impl MainPaneView {
                     .can_drop(move |dragged, _window, _cx| {
                         dragged.downcast_ref::<IRebaseDragValue>().is_some()
                     })
-                    .on_drop(cx.listener(move |this, drag: &IRebaseDragValue, _w, cx| {
-                        let from = drag.ix;
-                        let to = this
-                            .interactive_rebase_drag_state
-                            .map(|s| s.to_ix)
-                            .unwrap_or(from);
-                        this.interactive_rebase_drag_state = None;
-                        if from != to
-                            && from < this.interactive_rebase_entries.len()
-                            && to < this.interactive_rebase_entries.len()
-                        {
-                            let entry = this.interactive_rebase_entries.remove(from);
-                            this.interactive_rebase_entries.insert(to, entry);
-                            validate_squash_entries(&mut this.interactive_rebase_entries);
-                        }
+                    .on_drop(cx.listener(move |this, _drag: &IRebaseDragValue, _w, cx| {
+                        this.commit_interactive_rebase_drag();
                         cx.notify();
                     }))
                     .children(rows)
@@ -706,25 +835,19 @@ impl MainPaneView {
             .flex()
             .flex_col()
             .size_full()
-            // Safety net: clear drag state for drops that land outside the scroll container
+            // Safety net: end the drag for drops that land outside the scroll container
             // (e.g. releasing the mouse above the list when dragging the topmost item).
+            // Commits at the last previewed position, same as dropping on the list.
             .can_drop(|dragged, _, _| dragged.downcast_ref::<IRebaseDragValue>().is_some())
             .on_drop(cx.listener(|this, _: &IRebaseDragValue, _, cx| {
-                this.interactive_rebase_drag_state = None;
-                cx.notify();
+                if this.commit_interactive_rebase_drag() {
+                    cx.notify();
+                }
             }))
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
-                    if let Some(state) = this.interactive_rebase_drag_state.take() {
-                        if state.from_ix != state.to_ix
-                            && state.from_ix < this.interactive_rebase_entries.len()
-                            && state.to_ix < this.interactive_rebase_entries.len()
-                        {
-                            let entry = this.interactive_rebase_entries.remove(state.from_ix);
-                            this.interactive_rebase_entries.insert(state.to_ix, entry);
-                            validate_squash_entries(&mut this.interactive_rebase_entries);
-                        }
+                    if this.commit_interactive_rebase_drag() {
                         cx.notify();
                     }
                 }),

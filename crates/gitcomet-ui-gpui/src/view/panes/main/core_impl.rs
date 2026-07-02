@@ -1395,9 +1395,9 @@ impl MainPaneView {
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             interactive_rebase_entries: Vec::new(),
             interactive_rebase_original_entries: Vec::new(),
-            interactive_rebase_selected_ix: None,
             interactive_rebase_autosquash: false,
             interactive_rebase_drag_state: None,
+            interactive_rebase_scroll: gpui::ScrollHandle::default(),
             interactive_rebase_reorder_anim: None,
         };
 
@@ -3873,7 +3873,6 @@ impl MainPaneView {
                 if !self.interactive_rebase_entries.is_empty() {
                     self.interactive_rebase_entries.clear();
                     self.interactive_rebase_original_entries.clear();
-                    self.interactive_rebase_selected_ix = None;
                     self.interactive_rebase_autosquash = false;
                     self.interactive_rebase_drag_state = None;
                 }
