@@ -713,6 +713,22 @@ impl MainPaneView {
                 this.interactive_rebase_drag_state = None;
                 cx.notify();
             }))
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    if let Some(state) = this.interactive_rebase_drag_state.take() {
+                        if state.from_ix != state.to_ix
+                            && state.from_ix < this.interactive_rebase_entries.len()
+                            && state.to_ix < this.interactive_rebase_entries.len()
+                        {
+                            let entry = this.interactive_rebase_entries.remove(state.from_ix);
+                            this.interactive_rebase_entries.insert(state.to_ix, entry);
+                            validate_squash_entries(&mut this.interactive_rebase_entries);
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
             .child(
                 div()
                     .px_2()

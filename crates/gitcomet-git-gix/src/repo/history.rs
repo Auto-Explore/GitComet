@@ -255,7 +255,10 @@ impl RebaseScripts {
 fn build_todo_content(entries: &[InteractiveRebaseEntry]) -> String {
     entries
         .iter()
-        .map(|e| format!("{} {} {}\n", e.action.to_todo_str(), e.commit_id, e.summary))
+        .map(|e| {
+            let safe_summary = e.summary.replace('\n', " ");
+            format!("{} {} {}\n", e.action.to_todo_str(), e.commit_id, safe_summary)
+        })
         .collect()
 }
 
