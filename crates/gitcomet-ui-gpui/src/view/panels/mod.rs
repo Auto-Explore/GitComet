@@ -70,6 +70,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Opens the squash confirmation prompt for the current multi-selection.
+    SquashSelectedCommits {
+        repo_id: RepoId,
+    },
     CheckoutBranch {
         repo_id: RepoId,
         name: String,

@@ -468,6 +468,41 @@ pub(super) fn reset(repo_id: RepoId, target: String, mode: ResetMode) -> Vec<Eff
     }]
 }
 
+pub(super) fn squash_commits(
+    state: &mut AppState,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    expected_head: gitcomet_core::domain::CommitId,
+    message: String,
+    count: usize,
+) -> Vec<Effect> {
+    // Re-validate against the current selection and log: both may have
+    // changed between opening the prompt and confirming.
+    let still_valid = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .and_then(super::effects::squash_plan_for_repo)
+        .is_some_and(|plan| plan.oldest == oldest && plan.head == expected_head);
+    if !still_valid || message.trim().is_empty() {
+        super::util::push_notification(
+            state,
+            crate::model::AppNotificationKind::Warning,
+            "Squash cancelled: the selected commits are no longer squashable.".to_string(),
+        );
+        return Vec::new();
+    }
+
+    super::begin_local_action(state, repo_id);
+    vec![Effect::SquashCommits {
+        repo_id,
+        oldest,
+        expected_head,
+        message,
+        count,
+    }]
+}
+
 pub(super) fn rebase(repo_id: RepoId, onto: String) -> Vec<Effect> {
     vec![Effect::Rebase { repo_id, onto }]
 }
@@ -786,6 +821,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
         RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::SquashCommits { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -947,6 +983,7 @@ pub(super) fn repo_command_finished(
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }
+                    | RepoCommandKind::SquashCommits { .. }
                     | RepoCommandKind::Rebase { .. }
                     | RepoCommandKind::RebaseContinue
                     | RepoCommandKind::RebaseAbort
@@ -960,6 +997,13 @@ pub(super) fn repo_command_finished(
                 repo_state.diff_state.inline_submodule_diff = None;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
+            }
+            if matches!(&command, RepoCommandKind::SquashCommits { .. }) {
+                // The squashed commits no longer exist; clear the selection
+                // and the prompt's preview.
+                repo_state.set_selected_commit(None);
+                repo_state.set_commit_details(Loadable::NotLoaded);
+                repo_state.set_squash_preview(Loadable::NotLoaded);
             }
             push_command_log(repo_state, true, &command, &output, None);
         }

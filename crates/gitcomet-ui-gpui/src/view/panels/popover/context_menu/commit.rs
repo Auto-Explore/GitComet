@@ -21,6 +21,34 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         items.push(ContextMenuItem::Label(commit_summary.into()));
     }
     items.push(ContextMenuItem::Separator);
+
+    // "Squash N commits" appears only when the right-clicked commit is part
+    // of the active multi-selection and the whole selection passes the squash
+    // criteria (contiguous linear range ending at HEAD, non-root base).
+    let squash_plan = this
+        .active_repo()
+        .filter(|repo| repo.id == repo_id)
+        .and_then(|repo| {
+            let selection = &repo.history_state.multi_selection;
+            if !(selection.is_multi() && selection.contains(commit_id)) {
+                return None;
+            }
+            let Loadable::Ready(page) = &repo.log else {
+                return None;
+            };
+            let head = repo.head_commit_id()?;
+            gitcomet_core::squash::squash_eligibility(&page.commits, &selection.commits, &head)
+        });
+    if let Some(plan) = squash_plan {
+        items.push(ContextMenuItem::Entry {
+            label: format!("Squash {} commits", plan.commit_count).into(),
+            icon: Some("icons/git_commit.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),
+        });
+        items.push(ContextMenuItem::Separator);
+    }
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
         icon: Some("icons/open_external.svg".into()),

@@ -168,6 +168,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::UnsetUpstreamBranch { .. }
             | Msg::DeleteRemoteBranch { .. }
             | Msg::Reset { .. }
+            | Msg::PrepareSquash { .. }
+            | Msg::SquashCommits { .. }
             | Msg::Rebase { .. }
             | Msg::RebaseContinue { .. }
             | Msg::RebaseAbort { .. }
@@ -372,6 +374,18 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             repo_id,
             target,
             mode,
+        },
+        RepoCommandKind::SquashCommits {
+            oldest,
+            expected_head,
+            message,
+            count,
+        } => Msg::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
         },
         RepoCommandKind::Rebase { onto } => Msg::Rebase { repo_id, onto },
         RepoCommandKind::RebaseContinue => Msg::RebaseContinue { repo_id },
@@ -830,6 +844,20 @@ fn reduce_inner(
         Msg::SelectCommit { repo_id, commit_id } => {
             effects::select_commit(state, repo_id, commit_id)
         }
+        Msg::SelectCommitMulti {
+            repo_id,
+            commit_id,
+            mode,
+            clicked_index,
+            visible_order,
+        } => effects::select_commit_multi(
+            state,
+            repo_id,
+            commit_id,
+            mode,
+            clicked_index,
+            visible_order,
+        ),
         Msg::ClearCommitSelection { repo_id } => effects::clear_commit_selection(state, repo_id),
         Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
         Msg::OpenInlineSubmoduleDiff {
@@ -1314,6 +1342,21 @@ fn reduce_inner(
             begin_local_action(state, repo_id);
             actions_emit_effects::reset(repo_id, target, mode)
         }
+        Msg::PrepareSquash { repo_id } => effects::prepare_squash(state, repo_id),
+        Msg::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        } => actions_emit_effects::squash_commits(
+            state,
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        ),
         Msg::Rebase { repo_id, onto } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::rebase(repo_id, onto)
@@ -1684,6 +1727,12 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::SquashMessagePreviewLoaded {
+            repo_id,
+            oldest,
+            head,
+            result,
+        }) => effects::squash_message_preview_loaded(state, repo_id, oldest, head, result),
         Msg::Internal(crate::msg::InternalMsg::RecentCommitMessagesLoaded {
             repo_id,
             request_rev,

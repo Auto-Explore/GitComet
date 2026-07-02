@@ -41,6 +41,17 @@ pub enum RepoActionKind {
     DropStash,
 }
 
+/// How a history-row click mutates the commit selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitSelectMode {
+    /// Plain click: collapse to the clicked commit.
+    Single,
+    /// Ctrl/Cmd click: add or remove the clicked commit.
+    Toggle,
+    /// Shift click: select the range between the anchor and the clicked commit.
+    Range,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictAutosolveMode {
     Safe,
@@ -177,6 +188,15 @@ pub enum Msg {
     SelectCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// Modifier-aware history selection. `visible_order` (the visible commit
+    /// ids in log order) is only provided for `Range` clicks.
+    SelectCommitMulti {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        mode: CommitSelectMode,
+        clicked_index: Option<usize>,
+        visible_order: Option<Vec<CommitId>>,
     },
     ClearCommitSelection {
         repo_id: RepoId,
@@ -552,6 +572,21 @@ pub enum Msg {
         target: String,
         mode: ResetMode,
     },
+    /// Builds the squash message preview for the current multi-selection so
+    /// the squash prompt can prefill its message input.
+    PrepareSquash {
+        repo_id: RepoId,
+    },
+    /// Squashes the linear range `oldest..=expected_head` into one commit.
+    /// The reducer re-validates the range against the current selection and
+    /// log before emitting the effect.
+    SquashCommits {
+        repo_id: RepoId,
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
+    },
     Rebase {
         repo_id: RepoId,
         onto: String,
@@ -828,6 +863,12 @@ pub enum InternalMsg {
         repo_id: RepoId,
         commit_id: CommitId,
         result: Result<CommitDetails, Error>,
+    },
+    SquashMessagePreviewLoaded {
+        repo_id: RepoId,
+        oldest: CommitId,
+        head: CommitId,
+        result: Result<String, Error>,
     },
     DiffLoaded {
         repo_id: RepoId,

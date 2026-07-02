@@ -13,4 +13,5 @@ pub mod mergetool_trace;
 pub mod path_utils;
 pub mod process;
 pub mod services;
+pub mod squash;
 pub mod text_utils;

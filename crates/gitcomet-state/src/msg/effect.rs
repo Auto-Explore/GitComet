@@ -121,6 +121,11 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    LoadSquashMessagePreview {
+        repo_id: RepoId,
+        oldest: CommitId,
+        head: CommitId,
+    },
     OpenFileAtCommitParent {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -429,6 +434,13 @@ pub enum Effect {
         repo_id: RepoId,
         target: String,
         mode: ResetMode,
+    },
+    SquashCommits {
+        repo_id: RepoId,
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
     },
     Rebase {
         repo_id: RepoId,

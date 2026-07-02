@@ -1112,6 +1112,27 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_load_squash_message_preview(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    head: gitcomet_core::domain::CommitId,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SquashMessagePreviewLoaded {
+                repo_id,
+                oldest: oldest.clone(),
+                head: head.clone(),
+                result: repo.squash_message_preview(&oldest, &head),
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_open_file_at_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,

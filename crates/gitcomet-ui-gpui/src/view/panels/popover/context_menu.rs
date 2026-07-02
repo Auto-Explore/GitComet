@@ -585,6 +585,22 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::RevertCommit { repo_id, commit_id });
             }
+            ContextMenuAction::SquashSelectedCommits { repo_id } => {
+                // Kick off the combined-message preview, then swap the menu
+                // for the confirmation prompt.
+                self.store.dispatch(Msg::PrepareSquash { repo_id });
+                let anchor = self
+                    .popover_anchor
+                    .as_ref()
+                    .map(|anchor| match anchor {
+                        PopoverAnchor::Point(point) => *point,
+                        PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
+                    })
+                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
+                self.open_popover_at(PopoverKind::SquashPrompt { repo_id }, anchor, window, cx);
+                return;
+            }
             ContextMenuAction::CheckoutBranch { repo_id, name } => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
             }

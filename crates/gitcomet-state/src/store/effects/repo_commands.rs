@@ -857,6 +857,27 @@ pub(super) fn schedule_reset(
     );
 }
 
+pub(super) fn schedule_squash_commits(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    expected_head: gitcomet_core::domain::CommitId,
+    message: String,
+    count: usize,
+) {
+    let command = RepoCommandKind::SquashCommits {
+        oldest: oldest.clone(),
+        expected_head: expected_head.clone(),
+        message: message.clone(),
+        count,
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
+        repo.squash_commits_with_output(&oldest, &expected_head, &message)
+    });
+}
+
 pub(super) fn schedule_rebase(
     executor: &TaskExecutor,
     repos: &RepoMap,

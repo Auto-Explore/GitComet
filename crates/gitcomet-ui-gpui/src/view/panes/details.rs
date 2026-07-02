@@ -37,6 +37,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) unstaged_scroll: UniformListScrollHandle,
     pub(in super::super) staged_scroll: UniformListScrollHandle,
     pub(in super::super) commit_files_scroll: UniformListScrollHandle,
+    pub(in super::super) commit_multi_scroll: UniformListScrollHandle,
     pub(in super::super) commit_message_scroll: ScrollHandle,
     pub(in super::super) commit_scroll: ScrollHandle,
 
@@ -381,6 +382,7 @@ impl DetailsPaneView {
             unstaged_scroll: UniformListScrollHandle::default(),
             staged_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
+            commit_multi_scroll: UniformListScrollHandle::default(),
             commit_message_scroll,
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
@@ -773,9 +775,19 @@ impl DetailsPaneView {
                 })
         });
 
+        let prev_multi_commits = prev_active_repo_id.and_then(|repo_id| {
+            self.state
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .map(|r| r.history_state.multi_selection.commits.clone())
+        });
+
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
         let next_selected_commit = next_repo.and_then(|r| r.history_state.selected_commit.clone());
+        let next_multi_commits =
+            next_repo.map(|r| r.history_state.multi_selection.commits.clone());
         let next_merge_message = next_repo.and_then(|r| match &r.merge_commit_message {
             Loadable::Ready(Some(message)) => Some(message.clone()),
             _ => None,
@@ -887,6 +899,11 @@ impl DetailsPaneView {
         } else if prev_selected_commit != next_selected_commit {
             self.commit_scroll.set_offset(point(px(0.0), px(0.0)));
             self.commit_files_scroll
+                .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
+        }
+
+        if switched_repo || prev_multi_commits != next_multi_commits {
+            self.commit_multi_scroll
                 .scroll_to_item_strict(0, gpui::ScrollStrategy::Top);
         }
 

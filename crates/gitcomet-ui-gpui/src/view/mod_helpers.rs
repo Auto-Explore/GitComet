@@ -2514,6 +2514,9 @@ pub(super) enum PopoverKind {
         target: String,
         mode: ResetMode,
     },
+    SquashPrompt {
+        repo_id: RepoId,
+    },
     CreateTagPrompt {
         repo_id: RepoId,
         target: String,

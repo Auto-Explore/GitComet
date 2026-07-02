@@ -448,6 +448,19 @@ impl GitRepository for GixRepo {
         self.squash_ref_with_output_impl(reference)
     }
 
+    fn squash_message_preview(&self, oldest: &CommitId, head: &CommitId) -> Result<String> {
+        self.squash_message_preview_impl(oldest, head)
+    }
+
+    fn squash_commits_with_output(
+        &self,
+        oldest: &CommitId,
+        expected_head: &CommitId,
+        message: &str,
+    ) -> Result<CommandOutput> {
+        self.squash_commits_with_output_impl(oldest, expected_head, message)
+    }
+
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_unified_impl(target)

@@ -1075,6 +1075,45 @@ impl HistoryView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
+    /// Whether the commit is part of an active multi-selection (more than one
+    /// commit selected). Right-click uses this to keep the selection intact
+    /// instead of collapsing to the clicked commit.
+    pub(in super::super) fn commit_in_multi_selection(
+        &self,
+        repo_id: RepoId,
+        commit_id: &CommitId,
+    ) -> bool {
+        self.state
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|r| &r.history_state.multi_selection)
+            .is_some_and(|sel| sel.is_multi() && sel.contains(commit_id))
+    }
+
+    /// Visible commit ids in log order for shift-click range selection.
+    /// Hidden rows (stash helper commits) are excluded, matching what the
+    /// user sees.
+    pub(in super::super) fn visible_commit_ids_for_repo(
+        &self,
+        repo_id: RepoId,
+    ) -> Option<Vec<CommitId>> {
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
+        let page = Self::display_log_page_for_repo(repo)?;
+        let cache = self
+            .history_cache
+            .as_ref()
+            .filter(|cache| cache.base.request.repo_id == repo_id)?;
+        Some(
+            cache
+                .base
+                .visible_indices
+                .iter()
+                .filter_map(|ix| page.commits.get(ix).map(|c| c.id.clone()))
+                .collect(),
+        )
+    }
+
     pub(in crate::view) fn show_history_refs_hover(
         &mut self,
         repo_id: RepoId,

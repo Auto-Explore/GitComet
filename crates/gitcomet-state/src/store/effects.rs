@@ -409,6 +409,18 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadSquashMessagePreview {
+            repo_id,
+            oldest,
+            head,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::SquashMessagePreviewLoaded {
+                repo_id,
+                oldest,
+                head,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::OpenFileAtCommitParent { .. } | Effect::OpenFileAtCommit { .. } => {
             // No git backend available; nothing to resolve.
         }
@@ -961,6 +973,24 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::Reset { mode, target },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::SquashCommits {
+                    oldest,
+                    expected_head,
+                    message,
+                    count,
+                },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1577,6 +1607,19 @@ pub(super) fn schedule_effect(
                 );
             }
         }
+        Effect::LoadSquashMessagePreview {
+            repo_id,
+            oldest,
+            head,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_squash_message_preview(
+                    executor, repos, msg_tx, repo_id, oldest, head,
+                );
+            }
+        }
         Effect::OpenFileAtCommitParent {
             repo_id,
             commit_id,
@@ -2047,6 +2090,22 @@ pub(super) fn schedule_effect(
             target,
             mode,
         } => repo_commands::schedule_reset(executor, repos, msg_tx, repo_id, target, mode),
+        Effect::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        } => repo_commands::schedule_squash_commits(
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        ),
         Effect::Rebase { repo_id, onto } => {
             repo_commands::schedule_rebase(executor, repos, msg_tx, repo_id, onto)
         }

@@ -386,6 +386,25 @@ pub(super) fn log_loaded(
             repo_state.set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
         }
 
+        // Reconcile the commit multi-selection against the reloaded page: drop
+        // ids that no longer exist, and drop the anchor index hint since row
+        // indices may have shifted.
+        if !repo_state.history_state.multi_selection.commits.is_empty()
+            && let Loadable::Ready(page) = &repo_state.log
+        {
+            let mut next = repo_state.history_state.multi_selection.clone();
+            next.commits
+                .retain(|id| page.commits.iter().any(|c| c.id == *id));
+            if let Some(anchor) = &next.anchor
+                && !page.commits.iter().any(|c| c.id == *anchor)
+            {
+                next.anchor = None;
+            }
+            next.anchor_index = None;
+            next.anchor_log_rev = None;
+            repo_state.set_commit_multi_selection(next);
+        }
+
         if is_load_more {
             repo_state.set_log_loading_more(false);
         }

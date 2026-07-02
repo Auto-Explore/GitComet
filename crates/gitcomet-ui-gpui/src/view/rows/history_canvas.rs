@@ -670,10 +670,14 @@ pub(super) fn history_commit_row_canvas(
                         .and_then(|ix| tag_names.get(ix))
                         .map(|tag| tag.as_ref().to_string());
                     view.update(cx, |this, cx| {
-                        this.store.dispatch(Msg::SelectCommit {
-                            repo_id,
-                            commit_id: commit_id.clone(),
-                        });
+                        // Right-clicking inside an active multi-selection must
+                        // not collapse it — the menu acts on the whole set.
+                        if !this.commit_in_multi_selection(repo_id, &commit_id) {
+                            this.store.dispatch(Msg::SelectCommit {
+                                repo_id,
+                                commit_id: commit_id.clone(),
+                            });
+                        }
                         let context_menu_invoker: SharedString =
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();

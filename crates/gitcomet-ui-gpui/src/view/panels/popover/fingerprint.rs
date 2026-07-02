@@ -146,6 +146,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::StashPickerPrompt { repo_id, .. }
         | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
+        | PopoverKind::SquashPrompt { repo_id }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
@@ -290,6 +291,16 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
         }
 
+        // The squash prompt tracks the message preview plus everything that
+        // can invalidate the selection's eligibility while it is open.
+        PopoverKind::SquashPrompt { .. } => {
+            repo.history_state.squash_preview_rev.hash(hasher);
+            repo.history_state.selected_commit_rev.hash(hasher);
+            repo.history_state.log_rev.hash(hasher);
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
+        }
+
         PopoverKind::TagMenu { .. } | PopoverKind::TagRefMenu { .. } => {
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
@@ -416,6 +427,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             target.hash(hasher);
             hash_reset_mode(*mode, hasher);
+        }
+        PopoverKind::SquashPrompt { repo_id } => {
+            75u8.hash(hasher);
+            repo_id.hash(hasher);
         }
         PopoverKind::CreateTagPrompt { repo_id, target } => {
             8u8.hash(hasher);

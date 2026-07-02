@@ -26,6 +26,7 @@ mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod repo_picker;
 mod reset_prompt;
+mod squash_prompt;
 mod search_inputs;
 mod stash_drop_confirm;
 mod stash_picker_prompt;
@@ -172,6 +173,12 @@ pub(in super::super) struct PopoverHost {
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
+    squash_message_input: Entity<components::TextInput>,
+    squash_description_input: Entity<components::TextInput>,
+    squash_description_scroll: ScrollHandle,
+    /// Whether the squash prompt's message inputs have been prefilled with
+    /// the loaded preview; guards against overwriting user edits.
+    squash_prompt_prefilled: bool,
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
@@ -201,6 +208,8 @@ pub(in super::super) struct PopoverHost {
     clone_repo_submit_focus_handle: FocusHandle,
     create_tag_cancel_focus_handle: FocusHandle,
     create_tag_submit_focus_handle: FocusHandle,
+    squash_cancel_focus_handle: FocusHandle,
+    squash_submit_focus_handle: FocusHandle,
     remote_add_cancel_focus_handle: FocusHandle,
     remote_add_submit_focus_handle: FocusHandle,
     remote_edit_cancel_focus_handle: FocusHandle,
@@ -374,6 +383,19 @@ pub(super) fn hotkey_hint(
         .child(label)
 }
 
+/// Shared Cancel button for confirm dialogs and prompt popovers: consistent
+/// label, outlined style, and "Esc" hint. Attach the dismiss handler with
+/// `.on_click(...)` at the call site.
+pub(super) fn cancel_button(
+    id: &'static str,
+    hint_debug_selector: &'static str,
+    theme: AppTheme,
+) -> components::Button {
+    components::Button::new(id, "Cancel")
+        .separated_end_slot(hotkey_hint(theme, hint_debug_selector, "Esc"))
+        .style(components::ButtonStyle::Outlined)
+}
+
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
@@ -443,7 +465,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
         | PopoverKind::CloneRepo
-        | PopoverKind::CreateTagPrompt { .. } => Some(DIALOG_420_WIDTH),
+        | PopoverKind::CreateTagPrompt { .. }
+        | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::StashDropConfirm { .. }
@@ -766,6 +789,34 @@ impl PopoverHost {
             input
         });
 
+        let squash_message_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Commit message".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let squash_description_scroll = ScrollHandle::new();
+        let squash_description_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Description (optional)".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 4,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(squash_description_scroll.clone()));
+            input
+        });
+
         let remote_name_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -1034,6 +1085,8 @@ impl PopoverHost {
         let clone_repo_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let squash_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let squash_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -1111,6 +1164,10 @@ impl PopoverHost {
             create_tag_input,
             create_tag_message_input,
             create_tag_message_scroll,
+            squash_message_input,
+            squash_description_input,
+            squash_description_scroll,
+            squash_prompt_prefilled: false,
             remote_name_input,
             remote_url_input,
             remote_url_edit_input,
@@ -1139,6 +1196,8 @@ impl PopoverHost {
             clone_repo_submit_focus_handle,
             create_tag_cancel_focus_handle,
             create_tag_submit_focus_handle,
+            squash_cancel_focus_handle,
+            squash_submit_focus_handle,
             remote_add_cancel_focus_handle,
             remote_add_submit_focus_handle,
             remote_edit_cancel_focus_handle,
@@ -1175,6 +1234,10 @@ impl PopoverHost {
         self.rebase_onto_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_tag_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.squash_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.squash_description_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.remote_name_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1285,6 +1348,7 @@ impl PopoverHost {
                 | Some(PopoverKind::CommitPrompt { .. })
                 | Some(PopoverKind::CloneRepo)
                 | Some(PopoverKind::CreateTagPrompt { .. })
+                | Some(PopoverKind::SquashPrompt { .. })
                 | Some(PopoverKind::PushSetUpstreamPrompt { .. })
                 | Some(PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
@@ -1379,6 +1443,7 @@ impl PopoverHost {
             Some(PopoverKind::CloneRepo)
             | Some(PopoverKind::RecentRepositoryPicker)
             | Some(PopoverKind::CreateTagPrompt { .. })
+            | Some(PopoverKind::SquashPrompt { .. })
             | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
             | Some(PopoverKind::PushSetUpstreamPrompt { .. })
             | Some(PopoverKind::Repo {
@@ -1981,6 +2046,26 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
+                PopoverKind::SquashPrompt { .. } => {
+                    let theme = self.theme;
+                    self.squash_prompt_prefilled = false;
+                    self.squash_message_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.squash_description_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .squash_message_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
                     self.create_tag_annotated =
@@ -2538,6 +2623,7 @@ impl PopoverHost {
                 target,
                 mode,
             } => reset_prompt::panel(self, repo_id, target, mode, cx),
+            PopoverKind::SquashPrompt { repo_id } => squash_prompt::panel(self, repo_id, cx),
             PopoverKind::CreateTagPrompt { repo_id, target } => {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }

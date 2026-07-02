@@ -6,7 +6,7 @@ use crate::model::{
     AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId, RepoLoadsInFlight, RepoState,
     SidebarDataRequest, SidebarMode,
 };
-use crate::msg::Effect;
+use crate::msg::{CommitSelectMode, Effect};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, FileEntry, FileSource, FileStatusKind, LogPage,
@@ -213,10 +213,117 @@ pub(super) fn select_commit(
     repo_id: RepoId,
     commit_id: CommitId,
 ) -> Vec<Effect> {
+    select_commit_multi(state, repo_id, commit_id, CommitSelectMode::Single, None, None)
+}
+
+pub(super) fn select_commit_multi(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+    mode: CommitSelectMode,
+    clicked_index: Option<usize>,
+    visible_order: Option<Vec<CommitId>>,
+) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
 
+    let log_rev = repo_state.history_state.log_rev;
+    let mut sel = repo_state.history_state.multi_selection.clone();
+
+    let focus = match mode {
+        CommitSelectMode::Single => {
+            collapse_multi_selection_to(&mut sel, commit_id.clone(), clicked_index, log_rev);
+            commit_id
+        }
+        CommitSelectMode::Toggle => {
+            if let Some(ix) = sel.commits.iter().position(|c| *c == commit_id) {
+                sel.commits.remove(ix);
+                let Some(focus) = sel.commits.last().cloned() else {
+                    // Toggled the last commit away: clear the selection
+                    // entirely (also dissolves the multi-selection).
+                    repo_state.set_selected_commit(None);
+                    repo_state.set_commit_details(Loadable::NotLoaded);
+                    return Vec::new();
+                };
+                focus
+            } else {
+                sel.commits.push(commit_id.clone());
+                sel.anchor = Some(commit_id.clone());
+                sel.anchor_index = clicked_index;
+                sel.anchor_log_rev = Some(log_rev);
+                commit_id
+            }
+        }
+        CommitSelectMode::Range => {
+            let entries = visible_order.as_deref().unwrap_or(&[]);
+            let clicked_ix = commit_selection_entry_index(entries, &commit_id, clicked_index);
+            match clicked_ix {
+                None => {
+                    collapse_multi_selection_to(&mut sel, commit_id.clone(), clicked_index, log_rev);
+                }
+                Some(clicked_ix) => {
+                    let anchor_ix = sel
+                        .anchor
+                        .as_ref()
+                        .and_then(|anchor| {
+                            let trusted_hint = sel
+                                .anchor_index
+                                .filter(|_| sel.anchor_log_rev == Some(log_rev));
+                            commit_selection_entry_index(entries, anchor, trusted_hint)
+                        })
+                        .unwrap_or(clicked_ix);
+                    let (a, b) = if anchor_ix <= clicked_ix {
+                        (anchor_ix, clicked_ix)
+                    } else {
+                        (clicked_ix, anchor_ix)
+                    };
+                    sel.commits = entries[a..=b].to_vec();
+                    if sel.anchor.is_none() {
+                        sel.anchor = Some(commit_id.clone());
+                    }
+                    sel.anchor_index = Some(anchor_ix);
+                    sel.anchor_log_rev = Some(log_rev);
+                }
+            }
+            commit_id
+        }
+    };
+
+    repo_state.set_commit_multi_selection(sel);
+    select_commit_and_load_details(repo_state, repo_id, focus)
+}
+
+fn collapse_multi_selection_to(
+    sel: &mut crate::model::CommitMultiSelection,
+    commit_id: CommitId,
+    clicked_index: Option<usize>,
+    log_rev: u64,
+) {
+    sel.commits.clear();
+    sel.commits.push(commit_id.clone());
+    sel.anchor = Some(commit_id);
+    sel.anchor_index = clicked_index;
+    sel.anchor_log_rev = Some(log_rev);
+}
+
+/// Resolves `target`'s index in `entries`, preferring the index hint when it
+/// still points at the target.
+fn commit_selection_entry_index(
+    entries: &[CommitId],
+    target: &CommitId,
+    index_hint: Option<usize>,
+) -> Option<usize> {
+    index_hint
+        .filter(|&ix| entries.get(ix) == Some(target))
+        .or_else(|| entries.iter().position(|id| id == target))
+}
+
+fn select_commit_and_load_details(
+    repo_state: &mut RepoState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+) -> Vec<Effect> {
     if repo_state.history_state.selected_commit.as_ref() == Some(&commit_id) {
         return Vec::new();
     }
@@ -1094,6 +1201,69 @@ pub(super) fn reflog_loaded(
     effects
 }
 
+/// Validates the current multi-selection against the loaded log and HEAD.
+/// This is the single reducer-side gate for every squash entry point.
+pub(super) fn squash_plan_for_repo(
+    repo_state: &RepoState,
+) -> Option<gitcomet_core::squash::SquashPlan> {
+    let Loadable::Ready(page) = &repo_state.log else {
+        return None;
+    };
+    let head = repo_state.head_commit_id()?;
+    gitcomet_core::squash::squash_eligibility(
+        &page.commits,
+        &repo_state.history_state.multi_selection.commits,
+        &head,
+    )
+}
+
+pub(super) fn prepare_squash(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(plan) = squash_plan_for_repo(repo_state) else {
+        repo_state.set_squash_preview(Loadable::NotLoaded);
+        return Vec::new();
+    };
+
+    repo_state.set_squash_preview(Loadable::Loading);
+    vec![Effect::LoadSquashMessagePreview {
+        repo_id,
+        oldest: plan.oldest,
+        head: plan.head,
+    }]
+}
+
+pub(super) fn squash_message_preview_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    oldest: CommitId,
+    head: CommitId,
+    result: std::result::Result<String, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        // Drop stale results: the selection may have changed while the
+        // preview was loading.
+        let still_current = squash_plan_for_repo(repo_state)
+            .is_some_and(|plan| plan.oldest == oldest && plan.head == head);
+        if still_current {
+            let value = match result {
+                Ok(message) => Loadable::Ready(crate::model::SquashPreview {
+                    oldest,
+                    head,
+                    message,
+                }),
+                Err(e) => {
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.set_squash_preview(value);
+        }
+    }
+    Vec::new()
+}
+
 pub(super) fn commit_details_loaded(
     state: &mut AppState,
     repo_id: RepoId,
@@ -1888,6 +2058,172 @@ mod tests {
             repo.history_state.commit_details,
             Loadable::NotLoaded
         ));
+    }
+
+    fn multi_selection(state: &mut AppState, repo_id: RepoId) -> crate::model::CommitMultiSelection {
+        repo_mut(state, repo_id).history_state.multi_selection.clone()
+    }
+
+    #[test]
+    fn toggle_click_adds_and_removes_commits() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let a = CommitId("a".into());
+        let b = CommitId("b".into());
+
+        select_commit(&mut state, repo_id, a.clone());
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            b.clone(),
+            CommitSelectMode::Toggle,
+            Some(1),
+            None,
+        );
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, vec![a.clone(), b.clone()]);
+        assert_eq!(sel.anchor.as_ref(), Some(&b));
+        assert_eq!(
+            repo_mut(&mut state, repo_id).history_state.selected_commit,
+            Some(b.clone())
+        );
+
+        // Toggling a selected commit removes it; focus falls back to the last
+        // remaining commit.
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            b.clone(),
+            CommitSelectMode::Toggle,
+            Some(1),
+            None,
+        );
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, vec![a.clone()]);
+        assert_eq!(
+            repo_mut(&mut state, repo_id).history_state.selected_commit,
+            Some(a.clone())
+        );
+
+        // Toggling the last commit away clears the whole selection.
+        select_commit_multi(&mut state, repo_id, a, CommitSelectMode::Toggle, Some(0), None);
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(repo.history_state.selected_commit.is_none());
+        assert!(repo.history_state.multi_selection.commits.is_empty());
+    }
+
+    #[test]
+    fn shift_click_selects_range_from_anchor_in_both_directions() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let ids: Vec<CommitId> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|s| CommitId((*s).into()))
+            .collect();
+
+        select_commit(&mut state, repo_id, ids[1].clone());
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            ids[3].clone(),
+            CommitSelectMode::Range,
+            Some(3),
+            Some(ids.clone()),
+        );
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, ids[1..=3].to_vec());
+        assert_eq!(sel.anchor.as_ref(), Some(&ids[1]));
+
+        // Extending upward from the same anchor replaces the range.
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            ids[0].clone(),
+            CommitSelectMode::Range,
+            Some(0),
+            Some(ids.clone()),
+        );
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, ids[0..=1].to_vec());
+    }
+
+    #[test]
+    fn shift_click_ignores_stale_anchor_index_hint() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let ids: Vec<CommitId> = ["a", "b", "c", "d"]
+            .iter()
+            .map(|s| CommitId((*s).into()))
+            .collect();
+
+        select_commit(&mut state, repo_id, ids[0].clone());
+        {
+            // Simulate a log reload shifting rows: the anchor hint index now
+            // points elsewhere and the stored log rev no longer matches.
+            let repo = repo_mut(&mut state, repo_id);
+            let mut sel = repo.history_state.multi_selection.clone();
+            sel.anchor_index = Some(3);
+            sel.anchor_log_rev = Some(repo.history_state.log_rev.wrapping_add(1));
+            repo.set_commit_multi_selection(sel);
+        }
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            ids[2].clone(),
+            CommitSelectMode::Range,
+            Some(2),
+            Some(ids.clone()),
+        );
+        // The anchor is re-resolved by id, so the range is a..=c, not c..=d.
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, ids[0..=2].to_vec());
+    }
+
+    #[test]
+    fn plain_click_collapses_multi_selection() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let a = CommitId("a".into());
+        let b = CommitId("b".into());
+
+        select_commit(&mut state, repo_id, a.clone());
+        select_commit_multi(&mut state, repo_id, b.clone(), CommitSelectMode::Toggle, None, None);
+        assert_eq!(multi_selection(&mut state, repo_id).commits.len(), 2);
+
+        select_commit(&mut state, repo_id, a.clone());
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, vec![a.clone()]);
+        assert_eq!(sel.anchor.as_ref(), Some(&a));
+    }
+
+    #[test]
+    fn range_click_without_entries_falls_back_to_single() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let a = CommitId("a".into());
+        let b = CommitId("b".into());
+
+        select_commit(&mut state, repo_id, a);
+        select_commit_multi(&mut state, repo_id, b.clone(), CommitSelectMode::Range, None, None);
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, vec![b]);
+    }
+
+    #[test]
+    fn clearing_selection_dissolves_multi_selection() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let a = CommitId("a".into());
+        let b = CommitId("b".into());
+
+        select_commit(&mut state, repo_id, a);
+        select_commit_multi(&mut state, repo_id, b, CommitSelectMode::Toggle, None, None);
+        assert_eq!(multi_selection(&mut state, repo_id).commits.len(), 2);
+
+        clear_commit_selection(&mut state, repo_id);
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(repo.history_state.multi_selection.commits.is_empty());
+        assert!(repo.history_state.multi_selection.anchor.is_none());
     }
 
     #[test]
