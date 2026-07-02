@@ -431,6 +431,7 @@ impl CommitShaHoverMenu {
                     false,
                     false,
                     Some("icons/link.svg".into()),
+                    false,
                     "Navigate",
                     None,
                 )
@@ -453,6 +454,7 @@ impl CommitShaHoverMenu {
                 false,
                 false,
                 Some("icons/history.svg".into()),
+                false,
                 "Browse repository at this point",
                 None,
             )

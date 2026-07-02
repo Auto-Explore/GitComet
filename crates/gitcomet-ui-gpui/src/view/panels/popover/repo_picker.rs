@@ -54,6 +54,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     false,
                     false,
                     None,
+                    false,
                     label.clone(),
                     None,
                 )

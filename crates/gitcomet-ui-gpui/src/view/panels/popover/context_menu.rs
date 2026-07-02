@@ -1242,11 +1242,19 @@ impl PopoverHost {
             .filter(|&ix| model.is_selectable(ix))
             .or_else(|| model.first_selectable());
 
+        // Keep labels aligned across entries when only some of them (e.g. the
+        // checked option) carry an icon; icon-less menus stay compact.
+        let reserve_icon_column = model
+            .items
+            .iter()
+            .any(|item| matches!(item, ContextMenuItem::Entry { icon: Some(_), .. }));
+
         div()
             .flex()
             .flex_col()
             .items_stretch()
             .text_color(theme.colors.text)
+            .w(width.preferred_px(ui_scale))
             .min_w(width.min_px(ui_scale))
             .max_w(width.max_px(ui_scale))
             .track_focus(&focus)
@@ -1368,6 +1376,7 @@ impl PopoverHost {
                             selected,
                             disabled,
                             icon,
+                            reserve_icon_column,
                             label,
                             shortcut,
                         )
@@ -1516,7 +1525,6 @@ fn interactive_rebase_action_menu_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::services::InteractiveRebaseAction;
 
     #[test]
     fn context_menu_shortcut_entry_ix_matches_first_enabled_single_character_entry() {

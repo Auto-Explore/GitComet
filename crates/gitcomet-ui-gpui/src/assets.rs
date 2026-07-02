@@ -136,6 +136,7 @@ impl GitCometAssets {
                 "icons/question.svg".into(),
                 "icons/warning.svg".into(),
                 "icons/swap.svg".into(),
+                "icons/squash_arrow.svg".into(),
                 "icons/open_external.svg".into(),
                 "icons/file.svg".into(),
                 "icons/copy.svg".into(),

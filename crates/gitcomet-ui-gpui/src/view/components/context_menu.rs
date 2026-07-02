@@ -159,6 +159,7 @@ pub fn context_menu_entry(
     selected: bool,
     disabled: bool,
     icon: Option<SharedString>,
+    reserve_icon_column: bool,
     label: impl Into<SharedString>,
     shortcut: Option<SharedString>,
 ) -> Stateful<Div> {
@@ -177,7 +178,8 @@ pub fn context_menu_entry(
 
     let mut row = div()
         .id(id)
-        .h(control_height_md(ui_scale))
+        .min_h(control_height_md(ui_scale))
+        .py(scaled_px(4.0))
         .px(scaled_px(8.0))
         .flex()
         .items_center()
@@ -199,7 +201,7 @@ pub fn context_menu_entry(
                 .flex_1()
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .when(icon.is_some(), |row| {
+                .when(icon.is_some() || reserve_icon_column, |row| {
                     row.child(
                         div()
                             .w(scaled_px(16.0))
@@ -222,7 +224,6 @@ pub fn context_menu_entry(
                         .text_sm()
                         .line_height(scaled_px(18.0))
                         .text_color(text_color)
-                        .whitespace_nowrap()
                         .child(label),
                 ),
         );
