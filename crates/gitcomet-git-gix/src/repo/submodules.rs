@@ -435,7 +435,7 @@ fn collect_repo_untrusted_submodule_sources(
             out.insert(full_path.clone(), target);
         }
 
-        if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
+        if let Some(nested_repo) = open_configured_submodule_repo(repo, &submodule)? {
             collect_repo_untrusted_submodule_sources(&nested_repo, trust_root, &full_path, out)?;
         }
     }
@@ -521,7 +521,7 @@ fn collect_target_submodule_untrusted_sources(
             {
                 out.insert(full_path.clone(), target);
             }
-            if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
+            if let Some(nested_repo) = open_configured_submodule_repo(repo, &submodule)? {
                 collect_repo_untrusted_submodule_sources(
                     &nested_repo,
                     trust_root,
@@ -533,7 +533,7 @@ fn collect_target_submodule_untrusted_sources(
         }
 
         if target_path.starts_with(&full_path)
-            && let Some(nested_repo) = open_configured_submodule_repo(&submodule)?
+            && let Some(nested_repo) = open_configured_submodule_repo(repo, &submodule)?
             && collect_target_submodule_untrusted_sources(
                 &nested_repo,
                 trust_root,
@@ -633,7 +633,7 @@ fn configured_submodule_row(
         ));
     }
 
-    let nested_repo = open_configured_submodule_repo(&submodule)?;
+    let nested_repo = open_configured_submodule_repo(repo, &submodule)?;
     let Some(nested_repo) = nested_repo else {
         return Ok((
             Submodule {
@@ -1213,7 +1213,7 @@ fn failed_submodule_add_left_clone_only_state(workdir: &Path, path: &Path) -> Re
     let repo = gix::open(&git_dir).map_err(|e| {
         Error::new(ErrorKind::Backend(format!(
             "open repo after failed submodule add {}: {e}",
-            workdir.display()
+            git_dir.display()
         )))
     })?;
     Ok(!submodule_path_registered(&repo, path)?)
@@ -1493,12 +1493,13 @@ fn open_gitlink_repo(
         Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
         Err(e) => Err(Error::new(ErrorKind::Backend(format!(
             "gix open nested submodule repo {}: {e}",
-            path.display()
+            git_dir.display()
         )))),
     }
 }
 
 fn open_configured_submodule_repo(
+    parent_repo: &gix::Repository,
     submodule: &gix::Submodule<'_>,
 ) -> Result<Option<gix::Repository>> {
     let state = submodule
@@ -1507,9 +1508,26 @@ fn open_configured_submodule_repo(
     if !(state.repository_exists && state.worktree_checkout) {
         return Ok(None);
     }
-    submodule
-        .open()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule open: {e}"))))
+    let Some(parent_workdir) = parent_repo.workdir() else {
+        return Ok(None);
+    };
+    let relative_path = submodule
+        .path()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))?;
+    let relative_path = pathbuf_from_gix_path(relative_path.as_ref())?;
+    let path = parent_workdir.join(&relative_path);
+    let git_dir = git_dir_for_workdir(&path);
+
+    match gix::open(&git_dir) {
+        Ok(repo) => Ok(Some(repo)),
+        Err(gix::open::Error::NotARepository { .. }) => Ok(None),
+        Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
+        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
+            "gix open configured submodule repo {}: {e}",
+            git_dir.display()
+        )))),
+    }
 }
 
 fn trust_target_from_submodule(

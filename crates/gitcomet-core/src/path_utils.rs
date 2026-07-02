@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 /// (non-bare clone) or a `gitdir:` file (linked worktree) — so that gix can
 /// open it correctly.
 pub fn git_dir_for_workdir(workdir: &Path) -> PathBuf {
-    let is_dot_git_suffixed_dir =
-        workdir.extension().is_some_and(|ext| ext == "git") && workdir.join(".git").exists();
-    if is_dot_git_suffixed_dir {
-        workdir.join(".git")
+    let dot_git = workdir.join(".git");
+    if workdir.extension().is_some_and(|ext| ext == "git") && dot_git.exists() {
+        dot_git
     } else {
         workdir.to_path_buf()
     }
