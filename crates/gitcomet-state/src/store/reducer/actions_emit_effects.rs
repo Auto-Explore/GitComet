@@ -4,14 +4,17 @@ use super::util::{
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, Loadable, RepoId, RepoLoadsInFlight, RepoState};
+use crate::model::{
+    AppState, InteractiveRebaseSetup, Loadable, RepoId, RepoLoadsInFlight, RepoState,
+};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+    CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitTarget,
 };
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
@@ -519,6 +522,42 @@ pub(super) fn merge_abort(repo_id: RepoId) -> Vec<Effect> {
     vec![Effect::MergeAbort { repo_id }]
 }
 
+pub(super) fn load_interactive_rebase_setup(
+    state: &mut AppState,
+    repo_id: RepoId,
+    base: String,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup {
+            base: base.clone(),
+            entries: Loadable::Loading,
+        });
+    }
+    vec![Effect::LoadInteractiveRebaseSetup { repo_id, base }]
+}
+
+pub(super) fn interactive_rebase(
+    repo_id: RepoId,
+    base: String,
+    entries: Vec<InteractiveRebaseEntry>,
+) -> Vec<Effect> {
+    vec![Effect::InteractiveRebase {
+        repo_id,
+        base,
+        entries,
+    }]
+}
+
+pub(super) fn cancel_interactive_rebase_setup(
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.interactive_rebase_setup = None;
+    }
+    vec![]
+}
+
 pub(super) fn create_tag(
     repo_id: RepoId,
     name: String,
@@ -825,6 +864,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -867,6 +907,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -987,6 +1028,7 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::Rebase { .. }
                     | RepoCommandKind::RebaseContinue
                     | RepoCommandKind::RebaseAbort
+                    | RepoCommandKind::InteractiveRebase { .. }
                     | RepoCommandKind::MergeAbort
             ) {
                 repo_state.set_diff_target(None);

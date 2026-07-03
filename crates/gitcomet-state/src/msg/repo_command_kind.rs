@@ -62,6 +62,9 @@ pub enum RepoCommandKind {
     },
     RebaseContinue,
     RebaseAbort,
+    InteractiveRebase {
+        base: String,
+    },
     MergeAbort,
     CreateTag {
         name: String,

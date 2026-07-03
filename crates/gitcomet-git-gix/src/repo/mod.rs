@@ -10,8 +10,8 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
-    ConflictSide, ForcePushLease, GitRepository, MergetoolResult, PullMode, RemoteUrlKind,
-    ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult, PullMode,
+    RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
     SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
@@ -658,6 +658,21 @@ impl GitRepository for GixRepo {
 
     fn rebase_abort_with_output(&self) -> Result<CommandOutput> {
         self.rebase_abort_with_output_impl()
+    }
+
+    fn list_commits_for_interactive_rebase(
+        &self,
+        base: &str,
+    ) -> Result<Vec<InteractiveRebaseEntry>> {
+        self.list_commits_for_interactive_rebase_impl(base)
+    }
+
+    fn interactive_rebase_with_output(
+        &self,
+        base: &str,
+        entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        self.interactive_rebase_with_output_impl(base, entries)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

@@ -2070,14 +2070,7 @@ mod tests {
     #[gpui::test]
     fn text_input_command_shortcuts_trigger_undo_and_redo(cx: &mut gpui::TestAppContext) {
         let (input, cx) = cx.add_window_view(|window, cx| {
-            crate::kit::TextInput::new(
-                crate::kit::TextInputOptions {
-                    multiline: false,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
+            crate::kit::TextInput::new(crate::kit::TextInputOptions::default(), window, cx)
         });
 
         cx.update(|window, app| {
@@ -2110,14 +2103,7 @@ mod tests {
     #[gpui::test]
     fn text_input_control_redo_shortcut_triggers_redo(cx: &mut gpui::TestAppContext) {
         let (input, cx) = cx.add_window_view(|window, cx| {
-            crate::kit::TextInput::new(
-                crate::kit::TextInputOptions {
-                    multiline: false,
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
+            crate::kit::TextInput::new(crate::kit::TextInputOptions::default(), window, cx)
         });
 
         cx.update(|window, app| {

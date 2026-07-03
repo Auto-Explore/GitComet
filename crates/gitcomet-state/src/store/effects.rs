@@ -1015,6 +1015,24 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadInteractiveRebaseSetup { repo_id, base } => send(Msg::Internal(
+            crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
+                repo_id,
+                base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::InteractiveRebase {
+            repo_id,
+            base,
+            entries: _,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::InteractiveRebase { base },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::MergeAbort { repo_id } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
@@ -2115,6 +2133,18 @@ pub(super) fn schedule_effect(
         Effect::RebaseAbort { repo_id } => {
             repo_commands::schedule_rebase_abort(executor, repos, msg_tx, repo_id)
         }
+        Effect::LoadInteractiveRebaseSetup { repo_id, base } => {
+            repo_load::schedule_load_interactive_rebase_setup(
+                executor, repos, msg_tx, repo_id, base,
+            );
+        }
+        Effect::InteractiveRebase {
+            repo_id,
+            base,
+            entries,
+        } => repo_commands::schedule_interactive_rebase(
+            executor, repos, msg_tx, repo_id, base, entries,
+        ),
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)
         }

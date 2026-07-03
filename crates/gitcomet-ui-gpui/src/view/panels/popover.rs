@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::services::InteractiveRebaseAction;
 
 mod app_menu;
 mod branch_picker;
@@ -20,6 +21,7 @@ mod merge_abort_confirm;
 mod picker_nav;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
+mod rebase_onto_confirm;
 mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
@@ -88,7 +90,9 @@ impl PopoverWidthSpec {
 }
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
+const COMMIT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 260.0, 480.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
+const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
 const DIFF_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 320.0);
 const DIFF_EDITOR_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 200.0, 340.0);
@@ -238,6 +242,8 @@ pub(in super::super) struct PopoverHost {
     submodule_name_input: Entity<components::TextInput>,
     submodule_add_advanced_expanded: bool,
     submodule_force_enabled: bool,
+    rebase_reword_input: Entity<components::TextInput>,
+    rebase_reword_description_input: Entity<components::TextInput>,
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {
@@ -306,6 +312,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::DiffActionMenu
+            | PopoverKind::InteractiveRebaseActionMenu { .. }
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
@@ -352,6 +359,8 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
         PopoverKind::StashDropConfirm { .. }
             | PopoverKind::ForcePushConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
+            | PopoverKind::RebaseOntoConfirm { .. }
+            | PopoverKind::RebaseReword { .. }
             | PopoverKind::ConflictSaveStageConfirm { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
@@ -449,6 +458,8 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
+        | PopoverKind::RebaseOntoConfirm { .. }
+        | PopoverKind::RebaseReword { .. }
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
@@ -495,7 +506,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::PushSetUpstreamPrompt { .. } => Some(DIALOG_320_WIDTH),
-        PopoverKind::ResetPrompt { .. } => Some(DIALOG_380_WIDTH),
+        PopoverKind::ResetPrompt { .. } | PopoverKind::RebaseOntoConfirm { .. } => {
+            Some(DIALOG_380_WIDTH)
+        }
         PopoverKind::MergeAbortConfirm { .. } | PopoverKind::ConflictSaveStageConfirm { .. } => {
             Some(DIALOG_360_WIDTH)
         }
@@ -542,12 +555,12 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
+        PopoverKind::CommitMenu { .. } => Some(COMMIT_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
-        | PopoverKind::CommitMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -585,6 +598,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ConflictResolverChunkMenu { .. } => Some(CONFLICT_CHUNK_MENU_WIDTH),
         PopoverKind::ConflictResolverOutputMenu { .. } => Some(CONFLICT_OUTPUT_MENU_WIDTH),
         PopoverKind::StashMenu { .. } => Some(STASH_MENU_WIDTH),
+        PopoverKind::RebaseReword { .. } => Some(DIALOG_440_WIDTH),
+        PopoverKind::InteractiveRebaseActionMenu { .. } => Some(REBASE_ACTION_MENU_WIDTH),
     }
 }
 
@@ -1263,6 +1278,29 @@ impl PopoverHost {
             submodule_name_input,
             submodule_add_advanced_expanded: false,
             submodule_force_enabled: false,
+            rebase_reword_input: cx.new(|cx| {
+                components::TextInput::new(
+                    components::TextInputOptions {
+                        placeholder: "Commit subject".into(),
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                )
+            }),
+            rebase_reword_description_input: cx.new(|cx| {
+                components::TextInput::new(
+                    components::TextInputOptions {
+                        placeholder: "Description (optional)".into(),
+                        multiline: true,
+                        soft_wrap: true,
+                        min_lines: 4,
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                )
+            }),
         }
     }
 
@@ -2407,6 +2445,34 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
+                PopoverKind::RebaseReword {
+                    ix: _,
+                    original_action: _,
+                    original_message,
+                } => {
+                    let theme = self.theme;
+                    let (subject, body) = original_message
+                        .split_once("\n\n")
+                        .map(|(s, b)| (s.to_owned(), b.to_owned()))
+                        .unwrap_or_else(|| (original_message.clone(), String::new()));
+                    self.rebase_reword_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text(subject, cx);
+                        cx.notify();
+                    });
+                    self.rebase_reword_description_input
+                        .update(cx, |input, cx| {
+                            input.clear_transient_key_presses();
+                            input.set_theme(theme, cx);
+                            input.set_text(body, cx);
+                            cx.notify();
+                        });
+                    let focus = self
+                        .rebase_reword_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
                 k if popover_is_confirm_dialog(k) => {
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
                 }
@@ -3077,6 +3143,139 @@ impl PopoverHost {
                 cx,
             ),
             PopoverKind::AppMenu => app_menu::panel(self, cx),
+            PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
+                rebase_onto_confirm::panel(self, repo_id, onto, cx)
+            }
+            PopoverKind::InteractiveRebaseActionMenu { .. } => {
+                self.context_menu_view(kind.clone(), cx)
+            }
+            PopoverKind::RebaseReword {
+                ix,
+                original_action,
+                original_message: _,
+            } => {
+                let theme = self.theme;
+                let submit_button_id = "reword_save";
+                let main_pane = self.main_pane.clone();
+                let submit = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                    let subject = this
+                        .rebase_reword_input
+                        .read_with(cx, |input, _| input.text().to_string());
+                    let body = this
+                        .rebase_reword_description_input
+                        .read_with(cx, |input, _| input.text().to_string());
+                    let new_message = if body.trim().is_empty() {
+                        subject.clone()
+                    } else {
+                        format!("{subject}\n\n{body}")
+                    };
+                    let _ = main_pane.update(cx, |pane, cx| {
+                        if subject.is_empty() {
+                            // Empty subject → discard any previous override and revert
+                            // the action. Use set_rebase_action so side-effects
+                            // (squash-target cleanup, notify) are handled consistently.
+                            if let Some(entry) = pane
+                                .active_irebase_mut()
+                                .and_then(|st| st.entries.get_mut(ix))
+                            {
+                                entry.new_message = None;
+                            }
+                            pane.set_rebase_action(ix, original_action, cx);
+                        } else if let Some(entry) = pane
+                            .active_irebase_mut()
+                            .and_then(|st| st.entries.get_mut(ix))
+                        {
+                            entry.action = InteractiveRebaseAction::Reword;
+                            entry.new_message = Some(new_message);
+                            cx.notify();
+                        }
+                    });
+                    this.close_popover_and_restore_focus(window, cx);
+                });
+                let cancel = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
+                    let _ = this.main_pane.update(cx, |pane, cx| {
+                        pane.set_rebase_action(ix, original_action, cx);
+                    });
+                    this.close_popover_and_restore_focus(window, cx);
+                });
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .w(scaled_px(440.0))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .font_weight(FontWeight::BOLD)
+                            .child("Reword commit message"),
+                    )
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_2()
+                            .pt_2()
+                            .pb_1()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Subject"),
+                            )
+                            .child(self.rebase_reword_input.clone()),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .pt_1()
+                            .pb_2()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Description"),
+                            )
+                            .child(
+                                div()
+                                    .w_full()
+                                    .min_w(px(0.0))
+                                    .child(self.rebase_reword_description_input.clone()),
+                            ),
+                    )
+                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                components::Button::new("reword_cancel", "Cancel")
+                                    .separated_end_slot(hotkey_hint(
+                                        theme,
+                                        "reword_cancel_hint",
+                                        "Esc",
+                                    ))
+                                    .style(components::ButtonStyle::Outlined)
+                                    .render(theme, ui_scale_percent)
+                                    .on_click(cancel),
+                            )
+                            .child(
+                                components::Button::new(submit_button_id, "Save message")
+                                    .style(components::ButtonStyle::Filled)
+                                    .render(theme, ui_scale_percent)
+                                    .on_click(submit),
+                            ),
+                    )
+            }
             PopoverKind::TerminalShutdownConfirm(prompt) => {
                 terminal_shutdown_confirm::panel(self, prompt, cx)
             }

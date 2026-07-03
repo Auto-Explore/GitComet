@@ -7,9 +7,9 @@ use gitcomet_core::error::Error;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, PullMode, RemoteUrlKind,
-    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
-    SubmoduleTrustDecision, SubmoduleTrustTarget,
+    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, InteractiveRebaseEntry,
+    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -602,6 +602,18 @@ pub enum Msg {
     RebaseAbort {
         repo_id: RepoId,
     },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    InteractiveRebase {
+        repo_id: RepoId,
+        base: String,
+        entries: Vec<InteractiveRebaseEntry>,
+    },
+    CancelInteractiveRebaseSetup {
+        repo_id: RepoId,
+    },
     MergeAbort {
         repo_id: RepoId,
     },
@@ -811,6 +823,11 @@ pub enum InternalMsg {
     RebaseStateLoaded {
         repo_id: RepoId,
         result: Result<bool, Error>,
+    },
+    InteractiveRebaseSetupLoaded {
+        repo_id: RepoId,
+        base: String,
+        result: Result<Vec<InteractiveRebaseEntry>, Error>,
     },
     MergeCommitMessageLoaded {
         repo_id: RepoId,

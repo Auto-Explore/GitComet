@@ -6,7 +6,9 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let ui_scale = super::popover_ui_scale(cx);
+    let ui_scale_percent = ui_scale.percent();
+    let width = super::LARGE_PICKER_WIDTH;
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     if let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) {
@@ -62,8 +64,7 @@ pub(super) fn panel(
                                 this.close_popover(cx);
                             }),
                     )
-                    .w(scaled_px(520.0))
-                    .max_w(scaled_px(820.0))
+                    .w(width.preferred_px(ui_scale))
                 } else {
                     components::context_menu_label(
                         theme,

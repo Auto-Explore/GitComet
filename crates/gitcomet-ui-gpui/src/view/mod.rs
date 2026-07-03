@@ -1255,10 +1255,9 @@ impl GitCometView {
                 // TODO: Implement rebase onto
             }
             "rebase-continue" => {
-                // TODO: Continue rebase
-            }
-            "rebase-abort" => {
-                // TODO: Abort rebase
+                if let Some(repo_id) = self.active_repo_id() {
+                    self.store.dispatch(Msg::RebaseContinue { repo_id });
+                }
             }
             "create-tag" => {
                 if let Some(repo_id) = self.active_repo_id()

@@ -2588,6 +2588,36 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
 
     pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
+
+    /// Per-repo interactive rebase editing state, keyed by repo id so that
+    /// setups open in several repo tabs at once stay independent. Entries are
+    /// populated when a repo's setup becomes Ready and dropped when its setup
+    /// goes away (see `apply_state`).
+    pub(in crate::view) interactive_rebase_states: HashMap<RepoId, IRebaseViewState>,
+}
+
+/// View-local editing state for one repo's interactive rebase setup.
+#[derive(Default)]
+pub(in crate::view) struct IRebaseViewState {
+    pub(in crate::view) entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) autosquash: bool,
+    pub(in crate::view) drag_state: Option<IRebaseDragState>,
+    pub(in crate::view) scroll: gpui::ScrollHandle,
+    /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.
+    pub(in crate::view) reorder_anim: Option<(usize, usize, u32)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(in crate::view) struct IRebaseDragState {
+    pub(in crate::view) from_ix: usize,
+    pub(in crate::view) to_ix: usize,
+    pub(in crate::view) display_pos: usize,
+    /// The gap's previous display position, set once the gap has moved;
+    /// drives the paired shrink/grow animation of gap moves.
+    pub(in crate::view) prev_display_pos: Option<usize>,
+    /// Bumped on every gap move so the move animation replays.
+    pub(in crate::view) anim_ver: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

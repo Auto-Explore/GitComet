@@ -136,6 +136,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
+        | PopoverKind::RebaseReword { .. }
+        | PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -162,6 +164,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
+        | PopoverKind::RebaseOntoConfirm { repo_id, .. }
         | PopoverKind::CommitOptionsMenu { repo_id }
         | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
@@ -308,7 +311,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         }
 
         // Most prompt-style popovers don't require live state updates.
-        PopoverKind::MergeAbortConfirm { .. }
+        PopoverKind::InteractiveRebaseActionMenu { .. }
+        | PopoverKind::RebaseReword { .. }
+        | PopoverKind::RebaseOntoConfirm { .. }
+        | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
@@ -663,6 +669,31 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             74u8.hash(hasher);
             repo_id.hash(hasher);
             (*purpose as u8).hash(hasher);
+        }
+        PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
+            75u8.hash(hasher);
+            repo_id.hash(hasher);
+            onto.hash(hasher);
+        }
+        PopoverKind::RebaseReword {
+            ix,
+            original_action,
+            original_message,
+        } => {
+            77u8.hash(hasher);
+            ix.hash(hasher);
+            (*original_action as u8).hash(hasher);
+            original_message.hash(hasher);
+        }
+        PopoverKind::InteractiveRebaseActionMenu {
+            ix,
+            is_bottom,
+            can_drop,
+        } => {
+            78u8.hash(hasher);
+            ix.hash(hasher);
+            is_bottom.hash(hasher);
+            can_drop.hash(hasher);
         }
     }
 }

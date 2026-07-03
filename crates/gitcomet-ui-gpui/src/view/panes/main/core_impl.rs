@@ -795,6 +795,24 @@ impl MainPaneView {
             // The historical-browse purple frame keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
 
+            match &repo.interactive_rebase_setup {
+                Some(setup) => {
+                    1u8.hash(&mut hasher);
+                    setup.base.hash(&mut hasher);
+                    match &setup.entries {
+                        Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                        Loadable::Loading => 1u8.hash(&mut hasher),
+                        Loadable::Ready(_) => 2u8.hash(&mut hasher),
+                        Loadable::Error(err) => {
+                            3u8.hash(&mut hasher);
+                            err.hash(&mut hasher);
+                        }
+                    }
+                }
+                None => {
+                    0u8.hash(&mut hasher);
+                }
+            }
             // Blame/annotate data — when blame loads for the first time or changes
             // target, the annotation sidebar needs to repaint.
             repo.history_state.blame_path.hash(&mut hasher);
@@ -1375,6 +1393,7 @@ impl MainPaneView {
             conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
+            interactive_rebase_states: HashMap::default(),
         };
 
         pane.set_theme(theme, cx);
@@ -3816,6 +3835,36 @@ impl MainPaneView {
         }
 
         self.ensure_rendered_patch_diff_cache(cx);
+
+        // Sync per-repo interactive rebase editing state. Each repo with a setup
+        // gets its own `IRebaseViewState`, populated once its entries become Ready
+        // and kept (with local edits) across repo-tab switches. State for repos
+        // whose setup is gone (cancelled, started, repo closed) is dropped.
+        // Collect ids first: `retain`'s closure cannot also borrow `self.state`.
+        let repos_with_setup: Vec<RepoId> = self
+            .state
+            .repos
+            .iter()
+            .filter(|r| r.interactive_rebase_setup.is_some())
+            .map(|r| r.id)
+            .collect();
+        self.interactive_rebase_states
+            .retain(|repo_id, _| repos_with_setup.contains(repo_id));
+        for repo in self.state.repos.iter() {
+            let Some(setup) = repo.interactive_rebase_setup.as_ref() else {
+                continue;
+            };
+            let Loadable::Ready(entries) = &setup.entries else {
+                continue;
+            };
+            self.interactive_rebase_states
+                .entry(repo.id)
+                .or_insert_with(|| IRebaseViewState {
+                    entries: entries.clone(),
+                    original_entries: entries.clone(),
+                    ..Default::default()
+                });
+        }
 
         // History caches are now managed by HistoryView.
     }

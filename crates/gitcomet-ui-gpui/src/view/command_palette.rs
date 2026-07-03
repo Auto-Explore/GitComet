@@ -311,6 +311,13 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
+        id: "rebase-continue",
+        label: "Continue Rebase",
+        shortcut: "",
+        category: "Rebase",
+        requires_repo: true,
+    },
+    CommandEntry {
         id: "blame",
         label: "Blame / Annotate",
         shortcut: "Alt+B",
@@ -341,8 +348,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "delete-remote-branch"   - Delete Remote Branch
     // TODO: "merge"                  - Merge Branch/Ref
     // TODO: "rebase"                 - Rebase Onto
-    // TODO: "rebase-continue"        - Continue Rebase (Merge/Rebase)
-    // TODO: "rebase-abort"           - Abort Rebase (Merge/Rebase)
     // TODO: "delete-tag"             - Delete Tag
     // TODO: "remove-remote"          - Remove Remote
     // TODO: "edit-remote-url"        - Edit Remote URL
