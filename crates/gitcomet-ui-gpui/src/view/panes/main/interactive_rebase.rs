@@ -97,6 +97,95 @@ struct IRebaseDragValue {
     ix: usize,
 }
 
+/// Floating preview shown under the cursor while dragging a rebase entry. With
+/// the dragged content riding the cursor, the in-list gap can stay empty, so
+/// nothing is ever painted over a real row. Minimal styling for now.
+struct IRebaseDragPreview {
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    action: InteractiveRebaseAction,
+    sha: String,
+    summary: String,
+    row_h: f32,
+}
+
+impl Render for IRebaseDragPreview {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let action_btn_w = px(ACTION_BTN_W * self.ui_scale_percent as f32 / 100.0);
+        let is_squash_like = matches!(
+            self.action,
+            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+        );
+        let outlined_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.38 } else { 0.28 },
+        );
+        div()
+            .h(px(self.row_h))
+            .w(px(440.0 * self.ui_scale_percent as f32 / 100.0))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .rounded(px(theme.radii.row))
+            .bg(theme.colors.surface_bg_elevated)
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.6))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .child("⠿"),
+            )
+            .when(is_squash_like, |d| {
+                d.child(div().flex_shrink_0().flex().items_center().child(
+                    crate::view::icons::svg_icon(
+                        "icons/squash_arrow.svg",
+                        with_alpha(theme.colors.accent, 0.7),
+                        px(14.0),
+                    ),
+                ))
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(action_btn_w)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(theme.radii.row))
+                    .border_1()
+                    .border_color(outlined_border)
+                    .text_sm()
+                    .text_color(theme.colors.text)
+                    .child(format!("{} ▾", action_short_label(self.action))),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .font_family("monospace")
+                    .child(self.sha.clone()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(theme.colors.text)
+                    .overflow_x_hidden()
+                    .whitespace_nowrap()
+                    .child(self.summary.clone()),
+            )
+    }
+}
+
 /// Height of a real entry row measured from the last paint, so drag
 /// hit-testing and the gap ghost track font size and UI scale. Falls back
 /// to DRAG_ROW_HEIGHT before the first paint. The gap ghost and the
@@ -272,106 +361,17 @@ impl MainPaneView {
                 let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
                 let drag_display_pos = drag_state.map(|s| s.display_pos).unwrap_or(0);
 
-                // Display order is always newest-first (reversed). During drag we keep items in
-                // their original slots — a collapsing source placeholder and an animated gap at
-                // the target slot provide the reorder feedback instead.
+                // Display order is always newest-first (reversed). During drag the
+                // dragged entry rides the cursor (see the gripper's on_drag preview);
+                // in the list its source row collapses and an EMPTY gap opens at the
+                // target slot. An empty gap has no content to paint over a neighbour,
+                // so the reorder feedback is overlap-proof while still sliding.
                 let display_order: Vec<usize> = (0..entry_count).rev().collect();
 
-                // Display positions for the source placeholder and the animated gap target.
+                // Display positions for the collapsing source and the empty gap target.
                 let from_display_pos = (is_dragging && drag_from_ix < entry_count)
                     .then(|| (entry_count - 1).saturating_sub(drag_from_ix));
                 let gap_display_pos = is_dragging.then_some(drag_display_pos);
-
-                // Pre-extract the dragged item's display data so the gap can render it on rails.
-                let ghost_data = from_display_pos.map(|_| {
-                    let fix = drag_from_ix;
-                    let g_action = st.entries[fix].action;
-                    let g_sha = st.entries[fix]
-                        .commit_id
-                        .get(..8)
-                        .unwrap_or(&st.entries[fix].commit_id)
-                        .to_string();
-                    let g_summary = st.entries[fix]
-                        .new_message
-                        .as_deref()
-                        .and_then(|m| m.lines().next())
-                        .unwrap_or(&st.entries[fix].summary)
-                        .to_owned();
-                    (g_action, g_sha, g_summary)
-                });
-
-                // Builds the ghost row that appears in the animated gap — styled to match
-                // the real rows: gripper → (squash arrow) → static action button → sha → summary.
-                let build_ghost_row =
-                    |g_action: InteractiveRebaseAction, g_sha: &str, g_summary: &str| {
-                        let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
-                        let is_squash_like = matches!(
-                            g_action,
-                            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
-                        );
-                        let outlined_border = with_alpha(
-                            theme.colors.text_muted,
-                            if theme.is_dark { 0.38 } else { 0.28 },
-                        );
-                        div()
-                            .h(px(drag_row_h))
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .py_0p5()
-                            .rounded(px(theme.radii.row))
-                            .bg(with_alpha(theme.colors.accent, 0.12))
-                            .border_1()
-                            .border_color(with_alpha(theme.colors.accent, 0.4))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("⠿"),
-                            )
-                            .when(is_squash_like, |d| {
-                                d.child(div().flex_shrink_0().flex().items_center().child(
-                                    crate::view::icons::svg_icon(
-                                        "icons/squash_arrow.svg",
-                                        with_alpha(theme.colors.accent, 0.7),
-                                        px(14.0),
-                                    ),
-                                ))
-                            })
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .w(action_btn_w)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(theme.radii.row))
-                                    .border_1()
-                                    .border_color(outlined_border)
-                                    .text_sm()
-                                    .text_color(theme.colors.text)
-                                    .child(format!("{} ▾", action_short_label(g_action))),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .font_family("monospace")
-                                    .child(g_sha.to_owned()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(theme.colors.text)
-                                    .overflow_x_hidden()
-                                    .whitespace_nowrap()
-                                    .child(g_summary.to_owned()),
-                            )
-                            .into_any_element()
-                    };
 
                 // When dragging a higher item all the way to the bottom the drag
                 // slot falls past the last display position. In that case render
@@ -382,48 +382,36 @@ impl MainPaneView {
                 // gap left and the gap slot growing where it landed. Identical duration
                 // and easing keep the two heights summing to exactly one row, so
                 // rows below both slots stay put and rows in between slide smoothly.
-                // At drag start there is no previous slot: the ghost renders at full
-                // height, replacing the collapsed source row in place with no shift.
                 let gap_prev_display_pos = drag_state.and_then(|s| s.prev_display_pos);
                 let gap_anim_ver = drag_state.map(|s| s.anim_ver).unwrap_or(0);
                 let animate_gap_move = gap_prev_display_pos.is_some();
-                // Only the slot height animates; the ghost row itself stays at full
-                // height, pinned to the destination slot. Anchoring it to the growing
-                // slot's bottom when the gap moved down (top when it moved up) keeps
-                // its absolute position constant throughout the animation, so the
-                // dragged row is never clipped away mid-move (which read as a flicker).
-                // `deferred` paints it above the neighbor row sliding out from under it.
-                let gap_moved_down =
-                    gap_prev_display_pos.is_some_and(|prev| prev < drag_display_pos);
-                let wrap_gap = move |ghost_row: gpui::AnyElement| -> gpui::AnyElement {
+                // The empty drop-zone slot. A plain in-flow div (no deferred/absolute),
+                // so it can never overlap a real row; its height animates open, or sits
+                // at a full row height when there is no move to animate. `flex_shrink_0`
+                // is essential: without a content floor, an overflowing scroll list would
+                // let flex compress this empty div to nothing (or a reduced height).
+                let build_gap_slot = move || -> gpui::AnyElement {
+                    let slot = div()
+                        .w_full()
+                        .flex_shrink_0()
+                        .rounded(px(theme.radii.row))
+                        .bg(with_alpha(theme.colors.accent, 0.12));
                     if animate_gap_move {
-                        div()
-                            .w_full()
-                            .relative()
-                            .child(gpui::deferred(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .right_0()
-                                    .h(px(drag_row_h))
-                                    .when(gap_moved_down, |d| d.bottom_0())
-                                    .when(!gap_moved_down, |d| d.top_0())
-                                    .child(ghost_row),
-                            ))
-                            .with_animation(
-                                format!("irebase_gap_in_{gap_anim_ver}"),
-                                Animation::new(Duration::from_millis(120))
-                                    .with_easing(gpui::ease_out_quint()),
-                                move |d, delta| d.h(px(drag_row_h * delta)),
-                            )
-                            .into_any_element()
+                        slot.with_animation(
+                            format!("irebase_gap_in_{gap_anim_ver}"),
+                            Animation::new(Duration::from_millis(120))
+                                .with_easing(gpui::ease_out_quint()),
+                            move |d, delta| d.h(px(drag_row_h * delta)),
+                        )
+                        .into_any_element()
                     } else {
-                        ghost_row
+                        slot.h(px(drag_row_h)).into_any_element()
                     }
                 };
                 let build_gap_out_spacer = move || -> gpui::AnyElement {
                     div()
                         .w_full()
+                        .flex_shrink_0()
                         .with_animation(
                             format!("irebase_gap_out_{gap_anim_ver}"),
                             Animation::new(Duration::from_millis(120))
@@ -441,16 +429,10 @@ impl MainPaneView {
                         rows.push(build_gap_out_spacer());
                     }
 
-                    // Insert an animated slot at the target position. It renders the dragged
-                    // item's content so the ghost appears "on rails" within the list.
+                    // Open an empty gap at the target position — the dragged content
+                    // rides the cursor instead, so nothing here can overlap a row.
                     if gap_display_pos == Some(display_pos) && !append_gap_after {
-                        let ghost_row =
-                            if let Some((g_action, ref g_sha, ref g_summary)) = ghost_data {
-                                build_ghost_row(g_action, g_sha, g_summary)
-                            } else {
-                                div().into_any_element()
-                            };
-                        rows.push(wrap_gap(ghost_row));
+                        rows.push(build_gap_slot());
                     }
 
                     // Collapse the source item — the ghost view follows the cursor instead.
@@ -586,6 +568,10 @@ impl MainPaneView {
 
                     let drag_val = IRebaseDragValue { ix };
 
+                    // Data for the floating cursor preview built when this row is dragged.
+                    let pf_action = action;
+                    let pf_sha = sha.clone();
+                    let pf_summary = summary.clone();
                     let gripper = div()
                         .id(("gripper", ix))
                         .cursor(gpui::CursorStyle::PointingHand)
@@ -593,7 +579,14 @@ impl MainPaneView {
                         .text_color(theme.colors.text_muted)
                         .child("⠿")
                         .on_drag(drag_val, move |_drag, _offset, _window, cx| {
-                            cx.new(|_cx| gpui::Empty)
+                            cx.new(|_cx| IRebaseDragPreview {
+                                theme,
+                                ui_scale_percent,
+                                action: pf_action,
+                                sha: pf_sha.clone(),
+                                summary: pf_summary.clone(),
+                                row_h: drag_row_h,
+                            })
                         });
 
                     let commit_id_val = CommitId(st.entries[ix].commit_id.clone().into());
@@ -728,12 +721,7 @@ impl MainPaneView {
                 // When dragging a higher item (lower data index) all the way to the bottom,
                 // the gap belongs AFTER the last rendered item, not before it.
                 if append_gap_after {
-                    let ghost_row = if let Some((g_action, ref g_sha, ref g_summary)) = ghost_data {
-                        build_ghost_row(g_action, g_sha, g_summary)
-                    } else {
-                        div().into_any_element()
-                    };
-                    rows.push(wrap_gap(ghost_row));
+                    rows.push(build_gap_slot());
                 }
 
                 let scrollbar_gutter = components::Scrollbar::visible_gutter(
