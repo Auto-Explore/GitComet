@@ -362,7 +362,7 @@ impl MainPaneView {
                 let append_gap_after = gap_display_pos == Some(entry_count);
 
                 // Gap moves animate as a matched pair: a spacer shrinking where the
-                // gap left and the ghost growing where it landed. Identical duration
+                // gap left and the gap slot growing where it landed. Identical duration
                 // and easing keep the two heights summing to exactly one row, so
                 // rows below both slots stay put and rows in between slide smoothly.
                 // At drag start there is no previous slot: the ghost renders at full
@@ -370,12 +370,29 @@ impl MainPaneView {
                 let gap_prev_display_pos = drag_state.and_then(|s| s.prev_display_pos);
                 let gap_anim_ver = drag_state.map(|s| s.anim_ver).unwrap_or(0);
                 let animate_gap_move = gap_prev_display_pos.is_some();
+                // Only the slot height animates; the ghost row itself stays at full
+                // height, pinned to the destination slot. Anchoring it to the growing
+                // slot's bottom when the gap moved down (top when it moved up) keeps
+                // its absolute position constant throughout the animation, so the
+                // dragged row is never clipped away mid-move (which read as a flicker).
+                // `deferred` paints it above the neighbor row sliding out from under it.
+                let gap_moved_down =
+                    gap_prev_display_pos.is_some_and(|prev| prev < drag_display_pos);
                 let wrap_gap = move |ghost_row: gpui::AnyElement| -> gpui::AnyElement {
                     if animate_gap_move {
                         div()
                             .w_full()
-                            .overflow_hidden()
-                            .child(ghost_row)
+                            .relative()
+                            .child(gpui::deferred(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .h(px(drag_row_h))
+                                    .when(gap_moved_down, |d| d.bottom_0())
+                                    .when(!gap_moved_down, |d| d.top_0())
+                                    .child(ghost_row),
+                            ))
                             .with_animation(
                                 format!("irebase_gap_in_{gap_anim_ver}"),
                                 Animation::new(Duration::from_millis(120))
