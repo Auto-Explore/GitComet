@@ -2,8 +2,10 @@ use super::*;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let ui_scale = super::popover_ui_scale(cx);
+    let ui_scale_percent = ui_scale.percent();
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let width = super::PICKER_WIDTH;
     let is_delete = matches!(
         this.popover,
         Some(PopoverKind::BranchPicker {
@@ -19,8 +21,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let mut menu = div()
         .flex()
         .flex_col()
-        .min_w(scaled_px(420.0))
-        .max_w(scaled_px(820.0))
+        .min_w(width.min_px(ui_scale))
+        .max_w(width.max_px(ui_scale))
         .child(
             div()
                 .px_2()
@@ -74,17 +76,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         let name = branch.name.clone();
                         let label: SharedString = name.clone().into();
                         menu = menu.child(
-                            components::context_menu_entry(
+                            components::ContextMenuEntry::new(
                                 ("branch_item", ix),
-                                theme,
-                                ui_scale_percent,
-                                false,
-                                false,
-                                None,
-                                false,
-                                label,
-                                None,
+                                components::ContextMenuText::new(label)
+                                    .max_lines(1)
+                                    .tooltip_mode(
+                                        components::TruncatedTextTooltipMode::FullTextIfTruncated,
+                                    ),
                             )
+                            .tooltip_host(this.tooltip_host.clone())
+                            .render(theme, ui_scale_percent, cx)
                             .on_click(cx.listener(
                                 move |this, _e: &ClickEvent, _w, cx| {
                                     this.handle_inline_branch_picker_select(
@@ -110,9 +111,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         }
     }
 
-    components::context_menu(theme, menu)
-        .w(scaled_px(420.0))
-        .max_w(scaled_px(820.0))
+    // Fixed width: PickerPrompt rows size with `w_full`, which does not
+    // stretch under fit-content parents.
+    components::context_menu(theme, menu).w(width.preferred_px(ui_scale))
 }
 
 fn branch_picker_status_panel(

@@ -514,10 +514,17 @@ fn open_popover_for_test(
 
 fn set_ui_scale_percent_for_test(
     cx: &mut gpui::VisualTestContext,
-    _view: &gpui::Entity<super::super::GitCometView>,
+    view: &gpui::Entity<super::super::GitCometView>,
     percent: u32,
 ) {
-    cx.update(|_window, app| {
+    // Apply to the test window through the view first: `set_app_ui_scale_percent`
+    // reaches open windows via `WindowHandle::update`, which silently fails here
+    // because the test window is already borrowed by this `cx.update`, leaving the
+    // window rem size (and thus text scaling) untouched.
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.apply_ui_scale_percent(percent, window, cx);
+        });
         crate::app::set_app_ui_scale_percent(app, percent);
     });
 }

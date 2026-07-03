@@ -257,7 +257,12 @@ fn build_todo_content(entries: &[InteractiveRebaseEntry]) -> String {
         .iter()
         .map(|e| {
             let safe_summary = e.summary.replace('\n', " ");
-            format!("{} {} {}\n", e.action.to_todo_str(), e.commit_id, safe_summary)
+            format!(
+                "{} {} {}\n",
+                e.action.to_todo_str(),
+                e.commit_id,
+                safe_summary
+            )
         })
         .collect()
 }

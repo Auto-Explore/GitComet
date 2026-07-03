@@ -1254,7 +1254,6 @@ impl PopoverHost {
             .flex_col()
             .items_stretch()
             .text_color(theme.colors.text)
-            .w(width.preferred_px(ui_scale))
             .min_w(width.min_px(ui_scale))
             .max_w(width.max_px(ui_scale))
             .track_focus(&focus)
@@ -1369,18 +1368,22 @@ impl PopoverHost {
                         let tooltip_host_for_hover = tooltip_host.clone();
                         let activate_on_left_release = model_for_mouse.clone();
                         let activate_on_right_release = model_for_mouse.clone();
-                        let row = components::context_menu_entry(
-                            ("context_menu_entry", ix),
-                            theme,
-                            ui_scale,
-                            selected,
-                            disabled,
-                            icon,
-                            reserve_icon_column,
-                            label,
-                            shortcut,
-                        )
-                        .debug_selector(move || debug_selector.clone());
+                        let icon_slot = match icon {
+                            Some(icon) => components::ContextMenuIconSlot::Icon(icon),
+                            None if reserve_icon_column => {
+                                components::ContextMenuIconSlot::Reserved
+                            }
+                            None => components::ContextMenuIconSlot::None,
+                        };
+                        let row =
+                            components::ContextMenuEntry::new(("context_menu_entry", ix), label)
+                                .icon(icon_slot)
+                                .shortcut(shortcut)
+                                .selected(selected)
+                                .disabled(disabled)
+                                .tooltip_host(tooltip_host.clone())
+                                .render(theme, ui_scale, cx)
+                                .debug_selector(move || debug_selector.clone());
 
                         row.on_mouse_move(cx.listener(
                             move |this, event: &MouseMoveEvent, _w, cx| {
