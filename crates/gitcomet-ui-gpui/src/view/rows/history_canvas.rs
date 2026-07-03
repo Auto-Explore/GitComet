@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_state::msg::CommitSelectMode;
 use gpui::{
     Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, TruncateFrom,
     fill, point, px, size,
@@ -671,13 +672,17 @@ pub(super) fn history_commit_row_canvas(
                         .map(|tag| tag.as_ref().to_string());
                     view.update(cx, |this, cx| {
                         // Right-clicking inside an active multi-selection must
-                        // not collapse it — the menu acts on the whole set.
-                        if !this.commit_in_multi_selection(repo_id, &commit_id) {
-                            this.store.dispatch(Msg::SelectCommit {
-                                repo_id,
-                                commit_id: commit_id.clone(),
-                            });
-                        }
+                        // not collapse it — the menu acts on the whole set — but
+                        // focus must still move to the clicked commit so the
+                        // details pane matches the menu target. Outside the
+                        // selection this collapses to the clicked commit.
+                        this.store.dispatch(Msg::SelectCommitMulti {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                            mode: CommitSelectMode::PreserveIfSelected,
+                            clicked_index: None,
+                            visible_order: None,
+                        });
                         let context_menu_invoker: SharedString =
                             format!("history_commit_menu_{}_{}", repo_id.0, commit_id.as_ref())
                                 .into();

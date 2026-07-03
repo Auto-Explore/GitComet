@@ -171,11 +171,22 @@ impl GixRepo {
         let (author_name, author_email, author_date) =
             commit_author_env(&repo, oldest.as_ref())?;
 
+        // Respect commit.gpgsign: `git commit-tree` never signs unless asked,
+        // so without this a signed-commit repo would get an unsigned squash
+        // commit and later have the push rejected.
+        let sign = repo
+            .config_snapshot()
+            .boolean("commit.gpgsign")
+            .unwrap_or(false);
+
         // The squash commit reuses HEAD's tree with the range's base as its
         // parent, so the worktree and index are never touched.
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("commit-tree")
-            .arg(format!("{}^{{tree}}", expected_head.as_ref()))
+        cmd.arg("commit-tree");
+        if sign {
+            cmd.arg("-S");
+        }
+        cmd.arg(format!("{}^{{tree}}", expected_head.as_ref()))
             .arg("-p")
             .arg(&oldest_parent)
             .arg("-m")

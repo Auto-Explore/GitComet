@@ -1075,22 +1075,6 @@ impl HistoryView {
         self.state.repos.iter().find(|r| r.id == repo_id)
     }
 
-    /// Whether the commit is part of an active multi-selection (more than one
-    /// commit selected). Right-click uses this to keep the selection intact
-    /// instead of collapsing to the clicked commit.
-    pub(in super::super) fn commit_in_multi_selection(
-        &self,
-        repo_id: RepoId,
-        commit_id: &CommitId,
-    ) -> bool {
-        self.state
-            .repos
-            .iter()
-            .find(|r| r.id == repo_id)
-            .map(|r| &r.history_state.multi_selection)
-            .is_some_and(|sel| sel.is_multi() && sel.contains(commit_id))
-    }
-
     /// Visible commit ids in log order for shift-click range selection.
     /// Hidden rows (stash helper commits) are excluded, matching what the
     /// user sees.

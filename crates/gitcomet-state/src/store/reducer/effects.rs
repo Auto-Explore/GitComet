@@ -288,6 +288,15 @@ pub(super) fn select_commit_multi(
             }
             commit_id
         }
+        CommitSelectMode::PreserveIfSelected => {
+            // Keep an existing multi-selection intact when the clicked commit
+            // is already part of it — only the focus moves. Otherwise collapse
+            // to the clicked commit like a plain click.
+            if !sel.commits.iter().any(|c| *c == commit_id) {
+                collapse_multi_selection_to(&mut sel, commit_id.clone(), clicked_index, log_rev);
+            }
+            commit_id
+        }
     };
 
     repo_state.set_commit_multi_selection(sel);
@@ -319,7 +328,7 @@ fn commit_selection_entry_index(
         .or_else(|| entries.iter().position(|id| id == target))
 }
 
-fn select_commit_and_load_details(
+pub(super) fn select_commit_and_load_details(
     repo_state: &mut RepoState,
     repo_id: RepoId,
     commit_id: CommitId,
@@ -1222,10 +1231,13 @@ pub(super) fn prepare_squash(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
         return Vec::new();
     };
     let Some(plan) = squash_plan_for_repo(repo_state) else {
+        repo_state.history_state.squash_preview_pending = None;
         repo_state.set_squash_preview(Loadable::NotLoaded);
         return Vec::new();
     };
 
+    repo_state.history_state.squash_preview_pending =
+        Some((plan.oldest.clone(), plan.head.clone()));
     repo_state.set_squash_preview(Loadable::Loading);
     vec![Effect::LoadSquashMessagePreview {
         repo_id,
@@ -1242,17 +1254,25 @@ pub(super) fn squash_message_preview_loaded(
     result: std::result::Result<String, Error>,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        // Drop stale results: the selection may have changed while the
-        // preview was loading.
-        let still_current = squash_plan_for_repo(repo_state)
-            .is_some_and(|plan| plan.oldest == oldest && plan.head == head);
-        if still_current {
+        // Accept the result only if it still matches the range we last asked
+        // for. Keying off the recorded request (not the live plan) means a
+        // transiently-invalid plan — e.g. HEAD momentarily unresolved during a
+        // concurrent reload — does not drop the result and strand the preview
+        // on Loading forever.
+        let matches_request =
+            repo_state.history_state.squash_preview_pending.as_ref() == Some(&(oldest.clone(), head.clone()));
+        if matches_request {
+            repo_state.history_state.squash_preview_pending = None;
             let value = match result {
-                Ok(message) => Loadable::Ready(crate::model::SquashPreview {
-                    oldest,
-                    head,
-                    message,
-                }),
+                Ok(message) => {
+                    let (subject, body) = gitcomet_core::squash::split_subject_body(&message);
+                    Loadable::Ready(crate::model::SquashPreview {
+                        oldest,
+                        head,
+                        subject,
+                        body,
+                    })
+                }
                 Err(e) => {
                     push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                     Loadable::Error(e.to_string())
@@ -2110,6 +2130,123 @@ mod tests {
         let repo = repo_mut(&mut state, repo_id);
         assert!(repo.history_state.selected_commit.is_none());
         assert!(repo.history_state.multi_selection.commits.is_empty());
+    }
+
+    #[test]
+    fn preserve_if_selected_moves_focus_without_collapsing() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let a = CommitId("a".into());
+        let b = CommitId("b".into());
+        let c = CommitId("c".into());
+
+        select_commit(&mut state, repo_id, a.clone());
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            b.clone(),
+            CommitSelectMode::Toggle,
+            Some(1),
+            None,
+        );
+        assert_eq!(
+            repo_mut(&mut state, repo_id).history_state.selected_commit,
+            Some(b.clone())
+        );
+
+        // Right-click a commit already in the selection: the set is preserved,
+        // only the focus moves.
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            a.clone(),
+            CommitSelectMode::PreserveIfSelected,
+            None,
+            None,
+        );
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, vec![a.clone(), b.clone()]);
+        assert_eq!(
+            repo_mut(&mut state, repo_id).history_state.selected_commit,
+            Some(a.clone())
+        );
+
+        // Right-click a commit outside the selection: collapse to it.
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            c.clone(),
+            CommitSelectMode::PreserveIfSelected,
+            None,
+            None,
+        );
+        let sel = multi_selection(&mut state, repo_id);
+        assert_eq!(sel.commits, vec![c.clone()]);
+        assert_eq!(
+            repo_mut(&mut state, repo_id).history_state.selected_commit,
+            Some(c)
+        );
+    }
+
+    #[test]
+    fn squash_preview_accepted_by_pending_request_even_when_plan_invalid() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let oldest = CommitId("old".into());
+        let head = CommitId("head".into());
+        // A request is in flight but the plan is transiently invalid (no Ready
+        // log here). The returning result must still be accepted rather than
+        // stranding the preview on Loading forever.
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.history_state.squash_preview_pending = Some((oldest.clone(), head.clone()));
+            repo.set_squash_preview(Loadable::Loading);
+        }
+        let effects = squash_message_preview_loaded(
+            &mut state,
+            repo_id,
+            oldest.clone(),
+            head.clone(),
+            Ok("Subject line\n\nBody text".to_string()),
+        );
+        assert!(effects.is_empty());
+        let repo = repo_mut(&mut state, repo_id);
+        match &repo.history_state.squash_preview {
+            Loadable::Ready(preview) => {
+                assert_eq!(preview.subject, "Subject line");
+                assert_eq!(preview.body, "Body text");
+                assert_eq!(preview.oldest, oldest);
+                assert_eq!(preview.head, head);
+            }
+            other => panic!("expected Ready preview, got {other:?}"),
+        }
+        assert!(repo.history_state.squash_preview_pending.is_none());
+    }
+
+    #[test]
+    fn squash_preview_dropped_when_request_range_differs() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.history_state.squash_preview_pending =
+                Some((CommitId("new_old".into()), CommitId("new_head".into())));
+            repo.set_squash_preview(Loadable::Loading);
+        }
+        // A stale result for a range we are no longer waiting on is ignored.
+        squash_message_preview_loaded(
+            &mut state,
+            repo_id,
+            CommitId("old".into()),
+            CommitId("head".into()),
+            Ok("stale".to_string()),
+        );
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(matches!(
+            repo.history_state.squash_preview,
+            Loadable::Loading
+        ));
+        assert!(repo.history_state.squash_preview_pending.is_some());
     }
 
     #[test]

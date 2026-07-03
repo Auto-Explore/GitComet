@@ -14,19 +14,10 @@ pub(super) fn panel(
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     // Recompute eligibility from live state each render: the selection or the
-    // log may have changed while the prompt is open.
+    // log may have changed while the prompt is open. Prefill of the inputs is
+    // handled outside the render path (see `sync_squash_prompt_prefill`).
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
-    let plan = repo.and_then(|repo| {
-        let Loadable::Ready(page) = &repo.log else {
-            return None;
-        };
-        let head = repo.head_commit_id()?;
-        gitcomet_core::squash::squash_eligibility(
-            &page.commits,
-            &repo.history_state.multi_selection.commits,
-            &head,
-        )
-    });
+    let plan = this.squash_plan_for_repo_id(repo_id);
     let preview = repo
         .map(|repo| repo.history_state.squash_preview.clone())
         .unwrap_or(Loadable::NotLoaded);
@@ -73,25 +64,6 @@ pub(super) fn panel(
             );
     };
 
-    if let Loadable::Ready(preview) = &preview
-        && !this.squash_prompt_prefilled
-    {
-        this.squash_prompt_prefilled = true;
-        let (subject, body) = preview
-            .message
-            .split_once("\n\n")
-            .map(|(s, b)| (s.to_owned(), b.to_owned()))
-            .unwrap_or_else(|| (preview.message.clone(), String::new()));
-        this.squash_message_input.update(cx, |input, cx| {
-            input.set_text(subject, cx);
-            cx.notify();
-        });
-        this.squash_description_input.update(cx, |input, cx| {
-            input.set_text(body, cx);
-            cx.notify();
-        });
-    }
-
     let message_empty = this
         .squash_message_input
         .read_with(cx, |input, _| input.text().trim().is_empty());
@@ -108,8 +80,6 @@ pub(super) fn panel(
     };
 
     let description_scroll = this.squash_description_scroll.clone();
-    let oldest = plan.oldest.clone();
-    let expected_head = plan.head.clone();
     let count = plan.commit_count;
 
     div()
@@ -223,30 +193,7 @@ pub(super) fn panel(
                         .style(components::ButtonStyle::Filled)
                         .disabled(message_empty)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let subject = this
-                                .squash_message_input
-                                .read_with(cx, |input, _| input.text().trim().to_string());
-                            if subject.is_empty() {
-                                return;
-                            }
-                            let body = this
-                                .squash_description_input
-                                .read_with(cx, |input, _| input.text().to_string());
-                            let message = if body.trim().is_empty() {
-                                subject
-                            } else {
-                                format!("{subject}\n\n{}", body.trim_end())
-                            };
-                            this.store.dispatch(Msg::SquashCommits {
-                                repo_id,
-                                oldest: oldest.clone(),
-                                expected_head: expected_head.clone(),
-                                message,
-                                count,
-                            });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.submit_squash(cx);
                         }),
                 ),
         )

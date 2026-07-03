@@ -657,6 +657,11 @@ pub struct HistoryState {
     pub multi_selection: CommitMultiSelection,
     pub squash_preview: Loadable<SquashPreview>,
     pub squash_preview_rev: u64,
+    /// The `(oldest, head)` range whose message preview is currently being
+    /// loaded. Lets a returning preview result be accepted even if the squash
+    /// plan is transiently invalid (e.g. HEAD momentarily unresolved during a
+    /// concurrent reload), as long as the range still matches what was asked.
+    pub squash_preview_pending: Option<(CommitId, CommitId)>,
 }
 
 impl Default for HistoryState {
@@ -679,6 +684,7 @@ impl Default for HistoryState {
             multi_selection: CommitMultiSelection::default(),
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
+            squash_preview_pending: None,
         }
     }
 }
@@ -711,7 +717,10 @@ impl CommitMultiSelection {
 pub struct SquashPreview {
     pub oldest: CommitId,
     pub head: CommitId,
-    pub message: String,
+    /// Single-line subject, split from the combined message by core.
+    pub subject: String,
+    /// Message body (everything after the subject line), possibly empty.
+    pub body: String,
 }
 
 #[derive(Clone, Debug)]

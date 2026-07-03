@@ -1,5 +1,5 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
-use super::effects::append_ensure_sidebar_data_effects;
+use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
     selected_history_reloads_for_activation,
@@ -402,7 +402,33 @@ pub(super) fn log_loaded(
             }
             next.anchor_index = None;
             next.anchor_log_rev = None;
+
+            // The focused commit (which drives the details pane) may itself
+            // have vanished — an external amend/rebase can replace exactly the
+            // focused commit. Re-point focus at a surviving selected commit so
+            // the details pane never trails a commit that no longer exists.
+            let focus_gone = repo_state
+                .history_state
+                .selected_commit
+                .as_ref()
+                .is_some_and(|id| !page.commits.iter().any(|c| c.id == *id));
+            let refocus = focus_gone.then(|| next.commits.last().cloned()).flatten();
+
             repo_state.set_commit_multi_selection(next);
+
+            if focus_gone {
+                match refocus {
+                    Some(commit_id) => {
+                        effects.extend(select_commit_and_load_details(
+                            repo_state, repo_id, commit_id,
+                        ));
+                    }
+                    None => {
+                        repo_state.set_selected_commit(None);
+                        repo_state.set_commit_details(Loadable::NotLoaded);
+                    }
+                }
+            }
         }
 
         if is_load_more {

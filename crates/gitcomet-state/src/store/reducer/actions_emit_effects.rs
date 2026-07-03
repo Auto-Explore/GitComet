@@ -1003,6 +1003,7 @@ pub(super) fn repo_command_finished(
                 // and the prompt's preview.
                 repo_state.set_selected_commit(None);
                 repo_state.set_commit_details(Loadable::NotLoaded);
+                repo_state.history_state.squash_preview_pending = None;
                 repo_state.set_squash_preview(Loadable::NotLoaded);
             }
             push_command_log(repo_state, true, &command, &output, None);

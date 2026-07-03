@@ -586,6 +586,14 @@ impl PopoverHost {
                     .dispatch(Msg::RevertCommit { repo_id, commit_id });
             }
             ContextMenuAction::SquashSelectedCommits { repo_id } => {
+                // PrepareSquash and the eventual SquashCommits are both
+                // discarded silently when the git runtime is unavailable, which
+                // would leave the prompt stuck on "Building combined message…".
+                // Don't open it in that state.
+                if !self.state.git_runtime.is_available() {
+                    self.close_popover(cx);
+                    return;
+                }
                 // Kick off the combined-message preview, then swap the menu
                 // for the confirmation prompt.
                 self.store.dispatch(Msg::PrepareSquash { repo_id });
