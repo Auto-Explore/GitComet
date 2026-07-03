@@ -1,5 +1,5 @@
 use super::super::super::*;
-use super::helpers::IRebaseDragState;
+use super::helpers::{IRebaseDragState, IRebaseViewState};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use std::{cell::RefCell, rc::Rc};
 
@@ -97,99 +97,113 @@ struct IRebaseDragValue {
     ix: usize,
 }
 
+/// Height of a real entry row measured from the last paint, so drag
+/// hit-testing and the gap ghost track font size and UI scale. Falls back
+/// to DRAG_ROW_HEIGHT before the first paint. The gap ghost and the
+/// collapsed source row are always shorter than a real row, so the max
+/// child height is a real row's height.
+fn measured_drag_row_height(scroll: &gpui::ScrollHandle) -> f32 {
+    let mut max_h = 0f32;
+    let mut i = 0;
+    while let Some(b) = scroll.bounds_for_item(i) {
+        max_h = max_h.max(f32::from(b.size.height));
+        i += 1;
+    }
+    if max_h > 0.0 { max_h } else { DRAG_ROW_HEIGHT }
+}
+
 impl MainPaneView {
+    /// The active repo's interactive rebase editing state, if a setup is open.
+    pub(in crate::view) fn active_irebase(&self) -> Option<&IRebaseViewState> {
+        self.interactive_rebase_states.get(&self.active_repo_id()?)
+    }
+
+    pub(in crate::view) fn active_irebase_mut(&mut self) -> Option<&mut IRebaseViewState> {
+        let repo_id = self.active_repo_id()?;
+        self.interactive_rebase_states.get_mut(&repo_id)
+    }
+
     pub(in crate::view) fn set_rebase_action(
         &mut self,
         ix: usize,
         action: InteractiveRebaseAction,
         cx: &mut gpui::Context<Self>,
     ) {
-        if ix >= self.interactive_rebase_entries.len() {
+        let Some(st) = self.active_irebase_mut() else {
+            return;
+        };
+        if ix >= st.entries.len() {
             return;
         }
 
         // Prevent dropping the last non-dropped commit.
         if action == InteractiveRebaseAction::Drop {
-            let current = self.interactive_rebase_entries[ix].action;
-            if current != InteractiveRebaseAction::Drop
-                && non_drop_count(&self.interactive_rebase_entries) <= 1
-            {
+            let current = st.entries[ix].action;
+            if current != InteractiveRebaseAction::Drop && non_drop_count(&st.entries) <= 1 {
                 return;
             }
         }
 
-        let old_action = self.interactive_rebase_entries[ix].action;
+        let old_action = st.entries[ix].action;
         // Capture the former squash target before we change the action.
         let former_squash_target = if matches!(
             old_action,
             InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
         ) {
-            squash_target(&self.interactive_rebase_entries, ix)
+            squash_target(&st.entries, ix)
         } else {
             None
         };
 
-        self.interactive_rebase_entries[ix].action = action;
+        st.entries[ix].action = action;
 
         if action == InteractiveRebaseAction::Squash {
             // Auto-set the new target to Reword so the combined message can be written.
-            if let Some(j) = squash_target(&self.interactive_rebase_entries, ix) {
-                if self.interactive_rebase_entries[j].action == InteractiveRebaseAction::Pick {
-                    self.interactive_rebase_entries[j].action = InteractiveRebaseAction::Reword;
+            if let Some(j) = squash_target(&st.entries, ix) {
+                if st.entries[j].action == InteractiveRebaseAction::Pick {
+                    st.entries[j].action = InteractiveRebaseAction::Reword;
                 }
             }
         } else if let Some(j) = former_squash_target {
             // Was Squash/Fixup, now it isn't. If the former target is Reword and nothing
             // else is squashing into it, revert it back to Pick.
-            if self.interactive_rebase_entries[j].action == InteractiveRebaseAction::Reword {
-                let still_targeted = (0..self.interactive_rebase_entries.len()).any(|k| {
+            if st.entries[j].action == InteractiveRebaseAction::Reword {
+                let still_targeted = (0..st.entries.len()).any(|k| {
                     matches!(
-                        self.interactive_rebase_entries[k].action,
+                        st.entries[k].action,
                         InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
-                    ) && squash_target(&self.interactive_rebase_entries, k) == Some(j)
+                    ) && squash_target(&st.entries, k) == Some(j)
                 });
-                if !still_targeted && self.interactive_rebase_entries[j].new_message.is_none() {
-                    self.interactive_rebase_entries[j].action = InteractiveRebaseAction::Pick;
+                if !still_targeted && st.entries[j].new_message.is_none() {
+                    st.entries[j].action = InteractiveRebaseAction::Pick;
                 }
             }
         }
 
         if action == InteractiveRebaseAction::Drop {
-            validate_squash_entries(&mut self.interactive_rebase_entries);
+            validate_squash_entries(&mut st.entries);
         }
 
         cx.notify();
-    }
-
-    /// Height of a real entry row measured from the last paint, so drag
-    /// hit-testing and the gap ghost track font size and UI scale. Falls back
-    /// to DRAG_ROW_HEIGHT before the first paint. The gap ghost and the
-    /// collapsed source row are always shorter than a real row, so the max
-    /// child height is a real row's height.
-    fn measured_drag_row_height(&self) -> f32 {
-        let mut max_h = 0f32;
-        let mut i = 0;
-        while let Some(b) = self.interactive_rebase_scroll.bounds_for_item(i) {
-            max_h = max_h.max(f32::from(b.size.height));
-            i += 1;
-        }
-        if max_h > 0.0 { max_h } else { DRAG_ROW_HEIGHT }
     }
 
     /// Commit the pending drag reorder. Shared by every way a drag can end
     /// (drop on the list, drop outside it, mouse released out of the window)
     /// so the paths cannot diverge. Returns true if there was a drag to end.
     fn commit_interactive_rebase_drag(&mut self) -> bool {
-        let Some(state) = self.interactive_rebase_drag_state.take() else {
+        let Some(st) = self.active_irebase_mut() else {
+            return false;
+        };
+        let Some(state) = st.drag_state.take() else {
             return false;
         };
         if state.from_ix != state.to_ix
-            && state.from_ix < self.interactive_rebase_entries.len()
-            && state.to_ix < self.interactive_rebase_entries.len()
+            && state.from_ix < st.entries.len()
+            && state.to_ix < st.entries.len()
         {
-            let entry = self.interactive_rebase_entries.remove(state.from_ix);
-            self.interactive_rebase_entries.insert(state.to_ix, entry);
-            validate_squash_entries(&mut self.interactive_rebase_entries);
+            let entry = st.entries.remove(state.from_ix);
+            st.entries.insert(state.to_ix, entry);
+            validate_squash_entries(&mut st.entries);
         }
         true
     }
@@ -241,16 +255,19 @@ impl MainPaneView {
                 .text_color(theme.colors.text_muted)
                 .child(format!("Error: {e}"))
                 .into_any_element(),
-            Loadable::Ready(_) => {
-                let entry_count = self.interactive_rebase_entries.len();
-                let drag_row_h = self.measured_drag_row_height();
+            // The map entry is populated by `apply_state` on the same state
+            // application that made the entries Ready; guard anyway.
+            Loadable::Ready(_) if self.interactive_rebase_states.contains_key(&repo_id) => {
+                let st = &self.interactive_rebase_states[&repo_id];
+                let entry_count = st.entries.len();
+                let drag_row_h = measured_drag_row_height(&st.scroll);
                 let selected_commit_id = self
                     .active_repo()
                     .and_then(|r| r.history_state.selected_commit.as_ref())
                     .map(|c| c.0.as_ref().to_owned());
 
-                let reorder_anim = self.interactive_rebase_reorder_anim;
-                let drag_state = self.interactive_rebase_drag_state;
+                let reorder_anim = st.reorder_anim;
+                let drag_state = st.drag_state;
                 let is_dragging = drag_state.is_some();
                 let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
                 let drag_display_pos = drag_state.map(|s| s.display_pos).unwrap_or(0);
@@ -268,17 +285,17 @@ impl MainPaneView {
                 // Pre-extract the dragged item's display data so the gap can render it on rails.
                 let ghost_data = from_display_pos.map(|_| {
                     let fix = drag_from_ix;
-                    let g_action = self.interactive_rebase_entries[fix].action;
-                    let g_sha = self.interactive_rebase_entries[fix]
+                    let g_action = st.entries[fix].action;
+                    let g_sha = st.entries[fix]
                         .commit_id
                         .get(..8)
-                        .unwrap_or(&self.interactive_rebase_entries[fix].commit_id)
+                        .unwrap_or(&st.entries[fix].commit_id)
                         .to_string();
-                    let g_summary = self.interactive_rebase_entries[fix]
+                    let g_summary = st.entries[fix]
                         .new_message
                         .as_deref()
                         .and_then(|m| m.lines().next())
-                        .unwrap_or(&self.interactive_rebase_entries[fix].summary)
+                        .unwrap_or(&st.entries[fix].summary)
                         .to_owned();
                     (g_action, g_sha, g_summary)
                 });
@@ -451,21 +468,21 @@ impl MainPaneView {
                     let is_drag_source = false;
                     let is_bottom = display_pos + 1 >= entry_count;
 
-                    let action = self.interactive_rebase_entries[ix].action;
-                    let sha = self.interactive_rebase_entries[ix]
+                    let action = st.entries[ix].action;
+                    let sha = st.entries[ix]
                         .commit_id
                         .get(..8)
-                        .unwrap_or(&self.interactive_rebase_entries[ix].commit_id)
+                        .unwrap_or(&st.entries[ix].commit_id)
                         .to_string();
-                    let summary = self.interactive_rebase_entries[ix]
+                    let summary = st.entries[ix]
                         .new_message
                         .as_deref()
                         .and_then(|m| m.lines().next())
-                        .unwrap_or(&self.interactive_rebase_entries[ix].summary)
+                        .unwrap_or(&st.entries[ix].summary)
                         .to_owned();
                     let is_selected = selected_commit_id
                         .as_deref()
-                        .is_some_and(|s| s == self.interactive_rebase_entries[ix].commit_id);
+                        .is_some_and(|s| s == st.entries[ix].commit_id);
                     let is_squash_like = matches!(
                         action,
                         InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
@@ -487,9 +504,11 @@ impl MainPaneView {
                                 origin: gpui::point(px(0.0), px(0.0)),
                                 size: gpui::size(px(0.0), px(0.0)),
                             });
-                            let nd = non_drop_count(&this.interactive_rebase_entries);
-                            let current_action =
-                                this.interactive_rebase_entries.get(ix).map(|e| e.action);
+                            let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
+                                return;
+                            };
+                            let nd = non_drop_count(&st.entries);
+                            let current_action = st.entries.get(ix).map(|e| e.action);
                             let can_drop =
                                 current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
                             let wh = window.window_handle();
@@ -527,17 +546,18 @@ impl MainPaneView {
                         .disabled(display_pos == 0)
                         .render(theme, ui_scale_percent)
                         .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                            let len = this.interactive_rebase_entries.len();
+                            let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                                return;
+                            };
+                            let len = st.entries.len();
                             let entry_display_pos = len - 1 - ix;
                             if entry_display_pos > 0 {
                                 let swap_ix = len - 1 - (entry_display_pos - 1);
-                                this.interactive_rebase_entries.swap(ix, swap_ix);
-                                validate_squash_entries(&mut this.interactive_rebase_entries);
-                                let ver = this
-                                    .interactive_rebase_reorder_anim
-                                    .map(|(_, _, v)| v + 1)
-                                    .unwrap_or(0);
-                                this.interactive_rebase_reorder_anim = Some((ix, swap_ix, ver));
+                                st.entries.swap(ix, swap_ix);
+                                validate_squash_entries(&mut st.entries);
+                                let ver =
+                                    st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                                st.reorder_anim = Some((ix, swap_ix, ver));
                             }
                             cx.notify();
                         }));
@@ -548,17 +568,18 @@ impl MainPaneView {
                         .disabled(display_pos + 1 >= entry_count)
                         .render(theme, ui_scale_percent)
                         .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                            let len = this.interactive_rebase_entries.len();
+                            let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                                return;
+                            };
+                            let len = st.entries.len();
                             let entry_display_pos = len - 1 - ix;
                             if entry_display_pos + 1 < len {
                                 let swap_ix = len - 1 - (entry_display_pos + 1);
-                                this.interactive_rebase_entries.swap(ix, swap_ix);
-                                validate_squash_entries(&mut this.interactive_rebase_entries);
-                                let ver = this
-                                    .interactive_rebase_reorder_anim
-                                    .map(|(_, _, v)| v + 1)
-                                    .unwrap_or(0);
-                                this.interactive_rebase_reorder_anim = Some((ix, swap_ix, ver));
+                                st.entries.swap(ix, swap_ix);
+                                validate_squash_entries(&mut st.entries);
+                                let ver =
+                                    st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                                st.reorder_anim = Some((ix, swap_ix, ver));
                             }
                             cx.notify();
                         }));
@@ -575,8 +596,7 @@ impl MainPaneView {
                             cx.new(|_cx| gpui::Empty)
                         });
 
-                    let commit_id_val =
-                        CommitId(self.interactive_rebase_entries[ix].commit_id.clone().into());
+                    let commit_id_val = CommitId(st.entries[ix].commit_id.clone().into());
                     let row_div = div()
                         .id(("irebase_row", ix))
                         .flex()
@@ -652,9 +672,11 @@ impl MainPaneView {
                             gpui::MouseButton::Right,
                             cx.listener(move |this, e: &gpui::MouseUpEvent, window, cx| {
                                 cx.stop_propagation();
-                                let nd = non_drop_count(&this.interactive_rebase_entries);
-                                let current_action =
-                                    this.interactive_rebase_entries.get(ix).map(|e| e.action);
+                                let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
+                                    return;
+                                };
+                                let nd = non_drop_count(&st.entries);
+                                let current_action = st.entries.get(ix).map(|e| e.action);
                                 let can_drop =
                                     current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
                                 let wh = window.window_handle();
@@ -714,28 +736,36 @@ impl MainPaneView {
                     rows.push(wrap_gap(ghost_row));
                 }
 
-                div()
+                let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                    st.scroll.clone(),
+                    components::ScrollbarAxis::Vertical,
+                );
+                let scroll_list = div()
                     .id("irebase_entries_scroll")
                     .flex()
                     .flex_col()
                     .flex_1()
                     .overflow_y_scroll()
-                    .track_scroll(&self.interactive_rebase_scroll)
+                    .pr(scrollbar_gutter)
+                    .track_scroll(&st.scroll)
                     .on_drag_move(cx.listener(
-                        |this, e: &gpui::DragMoveEvent<IRebaseDragValue>, _w, cx| {
+                        move |this, e: &gpui::DragMoveEvent<IRebaseDragValue>, _w, cx| {
                             let from_ix = e.drag(cx).ix;
-                            let entry_count = this.interactive_rebase_entries.len();
+                            let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                                return;
+                            };
+                            let entry_count = st.entries.len();
                             if entry_count == 0 {
                                 return;
                             }
-                            let row_h = this.measured_drag_row_height();
+                            let row_h = measured_drag_row_height(&st.scroll);
 
                             // Auto-scroll while the pointer is near the viewport
                             // edges so items beyond the visible list are reachable.
                             let viewport_h = f32::from(e.bounds.size.height);
                             let pointer_vp_y = f32::from(e.event.position.y - e.bounds.origin.y);
-                            let mut offset_y = f32::from(this.interactive_rebase_scroll.offset().y);
-                            let max_down = f32::from(this.interactive_rebase_scroll.max_offset().y);
+                            let mut offset_y = f32::from(st.scroll.offset().y);
+                            let max_down = f32::from(st.scroll.max_offset().y);
                             if max_down > 0.0 {
                                 let edge = row_h.min(viewport_h / 4.0);
                                 let step = row_h / 2.0;
@@ -748,9 +778,9 @@ impl MainPaneView {
                                 };
                                 if scrolled_y != offset_y {
                                     offset_y = scrolled_y;
-                                    let mut o = this.interactive_rebase_scroll.offset();
+                                    let mut o = st.scroll.offset();
                                     o.y = px(offset_y);
-                                    this.interactive_rebase_scroll.set_offset(o);
+                                    st.scroll.set_offset(o);
                                     cx.notify();
                                 }
                             }
@@ -760,7 +790,7 @@ impl MainPaneView {
                             let drag_y = e.event.position.y - e.bounds.origin.y - px(offset_y);
 
                             let source_dp = (entry_count - 1).saturating_sub(from_ix);
-                            let current_state = this.interactive_rebase_drag_state;
+                            let current_state = st.drag_state;
                             let gap_dp = current_state.map_or(source_dp, |s| s.display_pos);
                             let append_gap =
                                 gap_dp == entry_count && source_dp < entry_count.saturating_sub(1);
@@ -821,7 +851,7 @@ impl MainPaneView {
                                     // the source slot still animates out of it.
                                     None => ((display_pos != source_dp).then_some(source_dp), 0),
                                 };
-                                this.interactive_rebase_drag_state = Some(IRebaseDragState {
+                                st.drag_state = Some(IRebaseDragState {
                                     from_ix,
                                     to_ix,
                                     display_pos,
@@ -839,14 +869,42 @@ impl MainPaneView {
                         this.commit_interactive_rebase_drag();
                         cx.notify();
                     }))
-                    .children(rows)
+                    .children(rows);
+
+                div()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(scroll_list)
+                    .child(
+                        components::Scrollbar::new("irebase_scrollbar", st.scroll.clone())
+                            .render(theme),
+                    )
                     .into_any_element()
             }
+            // Ready, but apply_state has not populated the editing state yet.
+            Loadable::Ready(_) => div()
+                .px_2()
+                .py_2()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("Loading commits…")
+                .into_any_element(),
         };
 
-        let autosquash_enabled = self.interactive_rebase_autosquash;
-        let is_modified =
-            self.interactive_rebase_entries != self.interactive_rebase_original_entries;
+        let (autosquash_enabled, is_modified, entries_empty) = self
+            .interactive_rebase_states
+            .get(&repo_id)
+            .map(|st| {
+                (
+                    st.autosquash,
+                    st.entries != st.original_entries,
+                    st.entries.is_empty(),
+                )
+            })
+            .unwrap_or((false, false, true));
 
         div()
             .flex()
@@ -918,15 +976,16 @@ impl MainPaneView {
                                         gpui::MouseButton::Left,
                                         cx.listener(
                                             move |this, _e: &gpui::MouseDownEvent, _w, cx| {
-                                                this.interactive_rebase_autosquash =
-                                                    !this.interactive_rebase_autosquash;
-                                                this.interactive_rebase_entries = this
-                                                    .interactive_rebase_original_entries
-                                                    .clone();
-                                                if this.interactive_rebase_autosquash {
-                                                    apply_autosquash(
-                                                        &mut this.interactive_rebase_entries,
-                                                    );
+                                                let Some(st) = this
+                                                    .interactive_rebase_states
+                                                    .get_mut(&repo_id)
+                                                else {
+                                                    return;
+                                                };
+                                                st.autosquash = !st.autosquash;
+                                                st.entries = st.original_entries.clone();
+                                                if st.autosquash {
+                                                    apply_autosquash(&mut st.entries);
                                                 }
                                                 cx.notify();
                                             },
@@ -946,12 +1005,15 @@ impl MainPaneView {
                                     .render(theme, ui_scale_percent)
                                     .on_click(cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
-                                            this.interactive_rebase_entries =
-                                                this.interactive_rebase_original_entries.clone();
-                                            if this.interactive_rebase_autosquash {
-                                                apply_autosquash(
-                                                    &mut this.interactive_rebase_entries,
-                                                );
+                                            let Some(st) = this
+                                                .interactive_rebase_states
+                                                .get_mut(&repo_id)
+                                            else {
+                                                return;
+                                            };
+                                            st.entries = st.original_entries.clone();
+                                            if st.autosquash {
+                                                apply_autosquash(&mut st.entries);
                                             }
                                             cx.notify();
                                         },
@@ -974,18 +1036,22 @@ impl MainPaneView {
                                 components::Button::new("irebase_start", "Start Rebase")
                                     .style(components::ButtonStyle::Filled)
                                     .disabled(
-                                        self.interactive_rebase_entries.is_empty()
+                                        entries_empty
                                             || !matches!(loading_state, Loadable::Ready(_)),
                                     )
                                     .render(theme, ui_scale_percent)
                                     .on_click(cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
-                                            if this.interactive_rebase_entries.is_empty() {
+                                            let Some(st) = this
+                                                .interactive_rebase_states
+                                                .get_mut(&repo_id)
+                                            else {
+                                                return;
+                                            };
+                                            if st.entries.is_empty() {
                                                 return;
                                             }
-                                            let entries = std::mem::take(
-                                                &mut this.interactive_rebase_entries,
-                                            );
+                                            let entries = std::mem::take(&mut st.entries);
                                             this.store.dispatch(Msg::InteractiveRebase {
                                                 repo_id,
                                                 base: base.clone(),

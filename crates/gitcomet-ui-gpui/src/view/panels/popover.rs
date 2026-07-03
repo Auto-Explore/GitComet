@@ -2937,11 +2937,17 @@ impl PopoverHost {
                             // Empty subject → discard any previous override and revert
                             // the action. Use set_rebase_action so side-effects
                             // (squash-target cleanup, notify) are handled consistently.
-                            if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
+                            if let Some(entry) = pane
+                                .active_irebase_mut()
+                                .and_then(|st| st.entries.get_mut(ix))
+                            {
                                 entry.new_message = None;
                             }
                             pane.set_rebase_action(ix, original_action, cx);
-                        } else if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
+                        } else if let Some(entry) = pane
+                            .active_irebase_mut()
+                            .and_then(|st| st.entries.get_mut(ix))
+                        {
                             entry.action = InteractiveRebaseAction::Reword;
                             entry.new_message = Some(new_message);
                             cx.notify();

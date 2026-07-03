@@ -2589,15 +2589,23 @@ pub(crate) struct MainPaneView {
 
     pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
 
-    pub(in crate::view) interactive_rebase_entries:
-        Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) interactive_rebase_original_entries:
-        Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) interactive_rebase_autosquash: bool,
-    pub(in crate::view) interactive_rebase_drag_state: Option<IRebaseDragState>,
-    pub(in crate::view) interactive_rebase_scroll: gpui::ScrollHandle,
+    /// Per-repo interactive rebase editing state, keyed by repo id so that
+    /// setups open in several repo tabs at once stay independent. Entries are
+    /// populated when a repo's setup becomes Ready and dropped when its setup
+    /// goes away (see `apply_state`).
+    pub(in crate::view) interactive_rebase_states: HashMap<RepoId, IRebaseViewState>,
+}
+
+/// View-local editing state for one repo's interactive rebase setup.
+#[derive(Default)]
+pub(in crate::view) struct IRebaseViewState {
+    pub(in crate::view) entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) autosquash: bool,
+    pub(in crate::view) drag_state: Option<IRebaseDragState>,
+    pub(in crate::view) scroll: gpui::ScrollHandle,
     /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.
-    pub(in crate::view) interactive_rebase_reorder_anim: Option<(usize, usize, u32)>,
+    pub(in crate::view) reorder_anim: Option<(usize, usize, u32)>,
 }
 
 #[derive(Clone, Copy, Debug)]

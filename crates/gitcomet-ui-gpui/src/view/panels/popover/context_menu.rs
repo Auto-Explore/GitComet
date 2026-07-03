@@ -390,7 +390,9 @@ impl PopoverHost {
                 can_drop,
             } => {
                 let current_action = self.main_pane.read_with(cx, |pane, _| {
-                    pane.interactive_rebase_entries.get(*ix).map(|e| e.action)
+                    pane.active_irebase()
+                        .and_then(|st| st.entries.get(*ix))
+                        .map(|e| e.action)
                 });
                 Some(interactive_rebase_action_menu_model(
                     *ix,
@@ -895,7 +897,10 @@ impl PopoverHost {
             }
             ContextMenuAction::ResetInteractiveRebaseEntry { ix } => {
                 let _ = self.main_pane.update(cx, |pane, cx| {
-                    if let Some(entry) = pane.interactive_rebase_entries.get_mut(ix) {
+                    if let Some(entry) = pane
+                        .active_irebase_mut()
+                        .and_then(|st| st.entries.get_mut(ix))
+                    {
                         entry.new_message = None;
                     }
                     pane.set_rebase_action(ix, InteractiveRebaseAction::Pick, cx);
@@ -906,10 +911,12 @@ impl PopoverHost {
                 let was_reword = action == InteractiveRebaseAction::Reword;
                 let reword_state = if was_reword {
                     self.main_pane.read_with(cx, |pane, _| {
-                        pane.interactive_rebase_entries.get(ix).map(|e| {
-                            let msg = e.new_message.as_ref().unwrap_or(&e.summary).clone();
-                            (e.action, msg)
-                        })
+                        pane.active_irebase()
+                            .and_then(|st| st.entries.get(ix))
+                            .map(|e| {
+                                let msg = e.new_message.as_ref().unwrap_or(&e.summary).clone();
+                                (e.action, msg)
+                            })
                     })
                 } else {
                     None
