@@ -2609,7 +2609,12 @@ pub(in crate::view) struct IRebaseViewState {
     pub(in crate::view) folded:
         std::collections::HashMap<String, Vec<gitcomet_core::services::InteractiveRebaseEntry>>,
     pub(in crate::view) drag_state: Option<IRebaseDragState>,
-    pub(in crate::view) scroll: gpui::ScrollHandle,
+    /// Variable-height virtualized list state, lazily created on first render
+    /// (`ListState` has no `Default`). Kept in sync with `entries`/`folded` via
+    /// `list_sig` (remeasure on same-count content change, reset on count change).
+    pub(in crate::view) scroll: Option<gpui::ListState>,
+    /// (content-hash, item-count) the `scroll` ListState was last synced to.
+    pub(in crate::view) list_sig: (u64, usize),
     /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.
     pub(in crate::view) reorder_anim: Option<(usize, usize, u32)>,
 }
@@ -2620,11 +2625,6 @@ pub(in crate::view) struct IRebaseDragState {
     pub(in crate::view) to_ix: usize,
     /// Drop-target position in display order (0..=entry_count).
     pub(in crate::view) display_pos: usize,
-    /// Previous drop-target position; the insertion line glides from here to
-    /// `display_pos`. `None` on the first move (no glide).
-    pub(in crate::view) prev_display_pos: Option<usize>,
-    /// Bumped on every drop-target change so the glide animation replays.
-    pub(in crate::view) anim_ver: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

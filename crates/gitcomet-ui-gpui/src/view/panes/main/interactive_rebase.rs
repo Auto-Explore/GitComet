@@ -4,9 +4,6 @@ use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use std::{cell::RefCell, rc::Rc};
 
 const ACTION_BTN_W: f32 = 76.0;
-// Fallback row height for drag hit-testing and the gap ghost, used only until
-// the first paint provides measured row bounds (see measured_drag_row_height).
-const DRAG_ROW_HEIGHT: f32 = 28.0;
 
 fn squash_target(entries: &[InteractiveRebaseEntry], k: usize) -> Option<usize> {
     (0..k)
@@ -198,19 +195,110 @@ struct IRebaseDragValue {
     ix: usize,
 }
 
-/// Height of a real entry row measured from the last paint, so drag
-/// hit-testing and the gap ghost track font size and UI scale. Falls back
-/// to DRAG_ROW_HEIGHT before the first paint. The gap ghost and the
-/// collapsed source row are always shorter than a real row, so the max
-/// child height is a real row's height.
-fn measured_drag_row_height(scroll: &gpui::ScrollHandle) -> f32 {
-    let mut max_h = 0f32;
-    let mut i = 0;
-    while let Some(b) = scroll.bounds_for_item(i) {
-        max_h = max_h.max(f32::from(b.size.height));
-        i += 1;
+/// Content signature of the rebase list: changes whenever a row's height
+/// could change (reorder, action change, or the folded-into map). Drives the
+/// `ListState` remeasure/reset in `interactive_rebase_view`.
+fn irebase_list_sig(st: &IRebaseViewState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    for e in &st.entries {
+        e.commit_id.hash(&mut h);
+        (e.action as u8).hash(&mut h);
     }
-    if max_h > 0.0 { max_h } else { DRAG_ROW_HEIGHT }
+    // Folded groups add a header line (taller row); key on survivor + count.
+    let mut folded: Vec<(&String, usize)> =
+        st.folded.iter().map(|(k, v)| (k, v.len())).collect();
+    folded.sort();
+    folded.hash(&mut h);
+    h.finish()
+}
+
+/// Floating preview shown under the cursor while dragging a rebase entry, so
+/// the in-list row can stay put (dimmed) with nothing painted over neighbours.
+struct IRebaseDragPreview {
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    action: InteractiveRebaseAction,
+    sha: String,
+    summary: String,
+    row_h: f32,
+}
+
+impl Render for IRebaseDragPreview {
+    fn render(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let theme = self.theme;
+        let action_btn_w = px(ACTION_BTN_W * self.ui_scale_percent as f32 / 100.0);
+        let is_squash_like = matches!(
+            self.action,
+            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+        );
+        let outlined_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.38 } else { 0.28 },
+        );
+        div()
+            .h(px(self.row_h))
+            .w(px(440.0 * self.ui_scale_percent as f32 / 100.0))
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_0p5()
+            .rounded(px(theme.radii.row))
+            .bg(theme.colors.surface_bg_elevated)
+            .border_1()
+            .border_color(with_alpha(theme.colors.accent, 0.6))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .child("⠿"),
+            )
+            .when(is_squash_like, |d| {
+                d.child(div().flex_shrink_0().flex().items_center().child(
+                    crate::view::icons::svg_icon(
+                        "icons/squash_arrow.svg",
+                        with_alpha(theme.colors.accent, 0.7),
+                        px(14.0),
+                    ),
+                ))
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .w(action_btn_w)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(theme.radii.row))
+                    .border_1()
+                    .border_color(outlined_border)
+                    .text_sm()
+                    .text_color(theme.colors.text)
+                    .child(format!("{} ▾", action_short_label(self.action))),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .font_family("monospace")
+                    .child(self.sha.clone()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_sm()
+                    .text_color(theme.colors.text)
+                    .overflow_x_hidden()
+                    .whitespace_nowrap()
+                    .child(self.summary.clone()),
+            )
+    }
 }
 
 impl MainPaneView {
@@ -334,8 +422,431 @@ impl MainPaneView {
             let entry = st.entries.remove(state.from_ix);
             st.entries.insert(state.to_ix, entry);
             validate_squash_entries(&mut st.entries);
+            // Fade the landed row in at its new position.
+            let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+            st.reorder_anim = Some((state.to_ix, state.to_ix, ver));
         }
         true
+    }
+
+    /// Update the drop target from a drag-move over the virtualized list.
+    /// Uses per-item bounds (rows are variable height) and auto-scrolls near
+    /// the viewport edges.
+    fn irebase_drag_move(
+        &mut self,
+        e: &gpui::DragMoveEvent<IRebaseDragValue>,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let from_ix = e.drag(cx).ix;
+        let Some(st) = self.interactive_rebase_states.get_mut(&repo_id) else {
+            return;
+        };
+        let entry_count = st.entries.len();
+        if entry_count == 0 {
+            return;
+        }
+        let Some(list) = st.scroll.clone() else {
+            return;
+        };
+
+        // Auto-scroll while the pointer is near the viewport edges.
+        let vp_h = e.bounds.size.height;
+        let pointer_vp = e.event.position.y - e.bounds.origin.y;
+        let edge = px(28.0);
+        if pointer_vp < edge {
+            list.scroll_by(-(edge - pointer_vp));
+            cx.notify();
+        } else if pointer_vp > vp_h - edge {
+            list.scroll_by(pointer_vp - (vp_h - edge));
+            cx.notify();
+        }
+
+        // Insertion position in display order (0..=entry_count): the first
+        // laid-out row whose vertical midpoint is below the pointer; past the
+        // last row means "append at the bottom".
+        let pointer_y = e.event.position.y;
+        let mut display_pos = entry_count;
+        for dp in 0..entry_count {
+            if let Some(b) = list.bounds_for_item(dp) {
+                if pointer_y < b.origin.y + b.size.height / 2.0 {
+                    display_pos = dp;
+                    break;
+                }
+            }
+        }
+
+        let source_dp = (entry_count - 1).saturating_sub(from_ix);
+        let to_ix = if display_pos <= source_dp {
+            entry_count - 1 - display_pos
+        } else {
+            entry_count - display_pos
+        };
+        let already = st
+            .drag_state
+            .is_some_and(|s| s.from_ix == from_ix && s.display_pos == display_pos);
+        if !already {
+            st.drag_state = Some(IRebaseDragState {
+                from_ix,
+                to_ix,
+                display_pos,
+            });
+            cx.notify();
+        }
+    }
+
+    /// Render one rebase row for the virtualized list. `display_pos` is the
+    /// list index (newest-first); the data index is `entry_count-1-display_pos`.
+    fn render_irebase_row(
+        &mut self,
+        display_pos: usize,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::AnyElement {
+        let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let selected_commit_id = self
+            .active_repo()
+            .and_then(|r| r.history_state.selected_commit.as_ref())
+            .map(|c| c.0.as_ref().to_owned());
+        let Some(st) = self.interactive_rebase_states.get(&repo_id) else {
+            return div().into_any_element();
+        };
+        let entry_count = st.entries.len();
+        if display_pos >= entry_count {
+            return div().into_any_element();
+        }
+        let ix = entry_count - 1 - display_pos;
+        let reorder_anim = st.reorder_anim;
+        let drag_state = st.drag_state;
+        let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
+        let insertion_pos = drag_state.map(|s| s.display_pos);
+        let is_drag_source = ix == drag_from_ix;
+        let is_bottom = display_pos + 1 >= entry_count;
+        // Insertion indicator: a line above this row when it is the drop
+        // target, or below it when dropping past the last row. Absolutely
+        // positioned so it never changes row height (no remeasure churn).
+        let show_top_line = insertion_pos == Some(display_pos);
+        let show_bottom_line = is_bottom && insertion_pos == Some(entry_count);
+
+        let action = st.entries[ix].action;
+        let sha = st.entries[ix]
+            .commit_id
+            .get(..8)
+            .unwrap_or(&st.entries[ix].commit_id)
+            .to_string();
+        let summary = st.entries[ix]
+            .new_message
+            .as_deref()
+            .and_then(|m| m.lines().next())
+            .unwrap_or(&st.entries[ix].summary)
+            .to_owned();
+        let is_selected = selected_commit_id
+            .as_deref()
+            .is_some_and(|s| s == st.entries[ix].commit_id);
+        let is_squash_like = matches!(
+            action,
+            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+        );
+        let is_dropped = action == InteractiveRebaseAction::Drop;
+        let autosquash_active = st.autosquash_mode.is_some();
+        let is_autosquash_eligible = !autosquash_active && {
+            let s = st.entries[ix].summary.as_str();
+            !s.trim().is_empty() && st.entries.iter().filter(|e| e.summary == s).count() > 1
+        };
+        let folded_shas: Vec<String> = st
+            .folded
+            .get(&st.entries[ix].commit_id)
+            .map(|folds| {
+                folds
+                    .iter()
+                    .map(|f| f.commit_id.get(..8).unwrap_or(&f.commit_id).to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let btn_bounds: Rc<RefCell<Option<gpui::Bounds<gpui::Pixels>>>> =
+            Rc::new(RefCell::new(None));
+        let btn_bounds_prepaint = Rc::clone(&btn_bounds);
+        let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
+        let action_label = format!("{} ▾", action_short_label(action));
+
+        let inner_btn = components::Button::new(format!("action_{ix}"), action_label)
+            .style(components::ButtonStyle::Outlined)
+            .render(theme, ui_scale_percent)
+            .w(action_btn_w)
+            .flex_shrink_0()
+            .on_click(cx.listener(move |this, _e, window, cx| {
+                let bounds = (*btn_bounds.borrow()).unwrap_or(gpui::Bounds {
+                    origin: gpui::point(px(0.0), px(0.0)),
+                    size: gpui::size(px(0.0), px(0.0)),
+                });
+                let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
+                    return;
+                };
+                let nd = non_drop_count(&st.entries);
+                let current_action = st.entries.get(ix).map(|e| e.action);
+                let can_drop = current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
+                let wh = window.window_handle();
+                let root = this.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = wh.update(cx, |_, window, cx| {
+                        let _ = root.update(cx, |root, cx| {
+                            root.open_popover_for_bounds(
+                                PopoverKind::InteractiveRebaseActionMenu {
+                                    ix,
+                                    is_bottom,
+                                    can_drop,
+                                },
+                                bounds,
+                                window,
+                                cx,
+                            );
+                        });
+                    });
+                });
+            }));
+
+        let action_btn = div()
+            .on_children_prepainted(move |children_bounds, _w, _cx| {
+                if let Some(b) = children_bounds.first() {
+                    *btn_bounds_prepaint.borrow_mut() = Some(*b);
+                }
+            })
+            .child(inner_btn)
+            .id(format!("action_w_{ix}"));
+
+        let up_btn = components::Button::new(format!("up_{ix}"), "▲")
+            .style(components::ButtonStyle::Subtle)
+            .no_focus()
+            .disabled(display_pos == 0)
+            .render(theme, ui_scale_percent)
+            .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
+                let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                    return;
+                };
+                let len = st.entries.len();
+                let entry_display_pos = len - 1 - ix;
+                if entry_display_pos > 0 {
+                    let swap_ix = len - 1 - (entry_display_pos - 1);
+                    st.entries.swap(ix, swap_ix);
+                    validate_squash_entries(&mut st.entries);
+                    let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                    st.reorder_anim = Some((ix, swap_ix, ver));
+                }
+                cx.notify();
+            }));
+
+        let down_btn = components::Button::new(format!("down_{ix}"), "▼")
+            .style(components::ButtonStyle::Subtle)
+            .no_focus()
+            .disabled(display_pos + 1 >= entry_count)
+            .render(theme, ui_scale_percent)
+            .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
+                let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
+                    return;
+                };
+                let len = st.entries.len();
+                let entry_display_pos = len - 1 - ix;
+                if entry_display_pos + 1 < len {
+                    let swap_ix = len - 1 - (entry_display_pos + 1);
+                    st.entries.swap(ix, swap_ix);
+                    validate_squash_entries(&mut st.entries);
+                    let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                    st.reorder_anim = Some((ix, swap_ix, ver));
+                }
+                cx.notify();
+            }));
+
+        let drag_val = IRebaseDragValue { ix };
+        let pf_action = action;
+        let pf_sha = sha.clone();
+        let pf_summary = summary.clone();
+        let preview_row_h = 28.0 * ui_scale_percent as f32 / 100.0;
+        let gripper = div()
+            .id(("gripper", ix))
+            .cursor(gpui::CursorStyle::PointingHand)
+            .text_xs()
+            .text_color(theme.colors.text_muted)
+            .child("⠿")
+            .on_drag(drag_val, move |_drag, _offset, _window, cx| {
+                cx.new(|_cx| IRebaseDragPreview {
+                    theme,
+                    ui_scale_percent,
+                    action: pf_action,
+                    sha: pf_sha.clone(),
+                    summary: pf_summary.clone(),
+                    row_h: preview_row_h,
+                })
+            });
+
+        let commit_id_val = CommitId(st.entries[ix].commit_id.clone().into());
+        let accent = theme.colors.accent;
+        let row_div = div()
+            .id(("irebase_row", ix))
+            .relative()
+            .w_full()
+            .flex()
+            .flex_col()
+            .px_2()
+            .py_0p5()
+            .rounded(px(theme.radii.row))
+            .when(!is_drag_source && is_selected, |d| d.bg(theme.colors.active))
+            .when(!is_drag_source && !is_selected, |d| {
+                d.hover(move |s| s.bg(theme.colors.hover))
+            })
+            .when(is_dropped, |d| d.opacity(0.5))
+            .when(show_top_line, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.0))
+                        .bg(accent),
+                )
+            })
+            .when(show_bottom_line, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(2.0))
+                        .bg(accent),
+                )
+            })
+            // The folded-commit list sits above the survivor row.
+            .when(!folded_shas.is_empty(), |d| {
+                d.child(
+                    div()
+                        .pl(px(20.0))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(crate::view::icons::svg_icon(
+                            "icons/squash_arrow.svg",
+                            with_alpha(theme.colors.accent, 0.7),
+                            px(12.0),
+                        ))
+                        .child(format!("squashed {}", folded_shas.join(", "))),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(gripper)
+                    .when(is_squash_like, |d| {
+                        d.child(div().flex_shrink_0().flex().items_center().child(
+                            crate::view::icons::svg_icon(
+                                "icons/squash_arrow.svg",
+                                with_alpha(theme.colors.accent, 0.7),
+                                px(14.0),
+                            ),
+                        ))
+                    })
+                    .child(action_btn)
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .font_family("monospace")
+                            .child(sha.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_sm()
+                            .text_color(theme.colors.text)
+                            .when(is_autosquash_eligible, |d| d.text_color(theme.colors.accent))
+                            .overflow_x_hidden()
+                            .whitespace_nowrap()
+                            .when(is_dropped, |d| d.line_through())
+                            .child(summary),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_shrink_0()
+                            .gap_0p5()
+                            .child(up_btn)
+                            .child(down_btn),
+                    ),
+            )
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _e: &gpui::MouseDownEvent, _w, cx| {
+                    this.store.dispatch(Msg::SelectCommit {
+                        repo_id,
+                        commit_id: commit_id_val.clone(),
+                    });
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                gpui::MouseButton::Right,
+                cx.listener(move |this, e: &gpui::MouseUpEvent, window, cx| {
+                    cx.stop_propagation();
+                    let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
+                        return;
+                    };
+                    let nd = non_drop_count(&st.entries);
+                    let current_action = st.entries.get(ix).map(|e| e.action);
+                    let can_drop = current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
+                    let wh = window.window_handle();
+                    let root = this.root_view.clone();
+                    let pos = e.position;
+                    cx.defer(move |cx| {
+                        let _ = wh.update(cx, |_, window, cx| {
+                            let _ = root.update(cx, |root, cx| {
+                                root.open_popover_at(
+                                    PopoverKind::InteractiveRebaseActionMenu {
+                                        ix,
+                                        is_bottom,
+                                        can_drop,
+                                    },
+                                    pos,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                    });
+                }),
+            );
+
+        if is_drag_source {
+            row_div
+                .with_animation(
+                    ("irebase_source_dim", ix),
+                    Animation::new(Duration::from_millis(120))
+                        .with_easing(gpui::ease_out_quint()),
+                    |d, delta| d.opacity(1.0 - 0.6 * delta),
+                )
+                .into_any_element()
+        } else if let Some((aix, bix, ver)) = reorder_anim {
+            if ix == aix || ix == bix {
+                row_div
+                    .with_animation(
+                        format!("reorder_{ix}_{ver}"),
+                        Animation::new(Duration::from_millis(200))
+                            .with_easing(gpui::ease_out_quint()),
+                        |d, delta| d.opacity(delta),
+                    )
+                    .into_any_element()
+            } else {
+                row_div.into_any_element()
+            }
+        } else {
+            row_div.into_any_element()
+        }
     }
 
     pub(in crate::view) fn interactive_rebase_view(
@@ -345,6 +856,36 @@ impl MainPaneView {
     ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
+
+        // Sync the variable-height virtualized list state before borrowing the
+        // repo below (this needs `&mut self`; the match on `repo` holds `self`
+        // immutably for its whole body).
+        if let Some(repo_id) = self.active_repo_id() {
+            if self.interactive_rebase_states.contains_key(&repo_id) {
+                let sig = irebase_list_sig(&self.interactive_rebase_states[&repo_id]);
+                let count = self.interactive_rebase_states[&repo_id].entries.len();
+                let st = self
+                    .interactive_rebase_states
+                    .get_mut(&repo_id)
+                    .expect("checked contains_key");
+                if st.scroll.is_none() {
+                    st.scroll = Some(gpui::ListState::new(
+                        count,
+                        gpui::ListAlignment::Top,
+                        px(400.0),
+                    ));
+                    st.list_sig = (sig, count);
+                } else if st.list_sig != (sig, count) {
+                    let ls = st.scroll.as_ref().expect("checked is_some");
+                    if st.list_sig.1 == count {
+                        ls.remeasure();
+                    } else {
+                        ls.reset(count);
+                    }
+                    st.list_sig = (sig, count);
+                }
+            }
+        }
 
         let Some(repo) = self.active_repo() else {
             return div().child("No active repo");
@@ -419,667 +960,37 @@ impl MainPaneView {
                     .into_any_element()
             }
             Loadable::Ready(_) if self.interactive_rebase_states.contains_key(&repo_id) => {
-                let st = &self.interactive_rebase_states[&repo_id];
-                let entry_count = st.entries.len();
-                let drag_row_h = measured_drag_row_height(&st.scroll);
-                let selected_commit_id = self
-                    .active_repo()
-                    .and_then(|r| r.history_state.selected_commit.as_ref())
-                    .map(|c| c.0.as_ref().to_owned());
+                // ListState was created/synced at the top of this fn.
+                let scroll = self.interactive_rebase_states[&repo_id]
+                    .scroll
+                    .clone()
+                    .expect("synced above");
 
-                // While auto-squash is off, flag rows whose summary is shared by
-                // another commit — the candidates a mode would fold together.
-                let autosquash_active = st.autosquash_mode.is_some();
-                let eligible_summaries: std::collections::HashSet<&str> = if autosquash_active {
-                    std::collections::HashSet::new()
-                } else {
-                    let mut counts: std::collections::HashMap<&str, u32> =
-                        std::collections::HashMap::new();
-                    for e in &st.entries {
-                        if !e.summary.trim().is_empty() {
-                            *counts.entry(e.summary.as_str()).or_default() += 1;
-                        }
-                    }
-                    counts
-                        .into_iter()
-                        .filter(|(_, c)| *c > 1)
-                        .map(|(s, _)| s)
-                        .collect()
-                };
-
-                let reorder_anim = st.reorder_anim;
-                let drag_state = st.drag_state;
-                let is_dragging = drag_state.is_some();
-                let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
-                let drag_display_pos = drag_state.map(|s| s.display_pos).unwrap_or(0);
-
-                // Display order is always newest-first (reversed). During drag we keep items in
-                // their original slots — a collapsing source placeholder and an animated gap at
-                // the target slot provide the reorder feedback instead.
-                let display_order: Vec<usize> = (0..entry_count).rev().collect();
-
-                // Display positions for the source placeholder and the animated gap target.
-                let from_display_pos = (is_dragging && drag_from_ix < entry_count)
-                    .then(|| (entry_count - 1).saturating_sub(drag_from_ix));
-                let gap_display_pos = is_dragging.then_some(drag_display_pos);
-
-                // Pre-extract the dragged item's display data so the gap can render it on rails.
-                let ghost_data = from_display_pos.map(|_| {
-                    let fix = drag_from_ix;
-                    let g_action = st.entries[fix].action;
-                    let g_sha = st.entries[fix]
-                        .commit_id
-                        .get(..8)
-                        .unwrap_or(&st.entries[fix].commit_id)
-                        .to_string();
-                    let g_summary = st.entries[fix]
-                        .new_message
-                        .as_deref()
-                        .and_then(|m| m.lines().next())
-                        .unwrap_or(&st.entries[fix].summary)
-                        .to_owned();
-                    (g_action, g_sha, g_summary)
-                });
-
-                // Builds the ghost row that appears in the animated gap — styled to match
-                // the real rows: gripper → (squash arrow) → static action button → sha → summary.
-                let build_ghost_row =
-                    |g_action: InteractiveRebaseAction, g_sha: &str, g_summary: &str| {
-                        let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
-                        let is_squash_like = matches!(
-                            g_action,
-                            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
-                        );
-                        let outlined_border = with_alpha(
-                            theme.colors.text_muted,
-                            if theme.is_dark { 0.38 } else { 0.28 },
-                        );
-                        div()
-                            .h(px(drag_row_h))
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .px_2()
-                            .py_0p5()
-                            .rounded(px(theme.radii.row))
-                            .bg(with_alpha(theme.colors.accent, 0.12))
-                            .border_1()
-                            .border_color(with_alpha(theme.colors.accent, 0.4))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("⠿"),
-                            )
-                            .when(is_squash_like, |d| {
-                                d.child(div().flex_shrink_0().flex().items_center().child(
-                                    crate::view::icons::svg_icon(
-                                        "icons/squash_arrow.svg",
-                                        with_alpha(theme.colors.accent, 0.7),
-                                        px(14.0),
-                                    ),
-                                ))
-                            })
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .w(action_btn_w)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(theme.radii.row))
-                                    .border_1()
-                                    .border_color(outlined_border)
-                                    .text_sm()
-                                    .text_color(theme.colors.text)
-                                    .child(format!("{} ▾", action_short_label(g_action))),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .font_family("monospace")
-                                    .child(g_sha.to_owned()),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_sm()
-                                    .text_color(theme.colors.text)
-                                    .overflow_x_hidden()
-                                    .whitespace_nowrap()
-                                    .child(g_summary.to_owned()),
-                            )
-                            .into_any_element()
-                    };
-
-                // When dragging a higher item all the way to the bottom the drag
-                // slot falls past the last display position. In that case render
-                // the gap after all rows.
-                let append_gap_after = gap_display_pos == Some(entry_count);
-
-                // Gap moves animate as a matched pair: a spacer shrinking where the
-                // gap left and the gap slot growing where it landed. Identical duration
-                // and easing keep the two heights summing to exactly one row, so
-                // rows below both slots stay put and rows in between slide smoothly.
-                // At drag start there is no previous slot: the ghost renders at full
-                // height, replacing the collapsed source row in place with no shift.
-                let gap_prev_display_pos = drag_state.and_then(|s| s.prev_display_pos);
-                let gap_anim_ver = drag_state.map(|s| s.anim_ver).unwrap_or(0);
-                let animate_gap_move = gap_prev_display_pos.is_some();
-                // Only the slot height animates; the ghost row itself stays at full
-                // height, pinned to the destination slot. Anchoring it to the growing
-                // slot's bottom when the gap moved down (top when it moved up) keeps
-                // its absolute position constant throughout the animation, so the
-                // dragged row is never clipped away mid-move (which read as a flicker).
-                // `deferred` paints it above the neighbor row sliding out from under it.
-                let gap_moved_down =
-                    gap_prev_display_pos.is_some_and(|prev| prev < drag_display_pos);
-                let wrap_gap = move |ghost_row: gpui::AnyElement| -> gpui::AnyElement {
-                    if animate_gap_move {
-                        div()
-                            .w_full()
-                            .relative()
-                            .child(gpui::deferred(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .right_0()
-                                    .h(px(drag_row_h))
-                                    .when(gap_moved_down, |d| d.bottom_0())
-                                    .when(!gap_moved_down, |d| d.top_0())
-                                    .child(ghost_row),
-                            ))
-                            .with_animation(
-                                format!("irebase_gap_in_{gap_anim_ver}"),
-                                Animation::new(Duration::from_millis(120))
-                                    .with_easing(gpui::ease_out_quint()),
-                                move |d, delta| d.h(px(drag_row_h * delta)),
-                            )
-                            .into_any_element()
-                    } else {
-                        ghost_row
-                    }
-                };
-                let build_gap_out_spacer = move || -> gpui::AnyElement {
-                    div()
-                        .w_full()
-                        .with_animation(
-                            format!("irebase_gap_out_{gap_anim_ver}"),
-                            Animation::new(Duration::from_millis(120))
-                                .with_easing(gpui::ease_out_quint()),
-                            move |d, delta| d.h(px(drag_row_h * (1.0 - delta))),
-                        )
-                        .into_any_element()
-                };
-
-                let mut rows: Vec<gpui::AnyElement> = Vec::with_capacity(entry_count + 2);
-
-                for (display_pos, &ix) in display_order.iter().enumerate() {
-                    // The shrinking half of the gap-move animation.
-                    if gap_prev_display_pos == Some(display_pos) {
-                        rows.push(build_gap_out_spacer());
-                    }
-
-                    // Insert an animated slot at the target position. It renders the dragged
-                    // item's content so the ghost appears "on rails" within the list.
-                    if gap_display_pos == Some(display_pos) && !append_gap_after {
-                        let ghost_row =
-                            if let Some((g_action, ref g_sha, ref g_summary)) = ghost_data {
-                                build_ghost_row(g_action, g_sha, g_summary)
-                            } else {
-                                div().into_any_element()
-                            };
-                        rows.push(wrap_gap(ghost_row));
-                    }
-
-                    // Collapse the source item — the ghost view follows the cursor instead.
-                    if from_display_pos == Some(display_pos) {
-                        rows.push(
-                            div()
-                                .id(("irebase_row", ix))
-                                .h(px(0.0))
-                                .overflow_hidden()
-                                .into_any_element(),
-                        );
-                        continue;
-                    }
-
-                    let is_drag_source = false;
-                    let is_bottom = display_pos + 1 >= entry_count;
-
-                    let action = st.entries[ix].action;
-                    let sha = st.entries[ix]
-                        .commit_id
-                        .get(..8)
-                        .unwrap_or(&st.entries[ix].commit_id)
-                        .to_string();
-                    let summary = st.entries[ix]
-                        .new_message
-                        .as_deref()
-                        .and_then(|m| m.lines().next())
-                        .unwrap_or(&st.entries[ix].summary)
-                        .to_owned();
-                    let is_selected = selected_commit_id
-                        .as_deref()
-                        .is_some_and(|s| s == st.entries[ix].commit_id);
-                    let is_squash_like = matches!(
-                        action,
-                        InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
-                    );
-                    // Dropped entries are dimmed and struck through so it is
-                    // clear they will be discarded when the rebase runs.
-                    let is_dropped = action == InteractiveRebaseAction::Drop;
-                    // A candidate for auto-squash (only surfaced while it is off).
-                    let is_autosquash_eligible =
-                        eligible_summaries.contains(st.entries[ix].summary.as_str());
-                    // Commits already folded into this survivor by auto-squash;
-                    // their short shas are listed beneath the row.
-                    let folded_shas: Vec<String> = st
-                        .folded
-                        .get(&st.entries[ix].commit_id)
-                        .map(|folds| {
-                            folds
-                                .iter()
-                                .map(|f| f.commit_id.get(..8).unwrap_or(&f.commit_id).to_string())
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
-                    let btn_bounds: Rc<RefCell<Option<gpui::Bounds<gpui::Pixels>>>> =
-                        Rc::new(RefCell::new(None));
-                    let btn_bounds_prepaint = Rc::clone(&btn_bounds);
-                    let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
-                    let action_label = format!("{} ▾", action_short_label(action));
-
-                    let inner_btn = components::Button::new(format!("action_{ix}"), action_label)
-                        .style(components::ButtonStyle::Outlined)
-                        .render(theme, ui_scale_percent)
-                        .w(action_btn_w)
-                        .flex_shrink_0()
-                        .on_click(cx.listener(move |this, _e, window, cx| {
-                            let bounds = (*btn_bounds.borrow()).unwrap_or(gpui::Bounds {
-                                origin: gpui::point(px(0.0), px(0.0)),
-                                size: gpui::size(px(0.0), px(0.0)),
-                            });
-                            let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
-                                return;
-                            };
-                            let nd = non_drop_count(&st.entries);
-                            let current_action = st.entries.get(ix).map(|e| e.action);
-                            let can_drop =
-                                current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
-                            let wh = window.window_handle();
-                            let root = this.root_view.clone();
-                            cx.defer(move |cx| {
-                                let _ = wh.update(cx, |_, window, cx| {
-                                    let _ = root.update(cx, |root, cx| {
-                                        root.open_popover_for_bounds(
-                                            PopoverKind::InteractiveRebaseActionMenu {
-                                                ix,
-                                                is_bottom,
-                                                can_drop,
-                                            },
-                                            bounds,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                });
-                            });
-                        }));
-
-                    let action_btn = div()
-                        .on_children_prepainted(move |children_bounds, _w, _cx| {
-                            if let Some(b) = children_bounds.first() {
-                                *btn_bounds_prepaint.borrow_mut() = Some(*b);
-                            }
-                        })
-                        .child(inner_btn)
-                        .id(format!("action_w_{ix}"));
-
-                    let up_btn = components::Button::new(format!("up_{ix}"), "▲")
-                        .style(components::ButtonStyle::Subtle)
-                        .no_focus()
-                        .disabled(display_pos == 0)
-                        .render(theme, ui_scale_percent)
-                        .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                            let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
-                                return;
-                            };
-                            let len = st.entries.len();
-                            let entry_display_pos = len - 1 - ix;
-                            if entry_display_pos > 0 {
-                                let swap_ix = len - 1 - (entry_display_pos - 1);
-                                st.entries.swap(ix, swap_ix);
-                                validate_squash_entries(&mut st.entries);
-                                let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
-                                st.reorder_anim = Some((ix, swap_ix, ver));
-                            }
-                            cx.notify();
-                        }));
-
-                    let down_btn = components::Button::new(format!("down_{ix}"), "▼")
-                        .style(components::ButtonStyle::Subtle)
-                        .no_focus()
-                        .disabled(display_pos + 1 >= entry_count)
-                        .render(theme, ui_scale_percent)
-                        .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                            let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
-                                return;
-                            };
-                            let len = st.entries.len();
-                            let entry_display_pos = len - 1 - ix;
-                            if entry_display_pos + 1 < len {
-                                let swap_ix = len - 1 - (entry_display_pos + 1);
-                                st.entries.swap(ix, swap_ix);
-                                validate_squash_entries(&mut st.entries);
-                                let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
-                                st.reorder_anim = Some((ix, swap_ix, ver));
-                            }
-                            cx.notify();
-                        }));
-
-                    let drag_val = IRebaseDragValue { ix };
-
-                    let gripper = div()
-                        .id(("gripper", ix))
-                        .cursor(gpui::CursorStyle::PointingHand)
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("⠿")
-                        .on_drag(drag_val, move |_drag, _offset, _window, cx| {
-                            cx.new(|_cx| gpui::Empty)
-                        });
-
-                    let commit_id_val = CommitId(st.entries[ix].commit_id.clone().into());
-                    let row_div = div()
-                        .id(("irebase_row", ix))
-                        .flex()
-                        .flex_col()
-                        .px_2()
-                        .py_0p5()
-                        .rounded(px(theme.radii.row))
-                        .when(is_drag_source, |d| {
-                            d.bg(with_alpha(theme.colors.accent, 0.15))
-                                .border_1()
-                                .border_color(with_alpha(theme.colors.accent, 0.5))
-                                .opacity(0.85)
-                        })
-                        .when(!is_drag_source && is_selected, |d| {
-                            d.bg(theme.colors.active)
-                        })
-                        .when(!is_drag_source && !is_selected, |d| {
-                            d.hover(move |s| s.bg(theme.colors.hover))
-                        })
-                        .when(is_dropped, |d| d.opacity(0.5))
-                        // The folded-commit list sits above the survivor row.
-                        .when(!folded_shas.is_empty(), |d| {
-                            d.child(
-                                div()
-                                    .pl(px(20.0))
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(crate::view::icons::svg_icon(
-                                        "icons/squash_arrow.svg",
-                                        with_alpha(theme.colors.accent, 0.7),
-                                        px(12.0),
-                                    ))
-                                    .child(format!("squashed {}", folded_shas.join(", "))),
-                            )
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(gripper)
-                                .when(is_squash_like, |d| {
-                                    d.child(div().flex_shrink_0().flex().items_center().child(
-                                        crate::view::icons::svg_icon(
-                                            "icons/squash_arrow.svg",
-                                            with_alpha(theme.colors.accent, 0.7),
-                                            px(14.0),
-                                        ),
-                                    ))
-                                })
-                                .child(action_btn)
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .text_color(theme.colors.text_muted)
-                                        .font_family("monospace")
-                                        .child(sha.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .text_sm()
-                                        .text_color(theme.colors.text)
-                                        .when(is_autosquash_eligible, |d| {
-                                            d.text_color(theme.colors.accent)
-                                        })
-                                        .overflow_x_hidden()
-                                        .whitespace_nowrap()
-                                        .when(is_dropped, |d| d.line_through())
-                                        .child(summary),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_shrink_0()
-                                        .gap_0p5()
-                                        .child(up_btn)
-                                        .child(down_btn),
-                                ),
-                        )
-                        .on_mouse_down(
-                            gpui::MouseButton::Left,
-                            cx.listener(move |this, _e: &gpui::MouseDownEvent, _w, cx| {
-                                this.store.dispatch(Msg::SelectCommit {
-                                    repo_id,
-                                    commit_id: commit_id_val.clone(),
-                                });
-                                cx.notify();
-                            }),
-                        )
-                        .on_mouse_up(
-                            gpui::MouseButton::Right,
-                            cx.listener(move |this, e: &gpui::MouseUpEvent, window, cx| {
-                                cx.stop_propagation();
-                                let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
-                                    return;
-                                };
-                                let nd = non_drop_count(&st.entries);
-                                let current_action = st.entries.get(ix).map(|e| e.action);
-                                let can_drop =
-                                    current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
-                                let wh = window.window_handle();
-                                let root = this.root_view.clone();
-                                let pos = e.position;
-                                cx.defer(move |cx| {
-                                    let _ = wh.update(cx, |_, window, cx| {
-                                        let _ = root.update(cx, |root, cx| {
-                                            root.open_popover_at(
-                                                PopoverKind::InteractiveRebaseActionMenu {
-                                                    ix,
-                                                    is_bottom,
-                                                    can_drop,
-                                                },
-                                                pos,
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    });
-                                });
-                            }),
-                        );
-
-                    let row_element = if let Some((aix, bix, ver)) = reorder_anim {
-                        if ix == aix || ix == bix {
-                            row_div
-                                .with_animation(
-                                    format!("reorder_{ix}_{ver}"),
-                                    Animation::new(Duration::from_millis(200))
-                                        .with_easing(gpui::ease_out_quint()),
-                                    |d, delta| d.opacity(delta),
-                                )
-                                .into_any_element()
-                        } else {
-                            row_div.into_any_element()
-                        }
-                    } else {
-                        row_div.into_any_element()
-                    };
-                    rows.push(row_element);
-                }
-
-                // The gap previously sat after the last row and has since moved up.
-                if gap_prev_display_pos == Some(entry_count) {
-                    rows.push(build_gap_out_spacer());
-                }
-
-                // When dragging a higher item (lower data index) all the way to the bottom,
-                // the gap belongs AFTER the last rendered item, not before it.
-                if append_gap_after {
-                    let ghost_row = if let Some((g_action, ref g_sha, ref g_summary)) = ghost_data {
-                        build_ghost_row(g_action, g_sha, g_summary)
-                    } else {
-                        div().into_any_element()
-                    };
-                    rows.push(wrap_gap(ghost_row));
-                }
+                let list_el = gpui::list(
+                    scroll.clone(),
+                    cx.processor(move |this, ix: usize, _window, cx| {
+                        this.render_irebase_row(ix, repo_id, cx)
+                    }),
+                )
+                .size_full();
 
                 let scrollbar_gutter = components::Scrollbar::visible_gutter(
-                    st.scroll.clone(),
+                    scroll.clone(),
                     components::ScrollbarAxis::Vertical,
                 );
-                let scroll_list = div()
-                    .id("irebase_entries_scroll")
+
+                // `list` (unlike `uniform_list`) is not interactive, so the drag
+                // handlers live on the wrapping div.
+                let list_wrap = div()
+                    .id("irebase_list_wrap")
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .overflow_y_scroll()
+                    .min_h(px(0.0))
                     .pr(scrollbar_gutter)
-                    .track_scroll(&st.scroll)
                     .on_drag_move(cx.listener(
                         move |this, e: &gpui::DragMoveEvent<IRebaseDragValue>, _w, cx| {
-                            let from_ix = e.drag(cx).ix;
-                            let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
-                                return;
-                            };
-                            let entry_count = st.entries.len();
-                            if entry_count == 0 {
-                                return;
-                            }
-                            let row_h = measured_drag_row_height(&st.scroll);
-
-                            // Auto-scroll while the pointer is near the viewport
-                            // edges so items beyond the visible list are reachable.
-                            let viewport_h = f32::from(e.bounds.size.height);
-                            let pointer_vp_y = f32::from(e.event.position.y - e.bounds.origin.y);
-                            let mut offset_y = f32::from(st.scroll.offset().y);
-                            let max_down = f32::from(st.scroll.max_offset().y);
-                            if max_down > 0.0 {
-                                let edge = row_h.min(viewport_h / 4.0);
-                                let step = row_h / 2.0;
-                                let scrolled_y = if pointer_vp_y < edge {
-                                    (offset_y + step).min(0.0)
-                                } else if pointer_vp_y > viewport_h - edge {
-                                    (offset_y - step).max(-max_down)
-                                } else {
-                                    offset_y
-                                };
-                                if scrolled_y != offset_y {
-                                    offset_y = scrolled_y;
-                                    let mut o = st.scroll.offset();
-                                    o.y = px(offset_y);
-                                    st.scroll.set_offset(o);
-                                    cx.notify();
-                                }
-                            }
-
-                            // Pointer Y in content space; the scroll offset is <= 0
-                            // when scrolled down.
-                            let drag_y = e.event.position.y - e.bounds.origin.y - px(offset_y);
-
-                            let source_dp = (entry_count - 1).saturating_sub(from_ix);
-                            let current_state = st.drag_state;
-                            let gap_dp = current_state.map_or(source_dp, |s| s.display_pos);
-                            let append_gap =
-                                gap_dp == entry_count && source_dp < entry_count.saturating_sub(1);
-
-                            // Simulate the rendering layout to get visual Y start
-                            // of each non-source display slot. Gap inserted before
-                            // its slot (if not past the end) or after all (if at end).
-                            let mut slot_ys = vec![0f32; entry_count];
-                            let mut y = 0f32;
-                            let mut y_at_source = 0f32;
-                            for (dp, slot_y) in slot_ys.iter_mut().enumerate() {
-                                if dp == gap_dp && !append_gap {
-                                    y += row_h;
-                                }
-                                if dp == source_dp {
-                                    y_at_source = y;
-                                    continue;
-                                }
-                                *slot_y = y;
-                                y += row_h;
-                            }
-
-                            // Count row midpoints the pointer has crossed to find
-                            // the gap's display position; entry_count means the gap
-                            // goes after the last row.
-                            let display_pos = (0..entry_count)
-                                .filter(|&i| {
-                                    let mid = if i == source_dp {
-                                        y_at_source
-                                    } else if i == entry_count.saturating_sub(1) {
-                                        slot_ys[i] + row_h
-                                    } else {
-                                        slot_ys[i] + row_h / 2.0
-                                    };
-                                    drag_y > px(mid)
-                                })
-                                .count();
-
-                            // Map the gap's display position to the data index the
-                            // dragged entry will land on. When the gap sits below
-                            // the source, removing the source shifts the rows in
-                            // between up by one, hence the second branch.
-                            let to_ix = if display_pos <= source_dp {
-                                entry_count - 1 - display_pos
-                            } else {
-                                entry_count - display_pos
-                            };
-                            let already_matches = current_state.is_some_and(|s| {
-                                s.from_ix == from_ix && s.display_pos == display_pos
-                            });
-                            if !already_matches {
-                                let (prev_display_pos, anim_ver) = match current_state {
-                                    Some(s) if s.display_pos != display_pos => {
-                                        (Some(s.display_pos), s.anim_ver.wrapping_add(1))
-                                    }
-                                    Some(s) => (s.prev_display_pos, s.anim_ver),
-                                    // A drag whose first event already lands away from
-                                    // the source slot still animates out of it.
-                                    None => ((display_pos != source_dp).then_some(source_dp), 0),
-                                };
-                                st.drag_state = Some(IRebaseDragState {
-                                    from_ix,
-                                    to_ix,
-                                    display_pos,
-                                    prev_display_pos,
-                                    anim_ver,
-                                });
-                                cx.notify();
-                            }
+                            this.irebase_drag_move(e, repo_id, cx);
                         },
                     ))
                     .can_drop(move |dragged, _window, _cx| {
@@ -1089,7 +1000,7 @@ impl MainPaneView {
                         this.commit_interactive_rebase_drag();
                         cx.notify();
                     }))
-                    .children(rows);
+                    .child(list_el);
 
                 div()
                     .relative()
@@ -1097,9 +1008,10 @@ impl MainPaneView {
                     .flex_col()
                     .flex_1()
                     .min_h(px(0.0))
-                    .child(scroll_list)
+                    .overflow_hidden()
+                    .child(list_wrap)
                     .child(
-                        components::Scrollbar::new("irebase_scrollbar", st.scroll.clone())
+                        components::Scrollbar::new("irebase_scrollbar", scroll.clone())
                             .render(theme),
                     )
                     .into_any_element()
