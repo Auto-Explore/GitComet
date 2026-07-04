@@ -155,7 +155,7 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
         .self_stretch()
         .my(scaled_px(2.0))
         .border_t_1()
-        .border_color(theme.colors.border)
+        .border_color(theme.colors.border_variant)
 }
 
 pub fn context_menu_entry(
@@ -177,9 +177,17 @@ pub fn context_menu_entry(
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = if disabled {
         theme.colors.text_muted
+    } else if icon_color == theme.colors.danger {
+        // Destructive entries carry the danger tint on the label too, not
+        // just the icon.
+        theme.colors.danger
     } else {
         theme.colors.text
     };
+    // Text-alpha overlays stay visible on the elevated popover surface, where
+    // the `hover` token (tuned for the darker canvas) has no contrast.
+    let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
+    let active_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
 
     let mut row = div()
         .id(id)
@@ -194,11 +202,11 @@ pub fn context_menu_entry(
         .gap(scaled_px(8.0))
         .rounded(px(theme.radii.row))
         .text_color(text_color)
-        .when(selected, |s| s.bg(theme.colors.hover))
+        .when(selected, |s| s.bg(hover_overlay))
         .when(!disabled, |s| {
             s.cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(theme.colors.hover))
-                .active(move |s| s.bg(theme.colors.active))
+                .hover(move |s| s.bg(hover_overlay))
+                .active(move |s| s.bg(active_overlay))
         })
         .child(
             div()
@@ -407,6 +415,11 @@ fn context_menu_text_content<V: 'static>(
         .text_color(text_color)
         .child(text.text)
         .into_any_element()
+}
+
+fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
+    color.a = alpha;
+    color
 }
 
 #[cfg(test)]

@@ -57,7 +57,7 @@ impl BottomStatusBarView {
 }
 
 impl Render for BottomStatusBarView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
@@ -110,9 +110,14 @@ impl Render for BottomStatusBarView {
             .items_center()
             .justify_end()
             .px_2()
-            .bg(theme.colors.surface_bg)
-            .border_t_1()
-            .border_color(theme.colors.border)
+            .bg(theme.colors.sidebar_bg)
+            .when_some(
+                crate::view::chrome::client_frame_corner_rounding(theme, window),
+                |d, rounding| {
+                    d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
+                        .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
+                },
+            )
             .child(zoom_button)
     }
 }

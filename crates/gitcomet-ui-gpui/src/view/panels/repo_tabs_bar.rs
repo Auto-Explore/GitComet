@@ -16,6 +16,7 @@ pub(in super::super) struct RepoTabsBarView {
     repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
     repo_tab_spinner_delay_seq: u64,
     notify_fingerprint: u64,
+    title_drag_state: crate::view::chrome::TitleBarDragState,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +165,7 @@ impl RepoTabsBarView {
             repo_tab_spinner_delay: None,
             repo_tab_spinner_delay_seq: 0,
             notify_fingerprint,
+            title_drag_state: crate::view::chrome::TitleBarDragState::default(),
         };
         this.update_repo_tab_spinner_delay(cx);
         this
@@ -276,8 +278,6 @@ impl Render for RepoTabsBarView {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let active = self.active_repo_id();
-        let repos_len = self.state.repos.len();
-        let active_ix = active.and_then(|id| self.state.repos.iter().position(|r| r.id == id));
         let spinner =
             |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(12.0));
 
@@ -300,19 +300,6 @@ impl Render for RepoTabsBarView {
             let show_close = self.hovered_repo_tab == Some(repo_id);
             let label = path_display::repo_path_name(&repo.spec.workdir);
             let label_for_drag = label.clone();
-
-            let position = if ix == 0 {
-                components::TabPosition::First
-            } else if ix + 1 == repos_len {
-                components::TabPosition::Last
-            } else {
-                let ordering = match (is_active, active_ix) {
-                    (true, _) => std::cmp::Ordering::Equal,
-                    (false, Some(active_ix)) => ix.cmp(&active_ix),
-                    (false, None) => std::cmp::Ordering::Equal,
-                };
-                components::TabPosition::Middle(ordering)
-            };
 
             let tooltip = Self::repo_tab_tooltip(repo);
             let close_tooltip: SharedString = "Close repository".into();
@@ -340,8 +327,7 @@ impl Render for RepoTabsBarView {
                 .gitcomet_tooltip(theme, close_tooltip.clone());
 
             let mut tab = components::Tab::new(("repo_tab", repo_id.0))
-                .selected(is_active || context_menu_active)
-                .position(position);
+                .selected(is_active || context_menu_active);
             if show_close {
                 tab = tab.end_slot(close_button);
             }
@@ -501,70 +487,107 @@ impl Render for RepoTabsBarView {
             bar = bar.tab(tab);
         }
 
-        let repo_bar_action_button =
-            |id: &'static str, icon_path: &'static str, tooltip: SharedString| {
-                div()
-                    .id(id)
-                    .h_full()
-                    .w(scaled_px(28.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor(CursorStyle::PointingHand)
-                    .child(
-                        div()
-                            .size(scaled_px(26.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(theme.radii.pill))
-                            .hover(move |s| s.bg(theme.colors.hover))
-                            .child(svg_icon(icon_path, theme.colors.accent, scaled_px(14.0))),
-                    )
-                    .gitcomet_tooltip(theme, tooltip)
-            };
-
+        // A single interactive element: putting the hover style on an inner
+        // non-interactive div makes the highlight lag behind the pointer.
+        // Browser-style "+" after the last tab: one entry point for opening
+        // or cloning a repository.
         let root_view = self.root_view.clone();
-        let open_repo =
-            repo_bar_action_button("open_repo", "icons/folder.svg", "Open repository".into())
-                .on_click(cx.listener(move |_this, _e: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    let _ = root_view.update(cx, |root, cx| root.prompt_open_repo(window, cx));
-                }));
+        let add_repo = div()
+            .flex_none()
+            .h_full()
+            .flex()
+            .items_end()
+            .px(scaled_px(2.0))
+            .pb(scaled_px(3.0))
+            .child(
+                components::Button::new("add_repo_menu", "")
+                    .start_slot(svg_icon(
+                        "icons/plus.svg",
+                        theme.colors.text_muted,
+                        scaled_px(14.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .borderless()
+                    .on_click_with_bounds(theme, cx, move |_this, _e, bounds, window, cx| {
+                        cx.stop_propagation();
+                        let _ = root_view.update(cx, |root, cx| {
+                            root.open_popover_for_bounds(
+                                PopoverKind::AddRepoMenu,
+                                bounds,
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+                    .debug_selector(|| "add_repo_menu".to_string())
+                    .gitcomet_tooltip(theme, "Add repository".into()),
+            );
 
-        let root_view = self.root_view.clone();
-        let clone_repo =
-            repo_bar_action_button("clone_repo", "icons/cloud.svg", "Clone repository".into())
-                .on_click(cx.listener(move |_this, e: &ClickEvent, window, cx| {
-                    cx.stop_propagation();
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.open_popover_at(PopoverKind::CloneRepo, e.position(), window, cx);
-                    });
-                }));
+        // Browser-style: the empty strip after the tabs moves the window,
+        // toggles zoom on double click, and offers the window system menu.
+        let tab_strip_drag = div()
+            .id("repo_tab_strip_drag")
+            .debug_selector(|| "repo_tab_strip_drag".to_string())
+            .size_full()
+            .window_control_area(WindowControlArea::Drag)
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                if !crate::view::chrome::should_handle_titlebar_double_click(
+                    e.click_count(),
+                    e.standard_click(),
+                ) {
+                    return;
+                }
+                this.title_drag_state.clear();
+                cx.stop_propagation();
+                crate::view::chrome::handle_titlebar_double_click(window);
+                cx.notify();
+            }))
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                    crate::view::chrome::show_titlebar_secondary_menu(e.position, window, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                    this.title_drag_state.on_left_mouse_down(e.click_count);
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.title_drag_state.clear();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e, _w, cx| {
+                    this.title_drag_state.clear();
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, _e, window, _cx| {
+                if this.title_drag_state.take_move_request() {
+                    crate::app::begin_window_move(window);
+                }
+            }));
 
-        bar.end_child(
-            div()
-                .id("add_repo_container")
-                .relative()
-                .h_full()
-                .flex()
-                .items_center()
-                .px_1()
-                .gap_1()
-                .child(open_repo)
-                .child(clone_repo),
-        )
-        .render(theme, ui_scale_percent)
-        .can_drop(|dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
-        .on_drop(cx.listener(|this, drag: &RepoTabDrag, _w, cx| {
-            // Drop on the bar (but not on a specific tab) -> move to end.
-            this.store.dispatch(Msg::ReorderRepoTabs {
-                repo_id: drag.repo_id,
-                insert_before: None,
-            });
-            this.hovered_repo_tab = None;
-            cx.notify();
-        }))
+        bar = bar.tab(add_repo);
+        bar.filler(tab_strip_drag)
+            .render(theme, ui_scale_percent)
+            .can_drop(|dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
+            .on_drop(cx.listener(|this, drag: &RepoTabDrag, _w, cx| {
+                // Drop on the bar (but not on a specific tab) -> move to end.
+                this.store.dispatch(Msg::ReorderRepoTabs {
+                    repo_id: drag.repo_id,
+                    insert_before: None,
+                });
+                this.hovered_repo_tab = None;
+                cx.notify();
+            }))
     }
 }
 

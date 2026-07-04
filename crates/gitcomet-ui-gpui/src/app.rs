@@ -18,8 +18,8 @@ use gitcomet_state::store::AppStore;
 
 use gpui::{
     Action, App, AppContext, BorrowAppContext, Bounds, KeyBinding, Pixels, Point, Size,
-    TitlebarOptions, Unbind, Window, WindowBounds, WindowDecorations, WindowOptions, actions,
-    point, px, size,
+    TitlebarOptions, Unbind, Window, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    WindowOptions, actions, point, px, size,
 };
 #[cfg(target_os = "macos")]
 use gpui::{Menu, MenuItem, OsAction, SystemMenuType};
@@ -428,6 +428,13 @@ fn open_gitcomet_window(
             }),
             app_id: Some(app_id),
             window_decorations: Some(WindowDecorations::Client),
+            // Client-side decorations inset a rounded frame into the surface;
+            // the pixels outside it must show the desktop, not a solid fill.
+            window_background: if cfg!(target_os = "macos") {
+                WindowBackgroundAppearance::Opaque
+            } else {
+                WindowBackgroundAppearance::Transparent
+            },
             is_movable: true,
             is_resizable: true,
             ..Default::default()

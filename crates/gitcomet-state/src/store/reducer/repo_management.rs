@@ -11,7 +11,7 @@ use super::util::{
 use crate::model::{
     AppNotificationKind, AppState, CloneOpState, CloneOpStatus, CloneProgressMeter,
     CloneProgressStage, DiagnosticKind, GitLogSettings, Loadable, RepoId, RepoLoadsInFlight,
-    RepoState,
+    RepoState, SidebarMode,
 };
 use crate::msg::Effect;
 use crate::session;
@@ -631,6 +631,25 @@ pub(super) fn set_active_repo(state: &mut AppState, repo_id: RepoId) -> Vec<Effe
     effects.into_vec()
 }
 
+/// With the sidebar in Files mode, activating a repo (or its open completing)
+/// must kick the file-browser listing exactly like switching into Files mode
+/// does — otherwise the tree sits on "Loading files..." until the user
+/// toggles the sidebar tabs.
+fn file_browser_load_for_active_files_mode(
+    sidebar_mode: SidebarMode,
+    repo_state: &RepoState,
+) -> Option<Effect> {
+    (sidebar_mode == SidebarMode::Files
+        && matches!(
+            repo_state.file_browser.entries,
+            Loadable::NotLoaded | Loadable::Error(_)
+        ))
+    .then(|| Effect::LoadFileBrowser {
+        repo_id: repo_state.id,
+        source: repo_state.file_browser.source.clone(),
+    })
+}
+
 pub(super) fn fill_set_active_repo_inline(
     state: &mut AppState,
     repo_id: RepoId,
@@ -667,6 +686,7 @@ fn fill_set_active_repo_inline_impl(
     let persist_effect = (changed && persist_on_change)
         .then(|| persist_session_effect(state, Some(repo_id), "switching active repository"));
     let git_log_settings = state.git_log_settings;
+    let sidebar_mode = state.sidebar_mode;
 
     let repo_state = &mut state.repos[repo_ix];
 
@@ -713,12 +733,14 @@ fn fill_set_active_repo_inline_impl(
     // On focus events the UI can re-send SetActiveRepo for the already-active repo. Avoid
     // re-running the full refresh fan-out in that case: prioritize the minimum set that
     // keeps the UI correct and responsive.
+    let file_browser_load = file_browser_load_for_active_files_mode(sidebar_mode, repo_state);
     let extra_effect_capacity = background_metadata_effect_capacity()
         + usize::from(selected_diff_reload.is_some())
         + selected_history_reloads.len()
         + usize::from(persist_effect.is_some())
         + usize::from(changed)
         + usize::from(changed && !use_full_refresh)
+        + usize::from(file_browser_load.is_some())
         + usize::from(repo_state.sidebar_data_request.worktrees)
         + usize::from(repo_state.sidebar_data_request.submodules)
         + usize::from(repo_state.sidebar_data_request.stashes);
@@ -747,6 +769,9 @@ fn fill_set_active_repo_inline_impl(
         append_repo_switch_worktree_refresh_effect(repo_state, effects);
     }
     append_ensure_sidebar_data_effects(repo_state, effects);
+    if let Some(effect) = file_browser_load {
+        effects.push(effect);
+    }
     if changed {
         append_auto_background_metadata_effects(repo_state, git_log_settings, effects);
     }
@@ -1082,6 +1107,7 @@ pub(super) fn repo_opened_ok(
     if !should_refresh_worktrees {
         return Vec::new();
     }
+    let sidebar_mode = state.sidebar_mode;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let mut effects = refresh_full_effects(repo_state, git_log_settings);
         if should_refresh_worktrees
@@ -1094,6 +1120,10 @@ pub(super) fn repo_opened_ok(
         }
         if should_refresh_worktrees {
             append_ensure_sidebar_data_effects(repo_state, &mut effects);
+            if let Some(effect) = file_browser_load_for_active_files_mode(sidebar_mode, repo_state)
+            {
+                effects.push(effect);
+            }
             append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
         }
         return effects;

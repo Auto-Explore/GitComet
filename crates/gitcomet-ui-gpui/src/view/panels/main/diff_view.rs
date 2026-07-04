@@ -965,11 +965,11 @@ impl MainPaneView {
             .gap(px(2.0))
             .px(px(4.0))
             .py(px(2.0))
-            .rounded(px(theme.radii.row))
+            .rounded(px(theme.radii.control))
             .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.surface_bg_elevated)
-            .shadow_sm()
+            .shadow(crate::theme::shadow_surface(theme))
             .child(
                 div()
                     .relative()
@@ -2323,7 +2323,19 @@ impl MainPaneView {
                     .child(div().min_w(px(0.0)).overflow_hidden().child(title))
                     .when_some(viewer_nav, |d, cluster| d.child(cluster)),
             )
-            .child(controls);
+            .child(
+                // Right-anchor the controls and clip from the leading edge so a
+                // narrow pane hides lower-priority buttons instead of pushing
+                // the action menu / close button past the pane clip, where they
+                // still paint but can no longer be clicked.
+                div()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .overflow_hidden()
+                    .child(controls),
+            );
 
         let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)

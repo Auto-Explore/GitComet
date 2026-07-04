@@ -2261,7 +2261,7 @@ impl GitCometView {
                         div()
                             .px(px(8.0))
                             .py(px(4.0))
-                            .text_color(gpui::rgb(0x888888))
+                            .text_color(theme.colors.text_muted)
                             .child(format!("Terminal — {status}")),
                     )
                     .child(panel)
@@ -2400,7 +2400,7 @@ impl GitCometView {
             .py(px(4.0))
             .bg(theme.colors.surface_bg)
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.border_variant)
             .child(tabs_row)
             .when(focused, |row| {
                 // Badge that explains why the usual app shortcuts (Ctrl+P, etc.)
@@ -2531,7 +2531,7 @@ impl GitCometView {
             .h(px(TERMINAL_PANEL_RESIZE_HANDLE_PX))
             .w_full()
             .cursor(CursorStyle::ResizeUpDown)
-            .bg(theme.colors.border)
+            .bg(theme.colors.border_variant)
             .on_drag(TerminalPanelResizeDrag, |_payload, _offset, _window, cx| {
                 cx.new(|_cx| super::mod_helpers::ResizeDragGhost)
             })

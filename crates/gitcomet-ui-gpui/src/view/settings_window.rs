@@ -6,7 +6,10 @@ use gitcomet_core::process::{
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
-use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
+use gpui::{
+    Stateful, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    WindowOptions,
+};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -386,6 +389,13 @@ fn settings_window_options_for_scale(
         titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
+        // Match the main window: the area outside the rounded client frame
+        // must be see-through.
+        window_background: if cfg!(target_os = "macos") {
+            WindowBackgroundAppearance::Opaque
+        } else {
+            WindowBackgroundAppearance::Transparent
+        },
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -1776,14 +1786,12 @@ impl SettingsWindowView {
             .child(
                 div()
                     .w(px(16.0))
-                    .text_sm()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(if selected {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .child(if selected { ">" } else { " " }),
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(selected, |d| {
+                        d.child(svg_icon("icons/check.svg", theme.colors.accent, px(12.0)))
+                    }),
             )
             .child(
                 div()
@@ -1860,14 +1868,12 @@ impl SettingsWindowView {
             .child(
                 div()
                     .w(px(16.0))
-                    .text_sm()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(if selected {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .child(if selected { ">" } else { " " }),
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(selected, |d| {
+                        d.child(svg_icon("icons/check.svg", theme.colors.accent, px(12.0)))
+                    }),
             )
             .child(
                 div()
@@ -2039,12 +2045,15 @@ impl SettingsWindowView {
                             .overflow_hidden()
                             .child(value),
                     )
-                    .child(
-                        div()
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .flex_shrink_0()
-                            .child(if expanded { "^" } else { "v" }),
-                    ),
+                    .child(div().flex_shrink_0().child(svg_icon(
+                        if expanded {
+                            "icons/chevron_down.svg"
+                        } else {
+                            "icons/arrow_right.svg"
+                        },
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))),
             )
     }
 
@@ -2094,20 +2103,7 @@ impl SettingsWindowView {
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .text_sm()
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_color(if enabled {
-                                theme.colors.success
-                            } else {
-                                theme.colors.text_muted
-                            })
-                            .child(if enabled { "On" } else { "Off" }),
-                    ),
+                    .child(components::switch(theme, self.ui_scale_percent, enabled)),
             )
     }
 
@@ -2751,7 +2747,7 @@ impl SettingsWindowView {
             .rounded(px(theme.radii.panel))
             .border_1()
             .border_color(theme.colors.border)
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface_bg)
             .p_2()
             .gap_1()
             .child(
@@ -2878,8 +2874,13 @@ impl Render for SettingsWindowView {
         let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let min = chrome::titlebar_control_button(
             theme,
+            self.ui_scale_percent,
             "settings_window_min_btn",
-            chrome::titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
+            chrome::titlebar_control_icon(
+                "icons/generic_minimize.svg",
+                theme.colors.text_muted,
+                self.ui_scale_percent,
+            ),
             min_hover,
             min_active,
         )
@@ -2900,8 +2901,9 @@ impl Render for SettingsWindowView {
         let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let max = chrome::titlebar_control_button(
             theme,
+            self.ui_scale_percent,
             "settings_window_max_btn",
-            chrome::titlebar_control_icon(max_icon, theme.colors.accent),
+            chrome::titlebar_control_icon(max_icon, theme.colors.text_muted, self.ui_scale_percent),
             max_hover,
             max_active,
         )
@@ -2918,8 +2920,13 @@ impl Render for SettingsWindowView {
         let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
         let close = chrome::titlebar_control_button(
             theme,
+            self.ui_scale_percent,
             "settings_window_close_btn",
-            chrome::titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
+            chrome::titlebar_control_icon(
+                "icons/generic_close.svg",
+                theme.colors.text_muted,
+                self.ui_scale_percent,
+            ),
             close_hover,
             close_active,
         )
@@ -2931,6 +2938,7 @@ impl Render for SettingsWindowView {
             window.remove_window();
         }));
 
+        let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
             .id("settings_window_header")
             .h(chrome::title_bar_height(self.ui_scale_percent))
@@ -2940,6 +2948,13 @@ impl Render for SettingsWindowView {
             .border_b_1()
             .border_color(header_border)
             .bg(header_bg)
+            .when_some(
+                chrome::client_frame_corner_rounding(theme, window),
+                |d, rounding| {
+                    d.when(rounding.top_left, |d| d.rounded_tl(rounding.radius))
+                        .when(rounding.top_right, |d| d.rounded_tr(rounding.radius))
+                },
+            )
             .child(drag_region)
             .when(!is_macos, |this| {
                 this.child(
@@ -4731,6 +4746,10 @@ impl Render for SettingsWindowView {
             .flex()
             .flex_col()
             .bg(theme.colors.window_bg)
+            .when_some(frame_rounding, |d, rounding| {
+                d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
+                    .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
+            })
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(&self.ui_font_family)
                     .into(),

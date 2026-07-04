@@ -2571,6 +2571,7 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     AppMenu,
+    AddRepoMenu,
     TerminalShutdownConfirm(TerminalShutdownPrompt),
     TerminalMenu {
         repo_id: RepoId,

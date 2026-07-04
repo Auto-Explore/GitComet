@@ -843,6 +843,12 @@ impl GitCometView {
                 );
             }
 
+            // Text-alpha overlays keep the highlight visible on the elevated
+            // palette surface, unlike the canvas-tuned hover token.
+            let hover_overlay =
+                with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
+            let selected_overlay =
+                with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
             let label_row = div()
                 .h(item_height)
                 .w_full()
@@ -851,11 +857,11 @@ impl GitCometView {
                 .justify_between()
                 .px_2()
                 .rounded(px(theme.radii.row))
-                .hover(move |s| s.bg(theme.colors.hover))
+                .hover(move |s| s.bg(hover_overlay))
                 .cursor(CursorStyle::PointingHand);
 
             let label_row = if selected_index == Some(i) {
-                label_row.bg(theme.colors.active)
+                label_row.bg(selected_overlay)
             } else {
                 label_row
             };
@@ -938,17 +944,18 @@ impl GitCometView {
         .render(theme);
 
         let palette_body = div()
-            .rounded(px(theme.radii.panel))
-            .bg(theme.colors.surface_bg)
+            .rounded(px(theme.radii.popover))
+            .bg(theme.colors.surface_bg_elevated)
             .border_1()
             .border_color(theme.colors.border)
+            .shadow(crate::theme::shadow_modal(theme))
             .overflow_hidden()
             .child(
                 div()
                     .w_full()
                     .flex()
                     .border_b_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.border_variant)
                     .child(query_input.clone()),
             )
             .child(
@@ -966,7 +973,10 @@ impl GitCometView {
             .top_0()
             .left_0()
             .size_full()
-            .bg(gpui::rgba(0x00000022))
+            .bg(with_alpha(
+                theme.colors.shadow,
+                if theme.is_dark { 0.35 } else { 0.22 },
+            ))
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
@@ -2814,6 +2824,10 @@ impl GitCometView {
             return div().id(id).w(px(0.0)).h_full();
         }
 
+        // Only the details divider shows an idle hairline: it separates two
+        // regions inside the content card. The sidebar handle sits on the
+        // bare canvas and stays invisible until hovered or dragged.
+        let idle_line = matches!(handle, PaneResizeHandle::Details);
         div()
             .id(id)
             .w(self.pane_resize_handle_width())
@@ -2824,7 +2838,9 @@ impl GitCometView {
             .cursor(CursorStyle::ResizeLeftRight)
             .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
             .active(move |s| s.bg(theme.colors.active))
-            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+            .when(idle_line, |d| {
+                d.child(div().w(px(1.0)).h_full().bg(theme.colors.border_variant))
+            })
             .on_drag(handle, |_handle, _offset, _window, cx| {
                 cx.new(|_cx| PaneResizeDragGhost)
             })

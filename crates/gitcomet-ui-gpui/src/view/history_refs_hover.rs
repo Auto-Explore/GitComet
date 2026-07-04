@@ -623,8 +623,8 @@ impl Render for HistoryRefsHoverHost {
             .bg(theme.colors.surface_bg_elevated)
             .border_1()
             .border_color(theme.colors.border)
-            .rounded(px(theme.radii.panel))
-            .shadow_lg()
+            .rounded(px(theme.radii.popover))
+            .shadow(crate::theme::shadow_popover(theme))
             .occlude()
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
                 this.keep_open_at(e.position);

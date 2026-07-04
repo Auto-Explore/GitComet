@@ -37,6 +37,9 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
         "surface_bg_elevated": "#1d2230ff",
         "active_section": "#262c3bff",
         "border": "#2c3445ff",
+        "border_variant": "#ffffff14",                  // Optional
+        "shadow": "#000000ff",                          // Optional
+        "sidebar_bg": "#141821ff",                      // Optional
         "tooltip_bg": "#0b0e14ff",                      // Optional
         "tooltip_text": "#f5f7fbff",                    // Optional
         "text": "#edf1f7ff",
@@ -117,9 +120,12 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
         "lifetime": "#80d2ffff"                         // Optional
       },
       "radii": {
-        "panel": 2.0,
-        "pill": 2.0,
-        "row": 2.0
+        "panel": 12.0,
+        "pill": 999.0,
+        "row": 8.0,
+        "control": 8.0,                                 // Optional
+        "popover": 10.0,                                // Optional
+        "window": 12.0                                  // Optional
       }
     }
   ]
@@ -158,7 +164,13 @@ The bundle root supports:
 
 ### Optional color fields
 
-`tooltip_bg`, `tooltip_text`, `diff_add_bg`, `diff_add_text`, `diff_remove_bg`, `diff_remove_text`, `input_placeholder`, `accent_text`, `emphasis_text`, `graph_lane_palette`, `graph_lane_hues`
+`tooltip_bg`, `tooltip_text`, `diff_add_bg`, `diff_add_text`, `diff_remove_bg`, `diff_remove_text`, `input_placeholder`, `accent_text`, `emphasis_text`, `border_variant`, `shadow`, `sidebar_bg`, `graph_lane_palette`, `graph_lane_hues`
+
+`border_variant` is a softer separator used for inner dividers (row and
+section separators inside panels); `border` stays on outer panel edges.
+`shadow` is the base color that popover and dialog shadows are derived from.
+`sidebar_bg` is the left sidebar panel background; when omitted it defaults to
+the midpoint of `window_bg` and `surface_bg`.
 
 ### Color value format
 
@@ -185,9 +197,15 @@ Use `type` in JSON for the main type-name color.
 
 The `radii` object is required and must include:
 
-- `panel`
-- `pill`
-- `row`
+- `panel` — cards and panels
+- `pill` — round badges and chips
+- `row` — list rows
+
+It may also include (falling back to built-in defaults when omitted):
+
+- `control` — buttons, inputs, and tabs (default `8.0`)
+- `popover` — menus, popovers, and dialogs (default `10.0`)
+- `window` — the window frame under client-side decorations (default `12.0`)
 
 These values are numeric and control the corner radius used by major UI elements.
 

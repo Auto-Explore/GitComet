@@ -31,6 +31,10 @@ pub(crate) fn popover_is_open(view: &GitCometView, app: &App) -> bool {
     popover_kind(view, app).is_some()
 }
 
+pub(crate) fn add_repo_menu_is_open(view: &GitCometView, app: &App) -> bool {
+    matches!(popover_kind(view, app), Some(PopoverKind::AddRepoMenu))
+}
+
 pub(in crate::view) fn history_refs_hover_is_open(view: &GitCometView, app: &App) -> bool {
     view.history_refs_hover_host.read(app).is_open_for_tests()
 }

@@ -4,7 +4,7 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 8.0;
+const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 12.0;
 
 pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
 where
@@ -774,10 +774,7 @@ impl Render for ActionBarView {
             .items_center()
             .justify_between()
             .px_2()
-            .py_1()
-            .bg(theme.colors.active_section)
-            .border_b_1()
-            .border_color(theme.colors.border)
+            .bg(theme.colors.sidebar_bg)
             .child(
                 div()
                     .flex()

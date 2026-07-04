@@ -271,11 +271,11 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        const BRANCH_TREE_BASE_PAD_PX: f32 = 8.0;
-        const BRANCH_TREE_DEPTH_STEP_PX: f32 = 10.0;
+        const BRANCH_TREE_BASE_PAD_PX: f32 = 6.0;
+        const BRANCH_TREE_DEPTH_STEP_PX: f32 = 8.0;
         const BRANCH_TREE_TOGGLE_SLOT_PX: f32 = 12.0;
         const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
-        const BRANCH_TREE_GAP_PX: f32 = 6.0;
+        const BRANCH_TREE_GAP_PX: f32 = 4.0;
         const BRANCH_BADGE_GAP_PX: f32 = 3.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -399,7 +399,6 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -410,7 +409,9 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .when(top_border, |d| {
+                            d.child(top_divider(theme.colors.border_variant))
+                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(icon_path, icon_primary, 14.0))
                         .child(
@@ -482,7 +483,6 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -493,7 +493,9 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .when(top_border, |d| {
+                            d.child(top_divider(theme.colors.border_variant))
+                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
                         .child(
@@ -673,7 +675,6 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -684,7 +685,9 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .when(top_border, |d| {
+                            d.child(top_divider(theme.colors.border_variant))
+                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
                         .child(
@@ -838,7 +841,7 @@ impl SidebarPaneView {
                                             .gap(scaled_px(3.0))
                                             .px(scaled_px(4.0))
                                             .py(scaled_px(0.0))
-                                            .rounded(scaled_px(2.0))
+                                            .rounded(px(theme.radii.pill))
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
                                             .bg(worktree_badge_palette.bg)
@@ -937,7 +940,6 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .bg(theme.colors.surface_bg_elevated)
                         .cursor(CursorStyle::PointingHand)
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -948,7 +950,9 @@ impl SidebarPaneView {
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
-                        .when(top_border, |d| d.child(top_divider(theme.colors.border)))
+                        .when(top_border, |d| {
+                            d.child(top_divider(theme.colors.border_variant))
+                        })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
                         .child(
@@ -1150,7 +1154,7 @@ impl SidebarPaneView {
                                     .gap(scaled_px(3.0))
                                     .px(scaled_px(4.0))
                                     .py(scaled_px(0.0))
-                                    .rounded(scaled_px(2.0))
+                                    .rounded(px(theme.radii.pill))
                                     .border_1()
                                     .border_color(if context_menu_active {
                                         theme.colors.border
@@ -1291,7 +1295,6 @@ impl SidebarPaneView {
                     collapsed,
                     collapse_key,
                 } => {
-                    let group_text_color = branch_tree_color(section);
                     let group_icon_color = match section {
                         BranchSection::Local => icon_primary,
                         BranchSection::Remote => theme.colors.text_muted,
@@ -1310,8 +1313,8 @@ impl SidebarPaneView {
                         .hover(move |s| s.bg(theme.colors.hover))
                         .active(move |s| s.bg(theme.colors.active))
                         .text_xs()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(group_text_color)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.colors.text_muted)
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(
                             super::super::file_icons::folder_icon(!collapsed),
@@ -1446,7 +1449,7 @@ impl SidebarPaneView {
                         let mut badge = div()
                             .px(scaled_px(3.0))
                             .py(scaled_px(0.0))
-                            .rounded(scaled_px(2.0))
+                            .rounded(px(theme.radii.pill))
                             .text_size(scaled_px(11.0))
                             .text_color(theme.colors.text_muted)
                             .bg(with_alpha(
@@ -1591,7 +1594,7 @@ impl SidebarPaneView {
                             .gap(scaled_px(3.0))
                             .px(scaled_px(4.0))
                             .py(scaled_px(0.0))
-                            .rounded(scaled_px(2.0))
+                            .rounded(px(theme.radii.pill))
                             .border_1()
                             .border_color(badge_colors.border)
                             .bg(worktree_badge_palette.bg)

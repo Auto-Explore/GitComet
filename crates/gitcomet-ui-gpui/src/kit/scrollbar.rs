@@ -213,6 +213,13 @@ impl Scrollbar {
         self
     }
 
+    /// Show the thumb only while scrolling or hovering the track, fading it
+    /// out afterwards.
+    pub fn auto_hide(mut self) -> Self {
+        self.always_visible = false;
+        self
+    }
+
     #[cfg(test)]
     pub fn debug_selector(mut self, selector: &'static str) -> Self {
         self.debug_selector = Some(selector);

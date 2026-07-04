@@ -1477,6 +1477,7 @@ fn replace_utf8_range_clears_shaped_row_caches(cx: &mut gpui::TestAppContext) {
                 ShapedRowCacheKey {
                     line_ix: 0,
                     wrap_width_key: i32::MIN,
+                    font_size_key: 13,
                 },
                 ShapedLine::default(),
             );
@@ -1484,6 +1485,7 @@ fn replace_utf8_range_clears_shaped_row_caches(cx: &mut gpui::TestAppContext) {
                 ShapedRowCacheKey {
                     line_ix: 0,
                     wrap_width_key: wrap_width_cache_key(px(320.0)),
+                    font_size_key: 13,
                 },
                 (),
             );

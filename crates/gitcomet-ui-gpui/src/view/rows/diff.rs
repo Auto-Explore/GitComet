@@ -2523,18 +2523,25 @@ fn collapsed_inline_header_row(
 ) -> AnyElement {
     match click_kind {
         DiffClickKind::FileHeader => {
-            let mut row = div()
+            let header_bg = if selected {
+                focused_diff_neutral_row_bg(theme)
+            } else {
+                theme.colors.surface_bg_elevated
+            };
+            // Pin the header content to the viewport while the background
+            // band spans the full scrollable width, so horizontal scrolling
+            // moves neither the band nor the file name.
+            let inner = div()
                 .id(("collapsed_diff_file_hdr", visible_ix))
                 .h(diff_file_header_height(ui_scale_percent))
-                .w_full()
-                .min_w(min_width)
+                .w(pinned_hunk_shell_width)
+                .min_w(px(0.0))
+                .relative()
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .justify_between()
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_b_1()
-                .border_color(theme.colors.border)
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
@@ -2551,11 +2558,19 @@ fn collapsed_inline_header_row(
                     this.child(components::diff_stat(theme, a, r))
                 });
 
-            if selected {
-                row = row.bg(focused_diff_neutral_row_bg(theme));
-            }
-
-            row.into_any_element()
+            div()
+                .h(diff_file_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .bg(header_bg)
+                .border_b_1()
+                .border_color(theme.colors.border_variant)
+                .child(scroll_pinned_hunk_shell(
+                    pinned_hunk_shell_scroll,
+                    None,
+                    inner.into_any_element(),
+                ))
+                .into_any_element()
         }
         DiffClickKind::HunkHeader => {
             let gutter_w = diff_canvas::diff_inline_text_start(ui_scale_percent);
@@ -3024,7 +3039,15 @@ fn collapsed_split_header_row(
 
     match click_kind {
         DiffClickKind::FileHeader => {
-            let mut row = div()
+            let header_bg = if selected {
+                focused_diff_neutral_row_bg(theme)
+            } else {
+                theme.colors.surface_bg_elevated
+            };
+            // Pin the header content to the viewport while the background
+            // band spans the full scrollable width, so horizontal scrolling
+            // moves neither the band nor the file name.
+            let inner = div()
                 .id((
                     match column {
                         PatchSplitColumn::Left => "collapsed_diff_split_left_file_hdr",
@@ -3033,15 +3056,14 @@ fn collapsed_split_header_row(
                     visible_ix,
                 ))
                 .h(diff_file_header_height(ui_scale_percent))
-                .w_full()
-                .min_w(min_width)
+                .w(pinned_hunk_shell_width)
+                .min_w(px(0.0))
+                .relative()
+                .overflow_hidden()
                 .flex()
                 .items_center()
                 .justify_between()
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_b_1()
-                .border_color(theme.colors.border)
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
@@ -3058,11 +3080,19 @@ fn collapsed_split_header_row(
                     this.child(components::diff_stat(theme, a, r))
                 });
 
-            if selected {
-                row = row.bg(focused_diff_neutral_row_bg(theme));
-            }
-
-            row.into_any_element()
+            div()
+                .h(diff_file_header_height(ui_scale_percent))
+                .w_full()
+                .min_w(min_width)
+                .bg(header_bg)
+                .border_b_1()
+                .border_color(theme.colors.border_variant)
+                .child(scroll_pinned_hunk_shell(
+                    pinned_hunk_shell_scroll,
+                    None,
+                    inner.into_any_element(),
+                ))
+                .into_any_element()
         }
         DiffClickKind::HunkHeader => {
             let gutter_w = diff_canvas::diff_single_column_text_start(ui_scale_percent);

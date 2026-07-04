@@ -60,7 +60,8 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         | PopoverKind::DiffActionMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker
-        | PopoverKind::AppMenu => {
+        | PopoverKind::AppMenu
+        | PopoverKind::AddRepoMenu => {
             // Mostly local UI state; depend only on whether a repo is active/open.
             state.active_repo.hash(&mut hasher);
             if let Some(repo) = repo_for_popover(state, popover) {
@@ -136,6 +137,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
+        | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -317,6 +319,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. }
         | PopoverKind::AppMenu
+        | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker
@@ -344,6 +347,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
     match kind {
         PopoverKind::RepoPicker => 0u8.hash(hasher),
         PopoverKind::RecentRepositoryPicker => 65u8.hash(hasher),
+        PopoverKind::AddRepoMenu => 66u8.hash(hasher),
         PopoverKind::BranchPicker { purpose } => {
             1u8.hash(hasher);
             (*purpose as u8).hash(hasher);

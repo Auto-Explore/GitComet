@@ -1,34 +1,30 @@
 use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div};
-use std::cmp::Ordering;
-
-/// The position of a tab within a list.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum TabPosition {
-    First,
-    Middle(Ordering),
-    Last,
-}
+use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
 
 pub struct Tab {
     div: Stateful<Div>,
     selected: bool,
-    position: TabPosition,
     end_slot: Option<AnyElement>,
     children: Vec<AnyElement>,
 }
 
 impl Tab {
     const END_TAB_SLOT_SIZE_PX: f32 = 14.0;
+    /// Tab height inside the 32px bar slot; the difference is the top inset
+    /// that lets the active tab rise from the bar like a browser tab.
+    const TAB_HEIGHT_PX: f32 = 28.0;
+    /// Tabs shrink no further than this before the strip scrolls.
+    const TAB_MIN_WIDTH_PX: f32 = 96.0;
+    /// Long repository names truncate rather than widening the tab past this.
+    const TAB_MAX_WIDTH_PX: f32 = 180.0;
 
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
         Self {
             div: div().id(id.clone()),
             selected: false,
-            position: TabPosition::First,
             end_slot: None,
             children: Vec::new(),
         }
@@ -36,11 +32,6 @@ impl Tab {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
-        self
-    }
-
-    pub fn position(mut self, position: TabPosition) -> Self {
-        self.position = position;
         self
     }
 
@@ -61,18 +52,13 @@ impl Tab {
     pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
         let ui_scale = ui_scale.into();
         let scaled_px = |value| ui_scale.px(value);
-        let (text_color, tab_bg) = if self.selected {
-            (theme.colors.text, theme.colors.active_section)
+        let text_color = if self.selected {
+            theme.colors.text
         } else {
-            (theme.colors.text_muted, theme.colors.surface_bg)
+            theme.colors.text_muted
         };
-        let inactive_hover_bg = if theme.is_dark {
-            with_alpha(theme.colors.hover, 0.65)
-        } else {
-            theme.colors.hover
-        };
+        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
         let active_bg = theme.colors.active;
-        let focus_ring = theme.colors.focus_ring;
 
         let end_slot = div()
             .flex_none()
@@ -82,100 +68,44 @@ impl Tab {
             .justify_center()
             .children(self.end_slot);
 
+        // Browser-style tab: both states share the shape — inset from the bar
+        // top, sitting on the bar's bottom edge, rounded top corners only.
+        // The active tab fills with the content-strip color and carries a
+        // top/side border so it reads as the front sheet; the bottom stays
+        // open to fuse with the workspace below. Width is clamped: long repo
+        // names truncate at the max, and tabs shrink no further than the min
+        // before the strip starts scrolling.
         let mut base = self
             .div
             .group("tab")
-            .tab_index(0)
-            .relative()
-            .h(Self::container_height(ui_scale))
-            .bg(tab_bg)
-            .border_color(theme.colors.border)
+            .h(scaled_px(Self::TAB_HEIGHT_PX))
+            .min_w(scaled_px(Self::TAB_MIN_WIDTH_PX))
+            .max_w(scaled_px(Self::TAB_MAX_WIDTH_PX))
+            .mx(scaled_px(3.0))
+            .px(scaled_px(10.0))
+            .flex()
+            .items_center()
+            .gap_1()
+            .rounded_tl(px(theme.radii.control))
+            .rounded_tr(px(theme.radii.control))
+            .text_color(text_color)
             .cursor_pointer()
-            .focus(move |s| s.border_color(focus_ring))
-            .on_key_down(|event, window, cx| {
-                if event.keystroke.modifiers.modified() {
-                    return;
-                }
-                match event.keystroke.key.as_str() {
-                    "left" => {
-                        window.focus_prev(cx);
-                        cx.stop_propagation();
-                    }
-                    "right" => {
-                        window.focus_next(cx);
-                        cx.stop_propagation();
-                    }
-                    _ => {}
-                }
-            })
-            .when(self.selected, |tab| {
-                let thickness = scaled_px(1.0);
-                tab.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(thickness)
-                        .bg(focus_ring),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left_0()
-                        .w(thickness)
-                        .bg(focus_ring),
-                )
-            })
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .h(scaled_px(31.0))
-                    .px_1()
-                    .text_color(text_color)
-                    .children(self.children)
-                    .child(end_slot),
-            );
+            .children(self.children)
+            .child(end_slot);
 
-        if !self.selected {
+        if self.selected {
             base = base
-                .hover(move |s| s.bg(inactive_hover_bg))
+                .bg(theme.colors.sidebar_bg)
+                .border_t_1()
+                .border_l_1()
+                .border_r_1()
+                .border_color(theme.colors.border);
+        } else {
+            base = base
+                .bg(gpui::rgba(0x00000000))
+                .hover(move |s| s.bg(hover_bg))
                 .active(move |s| s.bg(active_bg));
         }
-
-        base = match self.position {
-            TabPosition::First => {
-                if self.selected {
-                    base.pl(scaled_px(1.0)).pb(scaled_px(1.0))
-                } else {
-                    base.pl(scaled_px(1.0)).pr(scaled_px(1.0)).border_b_1()
-                }
-            }
-            TabPosition::Last => {
-                if self.selected {
-                    base.pb(scaled_px(1.0))
-                } else {
-                    base.pl(scaled_px(1.0)).border_b_1().border_r_1()
-                }
-            }
-            TabPosition::Middle(Ordering::Equal) => {
-                if self.selected {
-                    base.pb(scaled_px(1.0))
-                } else {
-                    base.border_l_1().border_r_1().pb(scaled_px(1.0))
-                }
-            }
-            TabPosition::Middle(Ordering::Less) => {
-                base.border_l_1().pr(scaled_px(1.0)).border_b_1()
-            }
-            TabPosition::Middle(Ordering::Greater) => {
-                base.border_r_1().pl(scaled_px(1.0)).border_b_1()
-            }
-        };
 
         base
     }

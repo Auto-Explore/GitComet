@@ -1833,7 +1833,7 @@ impl HistoryView {
     }
 }
 
-const HISTORY_ROW_HEIGHT_PX: f32 = 24.0;
+const HISTORY_ROW_HEIGHT_PX: f32 = 28.0;
 
 fn history_worktree_node_color(
     theme: AppTheme,
@@ -2101,6 +2101,8 @@ fn working_tree_summary_history_row(
         parts.push(icon_count("icons/minus.svg", theme.colors.danger, deleted));
     }
 
+    // History rows render on the content card, so the hollow node core
+    // matches the card surface rather than the window canvas.
     let node_fill = theme.colors.window_bg;
     let circle = gpui::canvas(
         |_, _, _| (),

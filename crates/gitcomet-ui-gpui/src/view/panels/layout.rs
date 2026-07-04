@@ -690,9 +690,6 @@ impl DetailsPaneView {
                 .justify_between()
                 .h(components::control_height_md(ui_scale))
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_b_1()
-                .border_color(theme.colors.border)
                 .child(
                     div()
                         .flex_1()
@@ -1465,9 +1462,6 @@ impl DetailsPaneView {
                 .justify_between()
                 .h(components::control_height_md(ui_scale_percent))
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_b_1()
-                .border_color(theme.colors.border)
                 .child(title)
                 .when(show_action, |d| d.child(action))
                 .into_any_element()
@@ -1953,15 +1947,7 @@ impl DetailsPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(status_sections)
-                    .child(
-                        div()
-                            .border_t_1()
-                            .border_color(theme.colors.border)
-                            .bg(theme.colors.surface_bg)
-                            .px_2()
-                            .py_2()
-                            .child(self.commit_box(cx)),
-                    )
+                    .child(div().px_2().py_2().child(self.commit_box(cx)))
                     .into_any_element()
             } else {
                 components::empty_state(theme, "Changes", "No repository selected.")

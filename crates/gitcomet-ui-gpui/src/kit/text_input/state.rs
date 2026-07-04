@@ -7,6 +7,9 @@ use super::*;
 pub(super) struct ShapedRowCacheKey {
     pub(super) line_ix: usize,
     pub(super) wrap_width_key: i32,
+    /// Rounded font size: zoom changes reshape instead of replaying stale
+    /// lines (most visible on never-edited placeholder text).
+    pub(super) font_size_key: i32,
 }
 
 #[derive(Clone, Default)]
@@ -297,7 +300,7 @@ impl TextInputStyle {
             border: base_border,
             hover_border,
             focus_border,
-            radius: theme.radii.row,
+            radius: theme.radii.control,
             text: theme.colors.text.into(),
             placeholder: theme.colors.input_placeholder.into(),
             cursor: with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 }),

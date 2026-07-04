@@ -6,18 +6,20 @@
       "name": "Sunset Veil",
       "appearance": "light",
       "colors": {
-        "window_bg": "#fcf6f0ff",
-        "surface_bg": "#eee2d5ff",
-        "surface_bg_elevated": "#eee2d5ff",
-        "active_section": "#faf2e8ff",
-        "border": "#e0cfbdff",
-        "tooltip_bg": "#fff8f1ff",
+        "window_bg": "#f1e8ddff",
+        "surface_bg": "#fbf5eeff",
+        "surface_bg_elevated": "#fffaf3ff",
+        "active_section": "#f1e2cfff",
+        "border": "#e6d8c7ff",
+        "border_variant": "#2b1f140f",
+        "shadow": "#2b1f14ff",
+        "tooltip_bg": "#fffaf3ff",
         "tooltip_text": "#2b241dff",
         "text": "#2b241dff",
         "text_muted": "#65584cff",
         "accent": "#a6632cff",
-        "hover": "#e8d9c8ff",
-        "active": { "hex": "#dfccb9ff", "alpha": 0.86 },
+        "hover": "#f3ebe0ff",
+        "active": { "hex": "#e8d6c2ff", "alpha": 0.85 },
         "focus_ring": { "hex": "#a6632cff", "alpha": 0.48 },
         "focus_ring_bg": { "hex": "#a6632cff", "alpha": 0.14 },
         "scrollbar_thumb": { "hex": "#65584cff", "alpha": 0.26 },
@@ -84,9 +86,12 @@
         "lifetime": "#aa72c0ff"
       },
       "radii": {
-        "panel": 2.0,
-        "pill": 2.0,
-        "row": 2.0
+        "panel": 12.0,
+        "pill": 999.0,
+        "row": 8.0,
+        "control": 8.0,
+        "popover": 10.0,
+        "window": 12.0
       }
     }
   ]

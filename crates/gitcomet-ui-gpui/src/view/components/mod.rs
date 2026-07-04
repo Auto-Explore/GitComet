@@ -5,6 +5,7 @@ mod context_menu;
 mod diff_stat;
 mod picker_prompt;
 mod split_button;
+mod switch;
 mod tab;
 mod tab_bar;
 mod toast;
@@ -23,7 +24,8 @@ pub use context_menu::{
 pub use diff_stat::diff_stat;
 pub use picker_prompt::{PickerPrompt, PickerPromptItem, PickerPromptItemPart};
 pub use split_button::{SplitButton, SplitButtonStyle};
-pub use tab::{Tab, TabPosition};
+pub use switch::switch;
+pub use tab::Tab;
 pub use tab_bar::TabBar;
 pub use toast::{ToastKind, toast};
 pub use tokens::*;

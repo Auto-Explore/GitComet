@@ -151,16 +151,11 @@ impl HistoryView {
                 }
             }))
             .child(
-                div()
-                    .w_full()
-                    .bg(bg)
-                    .border_b_1()
-                    .border_color(theme.colors.border)
-                    .child(
-                        div()
-                            .pr(scrollbar_gutter)
-                            .child(self.history_column_headers(cx)),
-                    ),
+                div().w_full().bg(bg).child(
+                    div()
+                        .pr(scrollbar_gutter)
+                        .child(self.history_column_headers(cx)),
+                ),
             )
             .child(
                 div()
@@ -345,7 +340,7 @@ impl HistoryView {
                     div()
                         .w(scaled_px(1.0))
                         .h(scaled_px(14.0))
-                        .bg(theme.colors.border),
+                        .bg(theme.colors.border_variant),
                 )
                 .on_drag(handle, |_handle, _offset, _window, cx| {
                     cx.new(|_cx| HistoryColResizeDragGhost)

@@ -443,6 +443,16 @@ impl MainPaneView {
                                                 .pr(scrollbar_gutter)
                                                 .child(list),
                                         )
+                                        // Anchored to the rows container so the
+                                        // handle's hover highlight matches the
+                                        // annotation column height exactly.
+                                        .when(self.annotation_active(), |d| {
+                                            d.child(self.annotate_resize_handle(
+                                                ui_scale_percent,
+                                                theme,
+                                                cx,
+                                            ))
+                                        })
                                         .child(
                                             components::Scrollbar::new(
                                                 "diff_scrollbar",
@@ -551,6 +561,12 @@ impl MainPaneView {
                                         '+',
                                         theme.colors.diff_add_text,
                                     );
+
+                                    // Built before `resize_handle` captures `cx`.
+                                    let split_annotate_handle =
+                                        self.annotation_active().then(|| {
+                                            self.annotate_resize_handle(ui_scale_percent, theme, cx)
+                                        });
 
                                     let resize_handle = |id: &'static str| {
                                         div()
@@ -766,7 +782,11 @@ impl MainPaneView {
                                                                             "diff_split_left_hscrollbar",
                                                                         ),
                                                                     )
-                                                                }),
+                                                                })
+                                                                .when_some(
+                                                                    split_annotate_handle,
+                                                                    |d, handle| d.child(handle),
+                                                                ),
                                                         )
                                                         .child(resize_handle(
                                                             "diff_split_resize_handle_body",

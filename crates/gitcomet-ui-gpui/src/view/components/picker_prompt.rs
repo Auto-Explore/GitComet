@@ -121,7 +121,7 @@ impl PickerPrompt {
                     .min_w(px(0.0))
                     .child(self.query_input.clone()),
             )
-            .child(div().border_t_1().border_color(theme.colors.border));
+            .child(div().border_t_1().border_color(theme.colors.border_variant));
 
         let mut list = div()
             .id("picker_prompt_list")
@@ -171,12 +171,18 @@ impl PickerPrompt {
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         (on_select)(this, original_index, event, window, cx);
                     }));
+                // Text-alpha overlays keep the highlight visible on the
+                // elevated popover surface, unlike the canvas-tuned tokens.
+                let hover_overlay =
+                    with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
+                let active_overlay =
+                    with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
                 if is_selected {
-                    row = row.bg(theme.colors.active);
+                    row = row.bg(hover_overlay);
                 }
                 row = row
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active));
+                    .hover(move |s| s.bg(hover_overlay))
+                    .active(move |s| s.bg(active_overlay));
                 list = list.child(row);
             }
         }
@@ -421,6 +427,11 @@ fn picker_item_label<V: 'static>(
     }
 
     label
+}
+
+fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
+    color.a = alpha;
+    color
 }
 
 /// Substring search with precomputed first-byte lowercase/uppercase values.

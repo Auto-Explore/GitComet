@@ -1175,10 +1175,12 @@ impl PopoverHost {
         let entry_tooltips = model.entry_tooltips.clone();
 
         let focus = self.context_menu_focus_handle.clone();
+        // No fallback highlight: the menu opens with nothing selected (like
+        // native menus), and hovering a disabled entry parks the selection on
+        // it, which renders as no highlight at all rather than jumping to the
+        // first selectable row.
         let current_selected = self.context_menu_selected_ix;
-        let selected_for_render = current_selected
-            .filter(|&ix| model.is_selectable(ix))
-            .or_else(|| model.first_selectable());
+        let selected_for_render = current_selected.filter(|&ix| model.is_selectable(ix));
 
         components::context_menu(
             theme,
