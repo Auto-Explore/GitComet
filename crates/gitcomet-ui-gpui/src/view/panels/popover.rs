@@ -29,6 +29,7 @@ mod remote_remove_confirm;
 mod repo_picker;
 mod reset_prompt;
 mod search_inputs;
+mod squash_prompt;
 mod stash_drop_confirm;
 mod stash_picker_prompt;
 mod stash_prompt;
@@ -92,6 +93,7 @@ const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260
 const COMMIT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 260.0, 480.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
 const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
+const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
 const DIFF_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 320.0);
 const DIFF_EDITOR_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 200.0, 340.0);
@@ -140,6 +142,8 @@ pub(in super::super) struct PopoverHost {
     _file_history_search_input_subscription: Option<gpui::Subscription>,
     _create_branch_input_subscription: gpui::Subscription,
     _stash_message_input_subscription: gpui::Subscription,
+    _squash_message_input_subscription: gpui::Subscription,
+    _squash_description_input_subscription: gpui::Subscription,
     _submodule_ref_input_subscription: gpui::Subscription,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
@@ -176,6 +180,17 @@ pub(in super::super) struct PopoverHost {
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
+    squash_message_input: Entity<components::TextInput>,
+    squash_description_input: Entity<components::TextInput>,
+    squash_description_scroll: ScrollHandle,
+    /// The `(oldest, head)` range the squash prompt's message inputs were last
+    /// prefilled for. Prevents re-prefilling the same range (so a user who
+    /// clears the fields keeps them cleared) and, together with the empty-input
+    /// check, prevents clobbering text the user typed while the preview loaded.
+    squash_prompt_prefilled_range: Option<(
+        gitcomet_core::domain::CommitId,
+        gitcomet_core::domain::CommitId,
+    )>,
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
@@ -205,12 +220,15 @@ pub(in super::super) struct PopoverHost {
     clone_repo_submit_focus_handle: FocusHandle,
     create_tag_cancel_focus_handle: FocusHandle,
     create_tag_submit_focus_handle: FocusHandle,
+    squash_cancel_focus_handle: FocusHandle,
+    squash_submit_focus_handle: FocusHandle,
     remote_add_cancel_focus_handle: FocusHandle,
     remote_add_submit_focus_handle: FocusHandle,
     remote_edit_cancel_focus_handle: FocusHandle,
     remote_edit_submit_focus_handle: FocusHandle,
     push_upstream_cancel_focus_handle: FocusHandle,
     push_upstream_submit_focus_handle: FocusHandle,
+    rebase_onto_submit_focus_handle: FocusHandle,
     worktree_browse_focus_handle: FocusHandle,
     worktree_cancel_focus_handle: FocusHandle,
     worktree_submit_focus_handle: FocusHandle,
@@ -299,6 +317,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
+            | PopoverKind::InteractiveRebaseAutosquashMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
@@ -383,6 +402,19 @@ pub(super) fn hotkey_hint(
         .child(label)
 }
 
+/// Shared Cancel button for confirm dialogs and prompt popovers: consistent
+/// label, outlined style, and "Esc" hint. Attach the dismiss handler with
+/// `.on_click(...)` at the call site.
+pub(super) fn cancel_button(
+    id: &'static str,
+    hint_debug_selector: &'static str,
+    theme: AppTheme,
+) -> components::Button {
+    components::Button::new(id, "Cancel")
+        .separated_end_slot(hotkey_hint(theme, hint_debug_selector, "Esc"))
+        .style(components::ButtonStyle::Outlined)
+}
+
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
@@ -454,7 +486,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
         | PopoverKind::CloneRepo
-        | PopoverKind::CreateTagPrompt { .. } => Some(DIALOG_420_WIDTH),
+        | PopoverKind::CreateTagPrompt { .. }
+        | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::StashDropConfirm { .. }
@@ -572,6 +605,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::StashMenu { .. } => Some(STASH_MENU_WIDTH),
         PopoverKind::RebaseReword { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::InteractiveRebaseActionMenu { .. } => Some(REBASE_ACTION_MENU_WIDTH),
+        PopoverKind::InteractiveRebaseAutosquashMenu => Some(REBASE_AUTOSQUASH_MENU_WIDTH),
     }
 }
 
@@ -674,6 +708,11 @@ impl PopoverHost {
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             this.state = Arc::clone(&model.read(cx).state);
+
+            // Prefill the squash prompt from the message preview when it lands,
+            // rather than in the render path, so the generated message never
+            // clobbers text the user typed while it was loading.
+            this.sync_squash_prompt_prefill(cx);
 
             let Some(popover) = this.popover.as_ref() else {
                 return;
@@ -778,6 +817,34 @@ impl PopoverHost {
                 cx,
             );
             input.set_vertical_scroll_handle(Some(create_tag_message_scroll.clone()));
+            input
+        });
+
+        let squash_message_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Commit message".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let squash_description_scroll = ScrollHandle::new();
+        let squash_description_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Description (optional)".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 4,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(squash_description_scroll.clone()));
             input
         });
 
@@ -887,6 +954,36 @@ impl PopoverHost {
                     return;
                 }
 
+                cx.notify();
+            });
+
+        // The subject input re-renders the host on every keystroke so the
+        // Squash button's disabled state (driven by whether the message is
+        // empty) stays current, and submits on Enter.
+        let squash_message_input_subscription =
+            cx.observe(&squash_message_input, |this, input, cx| {
+                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+                let _ = input.update(cx, |input, _| input.take_escape_pressed());
+
+                if !matches!(this.popover, Some(PopoverKind::SquashPrompt { .. })) {
+                    return;
+                }
+
+                if enter_pressed {
+                    this.submit_squash(cx);
+                    return;
+                }
+
+                cx.notify();
+            });
+
+        // The multiline description input only needs to re-render the host (it
+        // does not affect the button state, and Enter inserts a newline).
+        let squash_description_input_subscription =
+            cx.observe(&squash_description_input, |this, _input, cx| {
+                if !matches!(this.popover, Some(PopoverKind::SquashPrompt { .. })) {
+                    return;
+                }
                 cx.notify();
             });
 
@@ -1049,6 +1146,8 @@ impl PopoverHost {
         let clone_repo_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let squash_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let squash_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let remote_add_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -1056,6 +1155,7 @@ impl PopoverHost {
         let remote_edit_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let push_upstream_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let push_upstream_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let rebase_onto_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -1093,6 +1193,8 @@ impl PopoverHost {
             _stash_picker_search_input_subscription: None,
             _create_branch_input_subscription: create_branch_input_subscription,
             _stash_message_input_subscription: stash_message_input_subscription,
+            _squash_message_input_subscription: squash_message_input_subscription,
+            _squash_description_input_subscription: squash_description_input_subscription,
             _submodule_ref_input_subscription: submodule_ref_input_subscription,
             notify_fingerprint: 0,
             root_view,
@@ -1126,6 +1228,10 @@ impl PopoverHost {
             create_tag_input,
             create_tag_message_input,
             create_tag_message_scroll,
+            squash_message_input,
+            squash_description_input,
+            squash_description_scroll,
+            squash_prompt_prefilled_range: None,
             remote_name_input,
             remote_url_input,
             remote_url_edit_input,
@@ -1154,12 +1260,15 @@ impl PopoverHost {
             clone_repo_submit_focus_handle,
             create_tag_cancel_focus_handle,
             create_tag_submit_focus_handle,
+            squash_cancel_focus_handle,
+            squash_submit_focus_handle,
             remote_add_cancel_focus_handle,
             remote_add_submit_focus_handle,
             remote_edit_cancel_focus_handle,
             remote_edit_submit_focus_handle,
             push_upstream_cancel_focus_handle,
             push_upstream_submit_focus_handle,
+            rebase_onto_submit_focus_handle,
             worktree_browse_focus_handle,
             worktree_cancel_focus_handle,
             worktree_submit_focus_handle,
@@ -1213,6 +1322,10 @@ impl PopoverHost {
         self.rebase_onto_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.create_tag_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.squash_message_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.squash_description_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.remote_name_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
@@ -1288,6 +1401,110 @@ impl PopoverHost {
         cx.notify();
     }
 
+    /// Validates the repo's current multi-selection against its loaded log and
+    /// HEAD, returning a squash plan when the selection is eligible. Shared by
+    /// the squash prompt's render, prefill, and submit paths so they always
+    /// agree on the range.
+    pub(in super::super) fn squash_plan_for_repo_id(
+        &self,
+        repo_id: RepoId,
+    ) -> Option<gitcomet_core::squash::SquashPlan> {
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id)?;
+        let Loadable::Ready(page) = &repo.log else {
+            return None;
+        };
+        let head = repo.head_commit_id()?;
+        gitcomet_core::squash::squash_eligibility(
+            &page.commits,
+            &repo.history_state.multi_selection.commits,
+            &head,
+        )
+    }
+
+    /// Populates the squash prompt's inputs from the loaded message preview.
+    /// Only fires when the preview matches the live plan's range (never a stale
+    /// preview from an earlier selection) and only while both inputs are still
+    /// empty for a range not yet prefilled (never over the user's own text).
+    fn sync_squash_prompt_prefill(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::SquashPrompt { repo_id }) = self.popover else {
+            return;
+        };
+        let Some(plan) = self.squash_plan_for_repo_id(repo_id) else {
+            return;
+        };
+        let repo = self.state.repos.iter().find(|r| r.id == repo_id);
+        let Some(Loadable::Ready(preview)) = repo.map(|repo| &repo.history_state.squash_preview)
+        else {
+            return;
+        };
+        // The preview must belong to the range currently planned, not a leftover
+        // from a previous prompt whose PrepareSquash dispatch has not landed yet.
+        if preview.oldest != plan.oldest || preview.head != plan.head {
+            return;
+        }
+        let range = (plan.oldest.clone(), plan.head.clone());
+        if self.squash_prompt_prefilled_range.as_ref() == Some(&range) {
+            return;
+        }
+        // Empty inputs mean the user has not typed anything for this range yet;
+        // if they had, we must not overwrite it.
+        let inputs_empty = self
+            .squash_message_input
+            .read_with(cx, |input, _| input.text().is_empty())
+            && self
+                .squash_description_input
+                .read_with(cx, |input, _| input.text().is_empty());
+        if !inputs_empty {
+            return;
+        }
+
+        let subject = preview.subject.clone();
+        let body = preview.body.clone();
+        self.squash_prompt_prefilled_range = Some(range);
+        self.squash_message_input.update(cx, |input, cx| {
+            input.set_text(subject, cx);
+            cx.notify();
+        });
+        self.squash_description_input.update(cx, |input, cx| {
+            input.set_text(body, cx);
+            cx.notify();
+        });
+    }
+
+    /// Reads the squash prompt inputs, builds the final message, and dispatches
+    /// the squash against the live plan. No-ops if the selection is no longer
+    /// eligible or the subject is empty.
+    fn submit_squash(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::SquashPrompt { repo_id }) = self.popover else {
+            return;
+        };
+        let Some(plan) = self.squash_plan_for_repo_id(repo_id) else {
+            return;
+        };
+        let subject = self
+            .squash_message_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if subject.is_empty() {
+            return;
+        }
+        let body = self
+            .squash_description_input
+            .read_with(cx, |input, _| input.text().to_string());
+        let message = if body.trim().is_empty() {
+            subject
+        } else {
+            format!("{subject}\n\n{}", body.trim_end())
+        };
+        self.store.dispatch(Msg::SquashCommits {
+            repo_id,
+            oldest: plan.oldest,
+            expected_head: plan.head,
+            message,
+            count: plan.commit_count,
+        });
+        self.close_popover(cx);
+    }
+
     pub(in super::super) fn close_popover_and_restore_focus(
         &mut self,
         window: &mut Window,
@@ -1323,6 +1540,7 @@ impl PopoverHost {
                 | Some(PopoverKind::CommitPrompt { .. })
                 | Some(PopoverKind::CloneRepo)
                 | Some(PopoverKind::CreateTagPrompt { .. })
+                | Some(PopoverKind::SquashPrompt { .. })
                 | Some(PopoverKind::PushSetUpstreamPrompt { .. })
                 | Some(PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
@@ -1417,6 +1635,7 @@ impl PopoverHost {
             Some(PopoverKind::CloneRepo)
             | Some(PopoverKind::RecentRepositoryPicker)
             | Some(PopoverKind::CreateTagPrompt { .. })
+            | Some(PopoverKind::SquashPrompt { .. })
             | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
             | Some(PopoverKind::PushSetUpstreamPrompt { .. })
             | Some(PopoverKind::Repo {
@@ -2019,6 +2238,30 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
+                PopoverKind::SquashPrompt { .. } => {
+                    let theme = self.theme;
+                    self.squash_prompt_prefilled_range = None;
+                    self.squash_message_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    self.squash_description_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    // The preview may already be Ready (e.g. reopening the same
+                    // range); prefill immediately rather than waiting for the
+                    // next model update.
+                    self.sync_squash_prompt_prefill(cx);
+                    let focus = self
+                        .squash_message_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
                 PopoverKind::CreateTagPrompt { .. } => {
                     let theme = self.theme;
                     self.create_tag_annotated =
@@ -2236,6 +2479,11 @@ impl PopoverHost {
                         .rebase_reword_input
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
+                }
+                PopoverKind::RebaseOntoConfirm { .. } => {
+                    // Focus the primary (Rebase) button so Enter confirms and
+                    // Tab/Esc still reach Cancel.
+                    window.focus(&self.rebase_onto_submit_focus_handle, cx);
                 }
                 k if popover_is_confirm_dialog(k) => {
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
@@ -2604,6 +2852,7 @@ impl PopoverHost {
                 target,
                 mode,
             } => reset_prompt::panel(self, repo_id, target, mode, cx),
+            PopoverKind::SquashPrompt { repo_id } => squash_prompt::panel(self, repo_id, cx),
             PopoverKind::CreateTagPrompt { repo_id, target } => {
                 create_tag_prompt::panel(self, repo_id, target, cx)
             }
@@ -2909,7 +3158,8 @@ impl PopoverHost {
             PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
                 rebase_onto_confirm::panel(self, repo_id, onto, cx)
             }
-            PopoverKind::InteractiveRebaseActionMenu { .. } => {
+            PopoverKind::InteractiveRebaseActionMenu { .. }
+            | PopoverKind::InteractiveRebaseAutosquashMenu => {
                 self.context_menu_view(kind.clone(), cx)
             }
             PopoverKind::RebaseReword {
@@ -2987,7 +3237,7 @@ impl PopoverHost {
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.text_muted)
-                                    .child("Subject"),
+                                    .child("Commit message"),
                             )
                             .child(self.rebase_reword_input.clone()),
                     )
@@ -3011,6 +3261,14 @@ impl PopoverHost {
                                     .min_w(px(0.0))
                                     .child(self.rebase_reword_description_input.clone()),
                             ),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("Clear the message and save to keep the original commit message."),
                     )
                     .child(div().border_t_1().border_color(theme.colors.border))
                     .child(

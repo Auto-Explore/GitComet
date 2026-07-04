@@ -10,6 +10,18 @@ pub(super) fn panel(
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
+    // Name the branch being moved rather than the opaque "HEAD".
+    let current_branch = this
+        .state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .and_then(|r| match &r.head_branch {
+            Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => Some(head.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| "HEAD".to_string());
+
     div()
         .flex()
         .flex_col()
@@ -29,7 +41,7 @@ pub(super) fn panel(
                 .py_1()
                 .text_sm()
                 .text_color(theme.colors.text_muted)
-                .child(format!("Rebase HEAD onto {onto}")),
+                .child(format!("Rebase {current_branch} onto {onto}")),
         )
         .child(
             div()
@@ -48,8 +60,7 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("rebase_onto_cancel", "Cancel")
-                        .style(components::ButtonStyle::Outlined)
+                    super::cancel_button("rebase_onto_cancel", "rebase_onto_cancel_hint", theme)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.popover = None;
                             this.popover_anchor = None;
@@ -58,6 +69,12 @@ pub(super) fn panel(
                 )
                 .child(
                     components::Button::new("rebase_onto_go", "Rebase")
+                        .focus_handle(this.rebase_onto_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "rebase_onto_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             this.store.dispatch(Msg::Rebase {

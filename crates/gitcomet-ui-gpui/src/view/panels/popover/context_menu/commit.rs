@@ -44,6 +44,36 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         ));
     }
     items.push(ContextMenuItem::Separator);
+
+    // "Squash N commits" appears only when the right-clicked commit is part
+    // of the active multi-selection and the whole selection passes the squash
+    // criteria (contiguous linear first-parent chain, non-root base). The
+    // range may end at HEAD or sit anywhere in the chain.
+    let squash_plan = this
+        .active_repo()
+        .filter(|repo| repo.id == repo_id)
+        .and_then(|repo| {
+            let selection = &repo.history_state.multi_selection;
+            if !(selection.is_multi() && selection.contains(commit_id)) {
+                return None;
+            }
+            let Loadable::Ready(page) = &repo.log else {
+                return None;
+            };
+            let head = repo.head_commit_id()?;
+            gitcomet_core::squash::squash_eligibility(&page.commits, &selection.commits, &head)
+        });
+    if let Some(plan) = squash_plan {
+        let label = format!("Squash {} commits", plan.commit_count).into();
+        items.push(ContextMenuItem::Entry {
+            label,
+            icon: Some("icons/git_commit.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),
+        });
+        items.push(ContextMenuItem::Separator);
+    }
     items.push(ContextMenuItem::Entry {
         label: "Open diff".into(),
         icon: Some("icons/open_external.svg".into()),
@@ -119,19 +149,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
-    items.push(ContextMenuItem::Entry {
-        label: "Rebase onto this commit…".into(),
-        icon: Some("icons/arrow_up.svg".into()),
-        shortcut: Some("B".into()),
-        disabled: false,
-        action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RebaseOntoConfirm {
-                repo_id,
-                onto: sha.clone(),
-            },
-        }),
-    });
-    let current_branch = this
+    let current_branch: SharedString = this
         .active_repo()
         .and_then(|r| match &r.head_branch {
             Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => {
@@ -141,7 +159,22 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         })
         .unwrap_or_else(|| short.clone());
 
-    let target_label = branch_names.first().map(|s| s.as_str()).unwrap_or(&short);
+    // Prefer a branch name at the target commit; fall back to the abbreviated
+    // sha for the label and the full sha for the actual rebase target.
+    let target_label: SharedString = branch_names.first().map(|s| s.as_str()).unwrap_or(&short).into();
+    let onto_ref = branch_names.first().cloned().unwrap_or_else(|| sha.clone());
+    items.push(ContextMenuItem::Entry {
+        label: format!("Rebase {current_branch} onto {target_label}").into(),
+        icon: Some("icons/arrow_up.svg".into()),
+        shortcut: Some("B".into()),
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm {
+                repo_id,
+                onto: onto_ref,
+            },
+        }),
+    });
     items.push(ContextMenuItem::Entry {
         label: format!("Interactive rebase {current_branch} onto {target_label}").into(),
         icon: Some("icons/refresh.svg".into()),

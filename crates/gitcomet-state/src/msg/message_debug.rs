@@ -249,6 +249,36 @@ impl std::fmt::Debug for InternalMsg {
                 .field("commit_id", commit_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SquashMessagePreviewLoaded {
+                repo_id,
+                oldest,
+                head,
+                result,
+            } => f
+                .debug_struct("SquashMessagePreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("oldest", oldest)
+                .field("head", head)
+                .field("result", result)
+                .finish(),
+            InternalMsg::SquashRebaseSetupLoaded {
+                repo_id,
+                base,
+                actual_head,
+                selected_ids,
+                reword_id,
+                count,
+                ..
+            } => f
+                .debug_struct("SquashRebaseSetupLoaded")
+                .field("repo_id", repo_id)
+                .field("base", &base)
+                .field("actual_head", &actual_head)
+                .field("selected_ids", &selected_ids)
+                .field("reword_id", &reword_id)
+                .field("count", &count)
+                .field("result", &"<opaque>")
+                .finish(),
             InternalMsg::DiffLoaded {
                 repo_id,
                 target,

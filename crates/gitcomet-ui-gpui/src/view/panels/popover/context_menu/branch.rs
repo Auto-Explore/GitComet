@@ -37,6 +37,10 @@ pub(super) fn model(
     let is_current_branch = active_branch_name
         .as_ref()
         .is_some_and(|branch| branch == name);
+    // Name the branch being moved rather than the opaque "HEAD".
+    let current_branch_label = active_branch_name
+        .clone()
+        .unwrap_or_else(|| "HEAD".to_string());
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
@@ -114,7 +118,7 @@ pub(super) fn model(
                 }),
             });
             items.push(ContextMenuItem::Entry {
-                label: "Rebase onto this".into(),
+                label: format!("Rebase {current_branch_label} onto {name}").into(),
                 icon: Some("icons/arrow_up.svg".into()),
                 shortcut: Some("B".into()),
                 disabled: false,
@@ -173,7 +177,7 @@ pub(super) fn model(
                 }),
             });
             items.push(ContextMenuItem::Entry {
-                label: "Rebase onto this".into(),
+                label: format!("Rebase {current_branch_label} onto {name}").into(),
                 icon: Some("icons/arrow_up.svg".into()),
                 shortcut: Some("B".into()),
                 disabled: false,

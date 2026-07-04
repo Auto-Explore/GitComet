@@ -828,6 +828,31 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Builds the default combined message for squashing the linear commit
+    /// range `oldest..=head`: the oldest commit's full message first, younger
+    /// messages appended as paragraphs.
+    fn squash_message_preview(&self, _oldest: &CommitId, _head: &CommitId) -> Result<String> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "squashing commits is not implemented for this backend",
+        )))
+    }
+
+    /// Squashes the linear first-parent range `oldest..=expected_head` (which
+    /// must end at the current HEAD) into a single commit carrying `message`,
+    /// preserving the oldest commit's author. Must not touch the worktree or
+    /// index, and must fail without changing refs when HEAD no longer equals
+    /// `expected_head`.
+    fn squash_commits_with_output(
+        &self,
+        _oldest: &CommitId,
+        _expected_head: &CommitId,
+        _message: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "squashing commits is not implemented for this backend",
+        )))
+    }
+
     fn reset_with_output(&self, _target: &str, _mode: ResetMode) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git reset is not implemented for this backend",

@@ -51,6 +51,12 @@ pub enum RepoCommandKind {
         mode: ResetMode,
         target: String,
     },
+    SquashCommits {
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
+    },
     Rebase {
         onto: String,
     },

@@ -471,6 +471,60 @@ pub(super) fn reset(repo_id: RepoId, target: String, mode: ResetMode) -> Vec<Eff
     }]
 }
 
+pub(super) fn squash_commits(
+    state: &mut AppState,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    expected_head: gitcomet_core::domain::CommitId,
+    message: String,
+    count: usize,
+) -> Vec<Effect> {
+    // Re-validate against the current selection and log: both may have
+    // changed between opening the prompt and confirming.
+    let plan = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .and_then(super::effects::squash_plan_for_repo);
+    let still_valid = plan
+        .as_ref()
+        .is_some_and(|p| p.oldest == oldest && p.head == expected_head);
+    if !still_valid || message.trim().is_empty() {
+        super::util::push_notification(
+            state,
+            crate::model::AppNotificationKind::Warning,
+            "Squash cancelled: the selected commits are no longer squashable.".to_string(),
+        );
+        return Vec::new();
+    }
+    let plan = plan.unwrap();
+
+    // Range ends at HEAD: use the fast commit-tree + update-ref path that
+    // does not touch the worktree or index.
+    if plan.head == plan.actual_head {
+        super::begin_local_action(state, repo_id);
+        return vec![Effect::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        }];
+    }
+
+    // Intermediate range: load the full commit list from base..HEAD so we
+    // can build a rebase todo that squashes only the selected commits.
+    vec![Effect::LoadSquashRebaseSetup {
+        repo_id,
+        base: plan.oldest_parent,
+        actual_head: plan.actual_head,
+        selected_ids: plan.ordered_ids,
+        reword_id: oldest,
+        message,
+        count,
+    }]
+}
+
 pub(super) fn rebase(repo_id: RepoId, onto: String) -> Vec<Effect> {
     vec![Effect::Rebase { repo_id, onto }]
 }
@@ -825,6 +879,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
         RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::SquashCommits { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
@@ -988,6 +1043,7 @@ pub(super) fn repo_command_finished(
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }
+                    | RepoCommandKind::SquashCommits { .. }
                     | RepoCommandKind::Rebase { .. }
                     | RepoCommandKind::RebaseContinue
                     | RepoCommandKind::RebaseAbort
@@ -1002,6 +1058,17 @@ pub(super) fn repo_command_finished(
                 repo_state.diff_state.inline_submodule_diff = None;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
+            }
+            if matches!(
+                &command,
+                RepoCommandKind::SquashCommits { .. } | RepoCommandKind::InteractiveRebase { .. }
+            ) {
+                // The squashed/rebased commits may no longer exist; clear the
+                // selection and the prompt's preview.
+                repo_state.set_selected_commit(None);
+                repo_state.set_commit_details(Loadable::NotLoaded);
+                repo_state.history_state.squash_preview_pending = None;
+                repo_state.set_squash_preview(Loadable::NotLoaded);
             }
             push_command_log(repo_state, true, &command, &output, None);
         }

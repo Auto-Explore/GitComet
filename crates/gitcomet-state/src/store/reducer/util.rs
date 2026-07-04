@@ -1002,6 +1002,7 @@ fn summarize_command(
             RepoCommandKind::PushTag { .. } => "Push tag",
             RepoCommandKind::DeleteRemoteTag { .. } => "Delete remote tag",
             RepoCommandKind::Reset { .. } => "Reset",
+            RepoCommandKind::SquashCommits { .. } => "Squash",
             RepoCommandKind::Rebase { .. } => "Rebase",
             RepoCommandKind::RebaseContinue => "Rebase",
             RepoCommandKind::RebaseAbort => "Rebase",
@@ -1202,6 +1203,9 @@ fn summarize_command(
                 gitcomet_core::services::ResetMode::Hard => "hard",
             };
             format!("Reset (--{mode}) {target}: Completed")
+        }
+        RepoCommandKind::SquashCommits { count, .. } => {
+            format!("Squash {count} commits: Completed")
         }
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => "Rebase: Continued".to_string(),
