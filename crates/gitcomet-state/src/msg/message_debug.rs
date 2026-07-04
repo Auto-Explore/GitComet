@@ -261,6 +261,24 @@ impl std::fmt::Debug for InternalMsg {
                 .field("head", head)
                 .field("result", result)
                 .finish(),
+            InternalMsg::SquashRebaseSetupLoaded {
+                repo_id,
+                base,
+                actual_head,
+                selected_ids,
+                reword_id,
+                count,
+                ..
+            } => f
+                .debug_struct("SquashRebaseSetupLoaded")
+                .field("repo_id", repo_id)
+                .field("base", &base)
+                .field("actual_head", &actual_head)
+                .field("selected_ids", &selected_ids)
+                .field("reword_id", &reword_id)
+                .field("count", &count)
+                .field("result", &"<opaque>")
+                .finish(),
             InternalMsg::DiffLoaded {
                 repo_id,
                 target,

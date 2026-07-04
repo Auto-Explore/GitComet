@@ -421,6 +421,26 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadSquashRebaseSetup {
+            repo_id,
+            base,
+            actual_head,
+            selected_ids,
+            reword_id,
+            message,
+            count,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::SquashRebaseSetupLoaded {
+                repo_id,
+                base: base.as_ref().to_string(),
+                actual_head,
+                selected_ids,
+                reword_id,
+                message,
+                count,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::OpenFileAtCommitParent { .. } | Effect::OpenFileAtCommit { .. } => {
             // No git backend available; nothing to resolve.
         }
@@ -1635,6 +1655,34 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_load_squash_message_preview(
                     executor, repos, msg_tx, repo_id, oldest, head,
+                );
+            }
+        }
+        Effect::LoadSquashRebaseSetup {
+            repo_id,
+            base,
+            actual_head,
+            selected_ids,
+            reword_id,
+            message,
+            count,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_squash_rebase_setup(
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    repo_load::SquashRebaseSetupRequest {
+                        base,
+                        actual_head,
+                        selected_ids,
+                        reword_id,
+                        message,
+                        count,
+                    },
                 );
             }
         }

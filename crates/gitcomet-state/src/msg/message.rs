@@ -892,6 +892,16 @@ pub enum InternalMsg {
         head: CommitId,
         result: Result<String, Error>,
     },
+    SquashRebaseSetupLoaded {
+        repo_id: RepoId,
+        base: String,
+        actual_head: CommitId,
+        selected_ids: Vec<CommitId>,
+        reword_id: CommitId,
+        message: String,
+        count: usize,
+        result: Result<Vec<InteractiveRebaseEntry>, Error>,
+    },
     DiffLoaded {
         repo_id: RepoId,
         target: DiffTarget,

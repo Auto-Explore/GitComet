@@ -118,7 +118,11 @@ fn squash_replaces_linear_range_with_single_commit() {
 
     let backend = open_backend(&repo);
     backend
-        .squash_commits_with_output(&commit_id(&b), &commit_id(&d), "Squashed message\n\nDetails")
+        .squash_commits_with_output(
+            &commit_id(&b),
+            &commit_id(&d),
+            "Squashed message\n\nDetails",
+        )
         .expect("squash commits");
 
     let head = rev_parse(&repo, "HEAD");
@@ -165,9 +169,15 @@ fn squash_leaves_dirty_worktree_and_index_untouched() {
     // Note: git_stdout trims the output, which strips porcelain's leading
     // space from the first line; match without the column prefix.
     let status = git_stdout(&repo, &["status", "--porcelain"]);
-    assert!(status.contains("A  staged.txt"), "staged file kept: {status}");
+    assert!(
+        status.contains("A  staged.txt"),
+        "staged file kept: {status}"
+    );
     assert!(status.contains("M file.txt"), "dirty file kept: {status}");
-    assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "dirty\n");
+    assert_eq!(
+        fs::read_to_string(repo.join("file.txt")).unwrap(),
+        "dirty\n"
+    );
 }
 
 #[test]
@@ -183,7 +193,10 @@ fn squash_works_on_detached_head_and_moves_branch_when_attached() {
         .squash_commits_with_output(&commit_id(&b), &commit_id(&d), "Attached squash")
         .expect("squash commits");
     let squashed_head = rev_parse(&repo, "HEAD");
-    assert_eq!(rev_parse(&repo, &format!("refs/heads/{branch}")), squashed_head);
+    assert_eq!(
+        rev_parse(&repo, &format!("refs/heads/{branch}")),
+        squashed_head
+    );
 
     // Detached: HEAD itself moves, the branch stays.
     commit_file(&repo, "file.txt", "e\n", "Commit E");
@@ -239,7 +252,15 @@ fn squash_rejects_merge_commit_in_range() {
     let main_work = rev_parse(&repo, "HEAD");
     run_git(
         &repo,
-        &["-c", "commit.gpgsign=false", "merge", "--no-ff", "-m", "Merge feature", "feature"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "merge",
+            "--no-ff",
+            "-m",
+            "Merge feature",
+            "feature",
+        ],
     );
     let merge = rev_parse(&repo, "HEAD");
 
@@ -310,8 +331,5 @@ fn squash_message_preview_combines_messages_oldest_first() {
     let preview = backend
         .squash_message_preview(&commit_id(&b), &commit_id(&d))
         .expect("build message preview");
-    assert_eq!(
-        preview,
-        "Commit B\n\nBody of B\n\nCommit C\n\nCommit D"
-    );
+    assert_eq!(preview, "Commit B\n\nBody of B\n\nCommit C\n\nCommit D");
 }

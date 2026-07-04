@@ -389,17 +389,18 @@ impl PopoverHost {
                 is_bottom,
                 can_drop,
             } => {
-                let current_action = self.main_pane.read_with(cx, |pane, _| {
-                    pane.active_irebase()
-                        .and_then(|st| st.entries.get(*ix))
-                        .map(|e| e.action)
-                });
+                let is_squash_target = self
+                    .main_pane
+                    .read_with(cx, |pane, _| pane.active_entry_is_squash_target(*ix));
                 Some(interactive_rebase_action_menu_model(
                     *ix,
                     *is_bottom,
                     *can_drop,
-                    current_action,
+                    is_squash_target,
                 ))
+            }
+            PopoverKind::InteractiveRebaseAutosquashMenu => {
+                Some(interactive_rebase_autosquash_menu_model())
             }
             PopoverKind::TerminalMenu { repo_id, context } => {
                 Some(terminal::model(*repo_id, *context, cx))
@@ -919,17 +920,6 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::LoadInteractiveRebaseSetup { repo_id, base });
             }
-            ContextMenuAction::ResetInteractiveRebaseEntry { ix } => {
-                let _ = self.main_pane.update(cx, |pane, cx| {
-                    if let Some(entry) = pane
-                        .active_irebase_mut()
-                        .and_then(|st| st.entries.get_mut(ix))
-                    {
-                        entry.new_message = None;
-                    }
-                    pane.set_rebase_action(ix, InteractiveRebaseAction::Pick, cx);
-                });
-            }
             ContextMenuAction::SetInteractiveRebaseAction { ix, action } => {
                 let root_view = self.root_view.clone();
                 let was_reword = action == InteractiveRebaseAction::Reword;
@@ -965,6 +955,20 @@ impl PopoverHost {
                             });
                         });
                     });
+                }
+            }
+            ContextMenuAction::SetInteractiveRebaseAutosquashMode { mode } => {
+                let applied = self
+                    .main_pane
+                    .update(cx, |pane, cx| pane.apply_autosquash_mode(mode, cx));
+                if !applied {
+                    self.push_toast(
+                        components::ToastKind::Warning,
+                        "No automatic squashable commits found. Auto Squash searches for \
+                         commits with identical messages and amend-commits them."
+                            .to_string(),
+                        cx,
+                    );
                 }
             }
             ContextMenuAction::OpenPopover { kind } => {
@@ -1478,14 +1482,16 @@ fn interactive_rebase_action_menu_model(
     ix: usize,
     is_bottom: bool,
     can_drop: bool,
-    current_action: Option<InteractiveRebaseAction>,
+    is_squash_target: bool,
 ) -> ContextMenuModel {
     let mut items = vec![
         ContextMenuItem::Entry {
             label: "pick".into(),
             icon: None,
             shortcut: None,
-            disabled: false,
+            // A commit that a later commit squashes into cannot go back to a
+            // plain pick — it must keep receiving the squashed changes.
+            disabled: is_squash_target,
             action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
                 ix,
                 action: InteractiveRebaseAction::Pick,
@@ -1499,16 +1505,6 @@ fn interactive_rebase_action_menu_model(
             action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
                 ix,
                 action: InteractiveRebaseAction::Reword,
-            }),
-        },
-        ContextMenuItem::Entry {
-            label: "edit".into(),
-            icon: None,
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
-                ix,
-                action: InteractiveRebaseAction::Edit,
             }),
         },
         ContextMenuItem::Entry {
@@ -1533,27 +1529,26 @@ fn interactive_rebase_action_menu_model(
                 action: InteractiveRebaseAction::Squash,
             }),
         });
-        items.push(ContextMenuItem::Entry {
-            label: "fixup".into(),
-            icon: None,
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
-                ix,
-                action: InteractiveRebaseAction::Fixup,
-            }),
-        });
     }
-    let is_reword = current_action == Some(InteractiveRebaseAction::Reword);
-    items.push(ContextMenuItem::Separator);
-    items.push(ContextMenuItem::Entry {
-        label: "Reset".into(),
+    ContextMenuModel::new(items)
+}
+
+fn interactive_rebase_autosquash_menu_model() -> ContextMenuModel {
+    // Auto Squash is a one-shot action: pick a strategy and it folds the
+    // duplicate-message commits, no persisted on/off state to display.
+    let entry = |mode: AutosquashMode| ContextMenuItem::Entry {
+        label: mode.label().into(),
         icon: None,
         shortcut: None,
-        disabled: !is_reword,
-        action: Box::new(ContextMenuAction::ResetInteractiveRebaseEntry { ix }),
-    });
-    ContextMenuModel::new(items)
+        disabled: false,
+        action: Box::new(ContextMenuAction::SetInteractiveRebaseAutosquashMode { mode }),
+    };
+    ContextMenuModel::new(vec![
+        ContextMenuItem::Header("Auto Squash".into()),
+        entry(AutosquashMode::ToTop),
+        entry(AutosquashMode::Neighbor),
+        entry(AutosquashMode::ToBottom),
+    ])
 }
 
 #[cfg(test)]

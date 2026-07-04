@@ -311,13 +311,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
-        id: "rebase-continue",
-        label: "Continue Rebase",
-        shortcut: "",
-        category: "Rebase",
-        requires_repo: true,
-    },
-    CommandEntry {
         id: "blame",
         label: "Blame / Annotate",
         shortcut: "Alt+B",

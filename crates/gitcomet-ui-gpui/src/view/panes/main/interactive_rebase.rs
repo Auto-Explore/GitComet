@@ -14,50 +14,137 @@ fn squash_target(entries: &[InteractiveRebaseEntry], k: usize) -> Option<usize> 
         .find(|&j| entries[j].action != InteractiveRebaseAction::Drop)
 }
 
-pub(super) fn apply_autosquash(entries: &mut Vec<InteractiveRebaseEntry>) {
-    let mut i = 0;
-    while i < entries.len() {
-        let (prefix_action, target_summary) = {
-            let s = &entries[i].summary;
-            if let Some(t) = s.strip_prefix("fixup! ") {
-                (InteractiveRebaseAction::Fixup, t.to_owned())
-            } else if let Some(t) = s.strip_prefix("squash! ") {
-                (InteractiveRebaseAction::Squash, t.to_owned())
-            } else {
-                i += 1;
-                continue;
+/// Whether any squash/fixup entry currently folds into the entry at `ix`.
+fn entry_is_squash_target(entries: &[InteractiveRebaseEntry], ix: usize) -> bool {
+    (0..entries.len()).any(|k| {
+        matches!(
+            entries[k].action,
+            InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+        ) && squash_target(entries, k) == Some(ix)
+    })
+}
+
+/// The commit ids folded into each survivor for a given auto-squash `mode`.
+/// Groups commits by identical summary; the surviving commit per group is
+/// chosen by the mode, and the others fold (fixup) into it. Empty summaries are
+/// never eligible. `entries` are ordered oldest-first (index 0 = oldest).
+///
+/// Returns `folded_into[i] = Some(survivor_index)` for every commit that is
+/// folded away, and `None` for survivors and untouched commits.
+fn autosquash_folds(entries: &[InteractiveRebaseEntry], mode: AutosquashMode) -> Vec<Option<usize>> {
+    let n = entries.len();
+    let mut folded_into: Vec<Option<usize>> = vec![None; n];
+    match mode {
+        AutosquashMode::ToTop | AutosquashMode::ToBottom => {
+            // Group indices by summary, preserving first-seen order for stable output.
+            let mut order: Vec<&str> = Vec::new();
+            let mut groups: std::collections::HashMap<&str, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (i, e) in entries.iter().enumerate() {
+                if e.summary.trim().is_empty() {
+                    continue;
+                }
+                groups
+                    .entry(e.summary.as_str())
+                    .or_insert_with(|| {
+                        order.push(e.summary.as_str());
+                        Vec::new()
+                    })
+                    .push(i);
             }
-        };
-        let target_ix =
-            (0..i).find(|&j| entries[j].summary.lines().next().unwrap_or("") == target_summary);
-        if let Some(t) = target_ix {
-            entries[i].action = prefix_action;
-            let entry = entries.remove(i);
-            // Skip over already-grouped fixup/squash entries so that multiple
-            // fixup!/squash! commits targeting the same base don't swap each
-            // other back and forth indefinitely.
-            let mut insert_at = t + 1;
-            while insert_at < i
-                && matches!(
-                    entries[insert_at].action,
-                    InteractiveRebaseAction::Fixup | InteractiveRebaseAction::Squash
-                )
-            {
-                insert_at += 1;
+            for key in order {
+                let indices = &groups[key];
+                if indices.len() < 2 {
+                    continue;
+                }
+                // Highest index = newest commit; lowest = oldest.
+                let survivor = match mode {
+                    AutosquashMode::ToTop => *indices.iter().max().unwrap(),
+                    _ => *indices.iter().min().unwrap(),
+                };
+                for &i in indices {
+                    if i != survivor {
+                        folded_into[i] = Some(survivor);
+                    }
+                }
             }
-            entries.insert(insert_at, entry);
-            // If inserted at or past i, the same slot now holds an unprocessed entry.
-            if insert_at >= i {
-                i += 1;
+        }
+        AutosquashMode::Neighbor => {
+            // Collapse each maximal run of adjacent, equal-summary commits into
+            // the run's oldest (lowest-index) member.
+            let mut i = 0;
+            while i < n {
+                if entries[i].summary.trim().is_empty() {
+                    i += 1;
+                    continue;
+                }
+                let mut j = i + 1;
+                while j < n && entries[j].summary == entries[i].summary {
+                    j += 1;
+                }
+                for k in (i + 1)..j {
+                    folded_into[k] = Some(i);
+                }
+                i = j;
             }
-        } else {
-            i += 1;
         }
     }
-    validate_squash_entries(entries);
+    folded_into
+}
+
+/// Applies `mode` to `original`, producing the collapsed entry list (one row
+/// per surviving/untouched commit) plus the survivor-id → folded-fixup map.
+/// The folded map is empty when nothing was eligible.
+fn compute_autosquash(
+    original: &[InteractiveRebaseEntry],
+    mode: AutosquashMode,
+) -> (
+    Vec<InteractiveRebaseEntry>,
+    std::collections::HashMap<String, Vec<InteractiveRebaseEntry>>,
+) {
+    let folded_into = autosquash_folds(original, mode);
+    let mut collapsed = Vec::with_capacity(original.len());
+    let mut folded: std::collections::HashMap<String, Vec<InteractiveRebaseEntry>> =
+        std::collections::HashMap::new();
+    for (i, e) in original.iter().enumerate() {
+        match folded_into[i] {
+            Some(survivor) => {
+                let mut fixup = e.clone();
+                fixup.action = InteractiveRebaseAction::Fixup;
+                fixup.new_message = None;
+                folded
+                    .entry(original[survivor].commit_id.clone())
+                    .or_default()
+                    .push(fixup);
+            }
+            None => collapsed.push(e.clone()),
+        }
+    }
+    (collapsed, folded)
+}
+
+/// Re-expands the collapsed editing list into the todo the rebase executor
+/// consumes: each survivor is followed by its folded commits as `fixup` entries.
+/// A dropped survivor takes its folded commits with it.
+fn expand_folded(
+    entries: &[InteractiveRebaseEntry],
+    folded: &std::collections::HashMap<String, Vec<InteractiveRebaseEntry>>,
+) -> Vec<InteractiveRebaseEntry> {
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        out.push(e.clone());
+        if e.action != InteractiveRebaseAction::Drop {
+            if let Some(fixups) = folded.get(&e.commit_id) {
+                out.extend(fixups.iter().cloned());
+            }
+        }
+    }
+    out
 }
 
 fn validate_squash_entries(entries: &mut [InteractiveRebaseEntry]) {
+    // First pass: a squash/fixup with no surviving target above it becomes a
+    // plain pick.
     for k in 0..entries.len() {
         if !matches!(
             entries[k].action,
@@ -69,6 +156,20 @@ fn validate_squash_entries(entries: &mut [InteractiveRebaseEntry]) {
             .rev()
             .any(|j| entries[j].action != InteractiveRebaseAction::Drop);
         if !has_target {
+            entries[k].action = InteractiveRebaseAction::Pick;
+        }
+    }
+    // Second pass: an entry auto-promoted to Reword solely to absorb a squash
+    // reverts to Pick once nothing folds into it and the user never typed a
+    // replacement message. Runs after the squash pass so a squash that just
+    // reverted to Pick correctly strands its former target. Mirrors the
+    // targeted cleanup in `set_rebase_action` for the reorder paths (▲/▼, drag)
+    // which previously only ran the squash pass.
+    for k in 0..entries.len() {
+        if entries[k].action == InteractiveRebaseAction::Reword
+            && entries[k].new_message.is_none()
+            && !entry_is_squash_target(entries, k)
+        {
             entries[k].action = InteractiveRebaseAction::Pick;
         }
     }
@@ -121,6 +222,35 @@ impl MainPaneView {
     pub(in crate::view) fn active_irebase_mut(&mut self) -> Option<&mut IRebaseViewState> {
         let repo_id = self.active_repo_id()?;
         self.interactive_rebase_states.get_mut(&repo_id)
+    }
+
+    /// Whether a later commit squashes into the active-setup entry at `ix`.
+    pub(in crate::view) fn active_entry_is_squash_target(&self, ix: usize) -> bool {
+        self.active_irebase()
+            .is_some_and(|st| entry_is_squash_target(&st.entries, ix))
+    }
+
+    /// Applies an auto-squash `mode` to the active setup as a one-shot action,
+    /// recomputing from the original commit list. Returns `false` when no
+    /// commits were eligible — the caller then surfaces a toast and the state is
+    /// left unchanged.
+    pub(in crate::view) fn apply_autosquash_mode(
+        &mut self,
+        mode: AutosquashMode,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(st) = self.active_irebase_mut() else {
+            return true;
+        };
+        let (collapsed, folded) = compute_autosquash(&st.original_entries, mode);
+        if folded.is_empty() {
+            return false;
+        }
+        st.autosquash_mode = Some(mode);
+        st.entries = collapsed;
+        st.folded = folded;
+        cx.notify();
+        true
     }
 
     pub(in crate::view) fn set_rebase_action(
@@ -231,6 +361,16 @@ impl MainPaneView {
             } else {
                 base.clone().into()
             };
+        // Prefer a branch name that points at the base commit; fall back to the
+        // abbreviated sha.
+        let base_display: SharedString = match &repo.branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|b| b.target.as_ref() == base.as_str())
+                .map(|b| SharedString::from(b.name.clone()))
+                .unwrap_or_else(|| base_short.clone()),
+            _ => base_short.clone(),
+        };
 
         let loading_state = &setup.entries;
         let entry_content: gpui::AnyElement = match loading_state {
@@ -257,6 +397,27 @@ impl MainPaneView {
                 .into_any_element(),
             // The map entry is populated by `apply_state` on the same state
             // application that made the entries Ready; guard anyway.
+            // Nothing to rebase (base is already at HEAD): the editing UI is
+            // useless here, so show a plain message instead of an empty list.
+            // The footer hides its rebase options in the same empty case.
+            Loadable::Ready(_)
+                if self
+                    .interactive_rebase_states
+                    .get(&repo_id)
+                    .is_some_and(|st| st.entries.is_empty()) =>
+            {
+                div()
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px_2()
+                    .py_2()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child(format!("No commits to rebase onto {base_display}."))
+                    .into_any_element()
+            }
             Loadable::Ready(_) if self.interactive_rebase_states.contains_key(&repo_id) => {
                 let st = &self.interactive_rebase_states[&repo_id];
                 let entry_count = st.entries.len();
@@ -265,6 +426,26 @@ impl MainPaneView {
                     .active_repo()
                     .and_then(|r| r.history_state.selected_commit.as_ref())
                     .map(|c| c.0.as_ref().to_owned());
+
+                // While auto-squash is off, flag rows whose summary is shared by
+                // another commit — the candidates a mode would fold together.
+                let autosquash_active = st.autosquash_mode.is_some();
+                let eligible_summaries: std::collections::HashSet<&str> = if autosquash_active {
+                    std::collections::HashSet::new()
+                } else {
+                    let mut counts: std::collections::HashMap<&str, u32> =
+                        std::collections::HashMap::new();
+                    for e in &st.entries {
+                        if !e.summary.trim().is_empty() {
+                            *counts.entry(e.summary.as_str()).or_default() += 1;
+                        }
+                    }
+                    counts
+                        .into_iter()
+                        .filter(|(_, c)| *c > 1)
+                        .map(|(s, _)| s)
+                        .collect()
+                };
 
                 let reorder_anim = st.reorder_anim;
                 let drag_state = st.drag_state;
@@ -487,6 +668,24 @@ impl MainPaneView {
                         action,
                         InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
                     );
+                    // Dropped entries are dimmed and struck through so it is
+                    // clear they will be discarded when the rebase runs.
+                    let is_dropped = action == InteractiveRebaseAction::Drop;
+                    // A candidate for auto-squash (only surfaced while it is off).
+                    let is_autosquash_eligible =
+                        eligible_summaries.contains(st.entries[ix].summary.as_str());
+                    // Commits already folded into this survivor by auto-squash;
+                    // their short shas are listed beneath the row.
+                    let folded_shas: Vec<String> = st
+                        .folded
+                        .get(&st.entries[ix].commit_id)
+                        .map(|folds| {
+                            folds
+                                .iter()
+                                .map(|f| f.commit_id.get(..8).unwrap_or(&f.commit_id).to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default();
 
                     let btn_bounds: Rc<RefCell<Option<gpui::Bounds<gpui::Pixels>>>> =
                         Rc::new(RefCell::new(None));
@@ -555,8 +754,7 @@ impl MainPaneView {
                                 let swap_ix = len - 1 - (entry_display_pos - 1);
                                 st.entries.swap(ix, swap_ix);
                                 validate_squash_entries(&mut st.entries);
-                                let ver =
-                                    st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                                let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
                                 st.reorder_anim = Some((ix, swap_ix, ver));
                             }
                             cx.notify();
@@ -577,8 +775,7 @@ impl MainPaneView {
                                 let swap_ix = len - 1 - (entry_display_pos + 1);
                                 st.entries.swap(ix, swap_ix);
                                 validate_squash_entries(&mut st.entries);
-                                let ver =
-                                    st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+                                let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
                                 st.reorder_anim = Some((ix, swap_ix, ver));
                             }
                             cx.notify();
@@ -616,6 +813,25 @@ impl MainPaneView {
                         .when(!is_drag_source && !is_selected, |d| {
                             d.hover(move |s| s.bg(theme.colors.hover))
                         })
+                        .when(is_dropped, |d| d.opacity(0.5))
+                        // The folded-commit list sits above the survivor row.
+                        .when(!folded_shas.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .pl(px(20.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(crate::view::icons::svg_icon(
+                                        "icons/squash_arrow.svg",
+                                        with_alpha(theme.colors.accent, 0.7),
+                                        px(12.0),
+                                    ))
+                                    .child(format!("squashed {}", folded_shas.join(", "))),
+                            )
+                        })
                         .child(
                             div()
                                 .flex()
@@ -645,8 +861,12 @@ impl MainPaneView {
                                         .flex_1()
                                         .text_sm()
                                         .text_color(theme.colors.text)
+                                        .when(is_autosquash_eligible, |d| {
+                                            d.text_color(theme.colors.accent)
+                                        })
                                         .overflow_x_hidden()
                                         .whitespace_nowrap()
+                                        .when(is_dropped, |d| d.line_through())
                                         .child(summary),
                                 )
                                 .child(
@@ -894,17 +1114,11 @@ impl MainPaneView {
                 .into_any_element(),
         };
 
-        let (autosquash_enabled, is_modified, entries_empty) = self
+        let (is_modified, entries_empty) = self
             .interactive_rebase_states
             .get(&repo_id)
-            .map(|st| {
-                (
-                    st.autosquash,
-                    st.entries != st.original_entries,
-                    st.entries.is_empty(),
-                )
-            })
-            .unwrap_or((false, false, true));
+            .map(|st| (st.entries != st.original_entries, st.entries.is_empty()))
+            .unwrap_or((false, true));
 
         div()
             .flex()
@@ -944,7 +1158,7 @@ impl MainPaneView {
                         div()
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child(format!("onto {base_short}")),
+                            .child(format!("onto {base_display}")),
                     ),
             )
             .child(div().border_t_1().border_color(theme.colors.border))
@@ -957,7 +1171,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(
+                    .when(!entries_empty, |footer| footer.child(
                         div()
                             .flex()
                             .items_center()
@@ -966,59 +1180,56 @@ impl MainPaneView {
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.text_muted)
-                                    .child("Autosquash"),
+                                    .child("Auto Squash"),
                             )
                             .child(
-                                div()
-                                    .cursor(gpui::CursorStyle::PointingHand)
-                                    .text_sm()
-                                    .on_mouse_down(
-                                        gpui::MouseButton::Left,
-                                        cx.listener(
-                                            move |this, _e: &gpui::MouseDownEvent, _w, cx| {
-                                                let Some(st) = this
-                                                    .interactive_rebase_states
-                                                    .get_mut(&repo_id)
-                                                else {
-                                                    return;
-                                                };
-                                                st.autosquash = !st.autosquash;
-                                                st.entries = st.original_entries.clone();
-                                                if st.autosquash {
-                                                    apply_autosquash(&mut st.entries);
-                                                }
-                                                cx.notify();
-                                            },
-                                        ),
-                                    )
-                                    .child(if autosquash_enabled { "☑" } else { "☐" }),
+                                components::Button::new("irebase_autosquash", "Auto Squash ▾")
+                                    .style(components::ButtonStyle::Outlined)
+                                .on_click_with_bounds(
+                                    theme,
+                                    cx,
+                                    move |this, _e, bounds, window, cx| {
+                                        let wh = window.window_handle();
+                                        let root = this.root_view.clone();
+                                        cx.defer(move |cx| {
+                                            let _ = wh.update(cx, |_, window, cx| {
+                                                let _ = root.update(cx, |root, cx| {
+                                                    root.open_popover_for_bounds(
+                                                        PopoverKind::InteractiveRebaseAutosquashMenu,
+                                                        bounds,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                });
+                                            });
+                                        });
+                                    },
+                                ),
                             ),
-                    )
+                    ))
                     .child(
                         div()
                             .flex()
                             .gap_1()
-                            .child(
+                            .when(!entries_empty, |row| row.child(
                                 components::Button::new("irebase_reset", "Reset All")
                                     .style(components::ButtonStyle::Outlined)
                                     .disabled(!is_modified)
                                     .render(theme, ui_scale_percent)
                                     .on_click(cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
-                                            let Some(st) = this
-                                                .interactive_rebase_states
-                                                .get_mut(&repo_id)
+                                            let Some(st) =
+                                                this.interactive_rebase_states.get_mut(&repo_id)
                                             else {
                                                 return;
                                             };
                                             st.entries = st.original_entries.clone();
-                                            if st.autosquash {
-                                                apply_autosquash(&mut st.entries);
-                                            }
+                                            st.folded.clear();
+                                            st.autosquash_mode = None;
                                             cx.notify();
                                         },
                                     )),
-                            )
+                            ))
                             .child(
                                 components::Button::new("irebase_cancel", "Cancel")
                                     .style(components::ButtonStyle::Outlined)
@@ -1032,7 +1243,7 @@ impl MainPaneView {
                                         },
                                     )),
                             )
-                            .child(
+                            .when(!entries_empty, |row| row.child(
                                 components::Button::new("irebase_start", "Start Rebase")
                                     .style(components::ButtonStyle::Filled)
                                     .disabled(
@@ -1042,16 +1253,15 @@ impl MainPaneView {
                                     .render(theme, ui_scale_percent)
                                     .on_click(cx.listener(
                                         move |this, _e: &gpui::ClickEvent, _w, cx| {
-                                            let Some(st) = this
-                                                .interactive_rebase_states
-                                                .get_mut(&repo_id)
+                                            let Some(st) =
+                                                this.interactive_rebase_states.get_mut(&repo_id)
                                             else {
                                                 return;
                                             };
                                             if st.entries.is_empty() {
                                                 return;
                                             }
-                                            let entries = std::mem::take(&mut st.entries);
+                                            let entries = expand_folded(&st.entries, &st.folded);
                                             this.store.dispatch(Msg::InteractiveRebase {
                                                 repo_id,
                                                 base: base.clone(),
@@ -1063,8 +1273,195 @@ impl MainPaneView {
                                             cx.notify();
                                         },
                                     )),
-                            ),
+                            )),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(
+        action: InteractiveRebaseAction,
+        id: &str,
+        new_message: Option<&str>,
+    ) -> InteractiveRebaseEntry {
+        InteractiveRebaseEntry {
+            action,
+            commit_id: id.to_string(),
+            summary: format!("summary {id}"),
+            new_message: new_message.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn squash_folds_into_preceding_entry() {
+        // Data index 0 is the oldest commit; a squash at a higher index folds
+        // into the nearest non-drop entry below it.
+        let entries = vec![
+            entry(InteractiveRebaseAction::Pick, "a", None),
+            entry(InteractiveRebaseAction::Squash, "b", None),
+        ];
+        assert!(entry_is_squash_target(&entries, 0));
+        assert!(!entry_is_squash_target(&entries, 1));
+    }
+
+    #[test]
+    fn stranded_auto_reword_reverts_to_pick() {
+        // A Reword with no user message and nothing squashing into it — the
+        // state left behind when a squash is reordered away from its target
+        // (finding #5) — reverts to Pick.
+        let mut entries = vec![
+            entry(InteractiveRebaseAction::Pick, "a", None),
+            entry(InteractiveRebaseAction::Reword, "b", None),
+        ];
+        validate_squash_entries(&mut entries);
+        assert_eq!(entries[1].action, InteractiveRebaseAction::Pick);
+    }
+
+    #[test]
+    fn deliberate_reword_is_preserved() {
+        // A Reword the user actually typed a message for is never downgraded.
+        let mut entries = vec![
+            entry(InteractiveRebaseAction::Pick, "a", None),
+            entry(InteractiveRebaseAction::Reword, "b", Some("new subject")),
+        ];
+        validate_squash_entries(&mut entries);
+        assert_eq!(entries[1].action, InteractiveRebaseAction::Reword);
+    }
+
+    #[test]
+    fn reword_kept_while_still_a_squash_target() {
+        // The auto-promoted Reword target stays Reword as long as a squash
+        // continues to fold into it.
+        let mut entries = vec![
+            entry(InteractiveRebaseAction::Reword, "a", None),
+            entry(InteractiveRebaseAction::Squash, "b", None),
+        ];
+        validate_squash_entries(&mut entries);
+        assert_eq!(entries[0].action, InteractiveRebaseAction::Reword);
+        assert_eq!(entries[1].action, InteractiveRebaseAction::Squash);
+    }
+
+    #[test]
+    fn squash_without_target_reverts_to_pick() {
+        // A squash at the bottom (nothing below to fold into) becomes a pick,
+        // and the now-stranded reword above it also reverts.
+        let mut entries = vec![
+            entry(InteractiveRebaseAction::Squash, "a", None),
+            entry(InteractiveRebaseAction::Reword, "b", None),
+        ];
+        validate_squash_entries(&mut entries);
+        assert_eq!(entries[0].action, InteractiveRebaseAction::Pick);
+        assert_eq!(entries[1].action, InteractiveRebaseAction::Pick);
+    }
+
+    // Commit with an explicit summary, for auto-squash grouping tests.
+    // Order is oldest-first (index 0 = oldest), matching the entries vector.
+    fn sc(id: &str, summary: &str) -> InteractiveRebaseEntry {
+        InteractiveRebaseEntry {
+            action: InteractiveRebaseAction::Pick,
+            commit_id: id.to_string(),
+            summary: summary.to_string(),
+            new_message: None,
+        }
+    }
+
+    #[test]
+    fn autosquash_to_bottom_folds_into_oldest() {
+        // oldest→newest: B "fix", C "wip", D "fix", F "fix"
+        let original = vec![
+            sc("B", "fix"),
+            sc("C", "wip"),
+            sc("D", "fix"),
+            sc("F", "fix"),
+        ];
+        let (collapsed, folded) = compute_autosquash(&original, AutosquashMode::ToBottom);
+        // Only B (oldest "fix") and C survive.
+        let ids: Vec<&str> = collapsed.iter().map(|e| e.commit_id.as_str()).collect();
+        assert_eq!(ids, vec!["B", "C"]);
+        let into_b = &folded["B"];
+        assert_eq!(
+            into_b.iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            vec!["D", "F"]
+        );
+        assert!(into_b.iter().all(|e| e.action == InteractiveRebaseAction::Fixup));
+    }
+
+    #[test]
+    fn autosquash_to_top_folds_into_newest() {
+        let original = vec![
+            sc("B", "fix"),
+            sc("C", "wip"),
+            sc("D", "fix"),
+            sc("F", "fix"),
+        ];
+        let (collapsed, folded) = compute_autosquash(&original, AutosquashMode::ToTop);
+        // F (newest "fix") and C survive; F keeps its slot (after C).
+        let ids: Vec<&str> = collapsed.iter().map(|e| e.commit_id.as_str()).collect();
+        assert_eq!(ids, vec!["C", "F"]);
+        assert_eq!(
+            folded["F"].iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            vec!["B", "D"]
+        );
+    }
+
+    #[test]
+    fn autosquash_neighbor_only_merges_adjacent() {
+        // Two "fix" are adjacent (D,E); a separate "fix" (B) is not.
+        let original = vec![
+            sc("B", "fix"),
+            sc("C", "wip"),
+            sc("D", "fix"),
+            sc("E", "fix"),
+        ];
+        let (collapsed, folded) = compute_autosquash(&original, AutosquashMode::Neighbor);
+        // B stays (not adjacent to another "fix"); D survives its run, E folds in.
+        let ids: Vec<&str> = collapsed.iter().map(|e| e.commit_id.as_str()).collect();
+        assert_eq!(ids, vec!["B", "C", "D"]);
+        assert_eq!(
+            folded["D"].iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            vec!["E"]
+        );
+        assert!(!folded.contains_key("B"));
+    }
+
+    #[test]
+    fn autosquash_no_duplicates_yields_empty_fold() {
+        let original = vec![sc("A", "one"), sc("B", "two"), sc("C", "three")];
+        let (_, folded) = compute_autosquash(&original, AutosquashMode::ToBottom);
+        assert!(folded.is_empty());
+    }
+
+    #[test]
+    fn expand_folded_reinserts_fixups_after_survivor() {
+        let original = vec![sc("B", "fix"), sc("C", "wip"), sc("D", "fix")];
+        let (collapsed, folded) = compute_autosquash(&original, AutosquashMode::ToBottom);
+        let expanded = expand_folded(&collapsed, &folded);
+        let seq: Vec<(&str, InteractiveRebaseAction)> =
+            expanded.iter().map(|e| (e.commit_id.as_str(), e.action)).collect();
+        assert_eq!(
+            seq,
+            vec![
+                ("B", InteractiveRebaseAction::Pick),
+                ("D", InteractiveRebaseAction::Fixup),
+                ("C", InteractiveRebaseAction::Pick),
+            ]
+        );
+    }
+
+    #[test]
+    fn expand_folded_drops_fixups_with_dropped_survivor() {
+        let original = vec![sc("B", "fix"), sc("D", "fix")];
+        let (mut collapsed, folded) = compute_autosquash(&original, AutosquashMode::ToBottom);
+        // Drop the survivor B; its folded commit D should not be emitted.
+        collapsed[0].action = InteractiveRebaseAction::Drop;
+        let expanded = expand_folded(&collapsed, &folded);
+        assert_eq!(
+            expanded.iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            vec!["B"]
+        );
     }
 }

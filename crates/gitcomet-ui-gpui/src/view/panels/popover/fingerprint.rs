@@ -138,6 +138,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::AppMenu
         | PopoverKind::RebaseReword { .. }
         | PopoverKind::InteractiveRebaseActionMenu { .. }
+        | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -312,6 +313,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         // Most prompt-style popovers don't require live state updates.
         PopoverKind::InteractiveRebaseActionMenu { .. }
+        | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::RebaseReword { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
@@ -694,6 +696,9 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             ix.hash(hasher);
             is_bottom.hash(hasher);
             can_drop.hash(hasher);
+        }
+        PopoverKind::InteractiveRebaseAutosquashMenu => {
+            79u8.hash(hasher);
         }
     }
 }

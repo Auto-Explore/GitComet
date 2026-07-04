@@ -786,8 +786,7 @@ impl DetailsPaneView {
         let next_repo_id = next.active_repo;
         let next_repo = next_repo_id.and_then(|id| next.repos.iter().find(|r| r.id == id));
         let next_selected_commit = next_repo.and_then(|r| r.history_state.selected_commit.clone());
-        let next_multi_commits =
-            next_repo.map(|r| r.history_state.multi_selection.commits.clone());
+        let next_multi_commits = next_repo.map(|r| r.history_state.multi_selection.commits.clone());
         let next_merge_message = next_repo.and_then(|r| match &r.merge_commit_message {
             Loadable::Ready(Some(message)) => Some(message.clone()),
             _ => None,

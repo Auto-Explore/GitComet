@@ -481,12 +481,14 @@ pub(super) fn squash_commits(
 ) -> Vec<Effect> {
     // Re-validate against the current selection and log: both may have
     // changed between opening the prompt and confirming.
-    let still_valid = state
+    let plan = state
         .repos
         .iter()
         .find(|r| r.id == repo_id)
-        .and_then(super::effects::squash_plan_for_repo)
-        .is_some_and(|plan| plan.oldest == oldest && plan.head == expected_head);
+        .and_then(super::effects::squash_plan_for_repo);
+    let still_valid = plan
+        .as_ref()
+        .is_some_and(|p| p.oldest == oldest && p.head == expected_head);
     if !still_valid || message.trim().is_empty() {
         super::util::push_notification(
             state,
@@ -495,12 +497,29 @@ pub(super) fn squash_commits(
         );
         return Vec::new();
     }
+    let plan = plan.unwrap();
 
-    super::begin_local_action(state, repo_id);
-    vec![Effect::SquashCommits {
+    // Range ends at HEAD: use the fast commit-tree + update-ref path that
+    // does not touch the worktree or index.
+    if plan.head == plan.actual_head {
+        super::begin_local_action(state, repo_id);
+        return vec![Effect::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        }];
+    }
+
+    // Intermediate range: load the full commit list from base..HEAD so we
+    // can build a rebase todo that squashes only the selected commits.
+    vec![Effect::LoadSquashRebaseSetup {
         repo_id,
-        oldest,
-        expected_head,
+        base: plan.oldest_parent,
+        actual_head: plan.actual_head,
+        selected_ids: plan.ordered_ids,
+        reword_id: oldest,
         message,
         count,
     }]
@@ -1040,9 +1059,12 @@ pub(super) fn repo_command_finished(
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
             }
-            if matches!(&command, RepoCommandKind::SquashCommits { .. }) {
-                // The squashed commits no longer exist; clear the selection
-                // and the prompt's preview.
+            if matches!(
+                &command,
+                RepoCommandKind::SquashCommits { .. } | RepoCommandKind::InteractiveRebase { .. }
+            ) {
+                // The squashed/rebased commits may no longer exist; clear the
+                // selection and the prompt's preview.
                 repo_state.set_selected_commit(None);
                 repo_state.set_commit_details(Loadable::NotLoaded);
                 repo_state.history_state.squash_preview_pending = None;

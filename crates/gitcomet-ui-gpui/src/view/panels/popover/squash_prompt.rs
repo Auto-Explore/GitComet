@@ -68,11 +68,19 @@ pub(super) fn panel(
         .squash_message_input
         .read_with(cx, |input, _| input.text().trim().is_empty());
 
-    let summary = format!(
-        "{}..{} → one commit on HEAD",
-        short_sha(&plan.oldest),
-        short_sha(&plan.head)
-    );
+    let summary = if plan.head == plan.actual_head {
+        format!(
+            "{}..{} → one commit on HEAD",
+            short_sha(&plan.oldest),
+            short_sha(&plan.head)
+        )
+    } else {
+        format!(
+            "{}..{} → one commit · rewriting commits above",
+            short_sha(&plan.oldest),
+            short_sha(&plan.head)
+        )
+    };
     let message_hint: Option<SharedString> = match &preview {
         Loadable::Loading | Loadable::NotLoaded => Some("Building combined message…".into()),
         Loadable::Error(e) => Some(format!("Could not build the combined message: {e}").into()),

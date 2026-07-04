@@ -2601,7 +2601,13 @@ pub(crate) struct MainPaneView {
 pub(in crate::view) struct IRebaseViewState {
     pub(in crate::view) entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
     pub(in crate::view) original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) autosquash: bool,
+    /// Active auto-squash strategy, or None when auto-squash is off.
+    pub(in crate::view) autosquash_mode: Option<AutosquashMode>,
+    /// Commits folded away by auto-squash, keyed by the surviving commit id.
+    /// Each survivor's `entries` row displays these ids; they are re-expanded
+    /// into `fixup` todo entries when the rebase starts.
+    pub(in crate::view) folded:
+        std::collections::HashMap<String, Vec<gitcomet_core::services::InteractiveRebaseEntry>>,
     pub(in crate::view) drag_state: Option<IRebaseDragState>,
     pub(in crate::view) scroll: gpui::ScrollHandle,
     /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.

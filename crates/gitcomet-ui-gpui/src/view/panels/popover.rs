@@ -28,8 +28,8 @@ mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod repo_picker;
 mod reset_prompt;
-mod squash_prompt;
 mod search_inputs;
+mod squash_prompt;
 mod stash_drop_confirm;
 mod stash_picker_prompt;
 mod stash_prompt;
@@ -93,6 +93,7 @@ const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260
 const COMMIT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 260.0, 480.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
 const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
+const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
 const DIFF_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 320.0);
 const DIFF_EDITOR_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 200.0, 340.0);
@@ -186,8 +187,10 @@ pub(in super::super) struct PopoverHost {
     /// prefilled for. Prevents re-prefilling the same range (so a user who
     /// clears the fields keeps them cleared) and, together with the empty-input
     /// check, prevents clobbering text the user typed while the preview loaded.
-    squash_prompt_prefilled_range:
-        Option<(gitcomet_core::domain::CommitId, gitcomet_core::domain::CommitId)>,
+    squash_prompt_prefilled_range: Option<(
+        gitcomet_core::domain::CommitId,
+        gitcomet_core::domain::CommitId,
+    )>,
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
@@ -225,6 +228,7 @@ pub(in super::super) struct PopoverHost {
     remote_edit_submit_focus_handle: FocusHandle,
     push_upstream_cancel_focus_handle: FocusHandle,
     push_upstream_submit_focus_handle: FocusHandle,
+    rebase_onto_submit_focus_handle: FocusHandle,
     worktree_browse_focus_handle: FocusHandle,
     worktree_cancel_focus_handle: FocusHandle,
     worktree_submit_focus_handle: FocusHandle,
@@ -313,6 +317,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::RepoTabMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
+            | PopoverKind::InteractiveRebaseAutosquashMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
@@ -600,6 +605,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::StashMenu { .. } => Some(STASH_MENU_WIDTH),
         PopoverKind::RebaseReword { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::InteractiveRebaseActionMenu { .. } => Some(REBASE_ACTION_MENU_WIDTH),
+        PopoverKind::InteractiveRebaseAutosquashMenu => Some(REBASE_AUTOSQUASH_MENU_WIDTH),
     }
 }
 
@@ -1149,6 +1155,7 @@ impl PopoverHost {
         let remote_edit_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let push_upstream_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let push_upstream_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let rebase_onto_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let worktree_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
@@ -1261,6 +1268,7 @@ impl PopoverHost {
             remote_edit_submit_focus_handle,
             push_upstream_cancel_focus_handle,
             push_upstream_submit_focus_handle,
+            rebase_onto_submit_focus_handle,
             worktree_browse_focus_handle,
             worktree_cancel_focus_handle,
             worktree_submit_focus_handle,
@@ -1425,8 +1433,7 @@ impl PopoverHost {
             return;
         };
         let repo = self.state.repos.iter().find(|r| r.id == repo_id);
-        let Some(Loadable::Ready(preview)) =
-            repo.map(|repo| &repo.history_state.squash_preview)
+        let Some(Loadable::Ready(preview)) = repo.map(|repo| &repo.history_state.squash_preview)
         else {
             return;
         };
@@ -2473,6 +2480,11 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
+                PopoverKind::RebaseOntoConfirm { .. } => {
+                    // Focus the primary (Rebase) button so Enter confirms and
+                    // Tab/Esc still reach Cancel.
+                    window.focus(&self.rebase_onto_submit_focus_handle, cx);
+                }
                 k if popover_is_confirm_dialog(k) => {
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
                 }
@@ -3146,7 +3158,8 @@ impl PopoverHost {
             PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
                 rebase_onto_confirm::panel(self, repo_id, onto, cx)
             }
-            PopoverKind::InteractiveRebaseActionMenu { .. } => {
+            PopoverKind::InteractiveRebaseActionMenu { .. }
+            | PopoverKind::InteractiveRebaseAutosquashMenu => {
                 self.context_menu_view(kind.clone(), cx)
             }
             PopoverKind::RebaseReword {
@@ -3224,7 +3237,7 @@ impl PopoverHost {
                                 div()
                                     .text_xs()
                                     .text_color(theme.colors.text_muted)
-                                    .child("Subject"),
+                                    .child("Commit message"),
                             )
                             .child(self.rebase_reword_input.clone()),
                     )
@@ -3248,6 +3261,14 @@ impl PopoverHost {
                                     .min_w(px(0.0))
                                     .child(self.rebase_reword_description_input.clone()),
                             ),
+                    )
+                    .child(
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("Clear the message and save to keep the original commit message."),
                     )
                     .child(div().border_t_1().border_color(theme.colors.border))
                     .child(

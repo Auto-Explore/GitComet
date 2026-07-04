@@ -2474,6 +2474,28 @@ pub(super) enum StashPickerPurpose {
     Drop,
 }
 
+/// Auto-squash strategy: which commit in each identical-message group survives,
+/// the others being folded (fixup) into it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AutosquashMode {
+    /// Fold each duplicate group into its newest (top) commit.
+    ToTop,
+    /// Only merge duplicates that are already adjacent in the list.
+    Neighbor,
+    /// Fold each duplicate group into its oldest (bottom) commit.
+    ToBottom,
+}
+
+impl AutosquashMode {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            AutosquashMode::ToTop => "To Top Commit",
+            AutosquashMode::Neighbor => "Neighboring Commit",
+            AutosquashMode::ToBottom => "To Bottom Commit",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
@@ -2683,6 +2705,7 @@ pub(super) enum PopoverKind {
         is_bottom: bool,
         can_drop: bool,
     },
+    InteractiveRebaseAutosquashMenu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

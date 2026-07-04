@@ -153,9 +153,8 @@ impl GixRepo {
         // Re-validate against live repo state: the selection was made from a
         // possibly stale log snapshot.
         let repo = self.reopen_repo()?;
-        let head = gix_head_id_or_none(&repo)?.ok_or_else(|| {
-            Error::new(ErrorKind::Backend("squash: HEAD is unborn".to_string()))
-        })?;
+        let head = gix_head_id_or_none(&repo)?
+            .ok_or_else(|| Error::new(ErrorKind::Backend("squash: HEAD is unborn".to_string())))?;
         if !head
             .to_string()
             .eq_ignore_ascii_case(expected_head.as_ref())
@@ -172,8 +171,7 @@ impl GixRepo {
             )));
         }
 
-        let (author_name, author_email, author_date) =
-            commit_author_env(&repo, oldest.as_ref())?;
+        let (author_name, author_email, author_date) = commit_author_env(&repo, oldest.as_ref())?;
 
         // Respect commit.gpgsign: `git commit-tree` never signs unless asked,
         // so without this a signed-commit repo would get an unsigned squash

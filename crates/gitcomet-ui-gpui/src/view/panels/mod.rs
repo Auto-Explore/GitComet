@@ -214,8 +214,8 @@ pub(in crate::view) enum ContextMenuAction {
         ix: usize,
         action: InteractiveRebaseAction,
     },
-    ResetInteractiveRebaseEntry {
-        ix: usize,
+    SetInteractiveRebaseAutosquashMode {
+        mode: AutosquashMode,
     },
     ConflictResolverPick {
         target: ResolverPickTarget,

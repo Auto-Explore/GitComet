@@ -126,6 +126,18 @@ pub enum Effect {
         oldest: CommitId,
         head: CommitId,
     },
+    LoadSquashRebaseSetup {
+        repo_id: RepoId,
+        base: CommitId,
+        /// The repo HEAD the plan was validated against. Re-checked once the
+        /// live `base..HEAD` list loads, so a HEAD move during the async gap
+        /// cancels the squash instead of rewriting an unintended range.
+        actual_head: CommitId,
+        selected_ids: Vec<CommitId>,
+        reword_id: CommitId,
+        message: String,
+        count: usize,
+    },
     OpenFileAtCommitParent {
         repo_id: RepoId,
         commit_id: CommitId,
