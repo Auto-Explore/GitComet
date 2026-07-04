@@ -183,6 +183,12 @@ impl Render for IRebaseDragPreview {
                     .whitespace_nowrap()
                     .child(self.summary.clone()),
             )
+            // Fade the chip in when the drag is picked up.
+            .with_animation(
+                "irebase_preview_pop",
+                Animation::new(Duration::from_millis(120)).with_easing(gpui::ease_out_quint()),
+                |d, delta| d.opacity(delta),
+            )
     }
 }
 
@@ -205,9 +211,14 @@ fn uniform_item_height(scroll: &gpui::UniformListScrollHandle, item_count: usize
 
 /// Overlay that draws the drop-target insertion line on top of the uniform
 /// list while dragging. `pos` is the insertion position in display order
-/// (0..=item_count); `None` renders nothing.
+/// (0..=item_count); `None` renders nothing. The line glides from `prev_pos`
+/// to `pos` when the target moves (keyed by `anim_ver` so it replays).
 struct IRebaseInsertionLine {
     pos: Option<usize>,
+    prev_pos: Option<usize>,
+    anim_ver: u32,
+    /// Stable for the whole drag; keys the one-shot fade-in of the line.
+    from_ix: usize,
     color: gpui::Rgba,
 }
 
@@ -225,19 +236,34 @@ impl gpui::UniformListDecoration for IRebaseInsertionLine {
         let Some(pos) = self.pos else {
             return div().into_any_element();
         };
-        let y = item_height * (pos.min(item_count) as f32);
-        // Full-size overlay positioned at the list's content origin; the line
-        // is absolutely placed at the row boundary and clipped to the viewport.
+        let target_y = item_height * (pos.min(item_count) as f32);
+        // Absolutely placed at the row boundary in content space (the overlay
+        // root sits at the list's scroll-shifted content origin), clipped to
+        // the viewport.
+        let line = div().absolute().left_0().right_0().h(px(2.0)).bg(self.color);
+        let anim_ver = self.anim_ver;
+        let line = match self.prev_pos {
+            Some(prev) if prev != pos => {
+                let from_y = item_height * (prev.min(item_count) as f32);
+                line.with_animation(
+                    ("irebase_insertion_line", anim_ver as usize),
+                    Animation::new(Duration::from_millis(120))
+                        .with_easing(gpui::ease_out_quint()),
+                    move |d, delta| d.top(from_y + (target_y - from_y) * delta),
+                )
+                .into_any_element()
+            }
+            _ => line.top(target_y).into_any_element(),
+        };
+        // Fade the line in once when the drag starts (stable id for the drag).
         div()
             .size_full()
-            .child(
-                div()
-                    .absolute()
-                    .top(y)
-                    .left_0()
-                    .right_0()
-                    .h(px(2.0))
-                    .bg(self.color),
+            .child(line)
+            .with_animation(
+                ("irebase_insertion_line_fade", self.from_ix),
+                Animation::new(Duration::from_millis(120))
+                    .with_easing(gpui::ease_out_quint()),
+                |d, delta| d.opacity(delta),
             )
             .into_any_element()
     }
@@ -335,6 +361,9 @@ impl MainPaneView {
             let entry = st.entries.remove(state.from_ix);
             st.entries.insert(state.to_ix, entry);
             validate_squash_entries(&mut st.entries);
+            // Fade the landed row in at its new position.
+            let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
+            st.reorder_anim = Some((state.to_ix, state.to_ix, ver));
         }
         true
     }
@@ -369,12 +398,17 @@ impl MainPaneView {
         let mut offset_y = f32::from(base.offset().y);
         let max_down = f32::from(base.max_offset().y);
         if max_down > 0.0 {
-            let edge = item_h.min(viewport_h / 4.0);
-            let step = item_h / 2.0;
+            // Ramp the scroll step with how deep the pointer is into the edge
+            // zone (0 at the zone boundary → full step at the very edge) so
+            // auto-scroll eases in instead of jumping a fixed half-row.
+            let edge = item_h.max(viewport_h / 6.0);
+            let max_step = item_h * 1.5;
             let scrolled_y = if pointer_vp_y < edge {
-                (offset_y + step).min(0.0)
+                let depth = ((edge - pointer_vp_y) / edge).clamp(0.0, 1.0);
+                (offset_y + max_step * depth).min(0.0)
             } else if pointer_vp_y > viewport_h - edge {
-                (offset_y - step).max(-max_down)
+                let depth = ((pointer_vp_y - (viewport_h - edge)) / edge).clamp(0.0, 1.0);
+                (offset_y - max_step * depth).max(-max_down)
             } else {
                 offset_y
             };
@@ -400,14 +434,24 @@ impl MainPaneView {
         } else {
             entry_count - display_pos
         };
-        let already = st
-            .drag_state
-            .is_some_and(|s| s.from_ix == from_ix && s.display_pos == display_pos);
+        let current = st.drag_state;
+        let already =
+            current.is_some_and(|s| s.from_ix == from_ix && s.display_pos == display_pos);
         if !already {
+            // Glide the insertion line from the old target to the new one.
+            let (prev_display_pos, anim_ver) = match current {
+                Some(s) if s.display_pos != display_pos => {
+                    (Some(s.display_pos), s.anim_ver.wrapping_add(1))
+                }
+                Some(s) => (s.prev_display_pos, s.anim_ver),
+                None => (None, 0),
+            };
             st.drag_state = Some(IRebaseDragState {
                 from_ix,
                 to_ix,
                 display_pos,
+                prev_display_pos,
+                anim_ver,
             });
             cx.notify();
         }
@@ -591,7 +635,6 @@ impl MainPaneView {
                 .px_2()
                 .py_0p5()
                 .rounded(px(theme.radii.row))
-                .when(is_drag_source, |d| d.opacity(0.4))
                 .when(!is_drag_source && is_selected, |d| d.bg(theme.colors.active))
                 .when(!is_drag_source && !is_selected, |d| {
                     d.hover(move |s| s.bg(theme.colors.hover))
@@ -681,7 +724,17 @@ impl MainPaneView {
                     }),
                 );
 
-            let row_element = if let Some((aix, bix, ver)) = reorder_anim {
+            let row_element = if is_drag_source {
+                // Fade the dragged row down to a dim placeholder on pickup.
+                row_div
+                    .with_animation(
+                        ("irebase_source_dim", ix),
+                        Animation::new(Duration::from_millis(120))
+                            .with_easing(gpui::ease_out_quint()),
+                        |d, delta| d.opacity(1.0 - 0.6 * delta),
+                    )
+                    .into_any_element()
+            } else if let Some((aix, bix, ver)) = reorder_anim {
                 if ix == aix || ix == bix {
                     row_div
                         .with_animation(
@@ -755,8 +808,12 @@ impl MainPaneView {
                 let st = &self.interactive_rebase_states[&repo_id];
                 let entry_count = st.entries.len();
                 let scroll = st.scroll.clone();
-                // Drop-target line position (display order) while dragging.
+                // Drop-target line position (display order) while dragging, plus
+                // the glide's start position and replay key.
                 let insertion_pos = st.drag_state.map(|s| s.display_pos);
+                let insertion_prev = st.drag_state.and_then(|s| s.prev_display_pos);
+                let insertion_ver = st.drag_state.map(|s| s.anim_ver).unwrap_or(0);
+                let insertion_from = st.drag_state.map(|s| s.from_ix).unwrap_or(0);
 
                 let list = uniform_list(
                     "irebase_entries",
@@ -770,6 +827,9 @@ impl MainPaneView {
                 .track_scroll(&scroll)
                 .with_decoration(IRebaseInsertionLine {
                     pos: insertion_pos,
+                    prev_pos: insertion_prev,
+                    anim_ver: insertion_ver,
+                    from_ix: insertion_from,
                     color: theme.colors.accent,
                 })
                 .on_drag_move(cx.listener(

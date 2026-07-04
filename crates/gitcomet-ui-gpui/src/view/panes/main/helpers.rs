@@ -2614,6 +2614,11 @@ pub(in crate::view) struct IRebaseDragState {
     pub(in crate::view) to_ix: usize,
     /// Drop-target position in display order (0..=entry_count).
     pub(in crate::view) display_pos: usize,
+    /// Previous drop-target position; the insertion line glides from here to
+    /// `display_pos`. `None` on the first move (no glide).
+    pub(in crate::view) prev_display_pos: Option<usize>,
+    /// Bumped on every drop-target change so the glide animation replays.
+    pub(in crate::view) anim_ver: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
