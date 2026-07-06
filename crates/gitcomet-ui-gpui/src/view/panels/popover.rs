@@ -3268,7 +3268,9 @@ impl PopoverHost {
                             .pb_1()
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child("Clear the message and save to keep the original commit message."),
+                            .child(
+                                "Clear the message and save to keep the original commit message.",
+                            ),
                     )
                     .child(div().border_t_1().border_color(theme.colors.border))
                     .child(

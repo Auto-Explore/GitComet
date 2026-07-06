@@ -161,7 +161,11 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
 
     // Prefer a branch name at the target commit; fall back to the abbreviated
     // sha for the label and the full sha for the actual rebase target.
-    let target_label: SharedString = branch_names.first().map(|s| s.as_str()).unwrap_or(&short).into();
+    let target_label: SharedString = branch_names
+        .first()
+        .map(|s| s.as_str())
+        .unwrap_or(&short)
+        .into();
     let onto_ref = branch_names.first().cloned().unwrap_or_else(|| sha.clone());
     items.push(ContextMenuItem::Entry {
         label: format!("Rebase {current_branch} onto {target_label}").into(),

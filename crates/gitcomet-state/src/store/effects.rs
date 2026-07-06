@@ -2193,7 +2193,13 @@ pub(super) fn schedule_effect(
             entries,
             interactive,
         } => repo_commands::schedule_interactive_rebase(
-            executor, repos, msg_tx, repo_id, base, entries, interactive,
+            executor,
+            repos,
+            msg_tx,
+            repo_id,
+            base,
+            entries,
+            interactive,
         ),
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)

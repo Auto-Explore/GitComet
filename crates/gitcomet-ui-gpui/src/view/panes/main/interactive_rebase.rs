@@ -54,7 +54,10 @@ fn is_autosquash_prefixed(summary: &str) -> bool {
 ///
 /// Returns `folded_into[i] = Some(survivor_index)` for every commit that is
 /// folded away, and `None` for survivors and untouched commits.
-fn autosquash_folds(entries: &[InteractiveRebaseEntry], mode: AutosquashMode) -> Vec<Option<usize>> {
+fn autosquash_folds(
+    entries: &[InteractiveRebaseEntry],
+    mode: AutosquashMode,
+) -> Vec<Option<usize>> {
     let n = entries.len();
     let mut folded_into: Vec<Option<usize>> = vec![None; n];
     // Pick a group's survivor: prefer an unprefixed member (so its message is
@@ -256,8 +259,7 @@ fn irebase_list_sig(st: &IRebaseViewState) -> u64 {
         (e.action as u8).hash(&mut h);
     }
     // Folded groups add a header line (taller row); key on survivor + count.
-    let mut folded: Vec<(&String, usize)> =
-        st.folded.iter().map(|(k, v)| (k, v.len())).collect();
+    let mut folded: Vec<(&String, usize)> = st.folded.iter().map(|(k, v)| (k, v.len())).collect();
     folded.sort();
     folded.hash(&mut h);
     h.finish()
@@ -275,11 +277,7 @@ struct IRebaseDragPreview {
 }
 
 impl Render for IRebaseDragPreview {
-    fn render(
-        &mut self,
-        _window: &mut Window,
-        _cx: &mut gpui::Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let action_btn_w = px(ACTION_BTN_W * self.ui_scale_percent as f32 / 100.0);
         let is_squash_like = matches!(
@@ -747,7 +745,9 @@ impl MainPaneView {
             .px_2()
             .py_0p5()
             .rounded(px(theme.radii.row))
-            .when(!is_drag_source && is_selected, |d| d.bg(theme.colors.active))
+            .when(!is_drag_source && is_selected, |d| {
+                d.bg(theme.colors.active)
+            })
             .when(!is_drag_source && !is_selected, |d| {
                 d.hover(move |s| s.bg(theme.colors.hover))
             })
@@ -821,7 +821,9 @@ impl MainPaneView {
                             .flex_1()
                             .text_sm()
                             .text_color(theme.colors.text)
-                            .when(is_autosquash_eligible, |d| d.text_color(theme.colors.accent))
+                            .when(is_autosquash_eligible, |d| {
+                                d.text_color(theme.colors.accent)
+                            })
                             .overflow_x_hidden()
                             .whitespace_nowrap()
                             .when(is_dropped, |d| d.line_through())
@@ -882,8 +884,7 @@ impl MainPaneView {
             row_div
                 .with_animation(
                     ("irebase_source_dim", ix),
-                    Animation::new(Duration::from_millis(120))
-                        .with_easing(gpui::ease_out_quint()),
+                    Animation::new(Duration::from_millis(120)).with_easing(gpui::ease_out_quint()),
                     |d, delta| d.opacity(1.0 - 0.6 * delta),
                 )
                 .into_any_element()
@@ -1352,10 +1353,17 @@ mod tests {
         assert_eq!(ids, vec!["B", "C"]);
         let into_b = &folded["B"];
         assert_eq!(
-            into_b.iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            into_b
+                .iter()
+                .map(|e| e.commit_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["D", "F"]
         );
-        assert!(into_b.iter().all(|e| e.action == InteractiveRebaseAction::Fixup));
+        assert!(
+            into_b
+                .iter()
+                .all(|e| e.action == InteractiveRebaseAction::Fixup)
+        );
     }
 
     #[test]
@@ -1378,9 +1386,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["C"]
         );
-        assert!(folded["A"]
-            .iter()
-            .all(|e| e.action == InteractiveRebaseAction::Fixup));
+        assert!(
+            folded["A"]
+                .iter()
+                .all(|e| e.action == InteractiveRebaseAction::Fixup)
+        );
     }
 
     #[test]
@@ -1415,7 +1425,10 @@ mod tests {
         let ids: Vec<&str> = collapsed.iter().map(|e| e.commit_id.as_str()).collect();
         assert_eq!(ids, vec!["C", "F"]);
         assert_eq!(
-            folded["F"].iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            folded["F"]
+                .iter()
+                .map(|e| e.commit_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["B", "D"]
         );
     }
@@ -1434,7 +1447,10 @@ mod tests {
         let ids: Vec<&str> = collapsed.iter().map(|e| e.commit_id.as_str()).collect();
         assert_eq!(ids, vec!["B", "C", "D"]);
         assert_eq!(
-            folded["D"].iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            folded["D"]
+                .iter()
+                .map(|e| e.commit_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["E"]
         );
         assert!(!folded.contains_key("B"));
@@ -1452,8 +1468,10 @@ mod tests {
         let original = vec![sc("B", "fix"), sc("C", "wip"), sc("D", "fix")];
         let (collapsed, folded) = compute_autosquash(&original, AutosquashMode::ToBottom);
         let expanded = expand_folded(&collapsed, &folded);
-        let seq: Vec<(&str, InteractiveRebaseAction)> =
-            expanded.iter().map(|e| (e.commit_id.as_str(), e.action)).collect();
+        let seq: Vec<(&str, InteractiveRebaseAction)> = expanded
+            .iter()
+            .map(|e| (e.commit_id.as_str(), e.action))
+            .collect();
         assert_eq!(
             seq,
             vec![
@@ -1472,7 +1490,10 @@ mod tests {
         collapsed[0].action = InteractiveRebaseAction::Drop;
         let expanded = expand_folded(&collapsed, &folded);
         assert_eq!(
-            expanded.iter().map(|e| e.commit_id.as_str()).collect::<Vec<_>>(),
+            expanded
+                .iter()
+                .map(|e| e.commit_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["B"]
         );
     }
