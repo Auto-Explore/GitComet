@@ -3720,6 +3720,11 @@ pub enum ThreeWayVisibleItem {
     Line(usize),
     /// A collapsed summary row for a resolved conflict block (by conflict index).
     CollapsedBlock(usize),
+    /// A folded run of unchanged context lines (§30 collapsed context mode).
+    CollapsedContext {
+        source_line_start: usize,
+        len: usize,
+    },
 }
 
 /// Span-based replacement for `Vec<ThreeWayVisibleItem>` that uses O(spans) memory
@@ -3738,6 +3743,12 @@ pub enum ThreeWayVisibleSpan {
         visible_index: usize,
         conflict_ix: usize,
     },
+    /// A single fold row hiding `len` unchanged context lines.
+    CollapsedContext {
+        visible_index: usize,
+        source_line_start: usize,
+        len: usize,
+    },
 }
 
 impl ThreeWayVisibleSpan {
@@ -3745,13 +3756,14 @@ impl ThreeWayVisibleSpan {
         match *self {
             Self::Lines { visible_start, .. } => visible_start,
             Self::CollapsedResolvedBlock { visible_index, .. } => visible_index,
+            Self::CollapsedContext { visible_index, .. } => visible_index,
         }
     }
 
     fn visible_len(&self) -> usize {
         match *self {
             Self::Lines { len, .. } => len,
-            Self::CollapsedResolvedBlock { .. } => 1,
+            Self::CollapsedResolvedBlock { .. } | Self::CollapsedContext { .. } => 1,
         }
     }
 }
@@ -3871,6 +3883,19 @@ impl ThreeWayVisibleProjection {
                 }
                 Some(ThreeWayVisibleItem::CollapsedBlock(conflict_ix))
             }
+            ThreeWayVisibleSpan::CollapsedContext {
+                visible_index,
+                source_line_start,
+                len,
+            } => {
+                if visible_ix != visible_index {
+                    return None;
+                }
+                Some(ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                })
+            }
         }
     }
 
@@ -3928,6 +3953,141 @@ fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bo
 ///
 /// All lines in every conflict block are included (no preview gaps).
 /// Resolved blocks collapse to a single summary row when `hide_resolved` is true.
+/// Context lines kept visible on each side of a conflict when collapsed
+/// context mode is active (§30).
+pub(crate) const CONFLICT_COLLAPSED_CONTEXT_LINES: usize = 3;
+
+/// Runs shorter than this stay expanded — a fold row would not be
+/// meaningfully shorter than the lines it hides.
+const MIN_CONTEXT_FOLD_LINES: usize = 2;
+
+/// Visibility options for the three-way projection.
+#[derive(Clone, Copy, Default)]
+pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
+    pub hide_resolved: bool,
+    /// §30 collapsed context mode: fold unchanged runs beyond
+    /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
+    pub collapse_context: bool,
+    /// Folds the user expanded by clicking, keyed by fold source-line start.
+    pub expanded_context_folds: Option<&'a std::collections::HashSet<usize>>,
+}
+
+/// Build the three-way visible projection with hide-resolved and collapsed
+/// context folding applied.
+pub(in crate::view) fn build_three_way_visible_projection_with_options(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    conflict_resolved: &[bool],
+    options: ThreeWayVisibleOptions<'_>,
+) -> ThreeWayVisibleProjection {
+    if !options.collapse_context || conflict_ranges.is_empty() {
+        return build_three_way_visible_projection_with_resolved_flags(
+            total_lines,
+            conflict_ranges,
+            conflict_resolved,
+            options.hide_resolved,
+        );
+    }
+    if total_lines == 0 {
+        return ThreeWayVisibleProjection::default();
+    }
+
+    let is_fold_expanded = |fold_start: usize| {
+        options
+            .expanded_context_folds
+            .is_some_and(|expanded| expanded.contains(&fold_start))
+    };
+
+    let mut spans: Vec<ThreeWayVisibleSpan> = Vec::new();
+    let mut visible_ix = 0usize;
+    let push_lines =
+        |spans: &mut Vec<ThreeWayVisibleSpan>, visible_ix: &mut usize, start: usize, len: usize| {
+            if len == 0 {
+                return;
+            }
+            spans.push(ThreeWayVisibleSpan::Lines {
+                visible_start: *visible_ix,
+                source_line_start: start,
+                len,
+            });
+            *visible_ix += len;
+        };
+    // Emit an unchanged gap, keeping `leading_keep` lines adjacent to the
+    // previous conflict and `trailing_keep` lines before the next one;
+    // anything beyond that folds unless the user expanded it.
+    let push_gap = |spans: &mut Vec<ThreeWayVisibleSpan>,
+                    visible_ix: &mut usize,
+                    start: usize,
+                    end: usize,
+                    leading_keep: usize,
+                    trailing_keep: usize| {
+        let len = end.saturating_sub(start);
+        if len == 0 {
+            return;
+        }
+        let keep = leading_keep.saturating_add(trailing_keep);
+        let fold_len = len.saturating_sub(keep);
+        let fold_start = start + leading_keep;
+        if fold_len < MIN_CONTEXT_FOLD_LINES || is_fold_expanded(fold_start) {
+            push_lines(spans, visible_ix, start, len);
+            return;
+        }
+        push_lines(spans, visible_ix, start, leading_keep);
+        spans.push(ThreeWayVisibleSpan::CollapsedContext {
+            visible_index: *visible_ix,
+            source_line_start: fold_start,
+            len: fold_len,
+        });
+        *visible_ix += 1;
+        push_lines(spans, visible_ix, fold_start + fold_len, trailing_keep);
+    };
+
+    let ctx = CONFLICT_COLLAPSED_CONTEXT_LINES;
+    let mut line_ix = 0usize;
+    for (range_ix, range) in conflict_ranges.iter().enumerate() {
+        if line_ix >= total_lines {
+            break;
+        }
+        let range_start = range.start.min(total_lines).max(line_ix);
+        let range_end = range.end.min(total_lines).max(range_start);
+
+        let leading_keep = if range_ix == 0 { 0 } else { ctx };
+        push_gap(
+            &mut spans,
+            &mut visible_ix,
+            line_ix,
+            range_start,
+            leading_keep,
+            ctx,
+        );
+
+        let resolved = conflict_resolved.get(range_ix).copied().unwrap_or(false);
+        if options.hide_resolved && resolved && range_start < range_end {
+            spans.push(ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                visible_index: visible_ix,
+                conflict_ix: range_ix,
+            });
+            visible_ix += 1;
+        } else {
+            push_lines(
+                &mut spans,
+                &mut visible_ix,
+                range_start,
+                range_end - range_start,
+            );
+        }
+        line_ix = range_end;
+    }
+    if line_ix < total_lines {
+        push_gap(&mut spans, &mut visible_ix, line_ix, total_lines, ctx, 0);
+    }
+
+    ThreeWayVisibleProjection {
+        spans,
+        visible_len: visible_ix,
+    }
+}
+
 pub(in crate::view) fn build_three_way_visible_projection_with_resolved_flags(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
@@ -4085,6 +4245,7 @@ pub fn visible_index_for_conflict(
     visible_map.iter().position(|item| match item {
         ThreeWayVisibleItem::Line(ix) => range.contains(ix),
         ThreeWayVisibleItem::CollapsedBlock(ci) => *ci == range_ix,
+        ThreeWayVisibleItem::CollapsedContext { .. } => false,
     })
 }
 

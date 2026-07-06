@@ -553,6 +553,14 @@ impl MainPaneView {
                                     this.conflict_resolver_toggle_hide_resolved(cx);
                                 };
                             let hide_resolved = self.conflict_resolver.hide_resolved;
+                            let toggle_collapse_context =
+                                |this: &mut Self,
+                                 _e: &ClickEvent,
+                                 _w: &mut Window,
+                                 cx: &mut gpui::Context<Self>| {
+                                    this.conflict_resolver_toggle_collapse_context(cx);
+                                };
+                            let collapse_context = self.conflict_resolver.collapse_context;
 
                             let start_controls = div()
                                 .flex()
@@ -651,7 +659,35 @@ impl MainPaneView {
                                             toggle_hide_resolved,
                                         ),
                                     )
-                                });
+                                })
+                                .when(
+                                    has_conflicts
+                                        && view_mode == ConflictResolverViewMode::ThreeWay,
+                                    |d| {
+                                        d.child(
+                                            components::Button::new(
+                                                "conflict_collapse_context",
+                                                if collapse_context {
+                                                    "Expand unchanged"
+                                                } else {
+                                                    "Collapse unchanged"
+                                                },
+                                            )
+                                            .style(if collapse_context {
+                                                components::ButtonStyle::Outlined
+                                            } else {
+                                                components::ButtonStyle::Transparent
+                                            })
+                                            .on_click(theme, cx, toggle_collapse_context)
+                                            .gitcomet_tooltip(
+                                                theme,
+                                                "Fold unchanged lines beyond 3 context lines \
+                                                 around each conflict; click a fold to expand it"
+                                                    .into(),
+                                            ),
+                                        )
+                                    },
+                                );
 
                             let preview_kind = super::super::preview_path_rendered_kind(&path);
                             let show_preview_toggle = preview_kind.is_some();

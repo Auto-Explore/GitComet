@@ -427,6 +427,7 @@ impl MainPaneView {
             conflict_resolver::ThreeWayVisibleItem::Line(line_ix) => self
                 .conflict_resolver
                 .conflict_index_for_side_line(ThreeWayColumn::Ours, line_ix),
+            conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. } => None,
         }
     }
 
@@ -808,6 +809,11 @@ impl MainPaneView {
         } else {
             repo.conflict_state.conflict_hide_resolved
         };
+        let collapse_context = if is_same_conflict {
+            self.conflict_resolver.collapse_context
+        } else {
+            false
+        };
         let nav_anchor = if is_same_conflict {
             self.conflict_resolver.nav_anchor
         } else {
@@ -894,6 +900,12 @@ impl MainPaneView {
             source_hash: Some(source_hash),
             current: file.current.clone(),
             marker_segments,
+            collapse_context,
+            expanded_context_folds: if is_same_conflict {
+                std::mem::take(&mut self.conflict_resolver.expanded_context_folds)
+            } else {
+                std::collections::HashSet::default()
+            },
             conflict_region_indices,
             active_conflict,
             hovered_conflict: None,
@@ -1266,6 +1278,42 @@ impl MainPaneView {
                 hide_resolved: self.conflict_resolver.hide_resolved,
             });
         }
+        cx.notify();
+    }
+
+    /// Toggle §30 collapsed context mode: fold unchanged runs beyond the
+    /// per-conflict context window in the source columns.
+    pub(in crate::view) fn conflict_resolver_toggle_collapse_context(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver.collapse_context = !self.conflict_resolver.collapse_context;
+        self.conflict_resolver.expanded_context_folds.clear();
+        self.conflict_resolver_rebuild_visible_map();
+        // Keep the active conflict in view across the row-space change.
+        let active = self.conflict_resolver.active_conflict;
+        if self.conflict_resolver_conflict_count() > 0
+            && let Some(vi) = self.conflict_resolver_visible_ix_for_conflict(active)
+        {
+            self.conflict_resolver_scroll_all_columns(vi, gpui::ScrollStrategy::Center);
+        }
+        cx.notify();
+    }
+
+    /// Expand one collapsed context fold (identified by its first hidden line).
+    pub(in crate::view) fn conflict_resolver_expand_context_fold(
+        &mut self,
+        fold_start: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self
+            .conflict_resolver
+            .expanded_context_folds
+            .insert(fold_start)
+        {
+            return;
+        }
+        self.conflict_resolver_rebuild_visible_map();
         cx.notify();
     }
 

@@ -2618,6 +2618,8 @@ fn search_three_way_via_spans(
                     out.push(visible_index);
                 }
             }
+            // Folded context lines are not visible, so they are not searched.
+            conflict_resolver::ThreeWayVisibleSpan::CollapsedContext { .. } => {}
         }
     }
 }
@@ -2701,6 +2703,8 @@ fn search_three_way_via_spans_with_matcher(
                     Cow::Owned(format!("Resolved: picked {choice_label}")),
                 ));
             }
+            // Folded context lines are not visible, so they are not searched.
+            conflict_resolver::ThreeWayVisibleSpan::CollapsedContext { .. } => {}
         }
     }
 
@@ -2779,6 +2783,8 @@ fn three_way_visible_item_matches_query(
             let summary = format!("Resolved: picked {choice_label}");
             contains_ascii_case_insensitive(&summary, query)
         }
+        // Folded context lines are not visible, so they are not searched.
+        conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. } => false,
     }
 }
 

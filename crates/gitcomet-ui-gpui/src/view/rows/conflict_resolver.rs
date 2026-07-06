@@ -523,6 +523,36 @@ impl MainPaneView {
                         );
                     elements.push(collapsed.into_any_element());
                 }
+                conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                } => {
+                    let label: SharedString = format!("⋯ {len} unchanged lines").into();
+                    let fold = div()
+                        .id((div_id_prefix, vi))
+                        .w_full()
+                        .h(px(20.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(with_alpha(
+                            theme.colors.surface_bg_elevated,
+                            if theme.is_dark { 0.30 } else { 0.22 },
+                        ))
+                        .px_2()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(label)
+                        .cursor(CursorStyle::PointingHand)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                this.conflict_resolver_expand_context_fold(source_line_start, cx);
+                            }),
+                        );
+                    elements.push(fold.into_any_element());
+                }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
                     let line_text = this.conflict_resolver.three_way_line_text(column, ix);
                     let range_ix = this

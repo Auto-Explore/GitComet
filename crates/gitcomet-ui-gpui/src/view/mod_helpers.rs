@@ -1241,6 +1241,10 @@ pub(super) struct ConflictResolverUiState {
     pub(super) source_hash: Option<u64>,
     pub(super) current: Option<std::sync::Arc<str>>,
     pub(super) marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    /// §30 collapsed context mode: fold unchanged runs in the source columns.
+    pub(super) collapse_context: bool,
+    /// Context folds the user expanded by clicking (fold source-line starts).
+    pub(super) expanded_context_folds: std::collections::HashSet<usize>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
     pub(super) active_conflict: usize,
@@ -1309,6 +1313,8 @@ impl Default for ConflictResolverUiState {
             path: None,
             shared_path: None,
             loaded_file: None,
+            collapse_context: false,
+            expanded_context_folds: std::collections::HashSet::default(),
             conflict_syntax_language: None,
             source_hash: None,
             current: None,
@@ -1900,11 +1906,15 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
         let three_way_visible_projection =
-            conflict_resolver::build_three_way_visible_projection_with_resolved_flags(
+            conflict_resolver::build_three_way_visible_projection_with_options(
                 self.three_way_len,
                 &maps.conflict_ranges[1],
                 &maps.conflict_resolved,
-                self.hide_resolved,
+                conflict_resolver::ThreeWayVisibleOptions {
+                    hide_resolved: self.hide_resolved,
+                    collapse_context: self.collapse_context,
+                    expanded_context_folds: Some(&self.expanded_context_folds),
+                },
             );
         self.apply_three_way_conflict_maps(maps);
         match &mut self.mode_state {

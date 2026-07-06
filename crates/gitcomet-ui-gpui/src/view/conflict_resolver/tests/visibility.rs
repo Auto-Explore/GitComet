@@ -1348,3 +1348,137 @@ fn two_way_conflict_index_for_visible_row_maps_back_to_conflict() {
         None
     );
 }
+
+#[test]
+fn collapsed_context_folds_runs_beyond_context_window() {
+    // 30 lines, one conflict at 12..15. With 3 context lines kept around the
+    // conflict: head 0..9 folds, 9..12 context, 12..15 conflict, 15..18
+    // context, 18..30 folds.
+    let conflict_ranges = [12..15];
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            expanded_context_folds: None,
+        },
+    );
+
+    assert_eq!(projection.len(), 1 + 3 + 3 + 3 + 1);
+    assert_eq!(
+        projection.get(0),
+        Some(ThreeWayVisibleItem::CollapsedContext {
+            source_line_start: 0,
+            len: 9,
+        })
+    );
+    assert_eq!(projection.get(1), Some(ThreeWayVisibleItem::Line(9)));
+    assert_eq!(projection.get(4), Some(ThreeWayVisibleItem::Line(12)));
+    assert_eq!(
+        projection.visible_index_for_conflict(&conflict_ranges, 0),
+        Some(4),
+    );
+    assert_eq!(projection.get(7), Some(ThreeWayVisibleItem::Line(15)));
+    assert_eq!(
+        projection.get(10),
+        Some(ThreeWayVisibleItem::CollapsedContext {
+            source_line_start: 18,
+            len: 12,
+        })
+    );
+    assert_eq!(projection.get(11), None);
+}
+
+#[test]
+fn collapsed_context_respects_expanded_folds_and_short_gaps() {
+    let conflict_ranges = [12..15];
+    let expanded: std::collections::HashSet<usize> = [18usize].into_iter().collect();
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            expanded_context_folds: Some(&expanded),
+        },
+    );
+    // Tail fold (start 18) expanded back into lines; head still folded.
+    assert_eq!(projection.len(), 1 + 3 + 3 + 15);
+    assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
+    assert_eq!(projection.get(21), Some(ThreeWayVisibleItem::Line(29)));
+
+    // A gap only one line beyond the context window stays fully visible.
+    let conflict_ranges = [4..6];
+    let projection = build_three_way_visible_projection_with_options(
+        10,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            expanded_context_folds: None,
+        },
+    );
+    // Head gap 0..4: trailing keep 3, fold 0..1 is below the minimum → visible.
+    // Tail gap 6..10: leading keep 3, fold 9..10 below minimum → visible.
+    assert_eq!(projection.len(), 10);
+    assert_eq!(projection.get(0), Some(ThreeWayVisibleItem::Line(0)));
+    assert_eq!(projection.get(9), Some(ThreeWayVisibleItem::Line(9)));
+}
+
+#[test]
+fn collapsed_context_combines_with_hide_resolved() {
+    // Resolved conflict at 12..15 collapses to a summary row while the
+    // surrounding context still folds.
+    let conflict_ranges = [12..15];
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[true],
+        ThreeWayVisibleOptions {
+            hide_resolved: true,
+            collapse_context: true,
+            expanded_context_folds: None,
+        },
+    );
+    // fold(0..9) + ctx(9..12) + collapsed block + ctx(15..18) + fold(18..30)
+    assert_eq!(projection.len(), 1 + 3 + 1 + 3 + 1);
+    assert_eq!(
+        projection.get(4),
+        Some(ThreeWayVisibleItem::CollapsedBlock(0))
+    );
+    assert_eq!(
+        projection.visible_index_for_conflict(&conflict_ranges, 0),
+        Some(4),
+    );
+}
+
+#[test]
+fn collapsed_context_off_or_no_conflicts_keeps_everything_visible() {
+    let projection = build_three_way_visible_projection_with_options(
+        20,
+        &[],
+        &[],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            expanded_context_folds: None,
+        },
+    );
+    assert_eq!(projection.len(), 20);
+
+    let projection = build_three_way_visible_projection_with_options(
+        20,
+        &[5..8],
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: false,
+            expanded_context_folds: None,
+        },
+    );
+    assert_eq!(projection.len(), 20);
+}
