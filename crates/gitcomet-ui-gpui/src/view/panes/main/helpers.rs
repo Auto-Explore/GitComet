@@ -1661,33 +1661,6 @@ pub(super) fn append_choice_after_conflict_block(
     inserted_conflict_ix
 }
 
-pub(super) fn scroll_conflict_resolved_output_to_line(
-    scroll_handle: &UniformListScrollHandle,
-    target_line_ix: usize,
-    line_count: usize,
-) {
-    if line_count == 0 {
-        return;
-    }
-
-    let base_handle = scroll_handle.0.borrow().base_handle.clone();
-    let viewport_h = base_handle.bounds().size.height.max(px(0.0));
-    if viewport_h <= px(0.0) {
-        return;
-    }
-
-    let line_h = px(CONFLICT_RESOLVED_OUTPUT_ROW_HEIGHT_PX);
-    let total_h = line_h * line_count as f32;
-    let max_scroll = (total_h - viewport_h).max(px(0.0));
-    let target_line = target_line_ix.min(line_count.saturating_sub(1));
-    let target_center = line_h * target_line as f32 + line_h * 0.5;
-    let target_scroll_top = (target_center - viewport_h * 0.5)
-        .max(px(0.0))
-        .min(max_scroll);
-    let current = base_handle.offset();
-    base_handle.set_offset(point(current.x, -target_scroll_top));
-}
-
 #[cfg(test)]
 pub(super) fn apply_three_way_empty_base_provenance_hints(
     meta: &mut [conflict_resolver::ResolvedLineMeta],

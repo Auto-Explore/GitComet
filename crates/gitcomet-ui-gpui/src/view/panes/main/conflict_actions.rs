@@ -983,6 +983,13 @@ impl MainPaneView {
                 cx,
             );
         }
+        // §30: on a fresh open, bring every view to the initial active
+        // conflict. Deferred item scrolls apply once the lists lay out, so
+        // this works even though nothing has rendered yet.
+        if !is_same_conflict && conflict_block_count > 0 {
+            let initial_conflict = self.conflict_resolver.active_conflict;
+            self.conflict_resolver_scroll_all_views_to_conflict(initial_conflict, None, None, cx);
+        }
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(

@@ -2696,11 +2696,20 @@ impl MainPaneView {
         target_line_ix: usize,
         line_count: usize,
     ) {
-        scroll_conflict_resolved_output_to_line(
-            &self.conflict_resolved_preview_scroll,
-            target_line_ix,
-            line_count,
-        );
+        if line_count == 0 {
+            return;
+        }
+        // Deferred item scrolls apply at the next layout pass, so they work
+        // before the lists have ever laid out (initial open) and cannot be
+        // clamped against stale bounds. Scrolling the gutter and output
+        // lists together leaves the per-frame offset sync nothing to
+        // arbitrate, which previously ping-ponged the output back to the
+        // top of the file.
+        let target = target_line_ix.min(line_count.saturating_sub(1));
+        self.conflict_resolved_preview_scroll
+            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
+        self.conflict_resolved_preview_gutter_scroll
+            .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
     }
 
     pub(super) fn conflict_resolver_scroll_resolved_output_to_line_in_text(
