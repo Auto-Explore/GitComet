@@ -146,9 +146,22 @@ pub(super) fn split_conflict_row_canvas(
                 window.on_mouse_event({
                     let view = view.clone();
                     move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble
-                            || event.button != gpui::MouseButton::Right
-                        {
+                        if phase != DispatchPhase::Bubble {
+                            return;
+                        }
+                        if event.button == gpui::MouseButton::Left {
+                            if visible_left.contains(&event.position)
+                                || visible_right.contains(&event.position)
+                            {
+                                // §30: clicking a conflict block body selects it.
+                                let conflict_ix = chunk_context.conflict_ix;
+                                view.update(cx, |this, cx| {
+                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
+                                });
+                            }
+                            return;
+                        }
+                        if event.button != gpui::MouseButton::Right {
                             return;
                         }
 
@@ -260,12 +273,21 @@ pub(super) fn single_column_conflict_canvas(
                 window.on_mouse_event({
                     let view = view.clone();
                     move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble
-                            || event.button != gpui::MouseButton::Right
-                        {
+                        if phase != DispatchPhase::Bubble {
                             return;
                         }
                         if !visible.contains(&event.position) {
+                            return;
+                        }
+                        if event.button == gpui::MouseButton::Left {
+                            // §30: clicking a conflict block body selects it.
+                            let conflict_ix = chunk_context.conflict_ix;
+                            view.update(cx, |this, cx| {
+                                this.conflict_resolver_select_conflict(conflict_ix, cx);
+                            });
+                            return;
+                        }
+                        if event.button != gpui::MouseButton::Right {
                             return;
                         }
                         let invoker: SharedString = format!(

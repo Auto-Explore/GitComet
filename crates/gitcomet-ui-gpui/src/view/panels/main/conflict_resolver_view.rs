@@ -109,6 +109,72 @@ impl MainPaneView {
                         ),
                 )
             })
+            .when(
+                !conflict_rendered_preview_active && self.conflict_resolver_conflict_count() > 0,
+                |d| {
+                    // §30: visible pick affordances for the active conflict,
+                    // mirroring the A/B/C/D quick-pick keys.
+                    let active_ix = self.conflict_resolver.active_conflict;
+                    let has_base = self
+                        .conflict_resolver
+                        .conflict_has_base
+                        .get(active_ix)
+                        .copied()
+                        .unwrap_or(false);
+                    let selected =
+                        self.conflict_resolver_selected_choices_for_conflict_ix(active_ix);
+                    let mut pick_btn =
+                        |id: &'static str,
+                         label: &'static str,
+                         hint: &'static str,
+                         choice: conflict_resolver::ConflictChoice,
+                         enabled: bool,
+                         tooltip: &'static str| {
+                            components::Button::new(id, label)
+                                .style(components::ButtonStyle::Outlined)
+                                .separated_end_slot(Self::diff_nav_hotkey_hint(theme, hint))
+                                .selected(selected.contains(&choice))
+                                .disabled(!enabled)
+                                .on_click(theme, cx, move |this, _e, _w, cx| {
+                                    this.conflict_resolver_pick_active_conflict(choice, cx);
+                                })
+                                .gitcomet_tooltip(theme, tooltip.into())
+                        };
+                    d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
+                        .child(pick_btn(
+                            "conflict_pick_base",
+                            "Base",
+                            "A",
+                            conflict_resolver::ConflictChoice::Base,
+                            has_base,
+                            "Pick the base (ancestor) version for the active conflict",
+                        ))
+                        .child(pick_btn(
+                            "conflict_pick_ours",
+                            "Ours",
+                            "B",
+                            conflict_resolver::ConflictChoice::Ours,
+                            true,
+                            "Pick the local (ours) version for the active conflict",
+                        ))
+                        .child(pick_btn(
+                            "conflict_pick_theirs",
+                            "Theirs",
+                            "C",
+                            conflict_resolver::ConflictChoice::Theirs,
+                            true,
+                            "Pick the incoming (theirs) version for the active conflict",
+                        ))
+                        .child(pick_btn(
+                            "conflict_pick_both",
+                            "Both",
+                            "D",
+                            conflict_resolver::ConflictChoice::Both,
+                            true,
+                            "Keep both versions (ours, then theirs) for the active conflict",
+                        ))
+                },
+            )
             .when_some(next_file_btn, |d, btn| d.child(btn));
 
         controls

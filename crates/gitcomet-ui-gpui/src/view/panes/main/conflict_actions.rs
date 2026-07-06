@@ -2098,6 +2098,23 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// Select a conflict as the active one without picking a side (§30:
+    /// clicking a conflict block body selects it).
+    pub(in crate::view) fn conflict_resolver_select_conflict(
+        &mut self,
+        conflict_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if conflict_ix >= self.conflict_resolver_conflict_count() {
+            return;
+        }
+        if self.conflict_resolver.active_conflict == conflict_ix {
+            return;
+        }
+        self.conflict_resolver.active_conflict = conflict_ix;
+        cx.notify();
+    }
+
     pub(in crate::view) fn conflict_resolver_pick_active_conflict(
         &mut self,
         choice: conflict_resolver::ConflictChoice,

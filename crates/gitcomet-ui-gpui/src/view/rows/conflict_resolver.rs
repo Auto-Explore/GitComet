@@ -653,6 +653,13 @@ impl MainPaneView {
                         let (line_label, line_target, chunk_label, chunk_target) =
                             three_way_input_row_menu_targets(ix, conflict_ix, choice_enum);
                         cell = cell.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                // §30: clicking a conflict block body selects it.
+                                this.conflict_resolver_select_conflict(conflict_ix, cx);
+                            }),
+                        );
+                        cell = cell.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                                 cx.stop_propagation();
@@ -916,6 +923,13 @@ impl MainPaneView {
                         this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                     let (line_label, line_target, chunk_label, chunk_target) =
                         two_way_split_input_row_menu_targets(row_ix, conflict_ix, side);
+                    cell = cell.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                            // §30: clicking a conflict block body selects it.
+                            this.conflict_resolver_select_conflict(conflict_ix, cx);
+                        }),
+                    );
                     cell = cell.on_mouse_down(
                         MouseButton::Right,
                         cx.listener(move |this, e: &MouseDownEvent, window, cx| {
