@@ -936,6 +936,7 @@ pub(super) fn schedule_interactive_rebase(
     repo_id: RepoId,
     base: String,
     entries: Vec<InteractiveRebaseEntry>,
+    interactive: bool,
 ) {
     let base_for_cmd = base.clone();
     schedule_repo_command(
@@ -943,7 +944,10 @@ pub(super) fn schedule_interactive_rebase(
         repos,
         msg_tx,
         repo_id,
-        RepoCommandKind::InteractiveRebase { base: base_for_cmd },
+        RepoCommandKind::InteractiveRebase {
+            base: base_for_cmd,
+            interactive,
+        },
         move |repo| repo.interactive_rebase_with_output(&base, &entries),
     );
 }

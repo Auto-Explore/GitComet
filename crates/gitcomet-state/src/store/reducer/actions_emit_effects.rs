@@ -564,6 +564,7 @@ pub(super) fn interactive_rebase(
         repo_id,
         base,
         entries,
+        interactive: true,
     }]
 }
 

@@ -1046,10 +1046,11 @@ fn send_unavailable_git_effect_result(
             repo_id,
             base,
             entries: _,
+            interactive,
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
-                command: RepoCommandKind::InteractiveRebase { base },
+                command: RepoCommandKind::InteractiveRebase { base, interactive },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -2190,8 +2191,9 @@ pub(super) fn schedule_effect(
             repo_id,
             base,
             entries,
+            interactive,
         } => repo_commands::schedule_interactive_rebase(
-            executor, repos, msg_tx, repo_id, base, entries,
+            executor, repos, msg_tx, repo_id, base, entries, interactive,
         ),
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)

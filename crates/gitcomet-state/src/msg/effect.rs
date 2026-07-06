@@ -472,6 +472,9 @@ pub enum Effect {
         repo_id: RepoId,
         base: String,
         entries: Vec<InteractiveRebaseEntry>,
+        /// True for the user-opened editor; false for automated todo-list
+        /// rebases (e.g. squashing history without HEAD).
+        interactive: bool,
     }, // entries held here so the effect dispatcher can pass them to the scheduler
     MergeAbort {
         repo_id: RepoId,

@@ -64,6 +64,10 @@ pub enum RepoCommandKind {
     RebaseAbort,
     InteractiveRebase {
         base: String,
+        /// True when the interactive-rebase editor was opened by the user;
+        /// false for automated todo-list rebases (e.g. squashing history that
+        /// doesn't include HEAD), which report as a plain "Rebase".
+        interactive: bool,
     },
     MergeAbort,
     CreateTag {

@@ -1372,6 +1372,8 @@ pub(super) fn squash_rebase_setup_loaded(
         repo_id,
         base,
         entries: todo,
+        // Automated squash rebase — no editor window; reports as "Rebase".
+        interactive: false,
     }]
 }
 
