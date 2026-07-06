@@ -52,6 +52,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
     pending_commit_amend: Option<PendingCommitAmend>,
+    pending_amend_prefill: Option<RepoId>,
     pub(in super::super) commit_message_user_edited: bool,
     pub(in super::super) commit_message_last_text: SharedString,
     pub(in super::super) commit_message_programmatic_change: bool,
@@ -190,6 +191,7 @@ impl DetailsPaneView {
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
+            repo.recent_commit_messages_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
             repo.diff_state.diff_target_rev.hash(&mut hasher);
@@ -395,6 +397,7 @@ impl DetailsPaneView {
             commit_amend_enabled: false,
             commit_push_after_enabled,
             pending_commit_amend: None,
+            pending_amend_prefill: None,
             commit_message_user_edited: false,
             commit_message_last_text: SharedString::default(),
             commit_message_programmatic_change: false,
@@ -508,8 +511,65 @@ impl DetailsPaneView {
         self.commit_amend_enabled = enabled;
         if !enabled {
             self.pending_commit_amend = None;
+            self.pending_amend_prefill = None;
+        } else {
+            self.prefill_commit_message_for_amend(cx);
         }
         cx.notify();
+    }
+
+    fn commit_message_is_empty(&self, cx: &gpui::Context<Self>) -> bool {
+        self.commit_message_input.read(cx).text().trim().is_empty()
+    }
+
+    fn previous_commit_message(&self, repo_id: RepoId) -> Option<String> {
+        let repo = self.state.repos.iter().find(|repo| repo.id == repo_id)?;
+        match &repo.recent_commit_messages {
+            Loadable::Ready(messages) => messages.first().map(|message| message.message.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_commit_message_programmatically(
+        &mut self,
+        message: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.commit_message_user_edited = false;
+        self.commit_message_programmatic_change = true;
+        self.commit_message_last_text = message.clone().into();
+        self.commit_message_input
+            .update(cx, |input, cx| input.set_text(message, cx));
+        self.commit_message_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+    }
+
+    fn prefill_commit_message_for_amend(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        if !self.commit_message_is_empty(cx) {
+            self.pending_amend_prefill = None;
+            return;
+        }
+
+        match self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .map(|repo| &repo.recent_commit_messages)
+        {
+            Some(Loadable::Ready(_)) => {
+                self.pending_amend_prefill = None;
+                if let Some(message) = self.previous_commit_message(repo_id) {
+                    self.set_commit_message_programmatically(message, cx);
+                }
+            }
+            _ => {
+                self.pending_amend_prefill = Some(repo_id);
+            }
+        }
     }
 
     pub(in super::super) fn set_commit_push_after_enabled(
@@ -825,6 +885,7 @@ impl DetailsPaneView {
             let was_amend_enabled = self.commit_amend_enabled;
             self.commit_amend_enabled = false;
             self.pending_commit_amend = None;
+            self.pending_amend_prefill = None;
             if was_amend_enabled {
                 self.sync_commit_amend_enabled_to_root(false, cx);
             }
@@ -918,7 +979,39 @@ impl DetailsPaneView {
                 .set_offset(point(px(0.0), px(0.0)));
         }
 
+        self.apply_pending_amend_prefill(cx);
+
         self.update_commit_details_delay(cx);
+    }
+
+    fn apply_pending_amend_prefill(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.pending_amend_prefill else {
+            return;
+        };
+        if !self.commit_amend_enabled || self.active_repo_id() != Some(repo_id) {
+            self.pending_amend_prefill = None;
+            return;
+        }
+
+        let ready = matches!(
+            self.state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .map(|repo| &repo.recent_commit_messages),
+            Some(Loadable::Ready(_))
+        );
+        if !ready {
+            return;
+        }
+
+        self.pending_amend_prefill = None;
+        if !self.commit_message_is_empty(cx) {
+            return;
+        }
+        if let Some(message) = self.previous_commit_message(repo_id) {
+            self.set_commit_message_programmatically(message, cx);
+        }
     }
 
     fn update_commit_details_delay(&mut self, cx: &mut gpui::Context<Self>) {

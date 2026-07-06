@@ -1808,6 +1808,7 @@ impl PopoverHost {
                 Some(*repo_id)
             }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
+            PopoverKind::CommitOptionsMenu { repo_id } => Some(*repo_id),
             _ => None,
         };
         let Some(repo_id) = repo_id else {
@@ -1817,7 +1818,10 @@ impl PopoverHost {
             return;
         };
 
-        if matches!(kind, PopoverKind::PreviousCommitMessagesMenu { .. }) {
+        if matches!(
+            kind,
+            PopoverKind::PreviousCommitMessagesMenu { .. } | PopoverKind::CommitOptionsMenu { .. }
+        ) {
             if matches!(
                 repo.recent_commit_messages,
                 Loadable::NotLoaded | Loadable::Error(_)
