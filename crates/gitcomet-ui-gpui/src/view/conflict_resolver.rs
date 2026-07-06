@@ -145,6 +145,8 @@ impl ConflictSplitStyledTextCache {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutosolveTraceMode {
     Safe,
+    /// High+Medium tiers applied automatically when the file opened (§30).
+    OnOpen,
     #[cfg(test)]
     History,
 }
@@ -584,12 +586,60 @@ pub fn format_autosolve_trace_summary(
             stats.pass2_split,
             stats.pass1_after_split
         ),
+        AutosolveTraceMode::OnOpen => format!(
+            "Auto-solved on open: resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, regex {}).",
+            unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.regex
+        ),
         #[cfg(test)]
         AutosolveTraceMode::History => format!(
             "Last autosolve (history): resolved {resolved} {blocks_word}, unresolved {} -> {} (history {}).",
             unresolved_before, unresolved_after, stats.history
         ),
     }
+}
+
+/// Summarize the on-open autosolve pass from session region resolutions.
+///
+/// On a fresh open every resolved region is an [`AutoResolved`] one (user
+/// picks cannot exist yet), so the confidence-tier breakdown can be
+/// reconstructed from the applied rules. Returns `None` when nothing was
+/// auto-resolved.
+///
+/// [`AutoResolved`]: gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved
+pub fn on_open_autosolve_summary(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+) -> Option<String> {
+    use gitcomet_core::conflict_session::{AutosolveRule, ConflictRegionResolution};
+
+    let mut stats = gitcomet_state::msg::ConflictAutosolveStats::default();
+    for region in &session.regions {
+        let ConflictRegionResolution::AutoResolved { rule, .. } = &region.resolution else {
+            continue;
+        };
+        match rule {
+            AutosolveRule::IdenticalSides
+            | AutosolveRule::OnlyOursChanged
+            | AutosolveRule::OnlyTheirsChanged
+            | AutosolveRule::WhitespaceOnly => stats.pass1 += 1,
+            AutosolveRule::SubchunkFullyMerged => stats.pass2_split += 1,
+            AutosolveRule::RegexEquivalentSides
+            | AutosolveRule::RegexOnlyTheirsChanged
+            | AutosolveRule::RegexOnlyOursChanged => stats.regex += 1,
+            AutosolveRule::HistoryMerged => stats.history += 1,
+        }
+    }
+
+    let resolved = stats.total_resolved();
+    if resolved == 0 {
+        return None;
+    }
+    let unresolved_after = session.unsolved_count();
+    Some(format_autosolve_trace_summary(
+        AutosolveTraceMode::OnOpen,
+        unresolved_after + resolved,
+        unresolved_after,
+        &stats,
+    ))
 }
 
 /// Build a per-conflict autosolve trace label for the active conflict.

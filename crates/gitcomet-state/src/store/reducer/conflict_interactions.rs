@@ -1,6 +1,6 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{
-    ConflictAutosolveMode, ConflictBulkChoice, ConflictRegionChoice,
+    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictRegionChoice,
     ConflictRegionResolutionUpdate, Effect, RepoPath,
 };
 use gitcomet_core::conflict_session::{
@@ -171,8 +171,8 @@ pub(super) fn apply_autosolve(
         return Vec::new();
     }
 
-    let resolved = apply_autosolve_to_session(session, mode, whitespace_normalize);
-    if resolved > 0 {
+    let stats = apply_autosolve_to_session(session, mode, whitespace_normalize);
+    if stats.total_resolved() > 0 {
         repo_state.bump_conflict_rev();
     }
     Vec::new()
@@ -245,38 +245,30 @@ fn apply_bulk_choice_to_session(
     applied
 }
 
-fn apply_autosolve_to_session(
+pub(super) fn apply_autosolve_to_session(
     session: &mut gitcomet_core::conflict_session::ConflictSession,
     mode: ConflictAutosolveMode,
     whitespace_normalize: bool,
-) -> usize {
+) -> ConflictAutosolveStats {
+    let mut stats = ConflictAutosolveStats::default();
     match mode {
-        ConflictAutosolveMode::Safe => {
-            let pass1 = session.auto_resolve_safe_with_options(whitespace_normalize);
-            let pass2 = session.auto_resolve_pass2();
-            let pass1_after_split = if pass2 > 0 {
-                session.auto_resolve_safe_with_options(whitespace_normalize)
-            } else {
-                0
-            };
-            pass1 + pass2 + pass1_after_split
-        }
-        ConflictAutosolveMode::Regex => {
-            let pass1 = session.auto_resolve_safe_with_options(whitespace_normalize);
-            let pass2 = session.auto_resolve_pass2();
-            let pass1_after_split = if pass2 > 0 {
-                session.auto_resolve_safe_with_options(whitespace_normalize)
-            } else {
-                0
-            };
-            let regex =
-                session.auto_resolve_regex(&RegexAutosolveOptions::whitespace_insensitive());
-            pass1 + pass2 + pass1_after_split + regex
+        ConflictAutosolveMode::Safe | ConflictAutosolveMode::Regex => {
+            stats.pass1 = session.auto_resolve_safe_with_options(whitespace_normalize);
+            stats.pass2_split = session.auto_resolve_pass2();
+            if stats.pass2_split > 0 {
+                stats.pass1_after_split =
+                    session.auto_resolve_safe_with_options(whitespace_normalize);
+            }
+            if mode == ConflictAutosolveMode::Regex {
+                stats.regex =
+                    session.auto_resolve_regex(&RegexAutosolveOptions::whitespace_insensitive());
+            }
         }
         ConflictAutosolveMode::History => {
-            session.auto_resolve_history(&HistoryAutosolveOptions::bullet_list())
+            stats.history = session.auto_resolve_history(&HistoryAutosolveOptions::bullet_list());
         }
     }
+    stats
 }
 
 fn reset_session_resolutions(

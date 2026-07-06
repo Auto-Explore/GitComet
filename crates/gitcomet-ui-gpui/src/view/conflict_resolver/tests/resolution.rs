@@ -607,6 +607,100 @@ fn autosolve_trace_summary_history_mode_uses_history_stat() {
 }
 
 #[test]
+fn autosolve_trace_summary_on_open_mode() {
+    let stats = gitcomet_state::msg::ConflictAutosolveStats {
+        pass1: 2,
+        pass2_split: 1,
+        pass1_after_split: 0,
+        regex: 1,
+        history: 0,
+    };
+    let summary = format_autosolve_trace_summary(AutosolveTraceMode::OnOpen, 6, 2, &stats);
+    assert!(summary.contains("Auto-solved on open"));
+    assert!(summary.contains("resolved 4 blocks"));
+    assert!(summary.contains("unresolved 6 -> 2"));
+    assert!(summary.contains("regex 1"));
+}
+
+#[test]
+fn on_open_autosolve_summary_reconstructs_tier_breakdown_from_rules() {
+    use gitcomet_core::conflict_session::{
+        AutosolveConfidence, AutosolveRule, ConflictPayload, ConflictRegion,
+        ConflictRegionResolution as R, ConflictSession,
+    };
+    use gitcomet_core::domain::FileConflictKind;
+
+    let region = |resolution: R| ConflictRegion {
+        base: None,
+        ours: "ours\n".into(),
+        theirs: "theirs\n".into(),
+        resolution,
+    };
+    let auto = |rule: AutosolveRule| {
+        region(R::AutoResolved {
+            rule,
+            confidence: rule.confidence(),
+            content: String::new(),
+        })
+    };
+    let _ = AutosolveConfidence::High;
+
+    let mut session = ConflictSession::new(
+        std::path::PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+    );
+    session.regions = vec![
+        auto(AutosolveRule::IdenticalSides),
+        auto(AutosolveRule::SubchunkFullyMerged),
+        auto(AutosolveRule::RegexEquivalentSides),
+        region(R::Unresolved),
+    ];
+
+    let summary = on_open_autosolve_summary(&session).expect("summary for auto-resolved regions");
+    assert!(summary.contains("Auto-solved on open"));
+    assert!(summary.contains("resolved 3 blocks"));
+    assert!(summary.contains("unresolved 4 -> 1"));
+    assert!(summary.contains("pass1 1"));
+    assert!(summary.contains("split 1"));
+    assert!(summary.contains("regex 1"));
+}
+
+#[test]
+fn on_open_autosolve_summary_is_none_without_auto_resolutions() {
+    use gitcomet_core::conflict_session::{
+        ConflictPayload, ConflictRegion, ConflictRegionResolution as R, ConflictSession,
+    };
+    use gitcomet_core::domain::FileConflictKind;
+
+    let mut session = ConflictSession::new(
+        std::path::PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+    );
+    session.regions = vec![
+        ConflictRegion {
+            base: None,
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            resolution: R::PickOurs,
+        },
+        ConflictRegion {
+            base: None,
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            resolution: R::Unresolved,
+        },
+    ];
+
+    assert!(on_open_autosolve_summary(&session).is_none());
+}
+
+#[test]
 fn active_conflict_autosolve_trace_label_reports_rule_and_confidence() {
     use gitcomet_core::conflict_session::{
         AutosolveConfidence, AutosolveRule, ConflictPayload, ConflictRegion,

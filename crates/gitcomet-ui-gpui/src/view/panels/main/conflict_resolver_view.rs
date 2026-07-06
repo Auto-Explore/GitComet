@@ -459,6 +459,13 @@ impl MainPaneView {
                                                 theme,
                                                 cx,
                                                 auto_resolve,
+                                            )
+                                            .gitcomet_tooltip(
+                                                theme,
+                                                "Re-run safe auto-solve and the low-confidence \
+                                                 history/changelog merge (high and medium \
+                                                 confidence tiers already ran on open)"
+                                                    .into(),
                                             ),
                                         )
                                 })

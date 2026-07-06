@@ -6,8 +6,10 @@ use crate::model::{
     AppNotificationKind, AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId,
     RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
 };
-use crate::msg::{CommitSelectMode, Effect};
-use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
+use gitcomet_core::conflict_session::{
+    ConflictPayload, ConflictResolverStrategy, ConflictSession,
+};
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, FileEntry, FileSource, FileStatusKind, LogPage,
     RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry,
@@ -16,7 +18,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(super) fn file_history_loaded(
@@ -72,6 +74,7 @@ pub(super) fn conflict_file_loaded(
         && repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path)
     {
         let existing_session = repo_state.conflict_state.conflict_session.as_ref();
+        let fresh_open = existing_session.is_none();
         let session = conflict_session.or_else(|| match &result {
             Ok(Some(file)) => build_conflict_session(repo_state, file),
             _ => None,
@@ -91,8 +94,60 @@ pub(super) fn conflict_file_loaded(
         };
         repo_state.set_conflict_file(value);
         repo_state.set_conflict_session(session);
+        if fresh_open {
+            auto_resolve_session_on_open(repo_state, &path);
+        }
     }
     Vec::new()
+}
+
+/// UI_DESIGN.md §30 auto-solve policy: the High and Medium confidence tiers
+/// (safe rules, subchunk split, whitespace/regex normalization) apply
+/// automatically when a conflicted file first opens in the resolver. The Low
+/// tier (history merge) only ever runs behind the explicit Auto-solve action.
+///
+/// Reloads of an already-open file keep user resolutions via
+/// [`restore_conflict_session_resolutions`] and are never re-autosolved, so a
+/// region the user deliberately un-resolved stays unresolved.
+fn auto_resolve_session_on_open(repo_state: &mut RepoState, path: &Path) {
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return;
+    };
+    if session.strategy != ConflictResolverStrategy::FullTextResolver {
+        return;
+    }
+    let total_before = session.total_regions();
+    let unresolved_before = session.unsolved_count();
+    if unresolved_before == 0 {
+        return;
+    }
+
+    let stats = super::conflict_interactions::apply_autosolve_to_session(
+        session,
+        ConflictAutosolveMode::Regex,
+        true,
+    );
+    if stats.total_resolved() == 0 {
+        return;
+    }
+    let unresolved_after = session.unsolved_count();
+    let total_after = session.total_regions();
+
+    super::util::push_action_log(
+        repo_state,
+        true,
+        format!("telemetry.conflict_autosolve.on_open {}", path.display()),
+        super::util::conflict_autosolve_telemetry_summary(
+            ConflictAutosolveMode::Regex,
+            Some(path),
+            total_before,
+            total_after,
+            unresolved_before,
+            unresolved_after,
+            stats,
+        ),
+        None,
+    );
 }
 
 fn restore_conflict_session_resolutions(existing: &ConflictSession, next: &mut ConflictSession) {

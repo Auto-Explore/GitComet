@@ -1043,7 +1043,7 @@ theirs one\n\
 }
 
 #[test]
-fn conflict_apply_autosolve_safe_updates_conflict_session() {
+fn conflict_file_loaded_auto_resolves_identical_sides_on_open() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1086,14 +1086,27 @@ same content\n\
         }),
     );
 
-    let before_rev = state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
-        .unwrap()
+    // UI_DESIGN.md §30: High-confidence rules (identical sides) apply on open.
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
         .conflict_state
-        .conflict_rev;
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert_eq!(session.unsolved_count(), 0);
+    assert!(matches!(
+        session.regions[0].resolution,
+        gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved { .. }
+    ));
+    assert!(
+        repo_state.command_log.iter().any(|entry| entry
+            .command
+            .starts_with("telemetry.conflict_autosolve.on_open")),
+        "on-open autosolve should leave an auditable command-log entry",
+    );
 
+    // A later explicit Safe dispatch has nothing left to solve: no rev bump.
+    let before_rev = repo_state.conflict_state.conflict_rev;
     reduce(
         &mut repos,
         &id_alloc,
@@ -1105,7 +1118,86 @@ same content\n\
             whitespace_normalize: false,
         },
     );
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
+}
 
+fn history_conflict_file() -> ConflictFile {
+    let current = "\
+<<<<<<< ours\n\
+## Changelog\n\
+- entry a\n\
+- entry b\n\
+||||||| base\n\
+## Changelog\n\
+- entry a\n\
+=======\n\
+## Changelog\n\
+- entry a\n\
+- entry c\n\
+>>>>>>> theirs\n\
+";
+    ConflictFile {
+        path: PathBuf::from("file.txt").into(),
+        base_bytes: Some(b"## Changelog\n- entry a\n".to_vec().into()),
+        ours_bytes: Some(b"## Changelog\n- entry a\n- entry b\n".to_vec().into()),
+        theirs_bytes: Some(b"## Changelog\n- entry a\n- entry c\n".to_vec().into()),
+        current_bytes: Some(current.as_bytes().to_vec().into()),
+        base: Some("## Changelog\n- entry a\n".to_string().into()),
+        ours: Some("## Changelog\n- entry a\n- entry b\n".to_string().into()),
+        theirs: Some("## Changelog\n- entry a\n- entry c\n".to_string().into()),
+        current: Some(current.to_string().into()),
+    }
+}
+
+#[test]
+fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(history_conflict_file()))),
+            conflict_session: None,
+        }),
+    );
+
+    // The Low tier (history merge) never applies on open.
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert_eq!(session.unsolved_count(), 1);
+    let before_rev = repo_state.conflict_state.conflict_rev;
+
+    // The explicit History dispatch resolves it and bumps the rev.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictApplyAutosolve {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            mode: crate::msg::ConflictAutosolveMode::History,
+            whitespace_normalize: false,
+        },
+    );
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
         .conflict_state
@@ -1118,6 +1210,84 @@ same content\n\
         gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved { .. }
     ));
     assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
+}
+
+#[test]
+fn conflict_file_reload_does_not_reapply_autosolve_after_user_reset() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    let current = "\
+<<<<<<< ours\n\
+same content\n\
+=======\n\
+same content\n\
+>>>>>>> theirs\n\
+";
+    let make_file = || ConflictFile {
+        path: PathBuf::from("file.txt").into(),
+        base_bytes: Some(b"base\n".to_vec().into()),
+        ours_bytes: Some(b"same content\n".to_vec().into()),
+        theirs_bytes: Some(b"same content\n".to_vec().into()),
+        current_bytes: Some(current.as_bytes().to_vec().into()),
+        base: Some("base\n".to_string().into()),
+        ours: Some("same content\n".to_string().into()),
+        theirs: Some("same content\n".to_string().into()),
+        current: Some(current.to_string().into()),
+    };
+
+    let load = |repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+                state: &mut AppState,
+                file: ConflictFile| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                repo_id,
+                path: PathBuf::from("file.txt"),
+                result: Box::new(Ok(Some(file))),
+                conflict_session: None,
+            }),
+        );
+    };
+
+    load(&mut repos, &mut state, make_file());
+
+    // On-open autosolve resolved the identical-sides region; the user resets it.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictResetResolutions {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+        },
+    );
+
+    // A reload (e.g. status refresh) must keep the user's reset, not re-autosolve.
+    load(&mut repos, &mut state, make_file());
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let session = repo_state
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert_eq!(session.unsolved_count(), 1);
+    assert!(matches!(
+        session.regions[0].resolution,
+        gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
+    ));
 }
 
 #[test]

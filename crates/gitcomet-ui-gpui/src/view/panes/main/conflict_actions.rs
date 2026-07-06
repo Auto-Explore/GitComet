@@ -821,12 +821,26 @@ impl MainPaneView {
                 self.conflict_resolver.active_conflict.min(total - 1)
             }
         } else {
-            0
+            // §30: on open, selection lands on the first unresolved conflict
+            // (earlier ones may have been auto-solved on load).
+            conflict_resolver::unresolved_conflict_indices(&marker_segments)
+                .first()
+                .copied()
+                .unwrap_or(0)
         };
         let resolver_preview_mode = if is_same_conflict {
             self.conflict_resolver.resolver_preview_mode
         } else {
             ConflictResolverPreviewMode::default()
+        };
+        let last_autosolve_summary = if is_same_conflict {
+            self.conflict_resolver.last_autosolve_summary.clone()
+        } else {
+            repo.conflict_state
+                .conflict_session
+                .as_ref()
+                .and_then(conflict_resolver::on_open_autosolve_summary)
+                .map(Into::into)
         };
 
         self.conflict_three_way_segments_cache.clear();
@@ -902,7 +916,7 @@ impl MainPaneView {
             binary_side_sizes: [None; 3],
             strategy: conflict_strategy,
             conflict_kind,
-            last_autosolve_summary: None,
+            last_autosolve_summary,
             conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
@@ -2227,6 +2241,24 @@ impl MainPaneView {
                 repo_id,
                 path,
                 mode: gitcomet_state::msg::ConflictAutosolveMode::Safe,
+                whitespace_normalize: false,
+            });
+        }
+        // §30: the Low-confidence tier (history/changelog merge) only ever
+        // runs from this explicit action, never automatically. Results flow
+        // back into the blocks through the conflict_rev resync.
+        if unresolved_after > 0
+            && let (Some(repo_id), Some(path)) = (
+                self.conflict_resolver
+                    .repo_id
+                    .or_else(|| self.active_repo_id()),
+                self.conflict_resolver.dispatch_path(),
+            )
+        {
+            self.store.dispatch(Msg::ConflictApplyAutosolve {
+                repo_id,
+                path,
+                mode: gitcomet_state::msg::ConflictAutosolveMode::History,
                 whitespace_normalize: false,
             });
         }
