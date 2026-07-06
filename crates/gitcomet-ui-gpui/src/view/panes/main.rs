@@ -4,6 +4,7 @@ use super::super::*;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 mod actions_impl;
+mod conflict_actions;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
 pub(in crate::view) mod diff_search;

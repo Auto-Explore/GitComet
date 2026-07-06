@@ -1,6 +1,7 @@
 use super::*;
 
 mod binary_conflict;
+mod conflict_resolver_view;
 mod decision_conflict;
 mod diff;
 mod diff_view;
