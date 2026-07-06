@@ -553,6 +553,19 @@ pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
     }
 }
 
+/// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (§30 keyboard model).
+///
+/// Unlike the single-letter picks these also work while the output editor is
+/// focused, since they cannot collide with text input.
+pub fn conflict_ctrl_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
+    match key {
+        "1" => Some(ConflictChoice::Base),
+        "2" => Some(ConflictChoice::Ours),
+        "3" => Some(ConflictChoice::Theirs),
+        _ => None,
+    }
+}
+
 /// Resolve conflict navigation shortcuts (`F2`, `F3`, `F7`) to a direction.
 #[cfg(test)]
 pub fn conflict_nav_direction_for_key(key: &str, shift: bool) -> Option<ConflictNavDirection> {

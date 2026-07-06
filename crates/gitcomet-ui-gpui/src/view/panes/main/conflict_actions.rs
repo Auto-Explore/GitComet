@@ -1458,12 +1458,48 @@ impl MainPaneView {
         choice: conflict_resolver::ConflictChoice,
         cx: &mut gpui::Context<Self>,
     ) {
-        let mut matching_indices = conflict_group_indices_for_choice(
+        let matching_indices = conflict_group_indices_for_choice(
             &self.conflict_resolver.marker_segments,
             &self.conflict_resolver.conflict_region_indices,
             conflict_ix,
             choice,
         );
+        self.conflict_resolver_reset_block_indices(matching_indices, conflict_ix, cx);
+    }
+
+    /// Un-resolve the active conflict regardless of how it was resolved
+    /// (§30: one keypress reverts a pick or auto-resolution).
+    pub(in crate::view) fn conflict_resolver_unresolve_active_conflict(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let conflict_ix = self.conflict_resolver.active_conflict;
+        let resolved_flags: Vec<bool> = self
+            .conflict_resolver
+            .marker_segments
+            .iter()
+            .filter_map(|seg| match seg {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block.resolved),
+                _ => None,
+            })
+            .collect();
+        let matching_indices: Vec<usize> = conflict_group_member_indices_for_ix(
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolver.conflict_region_indices,
+            conflict_ix,
+        )
+        .into_iter()
+        .filter(|&ix| resolved_flags.get(ix).copied().unwrap_or(false))
+        .collect();
+        self.conflict_resolver_reset_block_indices(matching_indices, conflict_ix, cx);
+    }
+
+    fn conflict_resolver_reset_block_indices(
+        &mut self,
+        mut matching_indices: Vec<usize>,
+        conflict_ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if matching_indices.is_empty() {
             return;
         }
@@ -2096,6 +2132,31 @@ impl MainPaneView {
 
         self.conflict_resolver_auto_advance_to_next_unresolved();
         cx.notify();
+    }
+
+    /// Confidence tier of the auto-resolve rule applied to a conflict, when
+    /// its session region is `AutoResolved` (§30 gutter badges).
+    pub(in crate::view) fn conflict_autosolve_confidence_for_ix(
+        &self,
+        conflict_ix: usize,
+    ) -> Option<gitcomet_core::conflict_session::AutosolveConfidence> {
+        let region_ix = self
+            .conflict_resolver
+            .conflict_region_indices
+            .get(conflict_ix)
+            .copied()?;
+        let session = self
+            .active_repo()?
+            .conflict_state
+            .conflict_session
+            .as_ref()?;
+        match &session.regions.get(region_ix)?.resolution {
+            gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved {
+                confidence,
+                ..
+            } => Some(*confidence),
+            _ => None,
+        }
     }
 
     /// Select a conflict as the active one without picking a side (§30:

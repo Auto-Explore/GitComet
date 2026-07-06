@@ -742,7 +742,27 @@ impl MainPaneView {
                 .focus_handle()
                 .is_focused(window)
             && self.conflict_resolver_conflict_count() > 0
-            && let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key)
+        {
+            if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key) {
+                self.conflict_resolver_pick_active_conflict(choice, cx);
+                handled = true;
+            } else if key == "u" {
+                // §30: U un-resolves the active conflict (pick or auto-solve).
+                self.conflict_resolver_unresolve_active_conflict(cx);
+                handled = true;
+            }
+        }
+
+        // §30: kdiff3-compatible Ctrl+1/2/3 pick aliases. These stay usable
+        // while the output editor is focused (no text-input collision).
+        if !handled
+            && conflict_resolver_active
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && !mods.shift
+            && self.conflict_resolver_conflict_count() > 0
+            && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(key)
         {
             self.conflict_resolver_pick_active_conflict(choice, cx);
             handled = true;

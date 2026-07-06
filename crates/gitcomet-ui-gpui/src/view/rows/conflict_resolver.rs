@@ -1102,9 +1102,17 @@ impl MainPaneView {
                             .text_color(theme.colors.text_muted)
                             .child(line_number_string(u32::try_from(ix + 1).ok())),
                     )
-                    .child(
+                    .child({
+                        // §30: confidence dot on the first row of an
+                        // auto-resolved conflict (accent/warning/danger for
+                        // high/medium/low). Rule detail for the active
+                        // conflict shows in the resolver header trace label.
+                        let confidence = conflict_ix
+                            .filter(|_| gutter_row.is_start() && !conflict_unresolved)
+                            .and_then(|cix| this.conflict_autosolve_confidence_for_ix(cix));
                         div()
                             .w(px(24.0))
+                            .relative()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -1118,8 +1126,26 @@ impl MainPaneView {
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(badge_fg)
                                     .child(gutter_row.badge_char().to_string()),
-                            ),
-                    );
+                            )
+                            .when_some(confidence, |d, confidence| {
+                                use gitcomet_core::conflict_session::AutosolveConfidence;
+                                let dot_color = match confidence {
+                                    AutosolveConfidence::High => theme.colors.accent,
+                                    AutosolveConfidence::Medium => theme.colors.warning,
+                                    AutosolveConfidence::Low => theme.colors.danger,
+                                };
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(1.0))
+                                        .right(px(0.0))
+                                        .w(px(5.0))
+                                        .h(px(5.0))
+                                        .rounded(px(2.5))
+                                        .bg(dot_color),
+                                )
+                            })
+                    });
                 if let Some(conflict_ix) = conflict_ix {
                     let has_base = this
                         .conflict_resolver

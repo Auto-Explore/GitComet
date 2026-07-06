@@ -800,6 +800,24 @@ fn quick_pick_key_mapping_matches_a_b_c_d_shortcuts() {
 }
 
 #[test]
+fn ctrl_pick_key_mapping_matches_kdiff3_1_2_3_aliases() {
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("1"),
+        Some(ConflictChoice::Base)
+    );
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("2"),
+        Some(ConflictChoice::Ours)
+    );
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("3"),
+        Some(ConflictChoice::Theirs)
+    );
+    assert_eq!(conflict_ctrl_pick_choice_for_key("4"), None);
+    assert_eq!(conflict_ctrl_pick_choice_for_key("a"), None);
+}
+
+#[test]
 fn nav_key_mapping_matches_f2_f3_f7_shortcuts() {
     assert_eq!(
         conflict_nav_direction_for_key("f2", false),
