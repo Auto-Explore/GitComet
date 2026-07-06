@@ -1,7 +1,7 @@
 use super::GixRepo;
 use crate::util::{
-    bytes_to_text_preserving_utf8, run_git_capture, run_git_with_output, validate_hex_commit_id,
-    validate_ref_like_arg,
+    bytes_to_text_preserving_utf8, git_command_failed_error, run_git_capture, run_git_raw_output,
+    run_git_with_output, validate_hex_commit_id, validate_ref_like_arg,
 };
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
@@ -10,6 +10,7 @@ use gitcomet_core::services::{
 };
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 /// Returns the HEAD commit id, or `None` when HEAD is unborn / empty.
 pub(super) fn gix_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::ObjectId>> {
@@ -226,7 +227,27 @@ impl GixRepo {
     pub(super) fn rebase_continue_with_output_impl(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("rebase").arg("--continue");
-        run_git_with_output(cmd, "git rebase --continue")
+        self.run_rebase_step_output(cmd, "git rebase --continue")
+    }
+
+    /// Run a rebase step (`rebase -i` / `rebase --continue`). A non-zero exit
+    /// that leaves the rebase *still in progress* means git paused at the next
+    /// conflict — a normal outcome, not a failure. Report it as success (with
+    /// the captured output) so the UI treats it as "paused at conflict": it
+    /// clears the loading state, reloads status, and surfaces the new conflict,
+    /// instead of showing a hard error and getting stuck on a spinner.
+    fn run_rebase_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
+        let output = run_git_raw_output(cmd, label)?;
+        if output.status.success() || self.rebase_in_progress_impl()? {
+            Ok(CommandOutput {
+                command: label.to_string(),
+                stdout: bytes_to_text_preserving_utf8(&output.stdout),
+                stderr: bytes_to_text_preserving_utf8(&output.stderr),
+                exit_code: output.status.code(),
+            })
+        } else {
+            Err(git_command_failed_error(label, output))
+        }
     }
 
     pub(super) fn rebase_abort_with_output_impl(&self) -> Result<CommandOutput> {
@@ -320,7 +341,7 @@ impl GixRepo {
         cmd.args(["rebase", "-i", "--", base]);
 
         let label = format!("git rebase -i {base}");
-        run_git_with_output(cmd, &label)
+        self.run_rebase_step_output(cmd, &label)
     }
 
     fn git_dir_path(&self) -> PathBuf {
