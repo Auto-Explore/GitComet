@@ -55,8 +55,6 @@ impl MainPaneView {
         prev_file_btn: Option<AnyElement>,
         next_file_btn: Option<AnyElement>,
         conflict_rendered_preview_active: bool,
-        repo_id: Option<RepoId>,
-        conflict_target_path: &Option<std::path::PathBuf>,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
@@ -113,6 +111,23 @@ impl MainPaneView {
             })
             .when_some(next_file_btn, |d, btn| d.child(btn));
 
+        controls
+    }
+
+    /// Footer bar for the text conflict resolver (§30): live resolution
+    /// status on the left; Abort and the save/stage completion actions on
+    /// the right. Save & stage is gated on zero unresolved conflicts.
+    fn conflict_resolver_footer(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let total = self.conflict_resolver_conflict_count();
+        let resolved = self.conflict_resolver_resolved_count();
+        let unresolved = total.saturating_sub(resolved);
+
         let stage_safety = if self.conflict_resolved_output_is_streamed() {
             // Streamed mode: output is not materialized in the TextInput,
             // so skip the text-based marker check. Unresolved blocks are
@@ -131,82 +146,162 @@ impl MainPaneView {
             )
         };
 
-        if stage_safety.has_conflict_markers {
-            controls = controls.child(
-                div()
-                    .text_xs()
-                    .text_color(theme.colors.danger)
-                    .child("markers remain"),
-            );
-        }
-
-        if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
-            let focused_mergetool_mode = self.view_mode == GitCometViewMode::FocusedMergetool;
-            let save_label = if focused_mergetool_mode {
-                "Save & close"
+        let status: AnyElement = if total == 0 {
+            div()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child("No conflicts in this file")
+                .into_any_element()
+        } else if unresolved > 0 {
+            let noun = if unresolved == 1 {
+                "conflict"
             } else {
-                "Save"
+                "conflicts"
             };
-            let save_path = path.clone();
-            controls = controls
-                .child(
-                    components::Button::new("conflict_save", save_label)
-                        .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            if this.view_mode == GitCometViewMode::FocusedMergetool {
-                                this.focused_mergetool_save_and_exit(
-                                    repo_id,
-                                    save_path.clone(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            let text = this.conflict_resolver_save_contents(cx);
-                            this.store.dispatch(Msg::SaveWorktreeFile {
-                                repo_id,
-                                path: save_path.clone(),
-                                contents: text,
-                                stage: false,
-                            });
-                        }),
-                )
-                .when(show_conflict_save_stage_action(self.view_mode), |d| {
-                    let save_path = path.clone();
+            div()
+                .text_xs()
+                .text_color(theme.colors.warning)
+                .child(format!("⚠ {unresolved} {noun} unresolved"))
+                .into_any_element()
+        } else {
+            div()
+                .text_xs()
+                .text_color(theme.colors.success)
+                .child("✓ All conflicts resolved")
+                .into_any_element()
+        };
+
+        let focused_mergetool_mode = self.view_mode == GitCometViewMode::FocusedMergetool;
+        let is_merging = self
+            .active_repo()
+            .is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))));
+        let is_rebase_or_apply_in_progress = self
+            .active_repo()
+            .is_some_and(|r| matches!(&r.rebase_in_progress, Loadable::Ready(true)));
+        let show_abort = !focused_mergetool_mode && (is_merging || is_rebase_or_apply_in_progress);
+
+        let save_label = if focused_mergetool_mode {
+            "Save & close"
+        } else {
+            "Save"
+        };
+        let save_path = path.to_path_buf();
+        let stage_path = path.to_path_buf();
+
+        div()
+            .id("conflict_resolver_footer")
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .px_1()
+            .child(div().flex().items_center().gap_2().child(status).when(
+                stage_safety.has_conflict_markers,
+                |d| {
                     d.child(
-                        components::Button::new("conflict_save_stage", "Save & stage")
-                            .style(components::ButtonStyle::Filled)
-                            .on_click(theme, cx, move |this, e, window, cx| {
-                                let text = this.current_conflict_resolved_output_text(cx);
-                                let stage_safety = conflict_resolver::conflict_stage_safety_check(
-                                    &text,
-                                    &this.conflict_resolver.marker_segments,
-                                );
-                                if stage_safety.requires_confirmation() {
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.danger)
+                            .child("markers remain"),
+                    )
+                },
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .when(show_abort, |d| {
+                        d.child(
+                            components::Button::new("conflict_abort", "Abort")
+                                .style(components::ButtonStyle::Outlined)
+                                .on_click(theme, cx, move |this, e: &ClickEvent, window, cx| {
                                     this.open_popover_at(
-                                        PopoverKind::ConflictSaveStageConfirm {
-                                            repo_id,
-                                            path: save_path.clone(),
-                                            has_conflict_markers: stage_safety.has_conflict_markers,
-                                            unresolved_blocks: stage_safety.unresolved_blocks,
-                                        },
+                                        PopoverKind::MergeAbortConfirm { repo_id },
                                         e.position(),
                                         window,
                                         cx,
                                     );
-                                } else {
-                                    let text = this.conflict_resolver_save_contents_from_text(text);
-                                    this.store.dispatch(Msg::SaveWorktreeFile {
+                                })
+                                .gitcomet_tooltip(
+                                    theme,
+                                    "Abort the in-progress merge/rebase (asks to confirm)".into(),
+                                ),
+                        )
+                    })
+                    .child(
+                        components::Button::new("conflict_save", save_label)
+                            .style(components::ButtonStyle::Outlined)
+                            .on_click(theme, cx, move |this, _e, _w, cx| {
+                                if this.view_mode == GitCometViewMode::FocusedMergetool {
+                                    this.focused_mergetool_save_and_exit(
                                         repo_id,
-                                        path: save_path.clone(),
-                                        contents: text,
-                                        stage: true,
-                                    });
+                                        save_path.clone(),
+                                        cx,
+                                    );
+                                    return;
                                 }
+                                let text = this.conflict_resolver_save_contents(cx);
+                                this.store.dispatch(Msg::SaveWorktreeFile {
+                                    repo_id,
+                                    path: save_path.clone(),
+                                    contents: text,
+                                    stage: false,
+                                });
                             }),
                     )
-                });
-        }
-        controls
+                    .when(show_conflict_save_stage_action(self.view_mode), |d| {
+                        let gate_unresolved = unresolved;
+                        let mut save_stage_btn =
+                            components::Button::new("conflict_save_stage", "Save & stage")
+                                .style(components::ButtonStyle::Filled)
+                                .disabled(gate_unresolved > 0)
+                                .on_click(theme, cx, move |this, e, window, cx| {
+                                    let text = this.current_conflict_resolved_output_text(cx);
+                                    let stage_safety =
+                                        conflict_resolver::conflict_stage_safety_check(
+                                            &text,
+                                            &this.conflict_resolver.marker_segments,
+                                        );
+                                    if stage_safety.requires_confirmation() {
+                                        this.open_popover_at(
+                                            PopoverKind::ConflictSaveStageConfirm {
+                                                repo_id,
+                                                path: stage_path.clone(),
+                                                has_conflict_markers: stage_safety
+                                                    .has_conflict_markers,
+                                                unresolved_blocks: stage_safety.unresolved_blocks,
+                                            },
+                                            e.position(),
+                                            window,
+                                            cx,
+                                        );
+                                    } else {
+                                        let text =
+                                            this.conflict_resolver_save_contents_from_text(text);
+                                        this.store.dispatch(Msg::SaveWorktreeFile {
+                                            repo_id,
+                                            path: stage_path.clone(),
+                                            contents: text,
+                                            stage: true,
+                                        });
+                                    }
+                                });
+                        if gate_unresolved > 0 {
+                            let noun = if gate_unresolved == 1 {
+                                "conflict is"
+                            } else {
+                                "conflicts are"
+                            };
+                            save_stage_btn = save_stage_btn.gitcomet_tooltip(
+                                theme,
+                                format!("Disabled: {gate_unresolved} {noun} still unresolved")
+                                    .into(),
+                            );
+                        }
+                        d.child(save_stage_btn)
+                    }),
+            )
     }
 
     /// The main conflict resolver pane body: three-way / two-way source
@@ -1637,6 +1732,7 @@ impl MainPaneView {
                                     bottom_section.style().flex_basis = Some(relative(0.).into());
                                     bottom_section
                                 })
+                                .child(self.conflict_resolver_footer(repo_id, &path, theme, cx))
                                 .into_any_element()
                             }
                         }

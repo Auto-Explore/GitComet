@@ -1905,8 +1905,6 @@ impl MainPaneView {
                 prev_file_btn,
                 next_file_btn,
                 conflict_rendered_preview_active,
-                repo_id,
-                &conflict_target_path,
                 theme,
                 cx,
             );
