@@ -107,7 +107,10 @@ fn gix_backend_open_succeeds_for_dot_git_suffixed_linked_worktree() {
     // A linked worktree stores its `.git` as a `gitdir:` file, not a directory.
     let linked = dir.path().join("linked.git");
     run_git(&main, &["worktree", "add", linked.to_str().unwrap()]);
-    assert!(linked.join(".git").is_file(), "linked worktree has a .git file");
+    assert!(
+        linked.join(".git").is_file(),
+        "linked worktree has a .git file"
+    );
 
     let backend = GixBackend;
     let opened = backend
