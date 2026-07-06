@@ -1,6 +1,5 @@
 use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange, RepoWatchDegradedReason};
-use gitcomet_core::path_utils::git_dir_for_workdir;
 use gix::index::entry::Mode as GitIndexMode;
 use notify::event::{AccessKind, AccessMode};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -417,8 +416,7 @@ struct GitignoreMatcher {
 
 impl GitignoreMatcher {
     fn load(workdir: &Path) -> Option<Self> {
-        let git_dir = git_dir_for_workdir(workdir);
-        let repo = gix::open(&git_dir).ok()?;
+        let repo = crate::store::open_worktree_repo(workdir).ok()?;
         let worktree = repo.worktree()?;
         let index = worktree.index().ok()?;
         let excludes = repo

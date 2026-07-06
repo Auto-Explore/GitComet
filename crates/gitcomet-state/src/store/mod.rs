@@ -1,6 +1,6 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, RepoExternalChange, StoreEvent};
-use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::path_utils::{canonicalize_or_original, git_dir_for_workdir};
 use gitcomet_core::services::{GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
 use std::collections::VecDeque;
@@ -42,6 +42,18 @@ pub use reducer_diagnostics::StoreReducerDiagnostics;
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {
     canonicalize_or_original(path)
+}
+
+/// Open the repository backing `workdir` for read-only inspection, routing
+/// through [`git_dir_for_workdir`] so worktrees whose directory ends in `.git`
+/// are opened correctly. Single entry point for gix opens in this crate.
+// Thin forwarder over `gix::open`, whose large `gix::open::Error` we surface
+// as-is; both callers immediately discard it via `.ok()`/`let-else`.
+#[allow(clippy::result_large_err)]
+pub(crate) fn open_worktree_repo(
+    workdir: &std::path::Path,
+) -> Result<gix::Repository, gix::open::Error> {
+    gix::open(git_dir_for_workdir(workdir))
 }
 
 fn make_mut_state_with_diagnostics(state: &mut Arc<AppState>) -> &mut AppState {

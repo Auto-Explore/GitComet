@@ -9,7 +9,6 @@ use gitcomet_core::auth::stage_git_auth;
 use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth};
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
-use gitcomet_core::path_utils::git_dir_for_workdir;
 use gitcomet_core::services::CommandOutput;
 use rustc_hash::FxHashSet;
 use smallvec::{Array, SmallVec};
@@ -350,8 +349,7 @@ fn head_path_is_gitlink(workdir: &Path, path: &Path) -> bool {
         path
     };
 
-    let git_dir = git_dir_for_workdir(workdir);
-    let Ok(repo) = gix::open(&git_dir) else {
+    let Ok(repo) = crate::store::open_worktree_repo(workdir) else {
         return false;
     };
     let Ok(head_id) = repo.head_id() else {

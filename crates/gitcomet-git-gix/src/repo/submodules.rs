@@ -10,7 +10,7 @@ use gitcomet_core::domain::{
     SubmoduleStatus,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
-use gitcomet_core::path_utils::{canonicalize_or_original, git_dir_for_workdir};
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{
     CancellationToken, CommandOutput, Result, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
@@ -435,7 +435,7 @@ fn collect_repo_untrusted_submodule_sources(
             out.insert(full_path.clone(), target);
         }
 
-        if let Some(nested_repo) = open_configured_submodule_repo(repo, &submodule)? {
+        if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
             collect_repo_untrusted_submodule_sources(&nested_repo, trust_root, &full_path, out)?;
         }
     }
@@ -521,7 +521,7 @@ fn collect_target_submodule_untrusted_sources(
             {
                 out.insert(full_path.clone(), target);
             }
-            if let Some(nested_repo) = open_configured_submodule_repo(repo, &submodule)? {
+            if let Some(nested_repo) = open_configured_submodule_repo(&submodule)? {
                 collect_repo_untrusted_submodule_sources(
                     &nested_repo,
                     trust_root,
@@ -533,7 +533,7 @@ fn collect_target_submodule_untrusted_sources(
         }
 
         if target_path.starts_with(&full_path)
-            && let Some(nested_repo) = open_configured_submodule_repo(repo, &submodule)?
+            && let Some(nested_repo) = open_configured_submodule_repo(&submodule)?
             && collect_target_submodule_untrusted_sources(
                 &nested_repo,
                 trust_root,
@@ -633,7 +633,7 @@ fn configured_submodule_row(
         ));
     }
 
-    let nested_repo = open_configured_submodule_repo(repo, &submodule)?;
+    let nested_repo = open_configured_submodule_repo(&submodule)?;
     let Some(nested_repo) = nested_repo else {
         return Ok((
             Submodule {
@@ -1209,11 +1209,10 @@ fn cleanup_failed_submodule_add_error(
 }
 
 fn failed_submodule_add_left_clone_only_state(workdir: &Path, path: &Path) -> Result<bool> {
-    let git_dir = git_dir_for_workdir(workdir);
-    let repo = gix::open(&git_dir).map_err(|e| {
+    let repo = crate::open::open_worktree_repo(workdir).map_err(|e| {
         Error::new(ErrorKind::Backend(format!(
             "open repo after failed submodule add {}: {e}",
-            git_dir.display()
+            workdir.display()
         )))
     })?;
     Ok(!submodule_path_registered(&repo, path)?)
@@ -1484,22 +1483,20 @@ fn open_gitlink_repo(
         return Ok(None);
     };
     let path = workdir.join(relative_path);
-    let git_dir = git_dir_for_workdir(&path);
 
-    match gix::open(&git_dir) {
+    match crate::open::open_worktree_repo(&path) {
         Ok(repo) => Ok(Some(repo)),
         Err(gix::open::Error::NotARepository { .. }) => Ok(None),
         Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
         Err(e) => Err(Error::new(ErrorKind::Backend(format!(
             "gix open nested submodule repo {}: {e}",
-            git_dir.display()
+            path.display()
         )))),
     }
 }
 
 fn open_configured_submodule_repo(
-    parent_repo: &gix::Repository,
     submodule: &gix::Submodule<'_>,
 ) -> Result<Option<gix::Repository>> {
     let state = submodule
@@ -1508,26 +1505,13 @@ fn open_configured_submodule_repo(
     if !(state.repository_exists && state.worktree_checkout) {
         return Ok(None);
     }
-    let Some(parent_workdir) = parent_repo.workdir() else {
-        return Ok(None);
-    };
-    let relative_path = submodule
-        .path()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule path: {e}"))))?;
-    let relative_path = pathbuf_from_gix_path(relative_path.as_ref())?;
-    let path = parent_workdir.join(&relative_path);
-    let git_dir = git_dir_for_workdir(&path);
-
-    match gix::open(&git_dir) {
-        Ok(repo) => Ok(Some(repo)),
-        Err(gix::open::Error::NotARepository { .. }) => Ok(None),
-        Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(gix::open::Error::Io(io)) => Err(Error::new(ErrorKind::Io(io.kind()))),
-        Err(e) => Err(Error::new(ErrorKind::Backend(format!(
-            "gix open configured submodule repo {}: {e}",
-            git_dir.display()
-        )))),
-    }
+    // gix's own `Submodule::open` opens the submodule's git directory directly
+    // (`modules/<name>`, following the worktree `.git` pointer) and sets the
+    // workdir by hand, so it already handles submodule worktrees whose directory
+    // ends in `.git` — no `git_dir_for_workdir` shim is needed here.
+    submodule
+        .open()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule open: {e}"))))
 }
 
 fn trust_target_from_submodule(
