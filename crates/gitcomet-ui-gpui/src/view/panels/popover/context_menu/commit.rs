@@ -159,36 +159,47 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         })
         .unwrap_or_else(|| short.clone());
 
-    // Prefer a branch name at the target commit; fall back to the abbreviated
-    // sha for the label and the full sha for the actual rebase target.
-    let target_label: SharedString = branch_names
-        .first()
-        .map(|s| s.as_str())
-        .unwrap_or(&short)
-        .into();
-    let onto_ref = branch_names.first().cloned().unwrap_or_else(|| sha.clone());
-    items.push(ContextMenuItem::Entry {
-        label: format!("Rebase {current_branch} onto {target_label}").into(),
-        icon: Some("icons/arrow_up.svg".into()),
-        shortcut: Some("B".into()),
-        disabled: false,
-        action: Box::new(ContextMenuAction::OpenPopover {
-            kind: PopoverKind::RebaseOntoConfirm {
+    // Rebasing the current branch onto the commit it already points to is a
+    // no-op (plain rebase) or produces an empty `HEAD..HEAD` todo list
+    // (interactive), so skip both entries on the HEAD commit. The topmost
+    // commit is still editable via an interactive rebase from the commit below.
+    let is_head_commit = this
+        .active_repo()
+        .filter(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.head_commit_id())
+        .is_some_and(|head| head == *commit_id);
+    if !is_head_commit {
+        // Prefer a branch name at the target commit; fall back to the abbreviated
+        // sha for the label and the full sha for the actual rebase target.
+        let target_label: SharedString = branch_names
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or(&short)
+            .into();
+        let onto_ref = branch_names.first().cloned().unwrap_or_else(|| sha.clone());
+        items.push(ContextMenuItem::Entry {
+            label: format!("Rebase {current_branch} onto {target_label}").into(),
+            icon: Some("icons/arrow_up.svg".into()),
+            shortcut: Some("B".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::RebaseOntoConfirm {
+                    repo_id,
+                    onto: onto_ref,
+                },
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
+            label: format!("Interactive rebase {current_branch} onto {target_label}").into(),
+            icon: Some("icons/refresh.svg".into()),
+            shortcut: Some("I".into()),
+            disabled: false,
+            action: Box::new(ContextMenuAction::LoadInteractiveRebaseSetup {
                 repo_id,
-                onto: onto_ref,
-            },
-        }),
-    });
-    items.push(ContextMenuItem::Entry {
-        label: format!("Interactive rebase {current_branch} onto {target_label}").into(),
-        icon: Some("icons/refresh.svg".into()),
-        shortcut: Some("I".into()),
-        disabled: false,
-        action: Box::new(ContextMenuAction::LoadInteractiveRebaseSetup {
-            repo_id,
-            base: sha.clone(),
-        }),
-    });
+                base: sha.clone(),
+            }),
+        });
+    }
 
     items.push(ContextMenuItem::Separator);
     for (label, icon, mode) in [

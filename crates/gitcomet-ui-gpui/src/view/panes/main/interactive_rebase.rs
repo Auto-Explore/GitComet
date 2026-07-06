@@ -183,11 +183,10 @@ fn expand_folded(
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         out.push(e.clone());
-        if e.action != InteractiveRebaseAction::Drop {
-            if let Some(fixups) = folded.get(&e.commit_id) {
+        if e.action != InteractiveRebaseAction::Drop
+            && let Some(fixups) = folded.get(&e.commit_id) {
                 out.extend(fixups.iter().cloned());
             }
-        }
     }
     out
 }
@@ -425,11 +424,10 @@ impl MainPaneView {
 
         if action == InteractiveRebaseAction::Squash {
             // Auto-set the new target to Reword so the combined message can be written.
-            if let Some(j) = squash_target(&st.entries, ix) {
-                if st.entries[j].action == InteractiveRebaseAction::Pick {
+            if let Some(j) = squash_target(&st.entries, ix)
+                && st.entries[j].action == InteractiveRebaseAction::Pick {
                     st.entries[j].action = InteractiveRebaseAction::Reword;
                 }
-            }
         } else if let Some(j) = former_squash_target {
             // Was Squash/Fixup, now it isn't. If the former target is Reword and nothing
             // else is squashing into it, revert it back to Pick.
@@ -516,12 +514,11 @@ impl MainPaneView {
         let pointer_y = e.event.position.y;
         let mut display_pos = entry_count;
         for dp in 0..entry_count {
-            if let Some(b) = list.bounds_for_item(dp) {
-                if pointer_y < b.origin.y + b.size.height / 2.0 {
+            if let Some(b) = list.bounds_for_item(dp)
+                && pointer_y < b.origin.y + b.size.height / 2.0 {
                     display_pos = dp;
                     break;
                 }
-            }
         }
 
         let source_dp = (entry_count - 1).saturating_sub(from_ix);
@@ -917,8 +914,8 @@ impl MainPaneView {
         // Sync the variable-height virtualized list state before borrowing the
         // repo below (this needs `&mut self`; the match on `repo` holds `self`
         // immutably for its whole body).
-        if let Some(repo_id) = self.active_repo_id() {
-            if self.interactive_rebase_states.contains_key(&repo_id) {
+        if let Some(repo_id) = self.active_repo_id()
+            && self.interactive_rebase_states.contains_key(&repo_id) {
                 let sig = irebase_list_sig(&self.interactive_rebase_states[&repo_id]);
                 let count = self.interactive_rebase_states[&repo_id].entries.len();
                 let st = self
@@ -942,7 +939,6 @@ impl MainPaneView {
                     st.list_sig = (sig, count);
                 }
             }
-        }
 
         let Some(repo) = self.active_repo() else {
             return div().child("No active repo");

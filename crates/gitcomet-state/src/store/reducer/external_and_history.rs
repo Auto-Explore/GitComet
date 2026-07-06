@@ -312,7 +312,7 @@ pub(super) fn interactive_rebase_setup_loaded(
         if repo_state
             .interactive_rebase_setup
             .as_ref()
-            .map_or(false, |s| s.base == base)
+            .is_some_and(|s| s.base == base)
         {
             let entries = match result {
                 Ok(v) => Loadable::Ready(v),

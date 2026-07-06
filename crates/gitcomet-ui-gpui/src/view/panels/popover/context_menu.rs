@@ -935,7 +935,7 @@ impl PopoverHost {
                 } else {
                     None
                 };
-                let _ = self.main_pane.update(cx, |pane, cx| {
+                self.main_pane.update(cx, |pane, cx| {
                     pane.set_rebase_action(ix, action, cx);
                 });
                 if let Some((original_action, msg)) = reword_state {

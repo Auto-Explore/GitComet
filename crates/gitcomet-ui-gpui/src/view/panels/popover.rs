@@ -3182,7 +3182,7 @@ impl PopoverHost {
                     } else {
                         format!("{subject}\n\n{body}")
                     };
-                    let _ = main_pane.update(cx, |pane, cx| {
+                    main_pane.update(cx, |pane, cx| {
                         if subject.is_empty() {
                             // Empty subject → discard any previous override and revert
                             // the action. Use set_rebase_action so side-effects
@@ -3206,7 +3206,7 @@ impl PopoverHost {
                     this.close_popover_and_restore_focus(window, cx);
                 });
                 let cancel = cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
-                    let _ = this.main_pane.update(cx, |pane, cx| {
+                    this.main_pane.update(cx, |pane, cx| {
                         pane.set_rebase_action(ix, original_action, cx);
                     });
                     this.close_popover_and_restore_focus(window, cx);
