@@ -566,81 +566,16 @@ impl MainPaneView {
                     len,
                     fold_id,
                 } => {
-                    // Diff-view-style fold separator: hidden line range plus
-                    // incremental reveal arrows; clicking elsewhere expands
-                    // the whole fold.
-                    let first_line = source_line_start + 1;
-                    let last_line = source_line_start + len;
-                    let label: SharedString =
-                        format!("⋯ {len} unchanged lines ({first_line}–{last_line})").into();
-                    let reveal_btn =
-                        |id_suffix: &'static str,
-                         icon: &'static str,
-                         tooltip: &'static str,
-                         from_top: bool,
-                         cx: &mut gpui::Context<Self>| {
-                            div()
-                                .id((id_suffix, vi))
-                                .w(px(18.0))
-                                .h(px(16.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(theme.radii.row))
-                                .cursor(CursorStyle::PointingHand)
-                                .hover(move |style| style.bg(with_alpha(theme.colors.hover, 0.55)))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                        cx.stop_propagation();
-                                        this.conflict_resolver_reveal_context_fold(
-                                            fold_id, from_top, cx,
-                                        );
-                                    }),
-                                )
-                                .child(svg_icon(icon, theme.colors.text_muted, px(10.0)))
-                                .gitcomet_tooltip(theme, tooltip.into())
-                        };
-                    let fold = div()
-                        .id((div_id_prefix, vi))
-                        .w_full()
-                        .h(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .bg(with_alpha(
-                            theme.colors.surface_bg_elevated,
-                            if theme.is_dark { 0.30 } else { 0.22 },
-                        ))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child(reveal_btn(
-                            "conflict_fold_reveal_top",
-                            "icons/arrow_down.svg",
-                            "Reveal 20 more lines from the top of this fold",
-                            true,
-                            cx,
-                        ))
-                        .child(label)
-                        .child(reveal_btn(
-                            "conflict_fold_reveal_bottom",
-                            "icons/arrow_up.svg",
-                            "Reveal 20 more lines from the bottom of this fold",
-                            false,
-                            cx,
-                        ))
-                        .cursor(CursorStyle::PointingHand)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                cx.stop_propagation();
-                                this.conflict_resolver_expand_context_fold(fold_id, cx);
-                            }),
-                        )
-                        .gitcomet_tooltip(theme, "Expand all hidden lines".into());
-                    elements.push(fold.into_any_element());
+                    elements.push(Self::conflict_context_fold_row(
+                        theme,
+                        div_id_prefix,
+                        vi,
+                        source_line_start,
+                        len,
+                        fold_id,
+                        false,
+                        cx,
+                    ));
                 }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
                     // §30 aligned row space: `ix` is the shared visual row;
@@ -1131,6 +1066,110 @@ impl MainPaneView {
             .collect()
     }
 
+    /// Diff-view-style collapsed context fold row (§30, R6): muted band,
+    /// reveal arrows clustered where the line-number gutter sits, and a
+    /// left-aligned hidden-range label; clicking elsewhere expands the whole
+    /// fold. `output_pane` selects which fold-reveal state the controls
+    /// mutate (source columns vs resolved output).
+    #[allow(clippy::too_many_arguments)]
+    fn conflict_context_fold_row(
+        theme: AppTheme,
+        id_prefix: &'static str,
+        vi: usize,
+        source_line_start: usize,
+        len: usize,
+        fold_id: usize,
+        output_pane: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let first_line = source_line_start + 1;
+        let last_line = source_line_start + len;
+        let label: SharedString =
+            format!("⋯ {len} unchanged lines ({first_line}–{last_line})").into();
+        let fold_bg = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.14 } else { 0.10 },
+        );
+        let reveal_btn = |id_suffix: &'static str,
+                          icon: &'static str,
+                          tooltip: &'static str,
+                          from_top: bool,
+                          cx: &mut gpui::Context<Self>| {
+            div()
+                .id((id_suffix, vi))
+                .w(px(18.0))
+                .h(px(18.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(theme.radii.row))
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |style| style.bg(with_alpha(theme.colors.hover, 0.55)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                        if output_pane {
+                            this.conflict_resolver_reveal_output_context_fold(
+                                fold_id, from_top, cx,
+                            );
+                        } else {
+                            this.conflict_resolver_reveal_context_fold(fold_id, from_top, cx);
+                        }
+                    }),
+                )
+                .child(svg_icon(icon, theme.colors.text_muted, px(10.0)))
+                .gitcomet_tooltip(theme, tooltip.into())
+        };
+        div()
+            .id((id_prefix, vi))
+            .w_full()
+            .h(px(20.0))
+            .px_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .bg(fold_bg)
+            .text_xs()
+            .text_color(theme.colors.text_muted)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap_0p5()
+                    .child(reveal_btn(
+                        "conflict_fold_reveal_top",
+                        "icons/arrow_down.svg",
+                        "Reveal 20 more lines from the top of this fold",
+                        true,
+                        cx,
+                    ))
+                    .child(reveal_btn(
+                        "conflict_fold_reveal_bottom",
+                        "icons/arrow_up.svg",
+                        "Reveal 20 more lines from the bottom of this fold",
+                        false,
+                        cx,
+                    )),
+            )
+            .child(label)
+            .cursor(CursorStyle::PointingHand)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                    cx.stop_propagation();
+                    if output_pane {
+                        this.conflict_resolver_expand_output_context_fold(fold_id, cx);
+                    } else {
+                        this.conflict_resolver_expand_context_fold(fold_id, cx);
+                    }
+                }),
+            )
+            .gitcomet_tooltip(theme, "Expand all hidden lines".into())
+            .into_any_element()
+    }
+
     pub(in super::super) fn render_conflict_resolved_preview_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -1164,18 +1203,37 @@ impl MainPaneView {
             this.conflict_resolver.resolved_outline_gutter_rows = gutter_rows;
         }
 
+        let fold_bg = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.14 } else { 0.10 },
+        );
         let elements: Vec<AnyElement> = range
-            .map(|ix| {
-                if ix >= this.conflict_resolved_preview_line_count {
-                    return div()
-                        .id(("conflict_resolved_preview_oob", ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
-                }
+            .map(|vi| {
+                // Collapsed context mode projects the output row space; map
+                // each visible row to its line (folds render a matching band).
+                let ix = match this.resolved_output_item_for_visible(vi) {
+                    Some(conflict_resolver::ThreeWayVisibleItem::Line(line)) => line,
+                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
+                        ..
+                    }) => {
+                        return div()
+                            .id(("conflict_resolved_preview_fold", vi))
+                            .h(px(20.0))
+                            .w_full()
+                            .bg(fold_bg)
+                            .into_any_element();
+                    }
+                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(_)) | None => {
+                        return div()
+                            .id(("conflict_resolved_preview_oob", vi))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    }
+                };
 
                 let gutter_row = this
                     .conflict_resolver
@@ -1461,27 +1519,41 @@ impl MainPaneView {
         let syntax_document = this.conflict_resolved_preview_prepared_syntax_document;
         let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
         let line_starts = &this.conflict_resolved_preview_line_starts;
+        // Collapsed context mode projects the output row space: map each
+        // visible row to its output line (folds render as separator rows).
+        let items: Vec<Option<conflict_resolver::ThreeWayVisibleItem>> = range
+            .clone()
+            .map(|vi| this.resolved_output_item_for_visible(vi))
+            .collect();
+        let row_line = |item: &Option<conflict_resolver::ThreeWayVisibleItem>| match item {
+            Some(conflict_resolver::ThreeWayVisibleItem::Line(line)) => Some(*line),
+            _ => None,
+        };
+        let highlight_start = items.iter().find_map(&row_line);
+        let highlight_end = items.iter().rev().find_map(&row_line);
         let (line_texts, prepared_line_highlights) =
             this.conflict_resolver_input.read_with(cx, |input, _| {
                 let text = input.text();
-                let line_texts: Vec<SharedString> = range
-                    .clone()
-                    .map(|ix| {
-                        resolved_output_line_text(text, line_starts, ix)
+                let line_texts: Vec<SharedString> = items
+                    .iter()
+                    .map(|item| match row_line(item) {
+                        Some(line) => resolved_output_line_text(text, line_starts, line)
                             .to_string()
-                            .into()
+                            .into(),
+                        None => SharedString::default(),
                     })
                     .collect();
                 let prepared_line_highlights = syntax_document
                     .zip(syntax_language)
-                    .and_then(|(document, language)| {
+                    .zip(highlight_start.zip(highlight_end))
+                    .and_then(|((document, language), (start, end))| {
                         request_syntax_highlights_for_prepared_document_line_range(
                             theme,
                             text,
                             line_starts,
                             document,
                             language,
-                            range.clone(),
+                            start..end + 1,
                         )
                     })
                     .unwrap_or_default();
@@ -1499,19 +1571,38 @@ impl MainPaneView {
         );
 
         let elements: Vec<AnyElement> = range
+            .zip(items.iter().cloned())
             .zip(line_texts)
-            .enumerate()
-            .map(|(local_ix, (ix, line_text))| {
-                if ix >= this.conflict_resolved_preview_line_count {
-                    return div()
-                        .id(("conflict_resolved_output_oob", ix))
-                        .h(px(20.0))
-                        .px_2()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("")
-                        .into_any_element();
-                }
+            .map(|((vi, item), line_text)| {
+                let ix = match item {
+                    Some(conflict_resolver::ThreeWayVisibleItem::Line(line)) => line,
+                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
+                        source_line_start,
+                        len,
+                        fold_id,
+                    }) => {
+                        return Self::conflict_context_fold_row(
+                            theme,
+                            "conflict_resolved_output_fold",
+                            vi,
+                            source_line_start,
+                            len,
+                            fold_id,
+                            true,
+                            cx,
+                        );
+                    }
+                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(_)) | None => {
+                        return div()
+                            .id(("conflict_resolved_output_oob", vi))
+                            .h(px(20.0))
+                            .px_2()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("")
+                            .into_any_element();
+                    }
+                };
                 let display_line_text = if show_ws {
                     whitespace_visible_line_text(line_text.as_ref())
                 } else {
@@ -1524,8 +1615,11 @@ impl MainPaneView {
                 );
 
                 let row_content = if syntax_language.is_some() && !line_text.is_empty() {
-                    let prepared_line_highlight = prepared_line_highlights
-                        .get(local_ix)
+                    let prepared_line_highlight = highlight_start
+                        .and_then(|start| {
+                            ix.checked_sub(start)
+                                .and_then(|offset| prepared_line_highlights.get(offset))
+                        })
                         .filter(|line| line.line_ix == ix);
                     let needs_refresh = this
                         .conflict_resolved_preview_segments_cache_get(ix)

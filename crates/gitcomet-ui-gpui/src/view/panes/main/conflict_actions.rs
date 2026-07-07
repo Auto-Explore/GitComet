@@ -246,7 +246,8 @@ impl MainPaneView {
         if line_count == 0 {
             return;
         }
-        let target = target_line_ix.min(line_count.saturating_sub(1));
+        let target_line = target_line_ix.min(line_count.saturating_sub(1));
+        let target = self.resolved_output_visible_ix_for_line(target_line);
         self.conflict_resolved_preview_scroll
             .scroll_to_item(target, gpui::ScrollStrategy::Center);
         self.conflict_resolved_preview_gutter_scroll
@@ -1045,6 +1046,12 @@ impl MainPaneView {
             } else {
                 std::collections::HashMap::default()
             },
+            resolved_output_visible: None,
+            output_context_fold_reveals: if is_same_conflict {
+                std::mem::take(&mut self.conflict_resolver.output_context_fold_reveals)
+            } else {
+                std::collections::HashMap::default()
+            },
             conflict_region_indices,
             active_conflict,
             hovered_conflict: None,
@@ -1435,6 +1442,7 @@ impl MainPaneView {
             self.schedule_ui_settings_persist(cx);
         }
         self.conflict_resolver.context_fold_reveals.clear();
+        self.conflict_resolver.output_context_fold_reveals.clear();
         self.conflict_resolver_rebuild_visible_map();
         // Keep the active conflict in view across the row-space change.
         let active = self.conflict_resolver.active_conflict;
@@ -2385,6 +2393,105 @@ impl MainPaneView {
     /// Live collapse-unchanged-context state, read by the cog settings menu.
     pub(in crate::view) fn conflict_resolver_collapse_context(&self) -> bool {
         self.conflict_resolver.collapse_context
+    }
+
+    /// Rebuild the resolved-output fold projection for collapsed context mode
+    /// (§30). Output line space; derived from the outline's conflict markers.
+    /// Streamed outputs stay unfolded (their row space is already projected).
+    pub(in crate::view) fn rebuild_resolved_output_visible_projection(&mut self) {
+        let fold = self.conflict_resolver.collapse_context
+            && !self.conflict_resolved_output_is_streamed()
+            && self.conflict_resolved_preview_line_count > 0;
+        if !fold {
+            self.conflict_resolver.resolved_output_visible = None;
+            return;
+        }
+
+        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        for marker in self.conflict_resolver.resolved_outline.markers.iter().flatten() {
+            if marker.is_start {
+                ranges.push(marker.range_start..marker.range_end);
+            }
+        }
+        let resolved_flags = vec![false; ranges.len()];
+        let projection = conflict_resolver::build_three_way_visible_projection_with_options(
+            self.conflict_resolved_preview_line_count,
+            &ranges,
+            &resolved_flags,
+            conflict_resolver::ThreeWayVisibleOptions {
+                hide_resolved: false,
+                collapse_context: true,
+                context_fold_reveals: Some(&self.conflict_resolver.output_context_fold_reveals),
+            },
+        );
+        self.conflict_resolver.resolved_output_visible = Some(projection);
+    }
+
+    /// Row count of the resolved output lists (fold projection applied).
+    pub(in crate::view) fn resolved_output_visible_len(&self) -> usize {
+        self.conflict_resolver
+            .resolved_output_visible
+            .as_ref()
+            .map(|projection| projection.len())
+            .unwrap_or(self.conflict_resolved_preview_line_count)
+    }
+
+    /// Map a resolved-output visible row to its item (line or fold row).
+    pub(in crate::view) fn resolved_output_item_for_visible(
+        &self,
+        visible_ix: usize,
+    ) -> Option<conflict_resolver::ThreeWayVisibleItem> {
+        match self.conflict_resolver.resolved_output_visible.as_ref() {
+            Some(projection) => projection.get(visible_ix),
+            None => (visible_ix < self.conflict_resolved_preview_line_count)
+                .then_some(conflict_resolver::ThreeWayVisibleItem::Line(visible_ix)),
+        }
+    }
+
+    /// Map an output line to the visible row showing it (the fold row when
+    /// the line is folded away).
+    pub(in crate::view) fn resolved_output_visible_ix_for_line(&self, line: usize) -> usize {
+        self.conflict_resolver
+            .resolved_output_visible
+            .as_ref()
+            .and_then(|projection| projection.visible_index_for_source_line(line))
+            .unwrap_or(line)
+    }
+
+    /// Fully expand one collapsed context fold in the resolved output.
+    pub(in crate::view) fn conflict_resolver_expand_output_context_fold(
+        &mut self,
+        fold_id: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolver
+            .output_context_fold_reveals
+            .entry(fold_id)
+            .or_default()
+            .expand_all = true;
+        cx.notify();
+    }
+
+    /// Reveal a step of lines from one edge of a resolved-output fold.
+    pub(in crate::view) fn conflict_resolver_reveal_output_context_fold(
+        &mut self,
+        fold_id: usize,
+        from_top: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let reveal = self
+            .conflict_resolver
+            .output_context_fold_reveals
+            .entry(fold_id)
+            .or_default();
+        if from_top {
+            reveal.top = reveal.top.saturating_add(conflict_resolver::CONFLICT_FOLD_REVEAL_STEP);
+        } else {
+            reveal.bottom = reveal
+                .bottom
+                .saturating_add(conflict_resolver::CONFLICT_FOLD_REVEAL_STEP);
+        }
+        cx.notify();
     }
 
     /// Count conflicts currently resolved by the autosolver (as opposed to

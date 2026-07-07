@@ -1394,6 +1394,34 @@ fn collapsed_context_folds_runs_beyond_context_window() {
 }
 
 #[test]
+fn visible_index_for_source_line_maps_lines_and_folds() {
+    // Same shape as above: head fold 0..9, context 9..12, conflict 12..15,
+    // context 15..18, tail fold 18..30.
+    let conflict_ranges = [12..15];
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: None,
+        },
+    );
+
+    // Folded lines address the fold row itself.
+    assert_eq!(projection.visible_index_for_source_line(0), Some(0));
+    assert_eq!(projection.visible_index_for_source_line(8), Some(0));
+    // Visible lines map to their own row.
+    assert_eq!(projection.visible_index_for_source_line(9), Some(1));
+    assert_eq!(projection.visible_index_for_source_line(12), Some(4));
+    assert_eq!(projection.visible_index_for_source_line(17), Some(9));
+    // Tail fold.
+    assert_eq!(projection.visible_index_for_source_line(25), Some(10));
+    assert_eq!(projection.visible_index_for_source_line(30), None);
+}
+
+#[test]
 fn collapsed_context_respects_expanded_folds_and_short_gaps() {
     let conflict_ranges = [12..15];
     let expanded: std::collections::HashMap<usize, ConflictFoldReveal> = [(

@@ -4,16 +4,15 @@ use super::*;
 /// resolver-specific view options that used to borrow the diff-actions menu.
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let pane = host.main_pane.read(cx);
-    let (auto_advance, _collapse_default, vertical_split) = pane.mergetool_preferences();
+    let (auto_advance, _collapse_default, _vertical_split) = pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
-    model_for_mergetool_settings(auto_advance, collapse_context, vertical_split)
+    model_for_mergetool_settings(auto_advance, collapse_context)
 }
 
-fn model_for_mergetool_settings(
-    auto_advance: bool,
-    collapse_context: bool,
-    vertical_split: bool,
-) -> ContextMenuModel {
+// NOTE: a "Stack columns vertically" entry (backed by the persisted
+// `mergetool_vertical_split` setting and `SetMergetoolVerticalSplit`) is
+// deliberately not offered yet — the stacked column rendering is deferred.
+fn model_for_mergetool_settings(auto_advance: bool, collapse_context: bool) -> ContextMenuModel {
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Merge tool settings".into()),
         ContextMenuItem::Separator,
@@ -33,15 +32,6 @@ fn model_for_mergetool_settings(
             disabled: false,
             action: Box::new(ContextMenuAction::ToggleMergetoolCollapseUnchanged),
         },
-        ContextMenuItem::Entry {
-            label: "Stack columns vertically".into(),
-            icon: vertical_split.then_some("icons/check.svg".into()),
-            shortcut: None,
-            disabled: false,
-            action: Box::new(ContextMenuAction::SetMergetoolVerticalSplit {
-                enabled: !vertical_split,
-            }),
-        },
     ])
 }
 
@@ -51,7 +41,7 @@ mod tests {
 
     #[test]
     fn model_marks_enabled_options_and_toggles_them() {
-        let model = model_for_mergetool_settings(true, false, false);
+        let model = model_for_mergetool_settings(true, false);
 
         assert!(model.items.iter().any(|item| {
             matches!(
@@ -74,18 +64,6 @@ mod tests {
                         && matches!(
                             action.as_ref(),
                             ContextMenuAction::ToggleMergetoolCollapseUnchanged
-                        )
-            )
-        }));
-        assert!(model.items.iter().any(|item| {
-            matches!(
-                item,
-                ContextMenuItem::Entry { label, icon, action, .. }
-                    if label.as_ref() == "Stack columns vertically"
-                        && icon.is_none()
-                        && matches!(
-                            action.as_ref(),
-                            ContextMenuAction::SetMergetoolVerticalSplit { enabled: true }
                         )
             )
         }));

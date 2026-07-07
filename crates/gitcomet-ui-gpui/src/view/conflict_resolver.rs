@@ -4080,6 +4080,36 @@ impl ThreeWayVisibleProjection {
     pub fn spans(&self) -> &[ThreeWayVisibleSpan] {
         &self.spans
     }
+
+    /// Find the visible index showing the given source line. Lines hidden
+    /// inside a collapsed context fold map to the fold's row.
+    pub fn visible_index_for_source_line(&self, line: usize) -> Option<usize> {
+        for span in &self.spans {
+            match *span {
+                ThreeWayVisibleSpan::Lines {
+                    visible_start,
+                    source_line_start,
+                    len,
+                } => {
+                    if line >= source_line_start && line < source_line_start + len {
+                        return Some(visible_start + (line - source_line_start));
+                    }
+                }
+                ThreeWayVisibleSpan::CollapsedContext {
+                    visible_index,
+                    source_line_start,
+                    len,
+                    ..
+                } => {
+                    if line >= source_line_start && line < source_line_start + len {
+                        return Some(visible_index);
+                    }
+                }
+                ThreeWayVisibleSpan::CollapsedResolvedBlock { .. } => {}
+            }
+        }
+        None
+    }
 }
 
 #[cfg(any(test, feature = "benchmarks"))]

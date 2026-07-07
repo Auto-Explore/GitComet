@@ -1728,6 +1728,7 @@ impl MainPaneView {
                                     )
                                 })
                                 .child({
+                                    self.rebuild_resolved_output_visible_projection();
                                     self.sync_conflict_resolved_output_gutter_scroll();
                                     let mut bottom_section =
                                         div()
@@ -1742,8 +1743,10 @@ impl MainPaneView {
                                             .bg(theme.colors.window_bg)
                                             .child(
                                                 {
+                                                    // Fold-projected row count in collapsed
+                                                    // context mode; plain line count otherwise.
                                                     let outline_len =
-                                                        self.conflict_resolved_preview_line_count;
+                                                        self.resolved_output_visible_len();
                                                     // Match the source columns' bottom overscroll
                                                     // so the shared scroll sync can reach it.
                                                     let outline_len = if outline_len > 0 {

@@ -1255,6 +1255,13 @@ pub(super) struct ConflictResolverUiState {
     /// Per-fold reveal state for collapsed context mode, keyed by fold id.
     pub(super) context_fold_reveals:
         std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
+    /// §30 collapsed context mode for the resolved output pane: fold
+    /// projection in output line space. `None` ⇒ pass-through (one row per
+    /// line). Rebuilt each render from the outline markers.
+    pub(super) resolved_output_visible: Option<conflict_resolver::ThreeWayVisibleProjection>,
+    /// Per-fold reveal state for resolved-output folds (output-line fold ids).
+    pub(super) output_context_fold_reveals:
+        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
     pub(super) active_conflict: usize,
@@ -1360,6 +1367,8 @@ impl Default for ConflictResolverUiState {
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),
+            resolved_output_visible: None,
+            output_context_fold_reveals: std::collections::HashMap::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),

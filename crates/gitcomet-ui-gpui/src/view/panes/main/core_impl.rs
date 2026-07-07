@@ -2755,7 +2755,10 @@ impl MainPaneView {
         // lists together leaves the per-frame offset sync nothing to
         // arbitrate, which previously ping-ponged the output back to the
         // top of the file.
-        let target = target_line_ix.min(line_count.saturating_sub(1));
+        let target_line = target_line_ix.min(line_count.saturating_sub(1));
+        // Collapsed context mode: the output lists are in fold-projected row
+        // space, so address the row showing the line (or its fold).
+        let target = self.resolved_output_visible_ix_for_line(target_line);
         self.conflict_resolved_preview_scroll
             .scroll_to_item_strict(target, gpui::ScrollStrategy::Center);
         self.conflict_resolved_preview_gutter_scroll
