@@ -922,20 +922,21 @@ impl MainPaneView {
                     .interactive_rebase_states
                     .get_mut(&repo_id)
                     .expect("checked contains_key");
-                if st.scroll.is_none() {
+                if let Some(ls) = &st.scroll {
+                    if st.list_sig != (sig, count) {
+                        if st.list_sig.1 == count {
+                            ls.remeasure();
+                        } else {
+                            ls.reset(count);
+                        }
+                        st.list_sig = (sig, count);
+                    }
+                } else {
                     st.scroll = Some(gpui::ListState::new(
                         count,
                         gpui::ListAlignment::Top,
                         px(400.0),
                     ));
-                    st.list_sig = (sig, count);
-                } else if st.list_sig != (sig, count) {
-                    let ls = st.scroll.as_ref().expect("checked is_some");
-                    if st.list_sig.1 == count {
-                        ls.remeasure();
-                    } else {
-                        ls.reset(count);
-                    }
                     st.list_sig = (sig, count);
                 }
             }
