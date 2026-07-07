@@ -647,6 +647,53 @@ fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
     handle.0.borrow().base_handle.clone()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConflictPreviewSyncGroup {
+    /// Three-way, unfolded: base/ours/theirs columns and the resolved output
+    /// all render full line spaces.
+    ColumnsAndOutput,
+    /// Three-way with hide-resolved or collapsed context: the columns share a
+    /// projected row space the output does not.
+    ColumnsOnly,
+    /// Two-way split: left (base handle) and right (theirs handle) share the
+    /// block-local row space; the ours handle is unused.
+    TwoWayPair,
+}
+
+/// Sync one axis of the conflict-preview handle set for the given group.
+///
+/// Handles outside the group keep their own offsets; their baseline entries
+/// are refreshed each frame so switching groups never sees phantom changes.
+fn sync_conflict_preview_axis(
+    handles: &[ScrollHandle; 4],
+    last_synced: &mut [Pixels; 4],
+    axis: SyncedScrollAxis,
+    mode: DiffScrollSync,
+    group: ConflictPreviewSyncGroup,
+) {
+    match group {
+        ConflictPreviewSyncGroup::ColumnsAndOutput => {
+            maybe_sync_synced_scroll_offsets(handles, last_synced, axis, mode);
+        }
+        ConflictPreviewSyncGroup::ColumnsOnly => {
+            let columns = [handles[0].clone(), handles[1].clone(), handles[2].clone()];
+            let mut columns_last = [last_synced[0], last_synced[1], last_synced[2]];
+            maybe_sync_synced_scroll_offsets(&columns, &mut columns_last, axis, mode);
+            last_synced[..3].copy_from_slice(&columns_last);
+            last_synced[3] = axis.offset_component(handles[3].offset());
+        }
+        ConflictPreviewSyncGroup::TwoWayPair => {
+            let pair = [handles[0].clone(), handles[2].clone()];
+            let mut pair_last = [last_synced[0], last_synced[2]];
+            maybe_sync_synced_scroll_offsets(&pair, &mut pair_last, axis, mode);
+            last_synced[0] = pair_last[0];
+            last_synced[2] = pair_last[1];
+            last_synced[1] = axis.offset_component(handles[1].offset());
+            last_synced[3] = axis.offset_component(handles[3].offset());
+        }
+    }
+}
+
 fn snapshot_synced_scroll_offsets<const N: usize>(
     handles: &[ScrollHandle; N],
     axis: SyncedScrollAxis,
@@ -4913,18 +4960,40 @@ impl MainPaneView {
 
     pub(in crate::view) fn sync_conflict_preview_scroll(&mut self) {
         let handles = self.conflict_preview_scroll_handles();
-        maybe_sync_synced_scroll_offsets(
-            &handles,
-            &mut self.conflict_preview_last_synced_y,
-            SyncedScrollAxis::Vertical,
-            self.diff_scroll_sync,
-        );
-        maybe_sync_synced_scroll_offsets(
-            &handles,
-            &mut self.conflict_preview_last_synced_x,
-            SyncedScrollAxis::Horizontal,
-            self.diff_scroll_sync,
-        );
+        let group = self.conflict_preview_sync_group();
+        for (axis, last_synced) in [
+            (
+                SyncedScrollAxis::Vertical,
+                &mut self.conflict_preview_last_synced_y,
+            ),
+            (
+                SyncedScrollAxis::Horizontal,
+                &mut self.conflict_preview_last_synced_x,
+            ),
+        ] {
+            sync_conflict_preview_axis(&handles, last_synced, axis, self.diff_scroll_sync, group);
+        }
+    }
+
+    /// Which conflict-preview lists share a row space and may be raw-offset
+    /// synced in the current resolver mode.
+    ///
+    /// The resolved output renders full merged lines, so it only joins the
+    /// group in three-way mode with an unfolded column space. Two-way columns
+    /// render block-local rows and sync as a left/right pair; syncing them
+    /// against the output previously dragged the columns to unrelated
+    /// conflicts (raw offsets are meaningless across row spaces).
+    fn conflict_preview_sync_group(&self) -> ConflictPreviewSyncGroup {
+        match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => {
+                if self.conflict_resolver.hide_resolved || self.conflict_resolver.collapse_context {
+                    ConflictPreviewSyncGroup::ColumnsOnly
+                } else {
+                    ConflictPreviewSyncGroup::ColumnsAndOutput
+                }
+            }
+            ConflictResolverViewMode::TwoWayDiff => ConflictPreviewSyncGroup::TwoWayPair,
+        }
     }
 
     pub(in crate::view) fn sync_conflict_resolved_output_gutter_scroll(&mut self) {

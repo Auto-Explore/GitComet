@@ -1242,11 +1242,6 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
             cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let expected = if axis.includes(mode) {
-                    axis.component(output_offset)
-                } else {
-                    px(0.0)
-                };
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
                     axis.component(output_offset),
@@ -1254,27 +1249,21 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.label(),
                     mode,
                 );
+                // §30: two-way panes render block-local rows while the
+                // resolved output renders full merged lines. Raw offsets are
+                // meaningless across those row spaces, so output scrolling
+                // must never drag the panes (in any sync mode).
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
-                    expected,
-                    "two-way left pane should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) {
-                        "sync"
-                    } else {
-                        "not sync"
-                    },
+                    px(0.0),
+                    "two-way left pane must not follow resolved output {} scrolling in {:?} mode",
                     axis.label(),
                     mode,
                 );
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
-                    expected,
-                    "two-way right pane should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) {
-                        "sync"
-                    } else {
-                        "not sync"
-                    },
+                    px(0.0),
+                    "two-way right pane must not follow resolved output {} scrolling in {:?} mode",
                     axis.label(),
                     mode,
                 );
@@ -1318,15 +1307,12 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.label(),
                     mode,
                 );
+                // §30: the resolved output keeps its own scroll space in
+                // two-way mode (see the cross-space note above).
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
-                    expected,
-                    "resolved output should {} {} scrolling from the right pane in {:?} mode",
-                    if axis.includes(mode) {
-                        "sync"
-                    } else {
-                        "not sync"
-                    },
+                    px(0.0),
+                    "resolved output must not follow the right pane {} scrolling in {:?} mode",
                     axis.label(),
                     mode,
                 );
