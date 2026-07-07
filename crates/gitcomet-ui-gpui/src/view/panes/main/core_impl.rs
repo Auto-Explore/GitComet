@@ -3702,6 +3702,17 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.activate_context_menu_invoker(invoker, cx);
+        // Opening the chunk menu from the resolved output (output_line_ix is
+        // only Some there) selects that conflict and brings the source
+        // columns to it, so the menu's pick targets are visible in context.
+        // The output pane itself is not scrolled — the user is already there
+        // and the menu is anchored to it.
+        if output_line_ix.is_some() {
+            self.conflict_resolver.active_conflict = conflict_ix;
+            if let Some(vi) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) {
+                self.conflict_resolver_scroll_all_columns(vi, gpui::ScrollStrategy::Center);
+            }
+        }
         self.open_popover_at(
             PopoverKind::ConflictResolverChunkMenu {
                 conflict_ix,
