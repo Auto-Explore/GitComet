@@ -168,6 +168,240 @@ pub fn merge_file(base: &str, ours: &str, theirs: &str, options: &MergeOptions) 
     render_merged(&base_lines, &merged_hunks, base, ours, theirs, options)
 }
 
+/// How the sides relate within one aligned run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AlignedRunKind {
+    /// No side changed this region.
+    Unchanged,
+    /// Only ours changed from base.
+    OursChanged,
+    /// Only theirs changed from base.
+    TheirsChanged,
+    /// Both sides changed and agree (identical result).
+    BothSame,
+    /// Both sides changed differently.
+    Conflict,
+}
+
+/// One run of a kdiff3-style three-way alignment.
+///
+/// The three ranges are line ranges into base/ours/theirs respectively; a
+/// run renders as `max(len)` visual rows with shorter sides padded, so
+/// corresponding lines always sit at the same visual height.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlignedRun {
+    pub base: std::ops::Range<usize>,
+    pub ours: std::ops::Range<usize>,
+    pub theirs: std::ops::Range<usize>,
+    pub kind: AlignedRunKind,
+}
+
+impl AlignedRun {
+    /// Number of visual rows this run occupies in the aligned space.
+    pub fn visual_rows(&self) -> usize {
+        self.base.len().max(self.ours.len()).max(self.theirs.len())
+    }
+}
+
+/// Compute the three-way alignment of base/ours/theirs (§30 aligned row
+/// space). This walks the same base-anchored regions the merge algorithm
+/// uses to produce conflict markers, but reports per-side line ranges
+/// instead of merged content. The runs partition each input exactly.
+pub fn align_three_way(
+    base: &str,
+    ours: &str,
+    theirs: &str,
+    algorithm: DiffAlgorithm,
+) -> Vec<AlignedRun> {
+    let base_lines = split_lines(base);
+    let ours_lines = split_lines(ours);
+    let theirs_lines = split_lines(theirs);
+
+    let diff_fn = match algorithm {
+        DiffAlgorithm::Myers => myers_edits,
+        DiffAlgorithm::Histogram => histogram_edits,
+    };
+    let edits_ours = diff_fn(&base_lines, &ours_lines);
+    let edits_theirs = diff_fn(&base_lines, &theirs_lines);
+    let hunks_ours = edits_to_hunks(&edits_ours);
+    let hunks_theirs = edits_to_hunks(&edits_theirs);
+
+    let mut runs = Vec::new();
+    let mut base_pos = 0usize;
+    let mut ours_pos = 0usize;
+    let mut theirs_pos = 0usize;
+
+    let push_unchanged = |runs: &mut Vec<AlignedRun>,
+                          base_pos: &mut usize,
+                          ours_pos: &mut usize,
+                          theirs_pos: &mut usize,
+                          until: usize| {
+        let len = until.saturating_sub(*base_pos);
+        if len == 0 {
+            return;
+        }
+        runs.push(AlignedRun {
+            base: *base_pos..*base_pos + len,
+            ours: *ours_pos..*ours_pos + len,
+            theirs: *theirs_pos..*theirs_pos + len,
+            kind: AlignedRunKind::Unchanged,
+        });
+        *base_pos += len;
+        *ours_pos += len;
+        *theirs_pos += len;
+    };
+
+    for_each_merge_region(&base_lines, &hunks_ours, &hunks_theirs, |region| {
+        push_unchanged(
+            &mut runs,
+            &mut base_pos,
+            &mut ours_pos,
+            &mut theirs_pos,
+            region.base_start,
+        );
+
+        let ours_len = if region.ours_involved {
+            reconstruct_side(
+                &base_lines,
+                region.base_start,
+                region.base_end,
+                region.ours_hunks,
+            )
+            .len()
+        } else {
+            region.base_end - region.base_start
+        };
+        let theirs_len = if region.theirs_involved {
+            reconstruct_side(
+                &base_lines,
+                region.base_start,
+                region.base_end,
+                region.theirs_hunks,
+            )
+            .len()
+        } else {
+            region.base_end - region.base_start
+        };
+
+        let kind = match (region.ours_involved, region.theirs_involved) {
+            (true, true) => {
+                let ours_content = reconstruct_side(
+                    &base_lines,
+                    region.base_start,
+                    region.base_end,
+                    region.ours_hunks,
+                );
+                let theirs_content = reconstruct_side(
+                    &base_lines,
+                    region.base_start,
+                    region.base_end,
+                    region.theirs_hunks,
+                );
+                if ours_content == theirs_content {
+                    AlignedRunKind::BothSame
+                } else {
+                    AlignedRunKind::Conflict
+                }
+            }
+            (true, false) => AlignedRunKind::OursChanged,
+            (false, true) => AlignedRunKind::TheirsChanged,
+            (false, false) => AlignedRunKind::Unchanged,
+        };
+
+        runs.push(AlignedRun {
+            base: region.base_start..region.base_end,
+            ours: ours_pos..ours_pos + ours_len,
+            theirs: theirs_pos..theirs_pos + theirs_len,
+            kind,
+        });
+        base_pos = region.base_end;
+        ours_pos += ours_len;
+        theirs_pos += theirs_len;
+    });
+
+    push_unchanged(
+        &mut runs,
+        &mut base_pos,
+        &mut ours_pos,
+        &mut theirs_pos,
+        base_lines.len(),
+    );
+
+    debug_assert_eq!(ours_pos, ours_lines.len());
+    debug_assert_eq!(theirs_pos, theirs_lines.len());
+    runs
+}
+
+/// A base-anchored change region visited by [`for_each_merge_region`].
+struct MergeRegion<'h, 'a> {
+    base_start: usize,
+    base_end: usize,
+    ours_involved: bool,
+    theirs_involved: bool,
+    ours_hunks: &'h [Hunk<'a>],
+    theirs_hunks: &'h [Hunk<'a>],
+}
+
+/// Walk the overlapping-hunk regions of the two edit scripts, exactly as
+/// [`merge_hunks`] does, invoking `visit` per region.
+fn for_each_merge_region<'a>(
+    base_lines: &'a [&'a str],
+    ours: &[Hunk<'a>],
+    theirs: &[Hunk<'a>],
+    mut visit: impl FnMut(MergeRegion<'_, 'a>),
+) {
+    let _ = base_lines;
+    let mut oi = 0;
+    let mut ti = 0;
+
+    loop {
+        let oh_start = ours.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
+        let th_start = theirs.get(ti).map(|h| h.base_start).unwrap_or(usize::MAX);
+        if oh_start == usize::MAX && th_start == usize::MAX {
+            break;
+        }
+
+        let change_start = oh_start.min(th_start);
+        let mut region_end = change_start;
+        let oi_start = oi;
+        let ti_start = ti;
+
+        loop {
+            let mut extended = false;
+            while let Some(oh) = ours.get(oi) {
+                if oh.base_start <= region_end {
+                    region_end = region_end.max(oh.base_end);
+                    oi += 1;
+                    extended = true;
+                } else {
+                    break;
+                }
+            }
+            while let Some(th) = theirs.get(ti) {
+                if th.base_start <= region_end {
+                    region_end = region_end.max(th.base_end);
+                    ti += 1;
+                    extended = true;
+                } else {
+                    break;
+                }
+            }
+            if !extended {
+                break;
+            }
+        }
+
+        visit(MergeRegion {
+            base_start: change_start,
+            base_end: region_end,
+            ours_involved: oi > oi_start,
+            theirs_involved: ti > ti_start,
+            ours_hunks: &ours[oi_start..oi],
+            theirs_hunks: &theirs[ti_start..ti],
+        });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -1181,6 +1415,113 @@ mod tests {
         let result = merge_file(base, both, both, &default_opts());
         assert!(result.is_clean());
         assert_eq!(result.output, "first\nreplaced\nthird\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Three-way alignment (§30 aligned row space)
+    // -----------------------------------------------------------------------
+
+    fn run_lens(runs: &[AlignedRun]) -> (usize, usize, usize) {
+        runs.iter().fold((0, 0, 0), |acc, run| {
+            (
+                acc.0 + run.base.len(),
+                acc.1 + run.ours.len(),
+                acc.2 + run.theirs.len(),
+            )
+        })
+    }
+
+    fn assert_partitions(runs: &[AlignedRun], base: &str, ours: &str, theirs: &str) {
+        let (b, o, t) = run_lens(runs);
+        assert_eq!(b, split_lines(base).len(), "base lines partitioned");
+        assert_eq!(o, split_lines(ours).len(), "ours lines partitioned");
+        assert_eq!(t, split_lines(theirs).len(), "theirs lines partitioned");
+        let mut bp = 0;
+        let mut op = 0;
+        let mut tp = 0;
+        for run in runs {
+            assert_eq!(run.base.start, bp, "base ranges contiguous");
+            assert_eq!(run.ours.start, op, "ours ranges contiguous");
+            assert_eq!(run.theirs.start, tp, "theirs ranges contiguous");
+            bp = run.base.end;
+            op = run.ours.end;
+            tp = run.theirs.end;
+        }
+    }
+
+    #[test]
+    fn align_identity_is_one_unchanged_run() {
+        let text = "a\nb\nc\n";
+        let runs = align_three_way(text, text, text, DiffAlgorithm::Myers);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::Unchanged);
+        assert_eq!(runs[0].visual_rows(), 3);
+        assert_partitions(&runs, text, text, text);
+    }
+
+    #[test]
+    fn align_classifies_side_changes_and_conflicts() {
+        let base = "a\nb\nc\nd\ne\n";
+        let ours = "a\nB1\nB2\nc\nd\nE-ours\n";
+        let theirs = "a\nb\nc\nd\nE-theirs\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+
+        // a | b->B1,B2 (ours only) | c d | e conflict
+        let kinds: Vec<_> = runs.iter().map(|r| r.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::OursChanged,
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::Conflict,
+            ],
+        );
+        // The ours-only run pads base/theirs: 1 base line vs 2 ours lines.
+        let ours_run = &runs[1];
+        assert_eq!(ours_run.base.len(), 1);
+        assert_eq!(ours_run.ours.len(), 2);
+        assert_eq!(ours_run.theirs.len(), 1);
+        assert_eq!(ours_run.visual_rows(), 2);
+    }
+
+    #[test]
+    fn align_marks_identical_changes_as_both_same() {
+        let base = "a\nb\nc\n";
+        let both = "a\nX\nc\n";
+        let runs = align_three_way(base, both, both, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, both, both);
+        assert!(runs.iter().any(|r| r.kind == AlignedRunKind::BothSame));
+        assert!(!runs.iter().any(|r| r.kind == AlignedRunKind::Conflict));
+    }
+
+    #[test]
+    fn align_handles_empty_and_added_files() {
+        let runs = align_three_way("", "", "", DiffAlgorithm::Myers);
+        assert!(runs.is_empty());
+
+        let runs = align_three_way("", "added\n", "other\n", DiffAlgorithm::Myers);
+        assert_partitions(&runs, "", "added\n", "other\n");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::Conflict);
+        assert_eq!(runs[0].visual_rows(), 1);
+    }
+
+    #[test]
+    fn align_matches_merge_conflict_detection() {
+        // Alignment and merge_file must agree on what is a conflict.
+        let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+        let ours = "1\nO2\n3\n4\n5\nO6\n7\n8\n9\n";
+        let theirs = "1\nT2\n3\n4\n5\n6\n7\nT8\n9\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+        let conflict_runs = runs
+            .iter()
+            .filter(|r| r.kind == AlignedRunKind::Conflict)
+            .count();
+        let merged = merge_file(base, ours, theirs, &MergeOptions::default());
+        assert_eq!(conflict_runs, merged.conflict_count);
     }
 
     #[test]
