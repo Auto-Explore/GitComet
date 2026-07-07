@@ -1008,6 +1008,15 @@ pub(super) enum ThreeWayColumn {
 }
 
 impl ThreeWayColumn {
+    /// Index into `[base, ours, theirs]` arrays and the aligned map.
+    pub(super) fn side_index(self) -> usize {
+        match self {
+            ThreeWayColumn::Base => 0,
+            ThreeWayColumn::Ours => 1,
+            ThreeWayColumn::Theirs => 2,
+        }
+    }
+
     pub(super) const ALL: [ThreeWayColumn; 3] = [
         ThreeWayColumn::Base,
         ThreeWayColumn::Ours,
@@ -1258,6 +1267,9 @@ pub(super) struct ConflictResolverUiState {
     /// Per-side line start offsets into `three_way_text`, materialized lazily.
     pub(super) three_way_line_starts: ThreeWaySides<DeferredLineStarts>,
     pub(super) three_way_len: usize,
+    /// §30 aligned row space: maps visual rows to per-side lines. Identity
+    /// (row == line) when alignment is unavailable.
+    pub(super) three_way_aligned: conflict_resolver::ThreeWayAlignedMap,
     /// Whether the three-way visible projection/ranges have been built at
     /// least once for the current conflict source.
     pub(super) three_way_visible_state_ready: bool,
@@ -1328,6 +1340,7 @@ impl Default for ConflictResolverUiState {
             three_way_text: ThreeWaySides::default(),
             three_way_line_starts: ThreeWaySides::default(),
             three_way_len: 0,
+            three_way_aligned: conflict_resolver::ThreeWayAlignedMap::default(),
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             three_way_horizontal_measure_rows: [0; 3],
@@ -1493,6 +1506,30 @@ impl ConflictResolverUiState {
             self.three_way_line_starts_ref(side),
             line_ix,
         )
+    }
+
+    /// The side line rendered at an aligned visual row (§30 aligned row
+    /// space), or `None` for padding rows.
+    pub(super) fn three_way_side_line_for_row(
+        &self,
+        side: ThreeWayColumn,
+        row: usize,
+    ) -> Option<usize> {
+        self.three_way_aligned
+            .side_line_for_row(side.side_index(), row)
+    }
+
+    /// Text of the side line rendered at an aligned visual row; `None` for
+    /// padding rows and rows past the side's end.
+    pub(super) fn three_way_row_text(&self, side: ThreeWayColumn, row: usize) -> Option<&str> {
+        let line_ix = self.three_way_side_line_for_row(side, row)?;
+        self.three_way_line_text(side, line_ix)
+    }
+
+    /// The aligned visual row at which a side line renders.
+    pub(super) fn three_way_row_for_side_line(&self, side: ThreeWayColumn, line: usize) -> usize {
+        self.three_way_aligned
+            .row_for_side_line(side.side_index(), line)
     }
 
     pub(super) fn three_way_has_line(&self, side: ThreeWayColumn, line_ix: usize) -> bool {
@@ -1763,6 +1800,17 @@ impl ConflictResolverUiState {
     }
 
     fn compute_three_way_horizontal_measure_rows(&self) -> [usize; 3] {
+        let rows = self.compute_three_way_horizontal_measure_side_lines();
+        // §30 aligned row space: the walk yields per-side line indices;
+        // width measurement wants visual rows.
+        [
+            self.three_way_row_for_side_line(ThreeWayColumn::Base, rows[0]),
+            self.three_way_row_for_side_line(ThreeWayColumn::Ours, rows[1]),
+            self.three_way_row_for_side_line(ThreeWayColumn::Theirs, rows[2]),
+        ]
+    }
+
+    fn compute_three_way_horizontal_measure_side_lines(&self) -> [usize; 3] {
         let has_hidden_resolved_blocks = self.hide_resolved
             && self.marker_segments.iter().any(|segment| {
                 matches!(
@@ -1854,7 +1902,7 @@ impl ConflictResolverUiState {
                 .into_iter()
                 .enumerate()
                 {
-                    let width = self.three_way_line_text(side, line_ix).map_or(0, str::len);
+                    let width = self.three_way_row_text(side, line_ix).map_or(0, str::len);
                     if width > best_lens[slot] {
                         best_lens[slot] = width;
                         best_rows[slot] = visible_ix;
@@ -1906,10 +1954,39 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Ours),
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
+        // §30 aligned row space: conflict ranges live in aligned rows, shared
+        // by every column. Each block covers the union of its per-side
+        // estimated ranges mapped through the alignment, clamped monotonic.
+        let block_count = maps.conflict_ranges[1].len();
+        let mut aligned_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(block_count);
+        for block_ix in 0..block_count {
+            let mut start = usize::MAX;
+            let mut end = 0usize;
+            for side in 0..3 {
+                let side_range = &maps.conflict_ranges[side][block_ix];
+                if side_range.is_empty() && side == 0 {
+                    // Absent base contributes nothing.
+                    continue;
+                }
+                let mapped = self
+                    .three_way_aligned
+                    .aligned_range_for_side_range(side, side_range.clone());
+                start = start.min(mapped.start);
+                end = end.max(mapped.end);
+            }
+            if start == usize::MAX {
+                start = end;
+            }
+            if let Some(prev) = aligned_ranges.last() {
+                start = start.max(prev.end);
+                end = end.max(start);
+            }
+            aligned_ranges.push(start..end);
+        }
         let three_way_visible_projection =
             conflict_resolver::build_three_way_visible_projection_with_options(
                 self.three_way_len,
-                &maps.conflict_ranges[1],
+                &aligned_ranges,
                 &maps.conflict_resolved,
                 conflict_resolver::ThreeWayVisibleOptions {
                     hide_resolved: self.hide_resolved,
@@ -1918,6 +1995,12 @@ impl ConflictResolverUiState {
                 },
             );
         self.apply_three_way_conflict_maps(maps);
+        // All columns share the aligned conflict ranges.
+        self.three_way_conflict_ranges = ThreeWaySides {
+            base: aligned_ranges.clone(),
+            ours: aligned_ranges.clone(),
+            theirs: aligned_ranges,
+        };
         match &mut self.mode_state {
             ConflictModeState::Streamed(s) => {
                 s.three_way_visible_projection = three_way_visible_projection;

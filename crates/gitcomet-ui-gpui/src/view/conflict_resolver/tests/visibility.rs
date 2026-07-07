@@ -1555,3 +1555,105 @@ fn collapsed_context_partial_reveals_shrink_the_fold_from_either_edge() {
     assert_eq!(projection.get(14), Some(ThreeWayVisibleItem::Line(26)));
     assert_eq!(projection.get(17), Some(ThreeWayVisibleItem::Line(29)));
 }
+
+#[test]
+fn aligned_map_identity_passes_rows_through() {
+    let map = ThreeWayAlignedMap::default();
+    assert!(map.is_identity());
+    assert_eq!(map.side_line_for_row(0, 7), Some(7));
+    assert_eq!(map.row_for_side_line(2, 41), 41);
+    assert_eq!(map.aligned_range_for_side_range(1, 3..9), 3..9);
+}
+
+#[test]
+fn aligned_map_pads_short_sides_and_maps_both_directions() {
+    use gitcomet_core::merge::{AlignedRun, AlignedRunKind};
+    // Run 0: unchanged, 2 lines everywhere.
+    // Run 1: conflict, base 1 line, ours 3 lines, theirs 2 lines -> 3 rows.
+    // Run 2: unchanged, 1 line everywhere.
+    let runs = vec![
+        AlignedRun {
+            base: 0..2,
+            ours: 0..2,
+            theirs: 0..2,
+            kind: AlignedRunKind::Unchanged,
+        },
+        AlignedRun {
+            base: 2..3,
+            ours: 2..5,
+            theirs: 2..4,
+            kind: AlignedRunKind::Conflict,
+        },
+        AlignedRun {
+            base: 3..4,
+            ours: 5..6,
+            theirs: 4..5,
+            kind: AlignedRunKind::Unchanged,
+        },
+    ];
+    let map = ThreeWayAlignedMap::from_alignment(&runs);
+    assert!(!map.is_identity());
+    assert_eq!(map.aligned_len(), 2 + 3 + 1);
+
+    // Rows 0-1: all sides line 0-1.
+    assert_eq!(map.side_line_for_row(0, 1), Some(1));
+    // Row 2: base line 2, ours line 2, theirs line 2.
+    assert_eq!(map.side_line_for_row(0, 2), Some(2));
+    // Row 3: base padded out (only 1 line in run), ours line 3, theirs line 3.
+    assert_eq!(map.side_line_for_row(0, 3), None);
+    assert_eq!(map.side_line_for_row(1, 3), Some(3));
+    assert_eq!(map.side_line_for_row(2, 3), Some(3));
+    // Row 4: only ours has content (line 4).
+    assert_eq!(map.side_line_for_row(0, 4), None);
+    assert_eq!(map.side_line_for_row(1, 4), Some(4));
+    assert_eq!(map.side_line_for_row(2, 4), None);
+    // Row 5: the tail line on every side, with differing side line numbers.
+    assert_eq!(map.side_line_for_row(0, 5), Some(3));
+    assert_eq!(map.side_line_for_row(1, 5), Some(5));
+    assert_eq!(map.side_line_for_row(2, 5), Some(4));
+    // Past the end.
+    assert_eq!(map.side_line_for_row(1, 6), None);
+
+    // Reverse mapping.
+    assert_eq!(map.row_for_side_line(0, 3), 5);
+    assert_eq!(map.row_for_side_line(1, 4), 4);
+    assert_eq!(map.row_for_side_line(2, 4), 5);
+    // Past a side's end clamps to the aligned end.
+    assert_eq!(map.row_for_side_line(0, 99), 6);
+
+    // Range mapping: ours conflict lines 2..5 cover rows 2..5.
+    assert_eq!(map.aligned_range_for_side_range(1, 2..5), 2..5);
+    // Base conflict line 2..3 covers row 2..3.
+    assert_eq!(map.aligned_range_for_side_range(0, 2..3), 2..3);
+}
+
+#[test]
+fn aligned_map_round_trips_through_core_alignment() {
+    let base = "a\nb\nc\nd\n";
+    let ours = "a\nB1\nB2\nc\nd\n";
+    let theirs = "a\nb\nc\nD-theirs\n";
+    let runs = gitcomet_core::merge::align_three_way(
+        base,
+        ours,
+        theirs,
+        gitcomet_core::merge::DiffAlgorithm::Myers,
+    );
+    let map = ThreeWayAlignedMap::from_alignment(&runs);
+
+    // Every side line must appear at exactly one row, in order.
+    for (side, len) in [(0usize, 4usize), (1, 5), (2, 4)] {
+        let mut prev_row = None;
+        for line in 0..len {
+            let row = map.row_for_side_line(side, line);
+            assert_eq!(
+                map.side_line_for_row(side, row),
+                Some(line),
+                "side {side} line {line} should round-trip via row {row}",
+            );
+            if let Some(prev) = prev_row {
+                assert!(row > prev, "rows must be strictly increasing per side");
+            }
+            prev_row = Some(row);
+        }
+    }
+}

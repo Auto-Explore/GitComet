@@ -611,7 +611,7 @@ impl MainPaneView {
         } else {
             count_newlines(theirs_text).saturating_add(1)
         };
-        let three_way_len = three_way_base_len
+        let three_way_side_max_len = three_way_base_len
             .max(three_way_ours_len)
             .max(three_way_theirs_len);
 
@@ -621,8 +621,40 @@ impl MainPaneView {
         } else {
             Vec::new()
         };
-        let rendering_mode =
-            conflict_resolver::select_conflict_rendering_mode(&marker_segments, three_way_len);
+        let rendering_mode = conflict_resolver::select_conflict_rendering_mode(
+            &marker_segments,
+            three_way_side_max_len,
+        );
+        // §30 aligned row space: compute the kdiff3-style alignment once per
+        // bootstrap (side texts are immutable for the session). Fall back to
+        // the identity map when the base side is unavailable (2-way marker
+        // conflicts), when streamed large-file mode is active (whole-file
+        // conflicts make the diff quadratic — the same reason streaming
+        // exists), or when the file exceeds the alignment budget.
+        const THREE_WAY_ALIGN_MAX_TOTAL_LINES: usize = 100_000;
+        let total_side_lines = three_way_base_len + three_way_ours_len + three_way_theirs_len;
+        let three_way_aligned = if !rendering_mode.is_streamed_large_file()
+            && !base_text.is_empty()
+            && !ours_text.is_empty()
+            && !theirs_text.is_empty()
+            && total_side_lines <= THREE_WAY_ALIGN_MAX_TOTAL_LINES
+        {
+            conflict_resolver::ThreeWayAlignedMap::from_alignment(
+                &gitcomet_core::merge::align_three_way(
+                    base_text,
+                    ours_text,
+                    theirs_text,
+                    gitcomet_core::merge::DiffAlgorithm::Myers,
+                ),
+            )
+        } else {
+            conflict_resolver::ThreeWayAlignedMap::default()
+        };
+        let three_way_len = if three_way_aligned.is_identity() {
+            three_way_side_max_len
+        } else {
+            three_way_aligned.aligned_len()
+        };
         let full_syntax_parse_requested = conflict_syntax_language.is_some()
             && [base_text, ours_text, theirs_text]
                 .into_iter()
@@ -914,6 +946,7 @@ impl MainPaneView {
             three_way_text,
             three_way_line_starts,
             three_way_len,
+            three_way_aligned,
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             three_way_horizontal_measure_rows: [0; 3],
@@ -1726,16 +1759,17 @@ impl MainPaneView {
         choice: conflict_resolver::ConflictChoice,
         cx: &mut gpui::Context<Self>,
     ) {
+        // `line_ix` arrives from input-row menus in aligned-row space (§30).
         let line = match choice {
             conflict_resolver::ConflictChoice::Base => self
                 .conflict_resolver
-                .three_way_line_text(ThreeWayColumn::Base, line_ix),
+                .three_way_row_text(ThreeWayColumn::Base, line_ix),
             conflict_resolver::ConflictChoice::Ours => self
                 .conflict_resolver
-                .three_way_line_text(ThreeWayColumn::Ours, line_ix),
+                .three_way_row_text(ThreeWayColumn::Ours, line_ix),
             conflict_resolver::ConflictChoice::Theirs => self
                 .conflict_resolver
-                .three_way_line_text(ThreeWayColumn::Theirs, line_ix),
+                .three_way_row_text(ThreeWayColumn::Theirs, line_ix),
             conflict_resolver::ConflictChoice::Both => {
                 // Both is chunk-level only, not line-level.
                 return;

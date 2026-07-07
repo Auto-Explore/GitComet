@@ -2426,6 +2426,7 @@ struct ConflictResolverSearchContext<'a> {
     three_way_ours_line_starts: &'a [usize],
     three_way_theirs_text: &'a str,
     three_way_theirs_line_starts: &'a [usize],
+    three_way_aligned: &'a conflict_resolver::ThreeWayAlignedMap,
     two_way_rows: ConflictResolverSearchTwoWayRows<'a>,
 }
 
@@ -2453,6 +2454,7 @@ impl<'a> ConflictResolverSearchContext<'a> {
             three_way_ours_line_starts,
             three_way_theirs_text: &conflict_resolver.three_way_text.theirs,
             three_way_theirs_line_starts,
+            three_way_aligned: &conflict_resolver.three_way_aligned,
             two_way_rows: ConflictResolverSearchTwoWayRows::from_conflict_resolver(
                 conflict_resolver,
             ),
@@ -2585,22 +2587,23 @@ fn search_three_way_via_spans(
                 len,
             } => {
                 for i in 0..len {
-                    let line_ix = source_line_start + i;
-                    let base = line_text(
-                        ctx.three_way_base_text,
-                        ctx.three_way_base_line_starts,
-                        line_ix,
-                    );
-                    let ours = line_text(
-                        ctx.three_way_ours_text,
-                        ctx.three_way_ours_line_starts,
-                        line_ix,
-                    );
-                    let theirs = line_text(
-                        ctx.three_way_theirs_text,
-                        ctx.three_way_theirs_line_starts,
-                        line_ix,
-                    );
+                    // §30: rows are aligned; each side renders its own line
+                    // there (padding rows have no text).
+                    let row = source_line_start + i;
+                    let aligned = ctx.three_way_aligned;
+                    let base = aligned.side_line_for_row(0, row).map_or("", |l| {
+                        line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)
+                    });
+                    let ours = aligned.side_line_for_row(1, row).map_or("", |l| {
+                        line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, l)
+                    });
+                    let theirs = aligned.side_line_for_row(2, row).map_or("", |l| {
+                        line_text(
+                            ctx.three_way_theirs_text,
+                            ctx.three_way_theirs_line_starts,
+                            l,
+                        )
+                    });
                     if query.is_match(base) || query.is_match(ours) || query.is_match(theirs) {
                         out.push(visible_start + i);
                     }
@@ -2664,30 +2667,30 @@ fn search_three_way_via_spans_with_matcher(
             } => {
                 for i in 0..len {
                     let visible_ix = visible_start + i;
-                    let line_ix = source_line_start + i;
+                    // §30: rows are aligned; translate per side.
+                    let row = source_line_start + i;
+                    let aligned = ctx.three_way_aligned;
                     base_rows.push((
                         visible_ix,
-                        Cow::Borrowed(line_text(
-                            ctx.three_way_base_text,
-                            ctx.three_way_base_line_starts,
-                            line_ix,
-                        )),
+                        Cow::Borrowed(aligned.side_line_for_row(0, row).map_or("", |l| {
+                            line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)
+                        })),
                     ));
                     ours_rows.push((
                         visible_ix,
-                        Cow::Borrowed(line_text(
-                            ctx.three_way_ours_text,
-                            ctx.three_way_ours_line_starts,
-                            line_ix,
-                        )),
+                        Cow::Borrowed(aligned.side_line_for_row(1, row).map_or("", |l| {
+                            line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, l)
+                        })),
                     ));
                     theirs_rows.push((
                         visible_ix,
-                        Cow::Borrowed(line_text(
-                            ctx.three_way_theirs_text,
-                            ctx.three_way_theirs_line_starts,
-                            line_ix,
-                        )),
+                        Cow::Borrowed(aligned.side_line_for_row(2, row).map_or("", |l| {
+                            line_text(
+                                ctx.three_way_theirs_text,
+                                ctx.three_way_theirs_line_starts,
+                                l,
+                            )
+                        })),
                     ));
                 }
             }
@@ -2764,13 +2767,21 @@ fn three_way_visible_item_matches_query(
 
     match item {
         conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-            let base = line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, ix);
-            let ours = line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, ix);
-            let theirs = line_text(
-                ctx.three_way_theirs_text,
-                ctx.three_way_theirs_line_starts,
-                ix,
-            );
+            // §30: `ix` is an aligned row; translate per side.
+            let aligned = ctx.three_way_aligned;
+            let base = aligned.side_line_for_row(0, ix).map_or("", |l| {
+                line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)
+            });
+            let ours = aligned.side_line_for_row(1, ix).map_or("", |l| {
+                line_text(ctx.three_way_ours_text, ctx.three_way_ours_line_starts, l)
+            });
+            let theirs = aligned.side_line_for_row(2, ix).map_or("", |l| {
+                line_text(
+                    ctx.three_way_theirs_text,
+                    ctx.three_way_theirs_line_starts,
+                    l,
+                )
+            });
 
             contains_ascii_case_insensitive(base, query)
                 || contains_ascii_case_insensitive(ours, query)
@@ -2789,7 +2800,15 @@ fn three_way_visible_item_matches_query(
 }
 
 #[cfg(test)]
+fn identity_three_way_aligned() -> &'static conflict_resolver::ThreeWayAlignedMap {
+    use std::sync::OnceLock;
+    static MAP: OnceLock<conflict_resolver::ThreeWayAlignedMap> = OnceLock::new();
+    MAP.get_or_init(conflict_resolver::ThreeWayAlignedMap::default)
+}
+
+#[cfg(test)]
 mod tests {
+    use super::identity_three_way_aligned;
     use super::{
         AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
         ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchMatcher,
@@ -2831,6 +2850,7 @@ mod tests {
             three_way_ours_line_starts: ours.1,
             three_way_theirs_text: theirs.0,
             three_way_theirs_line_starts: theirs.1,
+            three_way_aligned: identity_three_way_aligned(),
             two_way_rows: empty_conflict_resolver_search_two_way_rows(),
         }
     }
@@ -3476,6 +3496,7 @@ mod tests {
             three_way_ours_line_starts: &three_way_ours_line_starts,
             three_way_theirs_text,
             three_way_theirs_line_starts: &three_way_theirs_line_starts,
+            three_way_aligned: identity_three_way_aligned(),
             two_way_rows: empty_conflict_resolver_search_two_way_rows(),
         };
 
@@ -3491,6 +3512,7 @@ mod tests {
         let index = ConflictSplitRowIndex::new(&marker_segments, 1);
         let projection = TwoWaySplitProjection::new(&index, &marker_segments, false);
         let two_way_ctx = ConflictResolverSearchContext {
+            three_way_aligned: identity_three_way_aligned(),
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             marker_segments: &marker_segments,
             three_way_visible: ConflictResolverSearchVisibleRows::Projection(
@@ -3527,6 +3549,7 @@ mod tests {
         let three_way_visible_projection =
             build_three_way_visible_projection(0, &[], &marker_segments, false);
         let ctx = ConflictResolverSearchContext {
+            three_way_aligned: identity_three_way_aligned(),
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             marker_segments: &marker_segments,
             three_way_visible: ConflictResolverSearchVisibleRows::Projection(

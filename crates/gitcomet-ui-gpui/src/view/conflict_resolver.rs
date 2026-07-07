@@ -3730,6 +3730,110 @@ pub enum ThreeWayVisibleItem {
     },
 }
 
+/// kdiff3-style aligned row space over base/ours/theirs (§30).
+///
+/// Maps between visual rows (shared by all columns) and per-side line
+/// indices. Sides shorter than a run are padded: their rows map to `None`.
+/// The default value is an unbounded identity map (row == line on every
+/// side), which is also the fallback when alignment is unavailable
+/// (missing/binary sides, giant files).
+#[derive(Clone, Debug, Default)]
+pub struct ThreeWayAlignedMap {
+    runs: Vec<AlignedMapRun>,
+    aligned_len: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AlignedMapRun {
+    aligned_start: usize,
+    rows: usize,
+    starts: [usize; 3],
+    lens: [usize; 3],
+}
+
+impl ThreeWayAlignedMap {
+    /// Build from the merge engine's alignment runs.
+    pub fn from_alignment(alignment: &[gitcomet_core::merge::AlignedRun]) -> Self {
+        let mut runs = Vec::with_capacity(alignment.len());
+        let mut aligned_start = 0usize;
+        for run in alignment {
+            let rows = run.visual_rows();
+            runs.push(AlignedMapRun {
+                aligned_start,
+                rows,
+                starts: [run.base.start, run.ours.start, run.theirs.start],
+                lens: [run.base.len(), run.ours.len(), run.theirs.len()],
+            });
+            aligned_start += rows;
+        }
+        Self {
+            runs,
+            aligned_len: aligned_start,
+        }
+    }
+
+    /// The identity map behaves as if every side had `row == line`.
+    pub fn is_identity(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    /// Total aligned rows. Zero for the identity map (callers keep their own
+    /// length in that case).
+    pub fn aligned_len(&self) -> usize {
+        self.aligned_len
+    }
+
+    fn run_for_row(&self, row: usize) -> Option<&AlignedMapRun> {
+        if row >= self.aligned_len {
+            return None;
+        }
+        let ix = self
+            .runs
+            .partition_point(|run| run.aligned_start + run.rows <= row);
+        self.runs.get(ix)
+    }
+
+    /// The side line rendered at `row`, or `None` for padding rows (and rows
+    /// past the aligned end).
+    pub fn side_line_for_row(&self, side: usize, row: usize) -> Option<usize> {
+        if self.is_identity() {
+            return Some(row);
+        }
+        let run = self.run_for_row(row)?;
+        let offset = row - run.aligned_start;
+        (offset < run.lens[side]).then(|| run.starts[side] + offset)
+    }
+
+    /// The row at which a side line renders. Lines past the side's end clamp
+    /// to the end of the aligned space.
+    pub fn row_for_side_line(&self, side: usize, line: usize) -> usize {
+        if self.is_identity() {
+            return line;
+        }
+        let ix = self
+            .runs
+            .partition_point(|run| run.starts[side] + run.lens[side] <= line);
+        match self.runs.get(ix) {
+            Some(run) => run.aligned_start + line.saturating_sub(run.starts[side]),
+            None => self.aligned_len,
+        }
+    }
+
+    /// Map a per-side line range to the aligned row range covering it.
+    pub fn aligned_range_for_side_range(
+        &self,
+        side: usize,
+        range: std::ops::Range<usize>,
+    ) -> std::ops::Range<usize> {
+        if self.is_identity() || range.is_empty() {
+            return range;
+        }
+        let start = self.row_for_side_line(side, range.start);
+        let end = self.row_for_side_line(side, range.end.saturating_sub(1)) + 1;
+        start..end.max(start)
+    }
+}
+
 /// Span-based replacement for `Vec<ThreeWayVisibleItem>` that uses O(spans) memory
 /// instead of O(visible lines). Each span covers a contiguous run of source lines
 /// or a single synthetic row (collapsed block / preview gap).

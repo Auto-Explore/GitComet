@@ -358,8 +358,16 @@ impl MainPaneView {
         // Pre-build styled text cache entries for visible lines in this column.
         let mut needs_chunk_poll = false;
         for vi in range.clone() {
-            let Some(conflict_resolver::ThreeWayVisibleItem::Line(ix)) =
+            let Some(conflict_resolver::ThreeWayVisibleItem::Line(row)) =
                 this.conflict_resolver.three_way_visible_item(vi)
+            else {
+                continue;
+            };
+            // §30 aligned row space: syntax documents, word highlights, and
+            // the styled-text cache are all keyed by the side's own line.
+            let Some(ix) = this
+                .conflict_resolver
+                .three_way_side_line_for_row(column, row)
             else {
                 continue;
             };
@@ -605,11 +613,18 @@ impl MainPaneView {
                     elements.push(fold.into_any_element());
                 }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-                    let line_text = this.conflict_resolver.three_way_line_text(column, ix);
+                    // §30 aligned row space: `ix` is the shared visual row;
+                    // each column renders its own line (or padding) there.
+                    let side_line = this
+                        .conflict_resolver
+                        .three_way_side_line_for_row(column, ix);
+                    let line_text = side_line
+                        .and_then(|l| this.conflict_resolver.three_way_line_text(column, l));
+                    // Conflict ranges are aligned-row ranges shared by all
+                    // columns; padding rows inside a conflict still highlight.
                     let range_ix = this
                         .conflict_resolver
-                        .conflict_index_for_side_line(column, ix)
-                        .filter(|_| line_text.is_some());
+                        .conflict_index_for_side_line(column, ix);
                     let is_in_conflict = range_ix.is_some();
 
                     let choice_for_row = range_ix.and_then(|ri| conflict_choices.get(ri).copied());
@@ -629,9 +644,10 @@ impl MainPaneView {
                         ),
                     };
 
-                    let styled = this.conflict_three_way_segments_cache.get(&(ix, column));
+                    let styled = side_line
+                        .and_then(|l| this.conflict_three_way_segments_cache.get(&(l, column)));
 
-                    let bg = if is_in_conflict && line_text.is_some() {
+                    let bg = if is_in_conflict {
                         match column {
                             ThreeWayColumn::Base => with_alpha(
                                 theme.colors.warning,
@@ -654,11 +670,12 @@ impl MainPaneView {
                     } else {
                         theme.colors.text_muted
                     };
+                    // kdiff3 behavior: per-column line numbers from the
+                    // side's own file; padding rows have none.
                     let line_no = line_number_string(
-                        line_text
-                            .is_some()
-                            .then(|| u32::try_from(ix + 1).ok())
-                            .flatten(),
+                        side_line
+                            .filter(|_| line_text.is_some())
+                            .and_then(|l| u32::try_from(l + 1).ok()),
                     );
                     let line_text = line_text.map(SharedString::new).unwrap_or_default();
                     let display_text = conflict_display_text(&line_text, styled, show_ws);
