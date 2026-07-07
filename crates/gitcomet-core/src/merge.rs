@@ -260,63 +260,32 @@ pub fn align_three_way(
             region.base_start,
         );
 
-        let ours_len = if region.ours_involved {
-            reconstruct_side(
-                &base_lines,
-                region.base_start,
-                region.base_end,
-                region.ours_hunks,
-            )
-            .len()
-        } else {
-            region.base_end - region.base_start
-        };
-        let theirs_len = if region.theirs_involved {
-            reconstruct_side(
-                &base_lines,
-                region.base_start,
-                region.base_end,
-                region.theirs_hunks,
-            )
-            .len()
-        } else {
-            region.base_end - region.base_start
-        };
-
-        let kind = match (region.ours_involved, region.theirs_involved) {
-            (true, true) => {
-                let ours_content = reconstruct_side(
-                    &base_lines,
-                    region.base_start,
-                    region.base_end,
-                    region.ours_hunks,
-                );
-                let theirs_content = reconstruct_side(
-                    &base_lines,
-                    region.base_start,
-                    region.base_end,
-                    region.theirs_hunks,
-                );
-                if ours_content == theirs_content {
-                    AlignedRunKind::BothSame
-                } else {
-                    AlignedRunKind::Conflict
-                }
-            }
-            (true, false) => AlignedRunKind::OursChanged,
-            (false, true) => AlignedRunKind::TheirsChanged,
-            (false, false) => AlignedRunKind::Unchanged,
-        };
-
-        runs.push(AlignedRun {
-            base: region.base_start..region.base_end,
-            ours: ours_pos..ours_pos + ours_len,
-            theirs: theirs_pos..theirs_pos + theirs_len,
-            kind,
-        });
+        let ours_shape = side_region_shape(
+            region.base_start,
+            region.base_end,
+            region.ours_hunks,
+            ours_pos,
+        );
+        let theirs_shape = side_region_shape(
+            region.base_start,
+            region.base_end,
+            region.theirs_hunks,
+            theirs_pos,
+        );
+        let (ours_end, theirs_end) = emit_region_rows(
+            &mut runs,
+            &ours_lines,
+            &theirs_lines,
+            region.base_start,
+            region.base_end,
+            &ours_shape,
+            &theirs_shape,
+            ours_pos,
+            theirs_pos,
+        );
         base_pos = region.base_end;
-        ours_pos += ours_len;
-        theirs_pos += theirs_len;
+        ours_pos = ours_end;
+        theirs_pos = theirs_end;
     });
 
     push_unchanged(
@@ -336,8 +305,6 @@ pub fn align_three_way(
 struct MergeRegion<'h, 'a> {
     base_start: usize,
     base_end: usize,
-    ours_involved: bool,
-    theirs_involved: bool,
     ours_hunks: &'h [Hunk<'a>],
     theirs_hunks: &'h [Hunk<'a>],
 }
@@ -394,12 +361,236 @@ fn for_each_merge_region<'a>(
         visit(MergeRegion {
             base_start: change_start,
             base_end: region_end,
-            ours_involved: oi > oi_start,
-            theirs_involved: ti > ti_start,
             ours_hunks: &ours[oi_start..oi],
             theirs_hunks: &theirs[ti_start..ti],
         });
     }
+}
+
+/// Per-side shape of a change region: which base lines survive on the side
+/// (with their side line index), and the side's free (inserted/replacement)
+/// line segments keyed by the base boundary they precede.
+struct SideRegionShape {
+    /// For each region-relative base index: `Some(side_line)` when the base
+    /// line survives on this side.
+    kept: Vec<Option<usize>>,
+    /// For each boundary position `0..=len`: `(side_line_start, count)` of
+    /// side lines inserted before that base line (or at the region end).
+    free_at: Vec<(usize, usize)>,
+}
+
+fn side_region_shape(
+    region_start: usize,
+    region_end: usize,
+    hunks: &[Hunk<'_>],
+    side_start: usize,
+) -> SideRegionShape {
+    let len = region_end - region_start;
+    let mut kept = vec![None; len];
+    let mut free_at = vec![(0usize, 0usize); len + 1];
+    let mut side_line = side_start;
+    let mut b = region_start;
+
+    for hunk in hunks {
+        let hunk_start = hunk.base_start.clamp(region_start, region_end);
+        while b < hunk_start {
+            kept[b - region_start] = Some(side_line);
+            side_line += 1;
+            b += 1;
+        }
+        let slot = &mut free_at[b - region_start];
+        if slot.1 == 0 {
+            slot.0 = side_line;
+        }
+        slot.1 += hunk.new_lines.len();
+        side_line += hunk.new_lines.len();
+        b = hunk.base_end.clamp(b, region_end);
+    }
+    while b < region_end {
+        kept[b - region_start] = Some(side_line);
+        side_line += 1;
+        b += 1;
+    }
+
+    SideRegionShape { kept, free_at }
+}
+
+/// Emit kdiff3-style aligned rows for one change region.
+///
+/// Base lines anchor to their surviving copies: a side that dropped the base
+/// line contributes its next replacement line on that row instead of padding.
+/// Free lines from both sides pair up top-aligned; a side's free lines always
+/// flush before its own anchored copy so side ranges stay contiguous.
+/// Returns the per-side cursor positions after the region.
+#[expect(clippy::too_many_arguments)]
+fn emit_region_rows(
+    runs: &mut Vec<AlignedRun>,
+    ours_lines: &[&str],
+    theirs_lines: &[&str],
+    region_start: usize,
+    region_end: usize,
+    ours_shape: &SideRegionShape,
+    theirs_shape: &SideRegionShape,
+    ours_start: usize,
+    theirs_start: usize,
+) -> (usize, usize) {
+    // Pending free lines per side; contiguous by construction (a side's free
+    // segments are only ever separated by its own anchored copies, which
+    // force a flush first).
+    let mut pend_o = (ours_start, 0usize);
+    let mut pend_t = (theirs_start, 0usize);
+
+    fn extend(pend: &mut (usize, usize), seg: (usize, usize)) {
+        if seg.1 == 0 {
+            return;
+        }
+        if pend.1 == 0 {
+            pend.0 = seg.0;
+        }
+        pend.1 += seg.1;
+    }
+    fn take(pend: &mut (usize, usize), n: usize) -> std::ops::Range<usize> {
+        let n = n.min(pend.1);
+        let range = pend.0..pend.0 + n;
+        pend.0 += n;
+        pend.1 -= n;
+        range
+    }
+
+    let mut o_cur = ours_start;
+    let mut t_cur = theirs_start;
+    let push_row = |runs: &mut Vec<AlignedRun>,
+                    o_cur: &mut usize,
+                    t_cur: &mut usize,
+                    base: std::ops::Range<usize>,
+                    ours: std::ops::Range<usize>,
+                    theirs: std::ops::Range<usize>,
+                    kind: AlignedRunKind| {
+        debug_assert_eq!(ours.start.max(*o_cur), *o_cur);
+        *o_cur = ours.end.max(*o_cur);
+        *t_cur = theirs.end.max(*t_cur);
+        runs.push(AlignedRun {
+            base,
+            ours,
+            theirs,
+            kind,
+        });
+    };
+
+    let zip_pending = |runs: &mut Vec<AlignedRun>,
+                       pend_o: &mut (usize, usize),
+                       pend_t: &mut (usize, usize),
+                       o_cur: &mut usize,
+                       t_cur: &mut usize,
+                       base_at: usize| {
+        let n = pend_o.1.min(pend_t.1);
+        if n == 0 {
+            return;
+        }
+        let ours = take(pend_o, n);
+        let theirs = take(pend_t, n);
+        let kind = if ours_lines.get(ours.clone()) == theirs_lines.get(theirs.clone())
+            && ours_lines.get(ours.clone()).is_some()
+        {
+            AlignedRunKind::BothSame
+        } else {
+            AlignedRunKind::Conflict
+        };
+        push_row(runs, o_cur, t_cur, base_at..base_at, ours, theirs, kind);
+    };
+    let flush_solo = |runs: &mut Vec<AlignedRun>,
+                      pend: &mut (usize, usize),
+                      o_cur: &mut usize,
+                      t_cur: &mut usize,
+                      base_at: usize,
+                      is_ours: bool| {
+        if pend.1 == 0 {
+            return;
+        }
+        let range = take(pend, pend.1);
+        let (ours, theirs, kind) = if is_ours {
+            (range, *t_cur..*t_cur, AlignedRunKind::OursChanged)
+        } else {
+            (*o_cur..*o_cur, range, AlignedRunKind::TheirsChanged)
+        };
+        push_row(runs, o_cur, t_cur, base_at..base_at, ours, theirs, kind);
+    };
+
+    let len = region_end - region_start;
+    for p in 0..len {
+        extend(&mut pend_o, ours_shape.free_at[p]);
+        extend(&mut pend_t, theirs_shape.free_at[p]);
+        let b = region_start + p;
+        let kept_o = ours_shape.kept[p];
+        let kept_t = theirs_shape.kept[p];
+
+        if kept_o.is_none() && kept_t.is_none() {
+            // The base line was dropped by both sides: it anchors to the
+            // first replacement line of each (kdiff3's modified-line row),
+            // with the remaining replacements pairing up below it.
+            let ours = take(&mut pend_o, 1);
+            let theirs = take(&mut pend_t, 1);
+            let kind = if !ours.is_empty()
+                && ours_lines.get(ours.clone()) == theirs_lines.get(theirs.clone())
+            {
+                AlignedRunKind::BothSame
+            } else {
+                AlignedRunKind::Conflict
+            };
+            push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
+            zip_pending(
+                runs,
+                &mut pend_o,
+                &mut pend_t,
+                &mut o_cur,
+                &mut t_cur,
+                b + 1,
+            );
+            continue;
+        }
+
+        zip_pending(runs, &mut pend_o, &mut pend_t, &mut o_cur, &mut t_cur, b);
+        // A side's free lines precede its anchored copy in side order, so
+        // they must be on rows above the anchor row.
+        if kept_o.is_some() {
+            flush_solo(runs, &mut pend_o, &mut o_cur, &mut t_cur, b, true);
+        }
+        if kept_t.is_some() {
+            flush_solo(runs, &mut pend_t, &mut o_cur, &mut t_cur, b, false);
+        }
+
+        let ours = match kept_o {
+            Some(line) => line..line + 1,
+            None => take(&mut pend_o, 1),
+        };
+        let theirs = match kept_t {
+            Some(line) => line..line + 1,
+            None => take(&mut pend_t, 1),
+        };
+        let kind = match (kept_o.is_some(), kept_t.is_some()) {
+            (true, true) => AlignedRunKind::Unchanged,
+            (true, false) => AlignedRunKind::TheirsChanged,
+            (false, true) => AlignedRunKind::OursChanged,
+            (false, false) => unreachable!("handled above"),
+        };
+        push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
+    }
+
+    // Region-end boundary: remaining free lines pair up, overflow flushes.
+    extend(&mut pend_o, ours_shape.free_at[len]);
+    extend(&mut pend_t, theirs_shape.free_at[len]);
+    zip_pending(
+        runs,
+        &mut pend_o,
+        &mut pend_t,
+        &mut o_cur,
+        &mut t_cur,
+        region_end,
+    );
+    flush_solo(runs, &mut pend_o, &mut o_cur, &mut t_cur, region_end, true);
+    flush_solo(runs, &mut pend_t, &mut o_cur, &mut t_cur, region_end, false);
+
+    (o_cur, t_cur)
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,23 +1658,88 @@ mod tests {
         let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
         assert_partitions(&runs, base, ours, theirs);
 
-        // a | b->B1,B2 (ours only) | c d | e conflict
+        // Fine-grained rows: a | b anchored to its replacement + theirs copy |
+        // ours' second replacement line alone | c d | e as one modified-line
+        // row holding both replacements.
         let kinds: Vec<_> = runs.iter().map(|r| r.kind).collect();
         assert_eq!(
             kinds,
             vec![
                 AlignedRunKind::Unchanged,
                 AlignedRunKind::OursChanged,
+                AlignedRunKind::OursChanged,
                 AlignedRunKind::Unchanged,
                 AlignedRunKind::Conflict,
             ],
         );
-        // The ours-only run pads base/theirs: 1 base line vs 2 ours lines.
-        let ours_run = &runs[1];
-        assert_eq!(ours_run.base.len(), 1);
-        assert_eq!(ours_run.ours.len(), 2);
-        assert_eq!(ours_run.theirs.len(), 1);
-        assert_eq!(ours_run.visual_rows(), 2);
+        // Row 1: base `b` rides with ours' first replacement and theirs' copy.
+        assert_eq!(runs[1].base, 1..2);
+        assert_eq!(runs[1].ours, 1..2);
+        assert_eq!(runs[1].theirs, 1..2);
+        // Row 2: ours' second replacement line, base/theirs padded.
+        assert_eq!(runs[2].base, 2..2);
+        assert_eq!(runs[2].ours, 2..3);
+        assert_eq!(runs[2].theirs.len(), 0);
+        // Row 4: `e` modified by both — one row with both replacements.
+        assert_eq!(runs[4].base.len(), 1);
+        assert_eq!(runs[4].ours.len(), 1);
+        assert_eq!(runs[4].theirs.len(), 1);
+        assert_eq!(runs[4].visual_rows(), 1);
+    }
+
+    /// First kdiff3-parity case from manual testing: ours inserts two lines
+    /// and keeps the base line; theirs replaces it with four lines. The kept
+    /// base line must anchor to its identical ours copy on one row, with
+    /// theirs' replacement lines flowing 1:1 through all rows.
+    #[test]
+    fn align_anchors_kept_line_below_paired_insertions() {
+        let base = "ctx\nreturn SLA\n";
+        let ours = "ctx\nif critical:\n    return 2x\nreturn SLA\n";
+        let theirs = "ctx\nthreshold = SLA\nif blocked:\n    half\nreturn threshold\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+
+        // ctx | [o1|t1] [o2|t2] | [base ~ ours copy ~ t3] | [t4]
+        let rows: Vec<(usize, usize, usize)> = runs
+            .iter()
+            .map(|r| (r.base.len(), r.ours.len(), r.theirs.len()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(1, 1, 1), (0, 2, 2), (1, 1, 1), (0, 0, 1)],
+            "kept base line must share a row with its ours copy and theirs' third line",
+        );
+        // The anchored row pairs base line 1 with ours line 3 (its copy).
+        assert_eq!(runs[2].base, 1..2);
+        assert_eq!(runs[2].ours, 3..4);
+        assert_eq!(runs[2].theirs, 3..4);
+    }
+
+    /// Second kdiff3-parity case: ours replaces two base lines with two new
+    /// ones; theirs keeps one base line mid-region among three new lines.
+    /// The theirs-kept base line anchors to its copy, and ours' second
+    /// replacement rides on that anchor row.
+    #[test]
+    fn align_anchors_theirs_kept_line_with_ours_replacement() {
+        let base = "ctx\ndone = len\nreturn round(done)\n";
+        let ours = "ctx\nfinished = len\nreturn round(finished)\n";
+        let theirs = "ctx\nactive = [t]\ndone = len\ndenom = len or 1\nreturn round(denom)\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+
+        // ctx | [o1|t1] | [base done ~ o2 ~ theirs copy] | [base return ~ t3]
+        // | [t4]
+        let rows: Vec<(usize, usize, usize)> = runs
+            .iter()
+            .map(|r| (r.base.len(), r.ours.len(), r.theirs.len()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(1, 1, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1), (0, 0, 1)],
+        );
+        // Anchor row: base `done = len` with theirs' identical copy.
+        assert_eq!(runs[2].base, 1..2);
+        assert_eq!(runs[2].theirs, 2..3);
     }
 
     #[test]
