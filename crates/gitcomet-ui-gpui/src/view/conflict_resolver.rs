@@ -2679,6 +2679,39 @@ fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
     block_max_line_count(block) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
 }
 
+/// Whether computing the three-way alignment is practical for these sides
+/// (§30 aligned row space).
+///
+/// The alignment diff is O(size × dissimilarity): a whole-file conflict on a
+/// large file makes Myers effectively quadratic. Small files always align;
+/// large ones only when each side still shares a reasonable fraction of its
+/// lines with base.
+pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) -> bool {
+    const ALWAYS_ALIGN_TOTAL_LINES: usize = 2_000;
+    const MAX_TOTAL_LINES: usize = 100_000;
+
+    let base_count = base.lines().count();
+    let ours_count = ours.lines().count();
+    let theirs_count = theirs.lines().count();
+    let total = base_count + ours_count + theirs_count;
+    if total > MAX_TOTAL_LINES {
+        return false;
+    }
+    if total <= ALWAYS_ALIGN_TOTAL_LINES {
+        return true;
+    }
+
+    let base_set: std::collections::HashSet<&str> = base.lines().collect();
+    let shared_enough = |side: &str, side_count: usize| {
+        if side_count == 0 {
+            return true;
+        }
+        let common = side.lines().filter(|line| base_set.contains(line)).count();
+        common.saturating_mul(4) >= side_count
+    };
+    shared_enough(ours, ours_count) && shared_enough(theirs, theirs_count)
+}
+
 pub fn select_conflict_rendering_mode(
     segments: &[ConflictSegment],
     combined_line_count: usize,

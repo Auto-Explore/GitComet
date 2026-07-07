@@ -1657,3 +1657,31 @@ fn aligned_map_round_trips_through_core_alignment() {
         }
     }
 }
+
+#[test]
+fn alignment_practicality_gates_large_dissimilar_sides() {
+    // Small files always align, no matter how different.
+    assert!(three_way_alignment_is_practical(
+        "a\nb\n",
+        "x\ny\nz\n",
+        "p\nq\n"
+    ));
+
+    // Large files whose sides still share most lines with base align.
+    let base: String = (0..3000).map(|i| format!("line {i}\n")).collect();
+    let mut ours = base.clone();
+    ours.push_str("ours tail\n");
+    let mut theirs = String::from("theirs head\n");
+    theirs.push_str(&base);
+    assert!(three_way_alignment_is_practical(&base, &ours, &theirs));
+
+    // A large whole-file conflict (sides share nothing with base) is the
+    // quadratic worst case and must fall back to the identity map.
+    let ours_rewrite: String = (0..3000).map(|i| format!("ours {i}\n")).collect();
+    let theirs_rewrite: String = (0..3000).map(|i| format!("theirs {i}\n")).collect();
+    assert!(!three_way_alignment_is_practical(
+        &base,
+        &ours_rewrite,
+        &theirs_rewrite
+    ));
+}

@@ -628,17 +628,17 @@ impl MainPaneView {
         // §30 aligned row space: compute the kdiff3-style alignment once per
         // bootstrap (side texts are immutable for the session). Fall back to
         // the identity map when the base side is unavailable (2-way marker
-        // conflicts), when streamed large-file mode is active (whole-file
-        // conflicts make the diff quadratic — the same reason streaming
-        // exists), or when the file exceeds the alignment budget.
-        const THREE_WAY_ALIGN_MAX_TOTAL_LINES: usize = 100_000;
-        let total_side_lines = three_way_base_len + three_way_ours_len + three_way_theirs_len;
-        let three_way_aligned = if !rendering_mode.is_streamed_large_file()
-            && !base_text.is_empty()
+        // conflicts) or when the alignment diff would be impractical
+        // (large files whose sides no longer share most of their lines —
+        // whole-file conflicts make Myers effectively quadratic).
+        let three_way_aligned = if !base_text.is_empty()
             && !ours_text.is_empty()
             && !theirs_text.is_empty()
-            && total_side_lines <= THREE_WAY_ALIGN_MAX_TOTAL_LINES
-        {
+            && conflict_resolver::three_way_alignment_is_practical(
+                base_text,
+                ours_text,
+                theirs_text,
+            ) {
             conflict_resolver::ThreeWayAlignedMap::from_alignment(
                 &gitcomet_core::merge::align_three_way(
                     base_text,
