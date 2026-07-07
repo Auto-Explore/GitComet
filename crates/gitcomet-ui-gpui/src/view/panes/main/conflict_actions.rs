@@ -901,10 +901,10 @@ impl MainPaneView {
             current: file.current.clone(),
             marker_segments,
             collapse_context,
-            expanded_context_folds: if is_same_conflict {
-                std::mem::take(&mut self.conflict_resolver.expanded_context_folds)
+            context_fold_reveals: if is_same_conflict {
+                std::mem::take(&mut self.conflict_resolver.context_fold_reveals)
             } else {
-                std::collections::HashSet::default()
+                std::collections::HashMap::default()
             },
             conflict_region_indices,
             active_conflict,
@@ -1288,7 +1288,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.conflict_resolver.collapse_context = !self.conflict_resolver.collapse_context;
-        self.conflict_resolver.expanded_context_folds.clear();
+        self.conflict_resolver.context_fold_reveals.clear();
         self.conflict_resolver_rebuild_visible_map();
         // Keep the active conflict in view across the row-space change.
         let active = self.conflict_resolver.active_conflict;
@@ -1300,18 +1300,45 @@ impl MainPaneView {
         cx.notify();
     }
 
-    /// Expand one collapsed context fold (identified by its first hidden line).
+    /// Fully expand one collapsed context fold.
     pub(in crate::view) fn conflict_resolver_expand_context_fold(
         &mut self,
-        fold_start: usize,
+        fold_id: usize,
         cx: &mut gpui::Context<Self>,
     ) {
-        if !self
+        let reveal = self
             .conflict_resolver
-            .expanded_context_folds
-            .insert(fold_start)
-        {
+            .context_fold_reveals
+            .entry(fold_id)
+            .or_default();
+        if reveal.expand_all {
             return;
+        }
+        reveal.expand_all = true;
+        self.conflict_resolver_rebuild_visible_map();
+        cx.notify();
+    }
+
+    /// Reveal [`CONFLICT_FOLD_REVEAL_STEP`] more lines at one edge of a fold
+    /// (top = extend the context above downward; bottom = extend the context
+    /// below upward), mirroring the diff view's collapsed-hunk arrows.
+    ///
+    /// [`CONFLICT_FOLD_REVEAL_STEP`]: conflict_resolver::CONFLICT_FOLD_REVEAL_STEP
+    pub(in crate::view) fn conflict_resolver_reveal_context_fold(
+        &mut self,
+        fold_id: usize,
+        from_top: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let reveal = self
+            .conflict_resolver
+            .context_fold_reveals
+            .entry(fold_id)
+            .or_default();
+        if from_top {
+            reveal.top += conflict_resolver::CONFLICT_FOLD_REVEAL_STEP;
+        } else {
+            reveal.bottom += conflict_resolver::CONFLICT_FOLD_REVEAL_STEP;
         }
         self.conflict_resolver_rebuild_visible_map();
         cx.notify();

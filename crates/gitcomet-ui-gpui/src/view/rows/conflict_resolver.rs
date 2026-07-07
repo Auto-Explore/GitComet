@@ -526,8 +526,43 @@ impl MainPaneView {
                 conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
                     source_line_start,
                     len,
+                    fold_id,
                 } => {
-                    let label: SharedString = format!("⋯ {len} unchanged lines").into();
+                    // Diff-view-style fold separator: hidden line range plus
+                    // incremental reveal arrows; clicking elsewhere expands
+                    // the whole fold.
+                    let first_line = source_line_start + 1;
+                    let last_line = source_line_start + len;
+                    let label: SharedString =
+                        format!("⋯ {len} unchanged lines ({first_line}–{last_line})").into();
+                    let reveal_btn =
+                        |id_suffix: &'static str,
+                         icon: &'static str,
+                         tooltip: &'static str,
+                         from_top: bool,
+                         cx: &mut gpui::Context<Self>| {
+                            div()
+                                .id((id_suffix, vi))
+                                .w(px(18.0))
+                                .h(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(theme.radii.row))
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(move |style| style.bg(with_alpha(theme.colors.hover, 0.55)))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                        cx.stop_propagation();
+                                        this.conflict_resolver_reveal_context_fold(
+                                            fold_id, from_top, cx,
+                                        );
+                                    }),
+                                )
+                                .child(svg_icon(icon, theme.colors.text_muted, px(10.0)))
+                                .gitcomet_tooltip(theme, tooltip.into())
+                        };
                     let fold = div()
                         .id((div_id_prefix, vi))
                         .w_full()
@@ -535,6 +570,7 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .justify_center()
+                        .gap_2()
                         .bg(with_alpha(
                             theme.colors.surface_bg_elevated,
                             if theme.is_dark { 0.30 } else { 0.22 },
@@ -542,15 +578,30 @@ impl MainPaneView {
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
+                        .child(reveal_btn(
+                            "conflict_fold_reveal_top",
+                            "icons/arrow_down.svg",
+                            "Reveal 20 more lines from the top of this fold",
+                            true,
+                            cx,
+                        ))
                         .child(label)
+                        .child(reveal_btn(
+                            "conflict_fold_reveal_bottom",
+                            "icons/arrow_up.svg",
+                            "Reveal 20 more lines from the bottom of this fold",
+                            false,
+                            cx,
+                        ))
                         .cursor(CursorStyle::PointingHand)
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
                                 cx.stop_propagation();
-                                this.conflict_resolver_expand_context_fold(source_line_start, cx);
+                                this.conflict_resolver_expand_context_fold(fold_id, cx);
                             }),
-                        );
+                        )
+                        .gitcomet_tooltip(theme, "Expand all hidden lines".into());
                     elements.push(fold.into_any_element());
                 }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {

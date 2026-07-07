@@ -3724,6 +3724,9 @@ pub enum ThreeWayVisibleItem {
     CollapsedContext {
         source_line_start: usize,
         len: usize,
+        /// Stable fold identity (the fold's start line before any reveals),
+        /// used to key partial-reveal state.
+        fold_id: usize,
     },
 }
 
@@ -3748,6 +3751,8 @@ pub enum ThreeWayVisibleSpan {
         visible_index: usize,
         source_line_start: usize,
         len: usize,
+        /// Stable fold identity (start line before any reveals).
+        fold_id: usize,
     },
 }
 
@@ -3887,6 +3892,7 @@ impl ThreeWayVisibleProjection {
                 visible_index,
                 source_line_start,
                 len,
+                fold_id,
             } => {
                 if visible_ix != visible_index {
                     return None;
@@ -3894,6 +3900,7 @@ impl ThreeWayVisibleProjection {
                 Some(ThreeWayVisibleItem::CollapsedContext {
                     source_line_start,
                     len,
+                    fold_id,
                 })
             }
         }
@@ -3961,6 +3968,21 @@ pub(crate) const CONFLICT_COLLAPSED_CONTEXT_LINES: usize = 3;
 /// meaningfully shorter than the lines it hides.
 const MIN_CONTEXT_FOLD_LINES: usize = 2;
 
+/// Lines revealed per click of a fold's reveal arrows (matches the diff
+/// view's collapsed-hunk reveal step).
+pub(crate) const CONFLICT_FOLD_REVEAL_STEP: usize = 20;
+
+/// Per-fold partial-reveal state, keyed by the fold's stable identity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct ConflictFoldReveal {
+    /// Lines revealed from the top edge of the fold.
+    pub top: usize,
+    /// Lines revealed from the bottom edge of the fold.
+    pub bottom: usize,
+    /// The user expanded the whole fold.
+    pub expand_all: bool,
+}
+
 /// Visibility options for the three-way projection.
 #[derive(Clone, Copy, Default)]
 pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
@@ -3968,8 +3990,8 @@ pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
     /// §30 collapsed context mode: fold unchanged runs beyond
     /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
     pub collapse_context: bool,
-    /// Folds the user expanded by clicking, keyed by fold source-line start.
-    pub expanded_context_folds: Option<&'a std::collections::HashSet<usize>>,
+    /// Per-fold reveal state, keyed by fold identity (pre-reveal start line).
+    pub context_fold_reveals: Option<&'a std::collections::HashMap<usize, ConflictFoldReveal>>,
 }
 
 /// Build the three-way visible projection with hide-resolved and collapsed
@@ -3992,10 +4014,11 @@ pub(in crate::view) fn build_three_way_visible_projection_with_options(
         return ThreeWayVisibleProjection::default();
     }
 
-    let is_fold_expanded = |fold_start: usize| {
+    let fold_reveal = |fold_id: usize| {
         options
-            .expanded_context_folds
-            .is_some_and(|expanded| expanded.contains(&fold_start))
+            .context_fold_reveals
+            .and_then(|reveals| reveals.get(&fold_id).copied())
+            .unwrap_or_default()
     };
 
     let mut spans: Vec<ThreeWayVisibleSpan> = Vec::new();
@@ -4028,18 +4051,34 @@ pub(in crate::view) fn build_three_way_visible_projection_with_options(
         let keep = leading_keep.saturating_add(trailing_keep);
         let fold_len = len.saturating_sub(keep);
         let fold_start = start + leading_keep;
-        if fold_len < MIN_CONTEXT_FOLD_LINES || is_fold_expanded(fold_start) {
+        // The fold identity is its pre-reveal start line, so partial reveals
+        // keep addressing the same fold.
+        let fold_id = fold_start;
+        let reveal = fold_reveal(fold_id);
+        let revealed_top = reveal.top.min(fold_len);
+        let revealed_bottom = reveal.bottom.min(fold_len.saturating_sub(revealed_top));
+        let remaining = fold_len - revealed_top - revealed_bottom;
+        if reveal.expand_all
+            || fold_len < MIN_CONTEXT_FOLD_LINES
+            || remaining < MIN_CONTEXT_FOLD_LINES
+        {
             push_lines(spans, visible_ix, start, len);
             return;
         }
-        push_lines(spans, visible_ix, start, leading_keep);
+        push_lines(spans, visible_ix, start, leading_keep + revealed_top);
         spans.push(ThreeWayVisibleSpan::CollapsedContext {
             visible_index: *visible_ix,
-            source_line_start: fold_start,
-            len: fold_len,
+            source_line_start: fold_start + revealed_top,
+            len: remaining,
+            fold_id,
         });
         *visible_ix += 1;
-        push_lines(spans, visible_ix, fold_start + fold_len, trailing_keep);
+        push_lines(
+            spans,
+            visible_ix,
+            fold_start + revealed_top + remaining,
+            revealed_bottom + trailing_keep,
+        );
     };
 
     let ctx = CONFLICT_COLLAPSED_CONTEXT_LINES;

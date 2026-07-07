@@ -1362,7 +1362,7 @@ fn collapsed_context_folds_runs_beyond_context_window() {
         ThreeWayVisibleOptions {
             hide_resolved: false,
             collapse_context: true,
-            expanded_context_folds: None,
+            context_fold_reveals: None,
         },
     );
 
@@ -1372,6 +1372,7 @@ fn collapsed_context_folds_runs_beyond_context_window() {
         Some(ThreeWayVisibleItem::CollapsedContext {
             source_line_start: 0,
             len: 9,
+            fold_id: 0,
         })
     );
     assert_eq!(projection.get(1), Some(ThreeWayVisibleItem::Line(9)));
@@ -1386,6 +1387,7 @@ fn collapsed_context_folds_runs_beyond_context_window() {
         Some(ThreeWayVisibleItem::CollapsedContext {
             source_line_start: 18,
             len: 12,
+            fold_id: 18,
         })
     );
     assert_eq!(projection.get(11), None);
@@ -1394,7 +1396,15 @@ fn collapsed_context_folds_runs_beyond_context_window() {
 #[test]
 fn collapsed_context_respects_expanded_folds_and_short_gaps() {
     let conflict_ranges = [12..15];
-    let expanded: std::collections::HashSet<usize> = [18usize].into_iter().collect();
+    let expanded: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+        18usize,
+        ConflictFoldReveal {
+            expand_all: true,
+            ..Default::default()
+        },
+    )]
+    .into_iter()
+    .collect();
     let projection = build_three_way_visible_projection_with_options(
         30,
         &conflict_ranges,
@@ -1402,7 +1412,7 @@ fn collapsed_context_respects_expanded_folds_and_short_gaps() {
         ThreeWayVisibleOptions {
             hide_resolved: false,
             collapse_context: true,
-            expanded_context_folds: Some(&expanded),
+            context_fold_reveals: Some(&expanded),
         },
     );
     // Tail fold (start 18) expanded back into lines; head still folded.
@@ -1419,7 +1429,7 @@ fn collapsed_context_respects_expanded_folds_and_short_gaps() {
         ThreeWayVisibleOptions {
             hide_resolved: false,
             collapse_context: true,
-            expanded_context_folds: None,
+            context_fold_reveals: None,
         },
     );
     // Head gap 0..4: trailing keep 3, fold 0..1 is below the minimum → visible.
@@ -1441,7 +1451,7 @@ fn collapsed_context_combines_with_hide_resolved() {
         ThreeWayVisibleOptions {
             hide_resolved: true,
             collapse_context: true,
-            expanded_context_folds: None,
+            context_fold_reveals: None,
         },
     );
     // fold(0..9) + ctx(9..12) + collapsed block + ctx(15..18) + fold(18..30)
@@ -1465,7 +1475,7 @@ fn collapsed_context_off_or_no_conflicts_keeps_everything_visible() {
         ThreeWayVisibleOptions {
             hide_resolved: false,
             collapse_context: true,
-            expanded_context_folds: None,
+            context_fold_reveals: None,
         },
     );
     assert_eq!(projection.len(), 20);
@@ -1477,8 +1487,71 @@ fn collapsed_context_off_or_no_conflicts_keeps_everything_visible() {
         ThreeWayVisibleOptions {
             hide_resolved: false,
             collapse_context: false,
-            expanded_context_folds: None,
+            context_fold_reveals: None,
         },
     );
     assert_eq!(projection.len(), 20);
+}
+
+#[test]
+fn collapsed_context_partial_reveals_shrink_the_fold_from_either_edge() {
+    let conflict_ranges = [12..15];
+    // Tail fold identity is 18 (lines 18..30 hidden). Reveal 20 from the top:
+    // more than the fold holds, so it fully expands (remaining < minimum).
+    let reveals: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+        18usize,
+        ConflictFoldReveal {
+            top: CONFLICT_FOLD_REVEAL_STEP,
+            ..Default::default()
+        },
+    )]
+    .into_iter()
+    .collect();
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: Some(&reveals),
+        },
+    );
+    assert_eq!(projection.len(), 1 + 3 + 3 + 15);
+    assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
+
+    // A small reveal from each edge keeps a shrunken fold with the same id.
+    let reveals: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+        18usize,
+        ConflictFoldReveal {
+            top: 3,
+            bottom: 4,
+            expand_all: false,
+        },
+    )]
+    .into_iter()
+    .collect();
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: Some(&reveals),
+        },
+    );
+    // head fold + ctx(3) + conflict(3) + ctx(3) + revealed top(3) + fold + revealed bottom(4)
+    assert_eq!(projection.len(), 1 + 3 + 3 + 3 + 3 + 1 + 4);
+    assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
+    assert_eq!(
+        projection.get(13),
+        Some(ThreeWayVisibleItem::CollapsedContext {
+            source_line_start: 21,
+            len: 5,
+            fold_id: 18,
+        })
+    );
+    assert_eq!(projection.get(14), Some(ThreeWayVisibleItem::Line(26)));
+    assert_eq!(projection.get(17), Some(ThreeWayVisibleItem::Line(29)));
 }
