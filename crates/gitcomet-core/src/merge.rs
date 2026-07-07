@@ -525,9 +525,10 @@ fn emit_region_rows(
         let kept_t = theirs_shape.kept[p];
 
         if kept_o.is_none() && kept_t.is_none() {
-            // The base line was dropped by both sides: it anchors to the
-            // first replacement line of each (kdiff3's modified-line row),
-            // with the remaining replacements pairing up below it.
+            // The base line was dropped by both sides: it pairs positionally
+            // with the next replacement line of each (kdiff3's modified-line
+            // rows — an N-line block replaced on both sides aligns 1:1).
+            // Leftover replacements flow to later anchors or the region end.
             let ours = take(&mut pend_o, 1);
             let theirs = take(&mut pend_t, 1);
             let kind = if !ours.is_empty()
@@ -538,14 +539,6 @@ fn emit_region_rows(
                 AlignedRunKind::Conflict
             };
             push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
-            zip_pending(
-                runs,
-                &mut pend_o,
-                &mut pend_t,
-                &mut o_cur,
-                &mut t_cur,
-                b + 1,
-            );
             continue;
         }
 
@@ -1713,6 +1706,31 @@ mod tests {
         assert_eq!(runs[2].base, 1..2);
         assert_eq!(runs[2].ours, 3..4);
         assert_eq!(runs[2].theirs, 3..4);
+    }
+
+    /// Third kdiff3-parity case from manual testing: a block where every
+    /// line was modified on both sides aligns 1:1 — seven clean rows, no
+    /// padding and no stranded base lines.
+    #[test]
+    fn align_pairs_fully_rewritten_blocks_line_by_line() {
+        let make = |suffix: &str| -> String {
+            (0..7).map(|i| format!("const_{i} = {suffix}\n")).collect()
+        };
+        let base = format!("ctx\n{}rest\n", make("base"));
+        let ours = format!("ctx\n{}rest\n", make("ours"));
+        let theirs = format!("ctx\n{}rest\n", make("theirs"));
+        let runs = align_three_way(&base, &ours, &theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, &base, &ours, &theirs);
+
+        let total_rows: usize = runs.iter().map(AlignedRun::visual_rows).sum();
+        assert_eq!(total_rows, 9, "ctx + 7 paired rows + rest, no padding");
+        for run in &runs {
+            assert_eq!(
+                (run.base.len(), run.ours.len(), run.theirs.len()),
+                (run.visual_rows(), run.visual_rows(), run.visual_rows()),
+                "every row pairs one line from each side",
+            );
+        }
     }
 
     /// Second kdiff3-parity case: ours replaces two base lines with two new
