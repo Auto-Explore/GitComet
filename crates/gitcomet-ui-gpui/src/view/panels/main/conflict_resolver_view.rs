@@ -6,6 +6,10 @@
 
 use super::*;
 
+/// Blank rows appended below the last line of the resolver lists so the tail
+/// of the file can be scrolled up into a comfortable reading position.
+pub(super) const CONFLICT_BOTTOM_OVERSCROLL_ROWS: usize = 10;
+
 impl MainPaneView {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
     /// decision-only): file navigation plus resolved counts.
@@ -48,13 +52,16 @@ impl MainPaneView {
     }
 
     /// Toolbar controls for the full text resolver: conflict navigation,
-    /// pick actions, view-mode toggles, and autosolve entry points.
+    /// pick actions, view-mode toggles, autosolve entry points, and the
+    /// save/stage completion actions.
     pub(super) fn conflict_toolbar_full_controls(
         &self,
         mut controls: gpui::Div,
         prev_file_btn: Option<AnyElement>,
         next_file_btn: Option<AnyElement>,
         conflict_rendered_preview_active: bool,
+        repo_id: Option<RepoId>,
+        conflict_target_path: &Option<std::path::PathBuf>,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
@@ -67,8 +74,29 @@ impl MainPaneView {
                     diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
                 let can_nav_next =
                     diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
+                let conflict_count = self.conflict_resolver_conflict_count();
+                let active_conflict = self.conflict_resolver.active_conflict;
+                let can_jump_first = conflict_count > 0 && active_conflict > 0;
+                let can_jump_last =
+                    conflict_count > 0 && active_conflict + 1 < conflict_count;
+                let can_prev_unresolved = self.conflict_has_prev_unresolved();
+                let can_next_unresolved = self.conflict_has_next_unresolved();
 
                 d.child(
+                    components::Button::new("conflict_first", "")
+                        .start_slot(svg_icon(
+                            "icons/arrow_up_to_line.svg",
+                            theme.colors.text,
+                            px(14.0),
+                        ))
+                        .style(components::ButtonStyle::Outlined)
+                        .disabled(!can_jump_first)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.conflict_jump_first(cx);
+                        })
+                        .gitcomet_tooltip(theme, "First delta (Ctrl+Home)".into()),
+                )
+                .child(
                     components::Button::new("conflict_prev", "")
                         .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
                         .style(components::ButtonStyle::Outlined)
@@ -106,6 +134,54 @@ impl MainPaneView {
                                 crate::view::shortcut_labels::alt_shortcut("Down")
                             )
                             .into(),
+                        ),
+                )
+                .child(
+                    components::Button::new("conflict_last", "")
+                        .start_slot(svg_icon(
+                            "icons/arrow_down_to_line.svg",
+                            theme.colors.text,
+                            px(14.0),
+                        ))
+                        .style(components::ButtonStyle::Outlined)
+                        .disabled(!can_jump_last)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.conflict_jump_last(cx);
+                        })
+                        .gitcomet_tooltip(theme, "Last delta (Ctrl+End)".into()),
+                )
+                .child(
+                    components::Button::new("conflict_prev_unresolved", "")
+                        .start_slot(svg_icon(
+                            "icons/arrow_up.svg",
+                            theme.colors.warning,
+                            px(14.0),
+                        ))
+                        .style(components::ButtonStyle::Outlined)
+                        .disabled(!can_prev_unresolved)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.conflict_jump_prev_unresolved(cx);
+                        })
+                        .gitcomet_tooltip(
+                            theme,
+                            "Previous unresolved conflict (Ctrl+PgUp)".into(),
+                        ),
+                )
+                .child(
+                    components::Button::new("conflict_next_unresolved", "")
+                        .start_slot(svg_icon(
+                            "icons/arrow_down.svg",
+                            theme.colors.warning,
+                            px(14.0),
+                        ))
+                        .style(components::ButtonStyle::Outlined)
+                        .disabled(!can_next_unresolved)
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.conflict_jump_next_unresolved(cx);
+                        })
+                        .gitcomet_tooltip(
+                            theme,
+                            "Next unresolved conflict (Ctrl+PgDn)".into(),
                         ),
                 )
             })
@@ -147,7 +223,8 @@ impl MainPaneView {
                             "A",
                             conflict_resolver::ConflictChoice::Base,
                             has_base,
-                            "Pick the base (ancestor) version for the active conflict",
+                            "Pick the base (ancestor) version for the active conflict \
+                             (A or Ctrl+1; U un-resolves)",
                         ))
                         .child(pick_btn(
                             "conflict_pick_ours",
@@ -155,7 +232,8 @@ impl MainPaneView {
                             "B",
                             conflict_resolver::ConflictChoice::Ours,
                             true,
-                            "Pick the local (ours) version for the active conflict",
+                            "Pick the local (ours) version for the active conflict \
+                             (B or Ctrl+2; U un-resolves)",
                         ))
                         .child(pick_btn(
                             "conflict_pick_theirs",
@@ -163,7 +241,8 @@ impl MainPaneView {
                             "C",
                             conflict_resolver::ConflictChoice::Theirs,
                             true,
-                            "Pick the incoming (theirs) version for the active conflict",
+                            "Pick the incoming (theirs) version for the active conflict \
+                             (C or Ctrl+3; U un-resolves)",
                         ))
                         .child(pick_btn(
                             "conflict_pick_both",
@@ -171,22 +250,104 @@ impl MainPaneView {
                             "D",
                             conflict_resolver::ConflictChoice::Both,
                             true,
-                            "Keep both versions (ours, then theirs) for the active conflict",
+                            "Keep both versions (ours, then theirs) for the active conflict \
+                             (D; U un-resolves)",
                         ))
                 },
             )
             .when_some(next_file_btn, |d, btn| d.child(btn));
 
+        if let (Some(repo_id), Some(path)) = (repo_id, conflict_target_path.clone()) {
+            let total = self.conflict_resolver_conflict_count();
+            let resolved = self.conflict_resolver_resolved_count();
+            let unresolved = total.saturating_sub(resolved);
+            let focused_mergetool_mode = self.view_mode == GitCometViewMode::FocusedMergetool;
+            let save_label = if focused_mergetool_mode {
+                "Save & close"
+            } else {
+                "Save"
+            };
+            let save_path = path.clone();
+            let stage_path = path.clone();
+            controls = controls
+                .child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
+                .child(
+                    components::Button::new("conflict_save", save_label)
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, move |this, _e, _w, cx| {
+                            if this.view_mode == GitCometViewMode::FocusedMergetool {
+                                this.focused_mergetool_save_and_exit(repo_id, save_path.clone(), cx);
+                                return;
+                            }
+                            let text = this.conflict_resolver_save_contents(cx);
+                            this.store.dispatch(Msg::SaveWorktreeFile {
+                                repo_id,
+                                path: save_path.clone(),
+                                contents: text,
+                                stage: false,
+                            });
+                        }),
+                )
+                .when(show_conflict_save_stage_action(self.view_mode), |d| {
+                    let gate_unresolved = unresolved;
+                    let mut save_stage_btn =
+                        components::Button::new("conflict_save_stage", "Save & stage")
+                            .style(components::ButtonStyle::Filled)
+                            .disabled(gate_unresolved > 0)
+                            .on_click(theme, cx, move |this, e, window, cx| {
+                                let text = this.current_conflict_resolved_output_text(cx);
+                                let stage_safety = conflict_resolver::conflict_stage_safety_check(
+                                    &text,
+                                    &this.conflict_resolver.marker_segments,
+                                );
+                                if stage_safety.requires_confirmation() {
+                                    this.open_popover_at(
+                                        PopoverKind::ConflictSaveStageConfirm {
+                                            repo_id,
+                                            path: stage_path.clone(),
+                                            has_conflict_markers: stage_safety
+                                                .has_conflict_markers,
+                                            unresolved_blocks: stage_safety.unresolved_blocks,
+                                        },
+                                        e.position(),
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    let text =
+                                        this.conflict_resolver_save_contents_from_text(text);
+                                    this.store.dispatch(Msg::SaveWorktreeFile {
+                                        repo_id,
+                                        path: stage_path.clone(),
+                                        contents: text,
+                                        stage: true,
+                                    });
+                                }
+                            });
+                    if gate_unresolved > 0 {
+                        let noun = if gate_unresolved == 1 {
+                            "conflict is"
+                        } else {
+                            "conflicts are"
+                        };
+                        save_stage_btn = save_stage_btn.gitcomet_tooltip(
+                            theme,
+                            format!("Disabled: {gate_unresolved} {noun} still unresolved").into(),
+                        );
+                    }
+                    d.child(save_stage_btn)
+                });
+        }
+
         controls
     }
 
     /// Footer bar for the text conflict resolver (§30): live resolution
-    /// status on the left; Abort and the save/stage completion actions on
-    /// the right. Save & stage is gated on zero unresolved conflicts.
+    /// status line plus the leftover-marker indicator. The save/stage
+    /// completion actions live in the top toolbar; merge abort lives in
+    /// the action bar's "Abort merge" button.
     fn conflict_resolver_footer(
         &self,
-        repo_id: RepoId,
-        path: &std::path::Path,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
@@ -237,23 +398,6 @@ impl MainPaneView {
                 .into_any_element()
         };
 
-        let focused_mergetool_mode = self.view_mode == GitCometViewMode::FocusedMergetool;
-        let is_merging = self
-            .active_repo()
-            .is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))));
-        let is_rebase_or_apply_in_progress = self
-            .active_repo()
-            .is_some_and(|r| matches!(&r.rebase_in_progress, Loadable::Ready(true)));
-        let show_abort = !focused_mergetool_mode && (is_merging || is_rebase_or_apply_in_progress);
-
-        let save_label = if focused_mergetool_mode {
-            "Save & close"
-        } else {
-            "Save"
-        };
-        let save_path = path.to_path_buf();
-        let stage_path = path.to_path_buf();
-
         div()
             .id("conflict_resolver_footer")
             .flex()
@@ -272,102 +416,6 @@ impl MainPaneView {
                     )
                 },
             ))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .when(show_abort, |d| {
-                        d.child(
-                            components::Button::new("conflict_abort", "Abort")
-                                .style(components::ButtonStyle::Outlined)
-                                .on_click(theme, cx, move |this, e: &ClickEvent, window, cx| {
-                                    this.open_popover_at(
-                                        PopoverKind::MergeAbortConfirm { repo_id },
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                                .gitcomet_tooltip(
-                                    theme,
-                                    "Abort the in-progress merge/rebase (asks to confirm)".into(),
-                                ),
-                        )
-                    })
-                    .child(
-                        components::Button::new("conflict_save", save_label)
-                            .style(components::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, cx| {
-                                if this.view_mode == GitCometViewMode::FocusedMergetool {
-                                    this.focused_mergetool_save_and_exit(
-                                        repo_id,
-                                        save_path.clone(),
-                                        cx,
-                                    );
-                                    return;
-                                }
-                                let text = this.conflict_resolver_save_contents(cx);
-                                this.store.dispatch(Msg::SaveWorktreeFile {
-                                    repo_id,
-                                    path: save_path.clone(),
-                                    contents: text,
-                                    stage: false,
-                                });
-                            }),
-                    )
-                    .when(show_conflict_save_stage_action(self.view_mode), |d| {
-                        let gate_unresolved = unresolved;
-                        let mut save_stage_btn =
-                            components::Button::new("conflict_save_stage", "Save & stage")
-                                .style(components::ButtonStyle::Filled)
-                                .disabled(gate_unresolved > 0)
-                                .on_click(theme, cx, move |this, e, window, cx| {
-                                    let text = this.current_conflict_resolved_output_text(cx);
-                                    let stage_safety =
-                                        conflict_resolver::conflict_stage_safety_check(
-                                            &text,
-                                            &this.conflict_resolver.marker_segments,
-                                        );
-                                    if stage_safety.requires_confirmation() {
-                                        this.open_popover_at(
-                                            PopoverKind::ConflictSaveStageConfirm {
-                                                repo_id,
-                                                path: stage_path.clone(),
-                                                has_conflict_markers: stage_safety
-                                                    .has_conflict_markers,
-                                                unresolved_blocks: stage_safety.unresolved_blocks,
-                                            },
-                                            e.position(),
-                                            window,
-                                            cx,
-                                        );
-                                    } else {
-                                        let text =
-                                            this.conflict_resolver_save_contents_from_text(text);
-                                        this.store.dispatch(Msg::SaveWorktreeFile {
-                                            repo_id,
-                                            path: stage_path.clone(),
-                                            contents: text,
-                                            stage: true,
-                                        });
-                                    }
-                                });
-                        if gate_unresolved > 0 {
-                            let noun = if gate_unresolved == 1 {
-                                "conflict is"
-                            } else {
-                                "conflicts are"
-                            };
-                            save_stage_btn = save_stage_btn.gitcomet_tooltip(
-                                theme,
-                                format!("Disabled: {gate_unresolved} {noun} still unresolved")
-                                    .into(),
-                            );
-                        }
-                        d.child(save_stage_btn)
-                    }),
-            )
     }
 
     /// The main conflict resolver pane body: three-way / two-way source
@@ -520,6 +568,15 @@ impl MainPaneView {
                                     self.conflict_resolver.two_way_split_visible_len()
                                 }
                             };
+                            // Bottom overscroll: a few empty rows below the last
+                            // line so it can be scrolled up for comfortable
+                            // reading. Renderers treat past-the-end rows as
+                            // blank spacers.
+                            let diff_list_len = if diff_len > 0 {
+                                diff_len + CONFLICT_BOTTOM_OVERSCROLL_ROWS
+                            } else {
+                                0
+                            };
 
                             let conflict_count = self.conflict_resolver_conflict_count();
                             let active_conflict = self.conflict_resolver.active_conflict;
@@ -553,15 +610,6 @@ impl MainPaneView {
                                     this.conflict_resolver_toggle_hide_resolved(cx);
                                 };
                             let hide_resolved = self.conflict_resolver.hide_resolved;
-                            let toggle_collapse_context =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_toggle_collapse_context(cx);
-                                };
-                            let collapse_context = self.conflict_resolver.collapse_context;
-
                             let start_controls = div()
                                 .flex()
                                 .items_center()
@@ -573,9 +621,18 @@ impl MainPaneView {
                                         conflict_count
                                     )
                                     .into();
-                                    let resolved_label: SharedString =
+                                    let auto_resolved_count =
+                                        self.conflict_resolver_auto_resolved_count();
+                                    let resolved_label: SharedString = if auto_resolved_count > 0 {
+                                        format!(
+                                            "Resolved {}/{} ({} auto)",
+                                            resolved_count, conflict_count, auto_resolved_count
+                                        )
+                                        .into()
+                                    } else {
                                         format!("Resolved {}/{}", resolved_count, conflict_count)
-                                            .into();
+                                            .into()
+                                    };
 
                                     let mut d = d.child(
                                         div()
@@ -660,34 +717,7 @@ impl MainPaneView {
                                         ),
                                     )
                                 })
-                                .when(
-                                    has_conflicts
-                                        && view_mode == ConflictResolverViewMode::ThreeWay,
-                                    |d| {
-                                        d.child(
-                                            components::Button::new(
-                                                "conflict_collapse_context",
-                                                if collapse_context {
-                                                    "Expand unchanged"
-                                                } else {
-                                                    "Collapse unchanged"
-                                                },
-                                            )
-                                            .style(if collapse_context {
-                                                components::ButtonStyle::Outlined
-                                            } else {
-                                                components::ButtonStyle::Transparent
-                                            })
-                                            .on_click(theme, cx, toggle_collapse_context)
-                                            .gitcomet_tooltip(
-                                                theme,
-                                                "Fold unchanged lines beyond 3 context lines \
-                                                 around each conflict; click a fold to expand it"
-                                                    .into(),
-                                            ),
-                                        )
-                                    },
-                                );
+                                ;
 
                             let preview_kind = super::super::preview_path_rendered_kind(&path);
                             let show_preview_toggle = preview_kind.is_some();
@@ -1166,7 +1196,7 @@ impl MainPaneView {
                                             );
                                         let base_list = uniform_list(
                                             "conflict_three_way_base_list",
-                                            diff_len,
+                                            diff_list_len,
                                             cx.processor(Self::render_conflict_three_way_base_rows),
                                         )
                                         .with_width_from_item(Some(
@@ -1184,7 +1214,7 @@ impl MainPaneView {
 
                                         let ours_list = uniform_list(
                                             "conflict_three_way_ours_list",
-                                            diff_len,
+                                            diff_list_len,
                                             cx.processor(Self::render_conflict_three_way_ours_rows),
                                         )
                                         .with_width_from_item(Some(
@@ -1202,7 +1232,7 @@ impl MainPaneView {
 
                                         let theirs_list = uniform_list(
                                             "conflict_three_way_theirs_list",
-                                            diff_len,
+                                            diff_list_len,
                                             cx.processor(Self::render_conflict_three_way_theirs_rows),
                                         )
                                         .with_width_from_item(Some(
@@ -1392,7 +1422,7 @@ impl MainPaneView {
 
                                         let left_list = uniform_list(
                                             "conflict_diff_left_list",
-                                            diff_len,
+                                            diff_list_len,
                                             cx.processor(Self::render_conflict_diff_left_rows),
                                         )
                                         .with_width_from_item(Some(
@@ -1410,7 +1440,7 @@ impl MainPaneView {
 
                                         let right_list = uniform_list(
                                             "conflict_diff_right_list",
-                                            diff_len,
+                                            diff_list_len,
                                             cx.processor(Self::render_conflict_diff_right_rows),
                                         )
                                         .with_width_from_item(Some(
@@ -1678,11 +1708,22 @@ impl MainPaneView {
                                 .child(vsplit_handle)
                                 .child(output_header)
                                 .when_some(autosolve_summary, |d, summary| {
+                                    // §30: make the autosolve pass visible on
+                                    // open — accent chip, not a muted footnote.
                                     d.child(
                                         div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded(px(theme.radii.row))
+                                            .bg(with_alpha(
+                                                theme.colors.accent,
+                                                if theme.is_dark { 0.14 } else { 0.10 },
+                                            ))
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .px_1()
+                                            .text_color(theme.colors.accent)
                                             .child(summary),
                                     )
                                 })
@@ -1703,6 +1744,14 @@ impl MainPaneView {
                                                 {
                                                     let outline_len =
                                                         self.conflict_resolved_preview_line_count;
+                                                    // Match the source columns' bottom overscroll
+                                                    // so the shared scroll sync can reach it.
+                                                    let outline_len = if outline_len > 0 {
+                                                        outline_len
+                                                            + CONFLICT_BOTTOM_OVERSCROLL_ROWS
+                                                    } else {
+                                                        0
+                                                    };
                                                     let outline_list = uniform_list(
                                                         "conflict_resolved_preview_gutter_list",
                                                         outline_len,
@@ -1834,7 +1883,7 @@ impl MainPaneView {
                                     bottom_section.style().flex_basis = Some(relative(0.).into());
                                     bottom_section
                                 })
-                                .child(self.conflict_resolver_footer(repo_id, &path, theme, cx))
+                                .child(self.conflict_resolver_footer(theme, cx))
                                 .into_any_element()
                             }
                         }

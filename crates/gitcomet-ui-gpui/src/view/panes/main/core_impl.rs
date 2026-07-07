@@ -1346,6 +1346,9 @@ impl MainPaneView {
             layout_sidebar_collapsed: false,
             layout_details_collapsed: false,
             reveal_whitespace_chars: diff_reveal_whitespace_chars,
+            mergetool_auto_advance: true,
+            mergetool_collapse_unchanged: false,
+            mergetool_vertical_split: false,
             diff_view: diff_view_mode,
             annotate_enabled,
             annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
@@ -3596,6 +3599,48 @@ impl MainPaneView {
             .history_visible_column_preferences()
     }
 
+    /// Persisted merge tool preferences: (auto-advance, collapse-unchanged
+    /// default, vertical split). Read by the root view's UI settings persist.
+    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool) {
+        (
+            self.mergetool_auto_advance,
+            self.mergetool_collapse_unchanged,
+            self.mergetool_vertical_split,
+        )
+    }
+
+    pub(in crate::view) fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.schedule_ui_settings_persist(cx);
+        });
+    }
+
+    pub(in crate::view) fn set_mergetool_auto_advance_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.mergetool_auto_advance == next {
+            return;
+        }
+        self.mergetool_auto_advance = next;
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_mergetool_vertical_split_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.mergetool_vertical_split == next {
+            return;
+        }
+        self.mergetool_vertical_split = next;
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
     pub(in crate::view) fn history_tag_preferences(&self, cx: &gpui::App) -> (bool, bool) {
         self.history_view.read(cx).history_tag_preferences()
     }
@@ -3702,15 +3747,31 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.activate_context_menu_invoker(invoker, cx);
-        // Opening the chunk menu from the resolved output (output_line_ix is
-        // only Some there) selects that conflict and brings the source
-        // columns to it, so the menu's pick targets are visible in context.
-        // The output pane itself is not scrolled — the user is already there
-        // and the menu is anchored to it.
+        // Opening the chunk menu selects that conflict and brings the
+        // *other* pane to it — the pane the user right-clicked is already in
+        // view and must not jump under the open menu. Reveals are non-strict:
+        // nothing scrolls when the target rows are already fully visible.
+        self.conflict_resolver.active_conflict = conflict_ix;
         if output_line_ix.is_some() {
-            self.conflict_resolver.active_conflict = conflict_ix;
+            // Invoked from the resolved output: reveal the source columns.
             if let Some(vi) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) {
-                self.conflict_resolver_scroll_all_columns(vi, gpui::ScrollStrategy::Center);
+                self.conflict_resolver_reveal_all_columns(vi);
+            }
+        } else {
+            // Invoked from a source column: reveal the resolved output chunk.
+            let output_text = (!self.conflict_resolved_output_is_streamed()).then(|| {
+                self.conflict_resolver_input
+                    .read_with(cx, |input, _| input.text().to_string())
+            });
+            let line_count = output_text
+                .as_ref()
+                .map(|text| text.split('\n').count().max(1))
+                .unwrap_or_else(|| self.conflict_resolved_preview_line_count.max(1));
+            if let Some(line) = self.conflict_resolver_output_line_for_conflict(
+                conflict_ix,
+                output_text.as_deref().unwrap_or(""),
+            ) {
+                self.conflict_resolver_reveal_resolved_output_line(line, line_count);
             }
         }
         self.open_popover_at(

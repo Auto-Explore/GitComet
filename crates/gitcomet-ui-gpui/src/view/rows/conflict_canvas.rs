@@ -238,6 +238,7 @@ pub(super) fn single_column_conflict_canvas(
     chunk_context: Option<ConflictChunkContext>,
     chunk_menu_prefix: &'static str,
     is_three_way: bool,
+    active_conflict_marker: bool,
 ) -> AnyElement {
     let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
 
@@ -251,6 +252,16 @@ pub(super) fn single_column_conflict_canvas(
             let gap = pad;
 
             window.paint_quad(fill(bounds, bg));
+
+            // §30: mark the active conflict's rows with an accent bar so a
+            // click/keyboard selection is visible in the source columns.
+            if active_conflict_marker {
+                let bar = gpui::Bounds::new(
+                    bounds.origin,
+                    gpui::size(px(3.0), bounds.size.height),
+                );
+                window.paint_quad(fill(bar, theme.colors.accent));
+            }
 
             paint_gutter_text(
                 &line_no,

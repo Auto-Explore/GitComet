@@ -2702,6 +2702,7 @@ pub(super) enum PopoverKind {
         context: TerminalMenuContext,
     },
     DiffActionMenu,
+    MergetoolSettingsMenu,
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,

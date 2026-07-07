@@ -741,6 +741,13 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
+            // Single-letter picks must not swallow characters typed into the
+            // search box (e.g. "d" would otherwise pick Both).
+            && !self
+                .diff_search_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
             && self.conflict_resolver_conflict_count() > 0
         {
             if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key) {
@@ -766,6 +773,38 @@ impl MainPaneView {
         {
             self.conflict_resolver_pick_active_conflict(choice, cx);
             handled = true;
+        }
+
+        // §30: kdiff3-compatible delta navigation — Ctrl+Home/End jump to the
+        // first/last delta, Ctrl+PgUp/PgDn to the previous/next unresolved
+        // conflict.
+        if !handled
+            && conflict_resolver_active
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && !mods.shift
+            && self.conflict_resolver_conflict_count() > 0
+        {
+            match key {
+                "home" => {
+                    self.conflict_jump_first(cx);
+                    handled = true;
+                }
+                "end" => {
+                    self.conflict_jump_last(cx);
+                    handled = true;
+                }
+                "pageup" => {
+                    self.conflict_jump_prev_unresolved(cx);
+                    handled = true;
+                }
+                "pagedown" => {
+                    self.conflict_jump_next_unresolved(cx);
+                    handled = true;
+                }
+                _ => {}
+            }
         }
 
         if !handled
@@ -1925,6 +1964,8 @@ impl MainPaneView {
                 prev_file_btn,
                 next_file_btn,
                 conflict_rendered_preview_active,
+                repo_id,
+                &conflict_target_path,
                 theme,
                 cx,
             );
@@ -2199,23 +2240,36 @@ impl MainPaneView {
         }
 
         if let Some(repo_id) = repo_id {
-            let diff_action_invoker: SharedString = "diff_action_menu".into();
+            // The full text resolver gets its own settings menu under the cog
+            // (§30); everything else keeps the diff actions menu.
+            let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;
+            let (cog_id, cog_kind, cog_tooltip): (&'static str, PopoverKind, &'static str) =
+                if resolver_settings_active {
+                    (
+                        "mergetool_settings_menu",
+                        PopoverKind::MergetoolSettingsMenu,
+                        "Merge tool settings",
+                    )
+                } else {
+                    ("diff_action_menu", PopoverKind::DiffActionMenu, "Diff actions")
+                };
+            let diff_action_invoker: SharedString = cog_id.into();
             let diff_action_active = self
                 .active_context_menu_invoker
                 .as_ref()
                 .is_some_and(|id| id == &diff_action_invoker);
             controls = controls.child(
-                components::Button::new("diff_action_menu", "")
+                components::Button::new(cog_id, "")
                     .start_slot(svg_icon("icons/cog.svg", theme.colors.text_muted, px(14.0)))
                     .style(components::ButtonStyle::Transparent)
                     .selected(diff_action_active)
                     .selected_bg(theme.colors.active)
                     .on_click(theme, cx, move |this, e, window, cx| {
                         this.activate_context_menu_invoker(diff_action_invoker.clone(), cx);
-                        this.open_popover_at(PopoverKind::DiffActionMenu, e.position(), window, cx);
+                        this.open_popover_at(cog_kind.clone(), e.position(), window, cx);
                     })
-                    .debug_selector(|| "diff_action_menu".to_string())
-                    .gitcomet_tooltip(theme, "Diff actions".into()),
+                    .debug_selector(move || cog_id.to_string())
+                    .gitcomet_tooltip(theme, cog_tooltip.into()),
             );
             controls = controls.child(
                 components::Button::new("diff_close", "")

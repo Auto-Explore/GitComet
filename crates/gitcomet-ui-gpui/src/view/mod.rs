@@ -1753,6 +1753,12 @@ impl GitCometView {
                 cx,
             )
         });
+        main_pane.update(cx, |pane, _cx| {
+            pane.mergetool_auto_advance = ui_session.mergetool_auto_advance.unwrap_or(true);
+            pane.mergetool_collapse_unchanged =
+                ui_session.mergetool_collapse_unchanged.unwrap_or(false);
+            pane.mergetool_vertical_split = ui_session.mergetool_vertical_split.unwrap_or(false);
+        });
         let details_pane = cx.new(|cx| {
             DetailsPaneView::new(
                 Arc::clone(&store),

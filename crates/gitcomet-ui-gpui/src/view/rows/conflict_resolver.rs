@@ -465,6 +465,14 @@ impl MainPaneView {
         let mut elements = Vec::with_capacity(range.len());
         for vi in range {
             let Some(visible_item) = this.conflict_resolver.three_way_visible_item(vi) else {
+                // Past-the-end rows exist only as bottom overscroll space.
+                elements.push(
+                    div()
+                        .id((div_id_prefix, vi))
+                        .w_full()
+                        .h(px(20.0))
+                        .into_any_element(),
+                );
                 continue;
             };
 
@@ -494,6 +502,7 @@ impl MainPaneView {
                         this.conflict_resolver_selected_choices_for_conflict_ix(range_ix);
                     let collapsed = div()
                         .id((div_id_prefix, vi))
+                        .relative()
                         .w_full()
                         .h(px(20.0))
                         .flex()
@@ -502,11 +511,32 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
+                        .when(
+                            range_ix == this.conflict_resolver.active_conflict,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(3.0))
+                                        .bg(theme.colors.accent),
+                                )
+                            },
+                        )
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                // §30: clicking a conflict block body selects it.
+                                this.conflict_resolver_select_conflict(range_ix, cx);
+                            }),
+                        )
                         .on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -685,6 +715,8 @@ impl MainPaneView {
                         editor_font_family.as_str(),
                     );
 
+                    let is_active_conflict =
+                        range_ix == Some(this.conflict_resolver.active_conflict);
                     if this.conflict_canvas_rows_enabled {
                         let chunk_context = range_ix.map(|conflict_ix| ConflictChunkContext {
                             conflict_ix,
@@ -713,12 +745,14 @@ impl MainPaneView {
                             chunk_context,
                             chunk_menu_prefix,
                             true,
+                            is_active_conflict,
                         ));
                         continue;
                     }
 
                     let mut cell = div()
                         .id((div_id_prefix, ix))
+                        .relative()
                         .w_full()
                         .min_w(min_width)
                         .h(px(20.0))
@@ -731,6 +765,17 @@ impl MainPaneView {
                         .whitespace_nowrap()
                         .bg(bg)
                         .when(is_chosen, |d| d.bg(chosen_bg))
+                        .when(is_active_conflict, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(px(3.0))
+                                    .bg(theme.colors.accent),
+                            )
+                        })
                         .child(
                             div()
                                 .w(px(38.0))
@@ -958,6 +1003,8 @@ impl MainPaneView {
                     editor_font_family.as_str(),
                 );
 
+                let is_active_conflict =
+                    conflict_ix == Some(this.conflict_resolver.active_conflict);
                 if this.conflict_canvas_rows_enabled {
                     let chunk_context_data = conflict_ix.map(|conflict_ix| ConflictChunkContext {
                         conflict_ix,
@@ -986,11 +1033,13 @@ impl MainPaneView {
                         chunk_context_data,
                         chunk_menu_prefix,
                         false,
+                        is_active_conflict,
                     );
                 }
 
                 let mut cell = div()
                     .id((div_id_prefix, row_ix))
+                    .relative()
                     .w_full()
                     .min_w(min_width)
                     .h(px(20.0))
@@ -1002,6 +1051,17 @@ impl MainPaneView {
                     .bg(bg)
                     .text_color(fg)
                     .whitespace_nowrap()
+                    .when(is_active_conflict, |d| {
+                        d.child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(px(3.0))
+                                .bg(theme.colors.accent),
+                        )
+                    })
                     .child(
                         div()
                             .w(px(38.0))

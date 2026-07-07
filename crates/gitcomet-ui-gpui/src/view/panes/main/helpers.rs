@@ -2317,6 +2317,15 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) layout_details_collapsed: bool,
 
     pub(in crate::view) reveal_whitespace_chars: bool,
+    /// §30 merge tool: auto-advance to the next unresolved conflict after a
+    /// source pick. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_auto_advance: bool,
+    /// §30 merge tool: default for the collapse-unchanged-context mode when a
+    /// conflicted file opens. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_collapse_unchanged: bool,
+    /// §30 merge tool: stack the source columns vertically instead of
+    /// side-by-side. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_vertical_split: bool,
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) annotate_enabled: bool,
     /// Width (design px) of the annotate column; user-resizable, session-local.

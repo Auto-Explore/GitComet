@@ -12,6 +12,7 @@ mod conflict_resolver_input_row;
 mod conflict_resolver_output;
 mod diff_actions;
 mod diff_content_mode_settings;
+mod mergetool_settings;
 mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
@@ -381,6 +382,7 @@ impl PopoverHost {
                 Some(history_branch_filter::model(self, *repo_id))
             }
             PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
@@ -1012,6 +1014,33 @@ impl PopoverHost {
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_apply_pick_target(target, cx);
                 });
+            }
+            ContextMenuAction::ConflictResolverUnresolve { conflict_ix } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_select_conflict(conflict_ix, cx);
+                    pane.conflict_resolver_unresolve_active_conflict(cx);
+                });
+            }
+            ContextMenuAction::SetMergetoolAutoAdvance { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_auto_advance_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::ToggleMergetoolCollapseUnchanged => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_toggle_collapse_context(cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolVerticalSplit { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_vertical_split_and_persist(enabled, cx);
+                });
+                cx.notify();
             }
             ContextMenuAction::ConflictResolverOutputCut { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));

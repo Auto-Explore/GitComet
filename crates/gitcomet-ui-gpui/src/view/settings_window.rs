@@ -939,6 +939,11 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
+            // Merge tool settings are managed from the resolver's cog menu;
+            // None never overwrites the stored values.
+            mergetool_auto_advance: None,
+            mergetool_collapse_unchanged: None,
+            mergetool_vertical_split: None,
             change_tracking_height: None,
             untracked_height: None,
             history_show_graph: Some(self.history_show_graph),

@@ -224,6 +224,35 @@ impl MainPaneView {
             .scroll_to_item_strict(target, strategy);
     }
 
+    /// Bring all column lists to the given item only if it is not already
+    /// fully visible (non-strict scroll — a no-op for visible rows). Used by
+    /// context-menu invocations so the view doesn't jump under the menu.
+    pub(in crate::view) fn conflict_resolver_reveal_all_columns(&self, target: usize) {
+        self.conflict_resolver_diff_scroll
+            .scroll_to_item(target, gpui::ScrollStrategy::Center);
+        self.conflict_preview_ours_scroll
+            .scroll_to_item(target, gpui::ScrollStrategy::Center);
+        self.conflict_preview_theirs_scroll
+            .scroll_to_item(target, gpui::ScrollStrategy::Center);
+    }
+
+    /// Bring the resolved output (and its gutter) to the given line only if
+    /// it is not already fully visible.
+    pub(in crate::view) fn conflict_resolver_reveal_resolved_output_line(
+        &self,
+        target_line_ix: usize,
+        line_count: usize,
+    ) {
+        if line_count == 0 {
+            return;
+        }
+        let target = target_line_ix.min(line_count.saturating_sub(1));
+        self.conflict_resolved_preview_scroll
+            .scroll_to_item(target, gpui::ScrollStrategy::Center);
+        self.conflict_resolved_preview_gutter_scroll
+            .scroll_to_item(target, gpui::ScrollStrategy::Center);
+    }
+
     pub(super) fn conflict_resolver_visible_ix_for_conflict(
         &self,
         conflict_ix: usize,
@@ -417,6 +446,83 @@ impl MainPaneView {
             }
         }
         self.conflict_resolver.nav_anchor = Some(target);
+    }
+
+    /// Nav anchor value for a conflict in whichever space `conflict_nav_entries`
+    /// currently uses (output marker lines when available, visible rows
+    /// otherwise), so F3/F7 navigation continues from targeted jumps.
+    fn conflict_nav_anchor_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
+        if !self.conflict_marker_nav_entries().is_empty() {
+            first_output_marker_line_for_conflict(
+                &self.conflict_resolver.resolved_outline.markers,
+                conflict_ix,
+            )
+        } else {
+            self.conflict_resolver_visible_ix_for_conflict(conflict_ix)
+        }
+    }
+
+    /// Select a conflict by index and bring all views (columns + output) to it.
+    fn conflict_jump_to_conflict_ix(&mut self, conflict_ix: usize, cx: &mut gpui::Context<Self>) {
+        if conflict_ix >= self.conflict_resolver_conflict_count() {
+            return;
+        }
+        self.conflict_resolver.active_conflict = conflict_ix;
+        self.conflict_resolver_scroll_all_views_to_conflict(conflict_ix, None, None, cx);
+        if let Some(anchor) = self.conflict_nav_anchor_for_conflict(conflict_ix) {
+            self.conflict_resolver.nav_anchor = Some(anchor);
+        }
+        cx.notify();
+    }
+
+    /// Jump to the first delta (kdiff3 Ctrl+Home).
+    pub(in crate::view) fn conflict_jump_first(&mut self, cx: &mut gpui::Context<Self>) {
+        self.conflict_jump_to_conflict_ix(0, cx);
+    }
+
+    /// Jump to the last delta (kdiff3 Ctrl+End).
+    pub(in crate::view) fn conflict_jump_last(&mut self, cx: &mut gpui::Context<Self>) {
+        let count = self.conflict_resolver_conflict_count();
+        if count == 0 {
+            return;
+        }
+        self.conflict_jump_to_conflict_ix(count - 1, cx);
+    }
+
+    /// Jump to the next unresolved conflict after the active one.
+    pub(in crate::view) fn conflict_jump_next_unresolved(&mut self, cx: &mut gpui::Context<Self>) {
+        let unresolved =
+            conflict_resolver::unresolved_conflict_indices(&self.conflict_resolver.marker_segments);
+        let current = self.conflict_resolver.active_conflict;
+        if let Some(&target) = unresolved.iter().find(|&&ix| ix > current) {
+            self.conflict_jump_to_conflict_ix(target, cx);
+        }
+    }
+
+    /// Jump to the previous unresolved conflict before the active one.
+    pub(in crate::view) fn conflict_jump_prev_unresolved(&mut self, cx: &mut gpui::Context<Self>) {
+        let unresolved =
+            conflict_resolver::unresolved_conflict_indices(&self.conflict_resolver.marker_segments);
+        let current = self.conflict_resolver.active_conflict;
+        if let Some(&target) = unresolved.iter().rev().find(|&&ix| ix < current) {
+            self.conflict_jump_to_conflict_ix(target, cx);
+        }
+    }
+
+    /// Whether any unresolved conflict exists after/before the active one
+    /// (for toolbar button enablement).
+    pub(in crate::view) fn conflict_has_next_unresolved(&self) -> bool {
+        let current = self.conflict_resolver.active_conflict;
+        conflict_resolver::unresolved_conflict_indices(&self.conflict_resolver.marker_segments)
+            .iter()
+            .any(|&ix| ix > current)
+    }
+
+    pub(in crate::view) fn conflict_has_prev_unresolved(&self) -> bool {
+        let current = self.conflict_resolver.active_conflict;
+        conflict_resolver::unresolved_conflict_indices(&self.conflict_resolver.marker_segments)
+            .iter()
+            .any(|&ix| ix < current)
     }
 
     /// Map a visible index back to the conflict range index it belongs to.
@@ -844,7 +950,8 @@ impl MainPaneView {
         let collapse_context = if is_same_conflict {
             self.conflict_resolver.collapse_context
         } else {
-            false
+            // Fresh opens honor the persisted collapse-unchanged default.
+            self.mergetool_collapse_unchanged
         };
         let nav_anchor = if is_same_conflict {
             self.conflict_resolver.nav_anchor
@@ -1321,6 +1428,12 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.conflict_resolver.collapse_context = !self.conflict_resolver.collapse_context;
+        // The live toggle doubles as the persisted default for the next
+        // conflicted file (cog-menu setting).
+        if self.mergetool_collapse_unchanged != self.conflict_resolver.collapse_context {
+            self.mergetool_collapse_unchanged = self.conflict_resolver.collapse_context;
+            self.schedule_ui_settings_persist(cx);
+        }
         self.conflict_resolver.context_fold_reveals.clear();
         self.conflict_resolver_rebuild_visible_map();
         // Keep the active conflict in view across the row-space change.
@@ -1937,7 +2050,10 @@ impl MainPaneView {
     }
 
     /// Advance to the next unresolved conflict after a pick (kdiff3-style).
-    fn conflict_resolver_auto_advance_to_next_unresolved(&mut self) {
+    fn conflict_resolver_auto_advance_to_next_unresolved(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.mergetool_auto_advance {
+            return;
+        }
         let current = self.conflict_resolver.active_conflict;
         if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
             &self.conflict_resolver.marker_segments,
@@ -1945,19 +2061,10 @@ impl MainPaneView {
         )
         .filter(|&next| next != current)
         {
-            self.conflict_resolver.active_conflict = next_unresolved;
-            let target_visible_ix = match self.conflict_resolver.view_mode {
-                ConflictResolverViewMode::ThreeWay => self
-                    .conflict_resolver
-                    .visible_index_for_conflict(self.conflict_resolver.active_conflict),
-                ConflictResolverViewMode::TwoWayDiff => self
-                    .conflict_resolver_two_way_visible_ix_for_conflict(
-                        self.conflict_resolver.active_conflict,
-                    ),
-            };
-            if let Some(vi) = target_visible_ix {
-                self.conflict_resolver_scroll_all_columns(vi, gpui::ScrollStrategy::Center);
-            }
+            // Jump like explicit navigation does: sync columns AND the
+            // resolved output, and keep the nav anchor in step (the old
+            // column-only scroll left the panes out of sync).
+            self.conflict_jump_to_conflict_ix(next_unresolved, cx);
         }
     }
 
@@ -2246,7 +2353,7 @@ impl MainPaneView {
             );
         }
 
-        self.conflict_resolver_auto_advance_to_next_unresolved();
+        self.conflict_resolver_auto_advance_to_next_unresolved(cx);
         cx.notify();
     }
 
@@ -2273,6 +2380,19 @@ impl MainPaneView {
             } => Some(*confidence),
             _ => None,
         }
+    }
+
+    /// Live collapse-unchanged-context state, read by the cog settings menu.
+    pub(in crate::view) fn conflict_resolver_collapse_context(&self) -> bool {
+        self.conflict_resolver.collapse_context
+    }
+
+    /// Count conflicts currently resolved by the autosolver (as opposed to
+    /// user picks), for the toolbar's "(N auto)" indicator.
+    pub(in crate::view) fn conflict_resolver_auto_resolved_count(&self) -> usize {
+        (0..self.conflict_resolver_conflict_count())
+            .filter(|ix| self.conflict_autosolve_confidence_for_ix(*ix).is_some())
+            .count()
     }
 
     /// Select a conflict as the active one without picking a side (§30:
@@ -2307,7 +2427,7 @@ impl MainPaneView {
         self.conflict_resolver_rebuild_visible_map();
         self.conflict_resolver_refresh_output_and_scroll(Some(picked_conflict_index), cx);
 
-        self.conflict_resolver_auto_advance_to_next_unresolved();
+        self.conflict_resolver_auto_advance_to_next_unresolved(cx);
         cx.notify();
     }
 

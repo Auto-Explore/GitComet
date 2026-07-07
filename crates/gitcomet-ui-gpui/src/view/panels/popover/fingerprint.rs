@@ -58,6 +58,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
         }
         PopoverKind::DiffContentModeSettings
         | PopoverKind::DiffActionMenu
+        | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::AppMenu
@@ -128,6 +129,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::DiffActionMenu
+        | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker => None,
 
@@ -334,6 +336,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::DiffActionMenu
+        | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::ConflictResolverInputRowMenu { .. }
@@ -419,6 +422,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
         PopoverKind::DiffActionMenu => 69u8.hash(hasher),
+        PopoverKind::MergetoolSettingsMenu => 75u8.hash(hasher),
         PopoverKind::CommitOptionsMenu { repo_id } => {
             70u8.hash(hasher);
             repo_id.hash(hasher);

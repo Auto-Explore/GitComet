@@ -334,6 +334,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
             | PopoverKind::InteractiveRebaseAutosquashMenu
+            | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
@@ -654,6 +655,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
+        | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
@@ -749,6 +751,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         // "Browse repository at this point" needs more room than the default
         // context-menu width.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
+        PopoverKind::MergetoolSettingsMenu => Some(DIFF_ACTION_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
@@ -1734,6 +1737,7 @@ impl PopoverHost {
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
                     | PopoverKind::DiffActionMenu
+                    | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
                     | PopoverKind::DiffEditorMenu { .. }
             )
@@ -3458,6 +3462,9 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
+            PopoverKind::MergetoolSettingsMenu => {
+                self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
+            }
             PopoverKind::TerminalMenu { repo_id, context } => {
                 self.context_menu_view(PopoverKind::TerminalMenu { repo_id, context }, cx)
             }

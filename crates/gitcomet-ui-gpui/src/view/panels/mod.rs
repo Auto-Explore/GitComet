@@ -225,6 +225,16 @@ pub(in crate::view) enum ContextMenuAction {
     ConflictResolverPick {
         target: ResolverPickTarget,
     },
+    ConflictResolverUnresolve {
+        conflict_ix: usize,
+    },
+    SetMergetoolAutoAdvance {
+        enabled: bool,
+    },
+    ToggleMergetoolCollapseUnchanged,
+    SetMergetoolVerticalSplit {
+        enabled: bool,
+    },
     ConflictResolverOutputCut {
         text: String,
     },
