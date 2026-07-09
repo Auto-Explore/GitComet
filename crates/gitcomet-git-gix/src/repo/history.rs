@@ -422,10 +422,11 @@ impl RebaseScripts {
             fs::create_dir_all(&msgs_dir)?;
             for entry in entries {
                 if entry.action == InteractiveRebaseAction::Reword
-                    && let Some(ref msg) = entry.new_message {
-                        let msg_file = msgs_dir.join(&entry.commit_id);
-                        fs::write(msg_file, msg.as_bytes())?;
-                    }
+                    && let Some(ref msg) = entry.new_message
+                {
+                    let msg_file = msgs_dir.join(&entry.commit_id);
+                    fs::write(msg_file, msg.as_bytes())?;
+                }
             }
 
             #[cfg(windows)]

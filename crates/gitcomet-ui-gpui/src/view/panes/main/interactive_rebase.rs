@@ -184,9 +184,10 @@ fn expand_folded(
     for e in entries {
         out.push(e.clone());
         if e.action != InteractiveRebaseAction::Drop
-            && let Some(fixups) = folded.get(&e.commit_id) {
-                out.extend(fixups.iter().cloned());
-            }
+            && let Some(fixups) = folded.get(&e.commit_id)
+        {
+            out.extend(fixups.iter().cloned());
+        }
     }
     out
 }
@@ -425,9 +426,10 @@ impl MainPaneView {
         if action == InteractiveRebaseAction::Squash {
             // Auto-set the new target to Reword so the combined message can be written.
             if let Some(j) = squash_target(&st.entries, ix)
-                && st.entries[j].action == InteractiveRebaseAction::Pick {
-                    st.entries[j].action = InteractiveRebaseAction::Reword;
-                }
+                && st.entries[j].action == InteractiveRebaseAction::Pick
+            {
+                st.entries[j].action = InteractiveRebaseAction::Reword;
+            }
         } else if let Some(j) = former_squash_target {
             // Was Squash/Fixup, now it isn't. If the former target is Reword and nothing
             // else is squashing into it, revert it back to Pick.
@@ -515,10 +517,11 @@ impl MainPaneView {
         let mut display_pos = entry_count;
         for dp in 0..entry_count {
             if let Some(b) = list.bounds_for_item(dp)
-                && pointer_y < b.origin.y + b.size.height / 2.0 {
-                    display_pos = dp;
-                    break;
-                }
+                && pointer_y < b.origin.y + b.size.height / 2.0
+            {
+                display_pos = dp;
+                break;
+            }
         }
 
         let source_dp = (entry_count - 1).saturating_sub(from_ix);
@@ -919,31 +922,32 @@ impl MainPaneView {
         // repo below (this needs `&mut self`; the match on `repo` holds `self`
         // immutably for its whole body).
         if let Some(repo_id) = self.active_repo_id()
-            && self.interactive_rebase_states.contains_key(&repo_id) {
-                let sig = irebase_list_sig(&self.interactive_rebase_states[&repo_id]);
-                let count = self.interactive_rebase_states[&repo_id].entries.len();
-                let st = self
-                    .interactive_rebase_states
-                    .get_mut(&repo_id)
-                    .expect("checked contains_key");
-                if let Some(ls) = &st.scroll {
-                    if st.list_sig != (sig, count) {
-                        if st.list_sig.1 == count {
-                            ls.remeasure();
-                        } else {
-                            ls.reset(count);
-                        }
-                        st.list_sig = (sig, count);
+            && self.interactive_rebase_states.contains_key(&repo_id)
+        {
+            let sig = irebase_list_sig(&self.interactive_rebase_states[&repo_id]);
+            let count = self.interactive_rebase_states[&repo_id].entries.len();
+            let st = self
+                .interactive_rebase_states
+                .get_mut(&repo_id)
+                .expect("checked contains_key");
+            if let Some(ls) = &st.scroll {
+                if st.list_sig != (sig, count) {
+                    if st.list_sig.1 == count {
+                        ls.remeasure();
+                    } else {
+                        ls.reset(count);
                     }
-                } else {
-                    st.scroll = Some(gpui::ListState::new(
-                        count,
-                        gpui::ListAlignment::Top,
-                        px(400.0),
-                    ));
                     st.list_sig = (sig, count);
                 }
+            } else {
+                st.scroll = Some(gpui::ListState::new(
+                    count,
+                    gpui::ListAlignment::Top,
+                    px(400.0),
+                ));
+                st.list_sig = (sig, count);
             }
+        }
 
         let Some(repo) = self.active_repo() else {
             return div().child("No active repo");
