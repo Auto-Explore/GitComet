@@ -248,8 +248,10 @@ impl MainPaneView {
         }
         let target_line = target_line_ix.min(line_count.saturating_sub(1));
         let target = self.resolved_output_visible_ix_for_line(target_line);
-        self.conflict_resolved_preview_scroll
-            .scroll_to_item(target, gpui::ScrollStrategy::Center);
+        // The output body is now the editable `TextInput`, driven by
+        // `conflict_resolved_output_editor_scroll`. Scroll the line-number gutter
+        // to the target row; the gutter↔editor scroll sync (which makes the
+        // changed handle the master) then pulls the editor to the same offset.
         self.conflict_resolved_preview_gutter_scroll
             .scroll_to_item(target, gpui::ScrollStrategy::Center);
     }
@@ -703,6 +705,11 @@ impl MainPaneView {
         );
         let is_same_conflict = self.conflict_resolver.repo_id == Some(repo_id)
             && self.conflict_resolver.path.as_ref() == Some(&path);
+        // True when the fast CurrentOnly first paint is showing: no side text
+        // has been loaded yet (a Full load provides at least one stage for
+        // real conflicts).
+        let needs_full_side_texts =
+            file.base.is_none() && file.ours.is_none() && file.theirs.is_none();
         let three_way_base_len = if base_text.is_empty() {
             0
         } else {
@@ -733,11 +740,14 @@ impl MainPaneView {
             three_way_side_max_len,
         );
         // §30 aligned row space: compute the kdiff3-style alignment once per
-        // bootstrap (side texts are immutable for the session). Fall back to
-        // the identity map when the base side is unavailable (2-way marker
-        // conflicts) or when the alignment diff would be impractical
-        // (large files whose sides no longer share most of their lines —
-        // whole-file conflicts make Myers effectively quadratic).
+        // bootstrap (side texts are immutable for the session). Files without
+        // a base version (e.g. both-added conflicts) align ours↔theirs
+        // directly with empty base ranges, so the two-way view gets the same
+        // whole-file row space. Fall back to the identity map when side texts
+        // are unavailable (CurrentOnly load) or when the alignment diff would
+        // be impractical (large files whose sides no longer share most of
+        // their lines — whole-file conflicts make Myers effectively
+        // quadratic).
         let three_way_aligned = if !base_text.is_empty()
             && !ours_text.is_empty()
             && !theirs_text.is_empty()
@@ -749,6 +759,18 @@ impl MainPaneView {
             conflict_resolver::ThreeWayAlignedMap::from_alignment(
                 &gitcomet_core::merge::align_three_way(
                     base_text,
+                    ours_text,
+                    theirs_text,
+                    gitcomet_core::merge::DiffAlgorithm::Myers,
+                ),
+            )
+        } else if base_text.is_empty()
+            && !ours_text.is_empty()
+            && !theirs_text.is_empty()
+            && conflict_resolver::two_way_alignment_is_practical(ours_text, theirs_text)
+        {
+            conflict_resolver::ThreeWayAlignedMap::from_alignment(
+                &gitcomet_core::merge::align_two_way(
                     ours_text,
                     theirs_text,
                     gitcomet_core::merge::DiffAlgorithm::Myers,
@@ -1085,9 +1107,13 @@ impl MainPaneView {
             resolver_preview_mode,
         };
         // Populate mode-dependent visible state using the same code path as
-        // later rebuilds (hide-resolved toggle, conflict picks, etc.).
+        // later rebuilds (hide-resolved toggle, conflict picks, etc.). The
+        // aligned two-way view shares the three-way projection, so it needs
+        // the same build.
         let three_way_rebuild_started = Instant::now();
-        if self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay {
+        if self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+            || self.conflict_resolver.two_way_uses_aligned_rows()
+        {
             self.conflict_resolver.rebuild_three_way_visible_state();
         } else {
             self.conflict_resolver
@@ -1142,12 +1168,40 @@ impl MainPaneView {
                 cx,
             );
         }
+        // The resolved output is an editable, kdiff3-style free-text pane, so the
+        // merged text must live in the buffer (not a read-only streamed
+        // projection). Materialize here at bootstrap — driven, deterministic, and
+        // one-time — rather than in the render path. Once materialized the output
+        // stays out of streamed mode for this open, so every downstream refresh
+        // keeps the buffer authoritative (all streamed paths are gated on
+        // `conflict_resolved_output_is_streamed`).
+        self.ensure_conflict_resolved_output_materialized(cx);
         // §30: on a fresh open, bring every view to the initial active
         // conflict. Deferred item scrolls apply once the lists lay out, so
         // this works even though nothing has rendered yet.
         if !is_same_conflict && conflict_block_count > 0 {
             let initial_conflict = self.conflict_resolver.active_conflict;
             self.conflict_resolver_scroll_all_views_to_conflict(initial_conflict, None, None, cx);
+        }
+        // §30 aligned row space: whole-file column rows (three-way and
+        // two-way full mode) need the side texts, which the fast CurrentOnly
+        // first paint does not include. Upgrade fresh opens of reasonably
+        // sized text conflicts to a Full load in the background; this
+        // bootstrap re-runs with the sides once it lands. Giant files stay
+        // on the block-local rows (the alignment gates reject them anyway).
+        const FULL_LOAD_UPGRADE_MAX_CURRENT_LINES: usize = 100_000;
+        if !is_same_conflict
+            && needs_full_side_texts
+            && matches!(
+                conflict_strategy,
+                Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
+            )
+            && current_text
+                .as_deref()
+                .is_some_and(|text| count_newlines(text) < FULL_LOAD_UPGRADE_MAX_CURRENT_LINES)
+        {
+            let _ = self
+                .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full);
         }
         mergetool_trace::record_with(|| {
             trace_ctx
@@ -1501,6 +1555,7 @@ impl MainPaneView {
     pub(super) fn conflict_resolver_rebuild_visible_map(&mut self) {
         if self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
             || self.conflict_resolver.has_three_way_visible_state_ready()
+            || self.conflict_resolver.two_way_uses_aligned_rows()
         {
             self.conflict_resolver.rebuild_three_way_visible_state();
         } else {

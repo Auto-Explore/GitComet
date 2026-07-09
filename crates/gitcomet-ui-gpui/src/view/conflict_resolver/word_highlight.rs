@@ -311,8 +311,15 @@ pub fn compute_word_highlights_for_row(
     if row.kind != gitcomet_core::file_diff::FileDiffRowKind::Modify {
         return None;
     }
-    let old = row.old.as_deref().unwrap_or("");
-    let new = row.new.as_deref().unwrap_or("");
+    compute_word_highlights_for_texts(
+        row.old.as_deref().unwrap_or(""),
+        row.new.as_deref().unwrap_or(""),
+    )
+}
+
+/// Compute word-level highlights for an ours/theirs line pair directly
+/// (§30 aligned two-way rows, where no `FileDiffRow` is materialized).
+pub fn compute_word_highlights_for_texts(old: &str, new: &str) -> Option<TwoWayWordHighlightPair> {
     let (old_ranges, new_ranges) =
         crate::view::word_diff::compact_capped_word_diff_ranges(old, new);
     if old_ranges.is_empty() && new_ranges.is_empty() {

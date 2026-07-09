@@ -809,6 +809,12 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        // §30 aligned row space: two-way full mode shares the three-way
+        // projection. The block-local path below remains for giant files and
+        // partially loaded sides.
+        if this.conflict_resolver.two_way_uses_aligned_rows() {
+            return Self::render_conflict_diff_aligned_column_rows(this, range, side, window, cx);
+        }
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
@@ -907,7 +913,7 @@ impl MainPaneView {
                     &mut this.conflict_diff_query_segments_cache_split,
                     row_ix,
                     side,
-                    text_opt,
+                    text_opt.map(AsRef::as_ref),
                     word_ranges,
                     query,
                     query_options,
@@ -1064,6 +1070,417 @@ impl MainPaneView {
                 cell.into_any_element()
             })
             .collect()
+    }
+
+    /// §30 aligned row space: two-way full mode. Renders one column of the
+    /// ours↔theirs diff over the shared three-way visible projection —
+    /// whole-file rows, context folds, and collapsed resolved blocks — while
+    /// keeping the two-way diff styling (add/remove/modify backgrounds and
+    /// ours↔theirs word highlights). Row keys for the styled-text caches are
+    /// aligned rows, which are stable for the session.
+    fn render_conflict_diff_aligned_column_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        side: ConflictPickSide,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        use gitcomet_core::file_diff::FileDiffRowKind as RK;
+
+        let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
+        let query = this.diff_search_query_or_empty();
+        let query_options = this.diff_search_options_or_default();
+        let query = query.as_ref().to_string();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
+        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let syntax_lang = this.conflict_row_syntax_language();
+        let syntax_mode = DiffSyntaxMode::Auto;
+        let theme = this.theme;
+        let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
+        let show_ws = this.reveal_whitespace_chars;
+        let query_text = this.conflict_diff_query_cache_query.clone();
+        let query = query_text.as_ref();
+        let whitespace_mode = this.diff_whitespace_mode;
+        let styling_enabled = this.conflict_row_styling_enabled();
+
+        let column = match side {
+            ConflictPickSide::Ours => ThreeWayColumn::Ours,
+            ConflictPickSide::Theirs => ThreeWayColumn::Theirs,
+        };
+        let document = match side {
+            ConflictPickSide::Ours => this.conflict_three_way_prepared_syntax_documents.ours,
+            ConflictPickSide::Theirs => this.conflict_three_way_prepared_syntax_documents.theirs,
+        };
+        let (div_id_prefix, canvas_id_prefix, chunk_menu_prefix, input_menu_prefix) = match side {
+            ConflictPickSide::Ours => (
+                "conflict_diff_col_ours",
+                "conflict_diff_canvas_ours",
+                "resolver_two_way_split_ours_chunk_menu",
+                "resolver_two_way_split_ours_input_menu",
+            ),
+            ConflictPickSide::Theirs => (
+                "conflict_diff_col_theirs",
+                "conflict_diff_canvas_theirs",
+                "resolver_two_way_split_theirs_chunk_menu",
+                "resolver_two_way_split_theirs_input_menu",
+            ),
+        };
+        let conflict_choices = this.conflict_resolver.conflict_choices.clone();
+
+        let mut needs_chunk_poll = false;
+        let mut elements = Vec::with_capacity(range.len());
+        for vi in range {
+            let Some(visible_item) = this.conflict_resolver.three_way_visible_item(vi) else {
+                // Past-the-end rows exist only as bottom overscroll space.
+                elements.push(
+                    div()
+                        .id((div_id_prefix, vi))
+                        .w_full()
+                        .h(px(20.0))
+                        .into_any_element(),
+                );
+                continue;
+            };
+
+            match visible_item {
+                conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(range_ix) => {
+                    let label: SharedString = if matches!(side, ConflictPickSide::Ours) {
+                        let choice_label = conflict_choices
+                            .get(range_ix)
+                            .map(|c| match c {
+                                conflict_resolver::ConflictChoice::Base => "Base (A)",
+                                conflict_resolver::ConflictChoice::Ours => "Local (B)",
+                                conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
+                                conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+                            })
+                            .unwrap_or("?");
+                        format!("  Resolved: picked {choice_label}").into()
+                    } else {
+                        "".into()
+                    };
+                    let has_base = this
+                        .conflict_resolver
+                        .conflict_has_base
+                        .get(range_ix)
+                        .copied()
+                        .unwrap_or(false);
+                    let selected_choices =
+                        this.conflict_resolver_selected_choices_for_conflict_ix(range_ix);
+                    let collapsed = div()
+                        .id((div_id_prefix, vi))
+                        .relative()
+                        .w_full()
+                        .h(px(20.0))
+                        .flex()
+                        .items_center()
+                        .bg(with_alpha(
+                            theme.colors.success,
+                            if theme.is_dark { 0.08 } else { 0.06 },
+                        ))
+                        .when(
+                            range_ix == this.conflict_resolver.active_conflict,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(3.0))
+                                        .bg(theme.colors.accent),
+                                )
+                            },
+                        )
+                        .px_2()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(label)
+                        .cursor(CursorStyle::PointingHand)
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                // §30: clicking a conflict block body selects it.
+                                this.conflict_resolver_select_conflict(range_ix, cx);
+                            }),
+                        )
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                let invoker: SharedString = format!(
+                                    "resolver_two_way_collapsed_chunk_menu_{}_{}",
+                                    range_ix, vi
+                                )
+                                .into();
+                                this.open_conflict_resolver_chunk_context_menu(
+                                    invoker,
+                                    range_ix,
+                                    has_base,
+                                    false,
+                                    selected_choices.clone(),
+                                    None,
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        );
+                    elements.push(collapsed.into_any_element());
+                }
+                conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                    fold_id,
+                } => {
+                    elements.push(Self::conflict_context_fold_row(
+                        theme,
+                        div_id_prefix,
+                        vi,
+                        source_line_start,
+                        len,
+                        fold_id,
+                        false,
+                        cx,
+                    ));
+                }
+                conflict_resolver::ThreeWayVisibleItem::Line(row) => {
+                    let ours_line = this
+                        .conflict_resolver
+                        .three_way_side_line_for_row(ThreeWayColumn::Ours, row);
+                    let theirs_line = this
+                        .conflict_resolver
+                        .three_way_side_line_for_row(ThreeWayColumn::Theirs, row);
+                    let ours_text = ours_line.and_then(|l| {
+                        this.conflict_resolver
+                            .three_way_line_text(ThreeWayColumn::Ours, l)
+                    });
+                    let theirs_text = theirs_line.and_then(|l| {
+                        this.conflict_resolver
+                            .three_way_line_text(ThreeWayColumn::Theirs, l)
+                    });
+
+                    // Per-row diff kind from the aligned pair. Unlike the
+                    // block-local path there is no run-level whitespace
+                    // arbitration; a row is whitespace-equal on its own.
+                    let visual_kind = match (ours_text, theirs_text) {
+                        (Some(o), Some(t)) if o == t => RK::Context,
+                        (Some(o), Some(t)) => {
+                            if whitespace_mode != DiffWhitespaceMode::Show
+                                && texts_equal_ignoring_whitespace(o, t)
+                            {
+                                RK::Context
+                            } else {
+                                RK::Modify
+                            }
+                        }
+                        (Some(_), None) => RK::Remove,
+                        (None, Some(_)) => RK::Add,
+                        // Padding-only row (e.g. a base-only run): blank.
+                        (None, None) => RK::Context,
+                    };
+
+                    let word_pair = (styling_enabled && matches!(visual_kind, RK::Modify))
+                        .then(|| {
+                            conflict_resolver::compute_word_highlights_for_texts(
+                                ours_text.unwrap_or(""),
+                                theirs_text.unwrap_or(""),
+                            )
+                        })
+                        .flatten();
+                    let word_ranges: &[Range<usize>] = match side {
+                        ConflictPickSide::Ours => {
+                            word_pair.as_ref().map(|(o, _)| o.as_slice()).unwrap_or(&[])
+                        }
+                        ConflictPickSide::Theirs => {
+                            word_pair.as_ref().map(|(_, n)| n.as_slice()).unwrap_or(&[])
+                        }
+                    };
+
+                    let (side_line, side_text) = match side {
+                        ConflictPickSide::Ours => (ours_line, ours_text),
+                        ConflictPickSide::Theirs => (theirs_line, theirs_text),
+                    };
+                    let has_text = side_text.is_some();
+                    // kdiff3 behavior: per-column line numbers from the
+                    // side's own file; padding rows have none.
+                    let line_no_opt = side_line
+                        .filter(|_| has_text)
+                        .and_then(|l| u32::try_from(l + 1).ok());
+
+                    let styled_result = Self::conflict_split_row_styled(
+                        theme,
+                        &mut this.conflict_diff_segments_cache_split,
+                        &mut this.conflict_diff_query_segments_cache_split,
+                        row,
+                        side,
+                        side_text,
+                        word_ranges,
+                        query,
+                        query_options,
+                        query_matcher.as_ref(),
+                        syntax_lang,
+                        syntax_mode,
+                        prepared_diff_syntax_line_for_one_based_line(document, line_no_opt),
+                    );
+                    if styled_result.pending {
+                        needs_chunk_poll = true;
+                    }
+                    let styled = styled_result.resolve(
+                        &this.conflict_diff_segments_cache_split,
+                        &this.conflict_diff_query_segments_cache_split,
+                        (row, side),
+                    );
+
+                    let text = SharedString::new(side_text.unwrap_or_default());
+                    let bg = split_cell_bg(theme, visual_kind, side);
+                    let fg = if has_text {
+                        theme.colors.text
+                    } else {
+                        theme.colors.text_muted
+                    };
+                    let display_text = conflict_display_text(&text, styled, show_ws);
+                    let min_width = conflict_input_row_min_width(
+                        window,
+                        &display_text,
+                        editor_font_family.as_str(),
+                    );
+
+                    let conflict_ix = this
+                        .conflict_resolver
+                        .conflict_index_for_side_line(column, row);
+                    let is_active_conflict =
+                        conflict_ix == Some(this.conflict_resolver.active_conflict);
+
+                    if this.conflict_canvas_rows_enabled {
+                        let chunk_context = conflict_ix.map(|conflict_ix| ConflictChunkContext {
+                            conflict_ix,
+                            has_base: this
+                                .conflict_resolver
+                                .conflict_has_base
+                                .get(conflict_ix)
+                                .copied()
+                                .unwrap_or(false),
+                            selected_choices: this
+                                .conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
+                        });
+                        elements.push(conflict_canvas::single_column_conflict_canvas(
+                            theme,
+                            cx.entity(),
+                            canvas_id_prefix,
+                            vi,
+                            row,
+                            min_width,
+                            line_number_string(line_no_opt),
+                            bg,
+                            fg,
+                            text,
+                            styled,
+                            show_ws,
+                            chunk_context,
+                            chunk_menu_prefix,
+                            false,
+                            is_active_conflict,
+                        ));
+                        continue;
+                    }
+
+                    let mut cell = div()
+                        .id((div_id_prefix, vi))
+                        .relative()
+                        .w_full()
+                        .min_w(min_width)
+                        .h(px(20.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_xs()
+                        .bg(bg)
+                        .text_color(fg)
+                        .whitespace_nowrap()
+                        .when(is_active_conflict, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(px(3.0))
+                                    .bg(theme.colors.accent),
+                            )
+                        })
+                        .child(
+                            div()
+                                .w(px(38.0))
+                                .text_color(theme.colors.text_muted)
+                                .child(line_number_string(line_no_opt)),
+                        )
+                        .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
+
+                    if let Some(conflict_ix) = conflict_ix {
+                        let has_base = this
+                            .conflict_resolver
+                            .conflict_has_base
+                            .get(conflict_ix)
+                            .copied()
+                            .unwrap_or(false);
+                        let selected_choices =
+                            this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
+                        let (line_label, line_target, chunk_label, chunk_target) =
+                            two_way_aligned_input_row_menu_targets(row, conflict_ix, side);
+                        cell = cell.on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                // §30: clicking a conflict block body selects it.
+                                this.conflict_resolver_select_conflict(conflict_ix, cx);
+                            }),
+                        );
+                        cell = cell.on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                if e.modifiers.shift {
+                                    let invoker: SharedString =
+                                        format!("{}_{}_{}", input_menu_prefix, conflict_ix, row)
+                                            .into();
+                                    this.open_conflict_resolver_input_row_context_menu(
+                                        invoker,
+                                        line_label.clone(),
+                                        line_target.clone(),
+                                        chunk_label.clone(),
+                                        chunk_target.clone(),
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                } else {
+                                    let invoker: SharedString =
+                                        format!("{}_{}_{}", chunk_menu_prefix, conflict_ix, row)
+                                            .into();
+                                    this.open_conflict_resolver_chunk_context_menu(
+                                        invoker,
+                                        conflict_ix,
+                                        has_base,
+                                        false,
+                                        selected_choices.clone(),
+                                        None,
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            }),
+                        );
+                    }
+
+                    elements.push(cell.into_any_element());
+                }
+            }
+        }
+        if needs_chunk_poll {
+            this.ensure_prepared_syntax_chunk_poll(cx);
+        }
+        elements
     }
 
     /// Diff-view-style collapsed context fold row (§30, R6): muted band,
@@ -1805,7 +2222,7 @@ impl MainPaneView {
         query_cache: &mut conflict_resolver::ConflictSplitStyledTextCache,
         row_ix: usize,
         side: ConflictPickSide,
-        text: Option<&gitcomet_core::file_diff::FileDiffLineText>,
+        text: Option<&str>,
         word_ranges: &[Range<usize>],
         query: &str,
         _query_options: DiffSearchOptions,
@@ -1820,7 +2237,6 @@ impl MainPaneView {
         let source_identity = Some(DiffTextSourceIdentity::from_str(text));
         let key = (row_ix, side);
         let mut result = ConflictRowStyledText::default();
-        let text = text.as_ref();
         if text.is_empty() {
             return result;
         }
@@ -1954,7 +2370,7 @@ impl MainPaneView {
                     &mut self.conflict_diff_query_segments_cache_split,
                     row_ix,
                     ConflictPickSide::Ours,
-                    row.old.as_ref(),
+                    row.old.as_deref(),
                     old_word_ranges,
                     query,
                     query_options,
@@ -1969,7 +2385,7 @@ impl MainPaneView {
                     &mut self.conflict_diff_query_segments_cache_split,
                     row_ix,
                     ConflictPickSide::Theirs,
-                    row.new.as_ref(),
+                    row.new.as_deref(),
                     new_word_ranges,
                     query,
                     query_options,
@@ -2322,6 +2738,45 @@ fn two_way_split_input_row_menu_targets(
             output_line_ix: None,
         },
     )
+}
+
+/// Input-row menu targets for the §30 aligned two-way view. `row_ix` is an
+/// aligned visual row (shared by both columns), so the line pick reuses the
+/// aligned-row-space `ThreeWayLine` target with this side's choice.
+fn two_way_aligned_input_row_menu_targets(
+    row_ix: usize,
+    conflict_ix: usize,
+    side: ConflictPickSide,
+) -> (
+    SharedString,
+    ResolverPickTarget,
+    SharedString,
+    ResolverPickTarget,
+) {
+    let side_label = two_way_side_label(side);
+    let choice = two_way_choice_for_side(side);
+    (
+        format!("Pick this line ({side_label})").into(),
+        ResolverPickTarget::ThreeWayLine {
+            line_ix: row_ix,
+            choice,
+        },
+        format!("Pick this chunk ({side_label})").into(),
+        ResolverPickTarget::Chunk {
+            conflict_ix,
+            choice,
+            output_line_ix: None,
+        },
+    )
+}
+
+/// Whether two lines are equal once all whitespace is removed. Matches the
+/// block-local `append_conflict_row_without_whitespace` semantics used to
+/// downgrade whitespace-only differences to context rows.
+fn texts_equal_ignoring_whitespace(a: &str, b: &str) -> bool {
+    a.chars()
+        .filter(|ch| !ch.is_whitespace())
+        .eq(b.chars().filter(|ch| !ch.is_whitespace()))
 }
 
 fn split_cell_bg(

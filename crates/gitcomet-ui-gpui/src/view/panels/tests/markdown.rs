@@ -1852,11 +1852,12 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).width > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
+                    > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
                     > px(120.0)
         },
         |pane| {
@@ -1866,11 +1867,11 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                 uniform_list_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_offset(&pane.conflict_preview_ours_scroll),
                 uniform_list_offset(&pane.conflict_preview_theirs_scroll),
-                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
                 uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_ours_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
-                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
             )
         },
     );
@@ -1887,6 +1888,10 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                         &pane.conflict_resolved_preview_scroll,
                         &pane.conflict_resolved_preview_gutter_scroll,
                     ]);
+                    set_scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                        point(px(0.0), px(0.0)),
+                    );
                     cx.notify();
                 });
             });
@@ -1903,8 +1908,8 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
                     this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(
-                            &pane.conflict_resolved_preview_scroll,
+                        set_scroll_handle_offset(
+                            &pane.conflict_resolved_output_editor_scroll,
                             output_offset,
                         );
                         cx.notify();
@@ -1921,7 +1926,9 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                     px(0.0)
                 };
                 assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                    )),
                     axis.component(output_offset),
                     "conflict markdown output should keep its {} offset in {:?} mode",
                     axis.label(),
@@ -1996,7 +2003,9 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                     mode,
                 );
                 assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                    )),
                     expected,
                     "conflict markdown resolved output should {} {} scrolling from the base preview in {:?} mode",
                     if axis.includes(mode) { "sync" } else { "not sync" },

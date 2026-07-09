@@ -1615,6 +1615,22 @@ impl ConflictResolverUiState {
 
     // ----- Two-way split dispatch (giant vs eager) -----
 
+    /// §30 aligned row space: whether the two-way view renders the shared
+    /// aligned whole-file rows (full mode) instead of the block-local
+    /// `ConflictSplitRowIndex` rows (giant files / sides not loaded).
+    pub(super) fn two_way_uses_aligned_rows(&self) -> bool {
+        !self.three_way_aligned.is_identity()
+    }
+
+    /// Number of visible rows in the two-way view (aligned or block-local).
+    pub(super) fn two_way_visible_len(&self) -> usize {
+        if self.two_way_uses_aligned_rows() {
+            self.three_way_visible_len()
+        } else {
+            self.two_way_split_visible_len()
+        }
+    }
+
     /// Number of visible rows in the two-way split view.
     pub(super) fn two_way_split_visible_len(&self) -> usize {
         match &self.mode_state {
@@ -1756,22 +1772,42 @@ impl ConflictResolverUiState {
         }
     }
 
-    // ----- Unified two-way dispatch (Split + Inline, giant vs eager) -----
+    // ----- Unified two-way dispatch (aligned vs block-local) -----
 
     /// Build unresolved conflict navigation entries for the current two-way
     /// conflict diff view.
     pub(super) fn two_way_nav_entries(&self) -> Vec<usize> {
+        if self.two_way_uses_aligned_rows() {
+            return conflict_resolver::unresolved_conflict_indices(&self.marker_segments)
+                .into_iter()
+                .filter_map(|ci| self.visible_index_for_conflict(ci))
+                .collect();
+        }
         self.two_way_split_nav_entries()
     }
 
     /// Map a two-way visible index to its conflict index.
     pub(super) fn two_way_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
+        if self.two_way_uses_aligned_rows() {
+            return match self.three_way_visible_item(visible_ix)? {
+                conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(ri) => Some(ri),
+                conflict_resolver::ThreeWayVisibleItem::Line(row) => {
+                    // Conflict ranges are aligned-row ranges shared by all
+                    // columns, so any side works for the lookup.
+                    self.conflict_index_for_side_line(ThreeWayColumn::Ours, row)
+                }
+                conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. } => None,
+            };
+        }
         self.two_way_split_conflict_ix_for_visible(visible_ix)
     }
 
     /// Find the first visible index for a conflict in the current two-way diff
     /// view.
     pub(super) fn two_way_visible_ix_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
+        if self.two_way_uses_aligned_rows() {
+            return self.visible_index_for_conflict(conflict_ix);
+        }
         self.two_way_split_visible_ix_for_conflict(conflict_ix)
     }
 
@@ -1794,6 +1830,18 @@ impl ConflictResolverUiState {
         &self,
         side: conflict_resolver::ConflictPickSide,
     ) -> usize {
+        // Aligned two-way rows share the three-way row space, so the
+        // three-way per-column measurements apply directly.
+        if self.two_way_uses_aligned_rows() {
+            return match side {
+                conflict_resolver::ConflictPickSide::Ours => {
+                    self.three_way_horizontal_measure_row(ThreeWayColumn::Ours)
+                }
+                conflict_resolver::ConflictPickSide::Theirs => {
+                    self.three_way_horizontal_measure_row(ThreeWayColumn::Theirs)
+                }
+            };
+        }
         match side {
             conflict_resolver::ConflictPickSide::Ours => self.two_way_horizontal_measure_rows[0],
             conflict_resolver::ConflictPickSide::Theirs => self.two_way_horizontal_measure_rows[1],

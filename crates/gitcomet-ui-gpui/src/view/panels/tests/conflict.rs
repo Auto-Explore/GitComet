@@ -477,6 +477,12 @@ fn svg_conflict_preview_rasterizes_off_the_ui_thread(cx: &mut gpui::TestAppConte
         },
     );
 
+    // The resolved output is now materialized into the editable buffer at
+    // bootstrap (kdiff3-style free-text editing), which recomputes the output
+    // outline/syntax and can leave background work pending. Drain it so no stray
+    // task remains when the deterministic test scheduler ends.
+    cx.run_until_parked();
+
     std::fs::remove_dir_all(&workdir).expect("cleanup svg conflict preview fixture");
 }
 
@@ -713,6 +719,11 @@ fn reset_conflict_scroll_matrix_offsets(pane: &mut MainPaneView) {
         &pane.conflict_resolved_preview_scroll,
         &pane.conflict_resolved_preview_gutter_scroll,
     ]);
+    // The editable resolved output couples via its own `ScrollHandle`.
+    set_scroll_handle_offset(
+        &pane.conflict_resolved_output_editor_scroll,
+        point(px(0.0), px(0.0)),
+    );
 }
 
 #[gpui::test]
@@ -787,16 +798,17 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
+                    > px(120.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
                     > px(120.0)
         },
         |pane| {
             format!(
                 "view_mode={:?} output_offset={:?} output_max={:?} gutter_offset={:?} gutter_max={:?}",
                 pane.conflict_resolver.view_mode,
-                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
-                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
                 uniform_list_offset(&pane.conflict_resolved_preview_gutter_scroll),
                 uniform_list_max_offset(&pane.conflict_resolved_preview_gutter_scroll),
             )
@@ -809,8 +821,8 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 reset_conflict_scroll_matrix_offsets(pane);
-                set_uniform_list_offset(
-                    &pane.conflict_resolved_preview_scroll,
+                set_scroll_handle_offset(
+                    &pane.conflict_resolved_output_editor_scroll,
                     point(px(-72.0), px(-48.0)),
                 );
                 cx.notify();
@@ -822,7 +834,7 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(
-            uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+            scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
             point(px(-72.0), px(-48.0)),
             "resolved output should keep its own scroll offset when diff sync is disabled",
         );
@@ -919,11 +931,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     .borrow()
                     .base_handle
                     .max_offset(),
-                pane.conflict_resolved_preview_scroll
-                    .0
-                    .borrow()
-                    .base_handle
-                    .max_offset(),
+                pane.conflict_resolved_output_editor_scroll.max_offset(),
             )
         },
     );
@@ -948,11 +956,12 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).width > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
+                    > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
                     > px(120.0)
         },
         |pane| {
@@ -962,11 +971,11 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 uniform_list_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_offset(&pane.conflict_preview_ours_scroll),
                 uniform_list_offset(&pane.conflict_preview_theirs_scroll),
-                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
                 uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_ours_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
-                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
             )
         },
     );
@@ -993,8 +1002,8 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {
                     this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(
-                            &pane.conflict_resolved_preview_scroll,
+                        set_scroll_handle_offset(
+                            &pane.conflict_resolved_output_editor_scroll,
                             output_offset,
                         );
                         cx.notify();
@@ -1011,7 +1020,9 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     px(0.0)
                 };
                 assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                    )),
                     axis.component(output_offset),
                     "resolved output should keep its {} offset in {:?} mode",
                     axis.label(),
@@ -1094,7 +1105,9 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     mode,
                 );
                 assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
+                    axis.component(scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                    )),
                     expected,
                     "resolved output should {} {} scrolling from the base pane in {:?} mode",
                     if axis.includes(mode) {
@@ -1188,10 +1201,11 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
             pane.conflict_resolver.view_mode == ConflictResolverViewMode::TwoWayDiff
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).width > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).width > px(120.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
+                    > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
-                && uniform_list_max_offset(&pane.conflict_resolved_preview_scroll).height
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
                     > px(120.0)
         },
         |pane| {
@@ -1200,10 +1214,10 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 pane.conflict_resolver.view_mode,
                 uniform_list_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_offset(&pane.conflict_preview_theirs_scroll),
-                uniform_list_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll),
                 uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
                 uniform_list_max_offset(&pane.conflict_preview_theirs_scroll),
-                uniform_list_max_offset(&pane.conflict_resolved_preview_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
             )
         },
     );
@@ -1221,102 +1235,135 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
         draw_and_drain_test_window(cx);
     };
 
-    for mode in ALL_DIFF_SCROLL_SYNC_MODES {
-        set_diff_scroll_sync_for_test(cx, &view, mode);
-
-        for axis in ScrollSyncAxis::ALL {
-            let output_offset = axis.offset(px(72.0));
-            reset_offsets(cx, &view);
-            cx.update(|_window, app| {
-                view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(
-                            &pane.conflict_resolved_preview_scroll,
-                            output_offset,
-                        );
-                        cx.notify();
-                    });
+    // §30 aligned two-way full mode (this fixture has a base, so ours/theirs
+    // align onto the shared whole-file row space). The left/right columns
+    // always couple as a pair; the resolved output couples with them only when
+    // the merge-tool output-scroll-sync setting is on. Both are still gated by
+    // the diff sync mode/axis.
+    for output_sync_on in [true, false] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    // Set the field directly: this test exercises the sync-group
+                    // logic, not persistence, and the `_and_persist` variant
+                    // re-enters the root view we're already updating.
+                    pane.mergetool_output_scroll_sync = output_sync_on;
+                    cx.notify();
                 });
             });
-            draw_and_drain_test_window(cx);
+        });
+        draw_and_drain_test_window(cx);
 
-            cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
-                    axis.component(output_offset),
-                    "two-way resolved output should keep its {} offset in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                // §30: two-way panes render block-local rows while the
-                // resolved output renders full merged lines. Raw offsets are
-                // meaningless across those row spaces, so output scrolling
-                // must never drag the panes (in any sync mode).
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
-                    px(0.0),
-                    "two-way left pane must not follow resolved output {} scrolling in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
-                    px(0.0),
-                    "two-way right pane must not follow resolved output {} scrolling in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-            });
+        for mode in ALL_DIFF_SCROLL_SYNC_MODES {
+            set_diff_scroll_sync_for_test(cx, &view, mode);
 
-            let right_offset = axis.offset(px(96.0));
-            reset_offsets(cx, &view);
-            cx.update(|_window, app| {
-                view.update(app, |this, cx| {
-                    this.main_pane.update(cx, |pane, cx| {
-                        set_uniform_list_offset(&pane.conflict_preview_theirs_scroll, right_offset);
-                        cx.notify();
+            for axis in ScrollSyncAxis::ALL {
+                let coupled = axis.includes(mode);
+                let output_coupled = coupled && output_sync_on;
+
+                let output_offset = axis.offset(px(72.0));
+                reset_offsets(cx, &view);
+                cx.update(|_window, app| {
+                    view.update(app, |this, cx| {
+                        this.main_pane.update(cx, |pane, cx| {
+                            set_scroll_handle_offset(
+                                &pane.conflict_resolved_output_editor_scroll,
+                                output_offset,
+                            );
+                            cx.notify();
+                        });
                     });
                 });
-            });
-            draw_and_drain_test_window(cx);
+                draw_and_drain_test_window(cx);
 
-            cx.update(|_window, app| {
-                let pane = view.read(app).main_pane.read(app);
-                let expected = if axis.includes(mode) {
-                    axis.component(right_offset)
-                } else {
-                    px(0.0)
-                };
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
-                    axis.component(right_offset),
-                    "two-way right pane should keep its {} offset in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
-                    expected,
-                    "two-way left pane should {} {} scrolling from the right pane in {:?} mode",
-                    if axis.includes(mode) {
-                        "sync"
+                cx.update(|_window, app| {
+                    let pane = view.read(app).main_pane.read(app);
+                    let expected = if output_coupled {
+                        axis.component(output_offset)
                     } else {
-                        "not sync"
-                    },
-                    axis.label(),
-                    mode,
-                );
-                // §30: the resolved output keeps its own scroll space in
-                // two-way mode (see the cross-space note above).
-                assert_eq!(
-                    axis.component(uniform_list_offset(&pane.conflict_resolved_preview_scroll)),
-                    px(0.0),
-                    "resolved output must not follow the right pane {} scrolling in {:?} mode",
-                    axis.label(),
-                    mode,
-                );
-            });
+                        px(0.0)
+                    };
+                    assert_eq!(
+                        axis.component(scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                    )),
+                        axis.component(output_offset),
+                        "two-way resolved output should keep its {} offset in {:?} mode (sync={output_sync_on})",
+                        axis.label(),
+                        mode,
+                    );
+                    assert_eq!(
+                        axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                        expected,
+                        "two-way left pane should {} {} scrolling from resolved output in {:?} mode (sync={output_sync_on})",
+                        if output_coupled { "sync" } else { "not sync" },
+                        axis.label(),
+                        mode,
+                    );
+                    assert_eq!(
+                        axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                        expected,
+                        "two-way right pane should {} {} scrolling from resolved output in {:?} mode (sync={output_sync_on})",
+                        if output_coupled { "sync" } else { "not sync" },
+                        axis.label(),
+                        mode,
+                    );
+                });
+
+                let right_offset = axis.offset(px(96.0));
+                reset_offsets(cx, &view);
+                cx.update(|_window, app| {
+                    view.update(app, |this, cx| {
+                        this.main_pane.update(cx, |pane, cx| {
+                            set_uniform_list_offset(
+                                &pane.conflict_preview_theirs_scroll,
+                                right_offset,
+                            );
+                            cx.notify();
+                        });
+                    });
+                });
+                draw_and_drain_test_window(cx);
+
+                cx.update(|_window, app| {
+                    let pane = view.read(app).main_pane.read(app);
+                    let pair_expected = if coupled {
+                        axis.component(right_offset)
+                    } else {
+                        px(0.0)
+                    };
+                    let output_expected = if output_coupled {
+                        axis.component(right_offset)
+                    } else {
+                        px(0.0)
+                    };
+                    assert_eq!(
+                        axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
+                        axis.component(right_offset),
+                        "two-way right pane should keep its {} offset in {:?} mode (sync={output_sync_on})",
+                        axis.label(),
+                        mode,
+                    );
+                    assert_eq!(
+                        axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
+                        pair_expected,
+                        "two-way left pane should {} {} scrolling from the right pane in {:?} mode (sync={output_sync_on})",
+                        if coupled { "sync" } else { "not sync" },
+                        axis.label(),
+                        mode,
+                    );
+                    assert_eq!(
+                        axis.component(scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                    )),
+                        output_expected,
+                        "two-way resolved output should {} {} scrolling from the right pane in {:?} mode (sync={output_sync_on})",
+                        if output_coupled { "sync" } else { "not sync" },
+                        axis.label(),
+                        mode,
+                    );
+                });
+            }
         }
     }
 

@@ -1042,6 +1042,13 @@ impl PopoverHost {
                 });
                 cx.notify();
             }
+            ContextMenuAction::SetMergetoolOutputScrollSync { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_output_scroll_sync_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
             ContextMenuAction::ConflictResolverOutputCut { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 self.main_pane.update(cx, |pane, cx| {

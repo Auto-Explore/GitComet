@@ -259,6 +259,20 @@ impl MainPaneView {
 
         let mut handled = false;
 
+        // When the editable resolved-output pane is focused the user is typing
+        // free text: every keystroke (space, a/b/c/d, etc.) belongs to that
+        // editor, not to the diff/conflict shortcut table. Letting them through
+        // here staged the conflict file on the first space typed (StagePath →
+        // the file leaves Conflicted → the resolver closes mid-edit).
+        if self
+            .conflict_resolver_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window)
+        {
+            return false;
+        }
+
         if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
             if self.diff_search_active {
                 self.deactivate_diff_search(window, cx);

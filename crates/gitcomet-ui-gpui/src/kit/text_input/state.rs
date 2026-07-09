@@ -459,6 +459,11 @@ pub(super) struct InteractionState {
     pub(super) context_menu: Option<TextInputContextMenuState>,
     pub(super) vertical_motion_x: Option<Pixels>,
     pub(super) vertical_scroll_handle: Option<ScrollHandle>,
+    /// When set, a multiline input lays out at its content (widest-line) width
+    /// instead of filling its container, so an outer `overflow_scroll` container
+    /// can scroll it horizontally and expose a real horizontal `max_offset` on
+    /// the shared scroll handle (used for column↔output scroll sync).
+    pub(super) content_width_layout: bool,
     pub(super) pending_cursor_autoscroll: bool,
     /// Set after a stale-max_offset retry so the next attempt always clears the flag,
     /// preventing an infinite notify loop when cursor_bottom sits at the viewport edge.
@@ -483,6 +488,7 @@ impl InteractionState {
             context_menu: None,
             vertical_motion_x: None,
             vertical_scroll_handle: None,
+            content_width_layout: false,
             pending_cursor_autoscroll: false,
             cursor_autoscroll_retry_exhausted: false,
             has_focus: false,

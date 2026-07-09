@@ -301,6 +301,70 @@ pub fn align_three_way(
     runs
 }
 
+/// Compute a direct two-way alignment of ours/theirs (§30 aligned row space,
+/// two-way full mode without a base version — e.g. both-added conflicts).
+///
+/// Runs carry empty base ranges. A replaced region pairs its lines 1:1
+/// top-aligned as one `Conflict` run; lines present on only one side become
+/// `OursChanged` (deletion) or `TheirsChanged` (insertion) runs. The runs
+/// partition both inputs exactly.
+pub fn align_two_way(ours: &str, theirs: &str, algorithm: DiffAlgorithm) -> Vec<AlignedRun> {
+    let ours_lines = split_lines(ours);
+    let theirs_lines = split_lines(theirs);
+
+    let diff_fn = match algorithm {
+        DiffAlgorithm::Myers => myers_edits,
+        DiffAlgorithm::Histogram => histogram_edits,
+    };
+    // Hunks are base-relative; here "base" is the ours side.
+    let hunks = edits_to_hunks(&diff_fn(&ours_lines, &theirs_lines));
+
+    let mut runs = Vec::with_capacity(hunks.len().saturating_mul(2).saturating_add(1));
+    let mut ours_pos = 0usize;
+    let mut theirs_pos = 0usize;
+
+    let push_unchanged =
+        |runs: &mut Vec<AlignedRun>, ours_pos: &mut usize, theirs_pos: &mut usize, until: usize| {
+            let len = until.saturating_sub(*ours_pos);
+            if len == 0 {
+                return;
+            }
+            runs.push(AlignedRun {
+                base: 0..0,
+                ours: *ours_pos..*ours_pos + len,
+                theirs: *theirs_pos..*theirs_pos + len,
+                kind: AlignedRunKind::Unchanged,
+            });
+            *ours_pos += len;
+            *theirs_pos += len;
+        };
+
+    for hunk in &hunks {
+        push_unchanged(&mut runs, &mut ours_pos, &mut theirs_pos, hunk.base_start);
+        let ours_range = ours_pos..hunk.base_end;
+        let theirs_range = theirs_pos..theirs_pos + hunk.new_lines.len();
+        let kind = match (ours_range.is_empty(), theirs_range.is_empty()) {
+            (true, true) => continue,
+            (false, true) => AlignedRunKind::OursChanged,
+            (true, false) => AlignedRunKind::TheirsChanged,
+            (false, false) => AlignedRunKind::Conflict,
+        };
+        ours_pos = ours_range.end;
+        theirs_pos = theirs_range.end;
+        runs.push(AlignedRun {
+            base: 0..0,
+            ours: ours_range,
+            theirs: theirs_range,
+            kind,
+        });
+    }
+    push_unchanged(&mut runs, &mut ours_pos, &mut theirs_pos, ours_lines.len());
+
+    debug_assert_eq!(ours_pos, ours_lines.len());
+    debug_assert_eq!(theirs_pos, theirs_lines.len());
+    runs
+}
+
 /// A base-anchored change region visited by [`for_each_merge_region`].
 struct MergeRegion<'h, 'a> {
     base_start: usize,
@@ -1796,6 +1860,92 @@ mod tests {
             .count();
         let merged = merge_file(base, ours, theirs, &MergeOptions::default());
         assert_eq!(conflict_runs, merged.conflict_count);
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-way alignment (§30 aligned row space, no-base fallback)
+    // -----------------------------------------------------------------------
+
+    fn assert_two_way_partitions(runs: &[AlignedRun], ours: &str, theirs: &str) {
+        let (b, o, t) = run_lens(runs);
+        assert_eq!(b, 0, "two-way runs carry no base lines");
+        assert_eq!(o, split_lines(ours).len(), "ours lines partitioned");
+        assert_eq!(t, split_lines(theirs).len(), "theirs lines partitioned");
+        let mut op = 0;
+        let mut tp = 0;
+        for run in runs {
+            assert_eq!(run.ours.start, op, "ours ranges contiguous");
+            assert_eq!(run.theirs.start, tp, "theirs ranges contiguous");
+            op = run.ours.end;
+            tp = run.theirs.end;
+        }
+    }
+
+    #[test]
+    fn align_two_way_identity_is_one_unchanged_run() {
+        let text = "a\nb\nc\n";
+        let runs = align_two_way(text, text, DiffAlgorithm::Myers);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::Unchanged);
+        assert_eq!(runs[0].visual_rows(), 3);
+        assert_two_way_partitions(&runs, text, text);
+    }
+
+    #[test]
+    fn align_two_way_classifies_inserts_deletes_and_replacements() {
+        let ours = "a\nours-only\nb\nreplaced-o\nc\n";
+        let theirs = "a\nb\nreplaced-t\nc\ntheirs-only\n";
+        let runs = align_two_way(ours, theirs, DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, ours, theirs);
+
+        let kinds: Vec<_> = runs.iter().map(|r| r.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::OursChanged,
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::Conflict,
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::TheirsChanged,
+            ],
+        );
+        // The replaced line pairs 1:1 on a single visual row.
+        assert_eq!(runs[3].visual_rows(), 1);
+        // Deletion pads theirs; insertion pads ours.
+        assert_eq!(runs[1].theirs.len(), 0);
+        assert_eq!(runs[5].ours.len(), 0);
+    }
+
+    #[test]
+    fn align_two_way_pairs_uneven_replacement_top_aligned() {
+        let ours = "ctx\no1\no2\nrest\n";
+        let theirs = "ctx\nt1\nt2\nt3\nt4\nrest\n";
+        let runs = align_two_way(ours, theirs, DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, ours, theirs);
+
+        let conflict = runs
+            .iter()
+            .find(|r| r.kind == AlignedRunKind::Conflict)
+            .expect("replacement region");
+        assert_eq!(conflict.ours.len(), 2);
+        assert_eq!(conflict.theirs.len(), 4);
+        assert_eq!(conflict.visual_rows(), 4, "shorter side padded below");
+    }
+
+    #[test]
+    fn align_two_way_handles_empty_sides() {
+        assert!(align_two_way("", "", DiffAlgorithm::Myers).is_empty());
+
+        let runs = align_two_way("", "added\n", DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, "", "added\n");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::TheirsChanged);
+
+        let runs = align_two_way("gone\n", "", DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, "gone\n", "");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::OursChanged);
     }
 
     #[test]

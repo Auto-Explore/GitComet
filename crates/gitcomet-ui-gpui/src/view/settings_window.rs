@@ -944,6 +944,7 @@ impl SettingsWindowView {
             mergetool_auto_advance: None,
             mergetool_collapse_unchanged: None,
             mergetool_vertical_split: None,
+            mergetool_output_scroll_sync: None,
             change_tracking_height: None,
             untracked_height: None,
             history_show_graph: Some(self.history_show_graph),

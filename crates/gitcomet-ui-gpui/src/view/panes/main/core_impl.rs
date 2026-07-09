@@ -655,9 +655,14 @@ enum ConflictPreviewSyncGroup {
     /// Three-way with hide-resolved or collapsed context: the columns share a
     /// projected row space the output does not.
     ColumnsOnly,
-    /// Two-way split: left (base handle) and right (theirs handle) share the
-    /// block-local row space; the ours handle is unused.
+    /// Two-way: left (base handle) and right (theirs handle) sync as a pair;
+    /// the ours handle is unused and the output owns its own scroll space.
+    /// Used for block-local giant-file rows, and for the aligned view when the
+    /// output-scroll-sync setting is off or the columns are folded.
     TwoWayPair,
+    /// Two-way aligned, unfolded, with output scroll sync on: the left/right
+    /// columns and the resolved output share the whole-file aligned row space.
+    TwoWayPairAndOutput,
 }
 
 /// Sync one axis of the conflict-preview handle set for the given group.
@@ -690,6 +695,15 @@ fn sync_conflict_preview_axis(
             last_synced[2] = pair_last[1];
             last_synced[1] = axis.offset_component(handles[1].offset());
             last_synced[3] = axis.offset_component(handles[3].offset());
+        }
+        ConflictPreviewSyncGroup::TwoWayPairAndOutput => {
+            let group = [handles[0].clone(), handles[2].clone(), handles[3].clone()];
+            let mut group_last = [last_synced[0], last_synced[2], last_synced[3]];
+            maybe_sync_synced_scroll_offsets(&group, &mut group_last, axis, mode);
+            last_synced[0] = group_last[0];
+            last_synced[2] = group_last[1];
+            last_synced[3] = group_last[2];
+            last_synced[1] = axis.offset_component(handles[1].offset());
         }
     }
 }
@@ -1349,6 +1363,7 @@ impl MainPaneView {
             mergetool_auto_advance: true,
             mergetool_collapse_unchanged: false,
             mergetool_vertical_split: false,
+            mergetool_output_scroll_sync: true,
             diff_view: diff_view_mode,
             annotate_enabled,
             annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
@@ -1556,6 +1571,7 @@ impl MainPaneView {
             conflict_preview_last_synced_x: [px(0.0); 4],
             conflict_preview_last_synced_y: [px(0.0); 4],
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
+            conflict_resolved_output_editor_scroll: ScrollHandle::new(),
             conflict_resolved_preview_gutter_scroll: UniformListScrollHandle::default(),
             conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),
@@ -1801,6 +1817,20 @@ impl MainPaneView {
             return;
         }
 
+        // Perf guard: a whole-file conflict can produce a merged output far too
+        // large to pull into the editable buffer. Above the threshold the output
+        // stays in read-only streamed mode (rendered from the projection); the
+        // edit affordances are gated on `!conflict_resolved_output_is_streamed`.
+        if self
+            .conflict_resolved_output_projection
+            .as_ref()
+            .is_some_and(|projection| {
+                projection.len() > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES
+            })
+        {
+            return;
+        }
+
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         let output_hash = hash_text_bytes(&resolved);
@@ -1816,6 +1846,30 @@ impl MainPaneView {
             input.set_text(resolved.clone(), cx);
         });
         self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
+    }
+
+    /// Configure the resolved-output `TextInput` for rendering as the editable
+    /// output pane. This is called from the render path, so it must stay cheap
+    /// and side-effect free: the merged text is materialized into the buffer at
+    /// bootstrap (see [`ensure_conflict_resolved_output_materialized`]), not here.
+    /// It only points the editor at its shared scroll handle so the line-number
+    /// gutter and the column scroll-sync group stay coupled to it.
+    pub(in crate::view) fn prepare_conflict_resolved_output_editor(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let scroll = self.conflict_resolved_output_editor_scroll.clone();
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_read_only(false, cx);
+            input.set_vertical_scroll_handle(Some(scroll));
+            // Lay the editor out at content width so its `overflow_scroll`
+            // container carries a horizontal `max_offset` on the shared handle,
+            // letting the resolved output scroll-sync with the source columns
+            // on the horizontal axis too.
+            input.set_content_width_layout(true);
+        });
     }
 
     pub(in crate::view) fn current_conflict_resolved_output_text(
@@ -2018,6 +2072,7 @@ impl MainPaneView {
         if self.conflict_resolved_preview_syntax_inflight == Some(request_key) {
             return;
         }
+        eprintln!("PROBE: output background syntax prepare SPAWN reached");
         self.conflict_resolved_preview_syntax_inflight = Some(request_key);
         let output_text = output_snapshot.as_shared_string();
         let output_line_starts = output_snapshot.shared_line_starts();
@@ -2087,6 +2142,7 @@ impl MainPaneView {
         if self.conflict_three_way_syntax_inflight[side] {
             return;
         }
+        eprintln!("PROBE: THREE-WAY background syntax prepare SPAWN reached side={side:?}");
         self.conflict_three_way_syntax_inflight[side] = true;
         let expected_source_hash = source_hash;
         cx.spawn(
@@ -3603,12 +3659,14 @@ impl MainPaneView {
     }
 
     /// Persisted merge tool preferences: (auto-advance, collapse-unchanged
-    /// default, vertical split). Read by the root view's UI settings persist.
-    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool) {
+    /// default, vertical split, output scroll sync). Read by the root view's
+    /// UI settings persist.
+    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool, bool) {
         (
             self.mergetool_auto_advance,
             self.mergetool_collapse_unchanged,
             self.mergetool_vertical_split,
+            self.mergetool_output_scroll_sync,
         )
     }
 
@@ -3640,6 +3698,19 @@ impl MainPaneView {
             return;
         }
         self.mergetool_vertical_split = next;
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_mergetool_output_scroll_sync_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.mergetool_output_scroll_sync == next {
+            return;
+        }
+        self.mergetool_output_scroll_sync = next;
         self.schedule_ui_settings_persist(cx);
         cx.notify();
     }
@@ -5013,7 +5084,7 @@ impl MainPaneView {
             uniform_list_base_handle(&self.conflict_resolver_diff_scroll),
             uniform_list_base_handle(&self.conflict_preview_ours_scroll),
             uniform_list_base_handle(&self.conflict_preview_theirs_scroll),
-            uniform_list_base_handle(&self.conflict_resolved_preview_scroll),
+            self.conflict_resolved_output_editor_scroll.clone(),
         ]
     }
 
@@ -5054,27 +5125,38 @@ impl MainPaneView {
     /// synced in the current resolver mode.
     ///
     /// The resolved output renders full merged lines, so it only joins the
-    /// group in three-way mode with an unfolded column space. Two-way columns
-    /// render block-local rows and sync as a left/right pair; syncing them
-    /// against the output previously dragged the columns to unrelated
-    /// conflicts (raw offsets are meaningless across row spaces).
+    /// group when the columns render an unfolded whole-file row space — the
+    /// three-way unfolded columns or the §30 aligned two-way full mode — and
+    /// only when the merge-tool output-scroll-sync setting is on. Folded
+    /// column spaces (hide-resolved / collapsed context) and block-local
+    /// giant-file two-way rows keep the output independent, because raw
+    /// offsets are meaningless across mismatched row spaces.
     fn conflict_preview_sync_group(&self) -> ConflictPreviewSyncGroup {
+        let folded =
+            self.conflict_resolver.hide_resolved || self.conflict_resolver.collapse_context;
+        let output_follows = self.mergetool_output_scroll_sync;
         match self.conflict_resolver.view_mode {
             ConflictResolverViewMode::ThreeWay => {
-                if self.conflict_resolver.hide_resolved || self.conflict_resolver.collapse_context {
+                if folded || !output_follows {
                     ConflictPreviewSyncGroup::ColumnsOnly
                 } else {
                     ConflictPreviewSyncGroup::ColumnsAndOutput
                 }
             }
-            ConflictResolverViewMode::TwoWayDiff => ConflictPreviewSyncGroup::TwoWayPair,
+            ConflictResolverViewMode::TwoWayDiff => {
+                if !self.conflict_resolver.two_way_uses_aligned_rows() || folded || !output_follows {
+                    ConflictPreviewSyncGroup::TwoWayPair
+                } else {
+                    ConflictPreviewSyncGroup::TwoWayPairAndOutput
+                }
+            }
         }
     }
 
     pub(in crate::view) fn sync_conflict_resolved_output_gutter_scroll(&mut self) {
         let handles = [
             uniform_list_base_handle(&self.conflict_resolved_preview_gutter_scroll),
-            uniform_list_base_handle(&self.conflict_resolved_preview_scroll),
+            self.conflict_resolved_output_editor_scroll.clone(),
         ];
         sync_synced_scroll_offsets(
             &handles,

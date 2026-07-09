@@ -9,6 +9,12 @@ impl Render for TextInput {
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        // Content-width layout: the wrappers below size to the widest line so an
+        // outer `overflow_scroll` container can scroll the field horizontally
+        // (and expose a horizontal `max_offset`), instead of clipping to the
+        // viewport. Opt-in, non-wrapping multiline only.
+        let content_width_layout =
+            multiline && self.interaction.content_width_layout && !self.soft_wrap;
         let pad_x = if chromeless { px(0.0) } else { px(8.0) };
         let pad_y = if chromeless || !multiline {
             px(0.0)
@@ -63,17 +69,25 @@ impl Render for TextInput {
             self.interaction.cursor_blink_task = Some(task);
         }
 
-        let text_surface = div()
-            .w_full()
-            .min_w(px(0.0))
-            .px(pad_x)
-            .py(pad_y)
-            .overflow_hidden()
-            .child(TextElement { input: cx.entity() });
+        let mut text_surface = div().px(pad_x).py(pad_y);
+        if content_width_layout {
+            // At least the viewport, but grow to the widest line so the outer
+            // scroll container sees horizontal overflow. No clipping here — the
+            // container owns horizontal scrolling. `flex_shrink_0` stops the
+            // flex-row parent from shrinking it back down to the viewport.
+            text_surface = text_surface.min_w_full().flex_shrink_0();
+        } else {
+            text_surface = text_surface.w_full().min_w(px(0.0)).overflow_hidden();
+        }
+        let text_surface = text_surface.child(TextElement { input: cx.entity() });
 
-        let mut input = div()
-            .w_full()
-            .min_w(px(0.0))
+        let mut input = div();
+        if content_width_layout {
+            input = input.min_w_full();
+        } else {
+            input = input.w_full().min_w(px(0.0));
+        }
+        let mut input = input
             .flex()
             .track_focus(&focus)
             .key_context("TextInput")
@@ -157,12 +171,15 @@ impl Render for TextInput {
             // Focus changes toggle GPUI platform input handler registration during paint.
             // Key the subtree by focus state so GPUI doesn't reuse a stale unfocused paint
             // range that contains no input handlers when the field becomes focused.
-            .id(render_id)
-            .w_full()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .child(input);
+            .id(render_id);
+        if content_width_layout {
+            // `items_start` so the flex-col cross axis doesn't stretch the inner
+            // field back to the viewport width, letting it keep its content width.
+            outer = outer.min_w_full().items_start();
+        } else {
+            outer = outer.w_full().min_w(px(0.0));
+        }
+        let mut outer = outer.flex().flex_col().child(input);
 
         if let Some(state) = self.interaction.context_menu {
             outer = outer.child(

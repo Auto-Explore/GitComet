@@ -1758,6 +1758,8 @@ impl GitCometView {
             pane.mergetool_collapse_unchanged =
                 ui_session.mergetool_collapse_unchanged.unwrap_or(false);
             pane.mergetool_vertical_split = ui_session.mergetool_vertical_split.unwrap_or(false);
+            pane.mergetool_output_scroll_sync =
+                ui_session.mergetool_output_scroll_sync.unwrap_or(true);
         });
         let details_pane = cx.new(|cx| {
             DetailsPaneView::new(

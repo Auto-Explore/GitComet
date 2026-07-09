@@ -41,6 +41,7 @@ pub struct UiSession {
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
     pub mergetool_vertical_split: Option<bool>,
+    pub mergetool_output_scroll_sync: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -173,6 +174,7 @@ struct UiSessionFile {
     mergetool_auto_advance: Option<bool>,
     mergetool_collapse_unchanged: Option<bool>,
     mergetool_vertical_split: Option<bool>,
+    mergetool_output_scroll_sync: Option<bool>,
     change_tracking_height: Option<u32>,
     untracked_height: Option<u32>,
     history_show_graph: Option<bool>,
@@ -282,6 +284,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,
         mergetool_vertical_split: file.mergetool_vertical_split,
+        mergetool_output_scroll_sync: file.mergetool_output_scroll_sync,
         change_tracking_height: file.change_tracking_height,
         untracked_height: file.untracked_height,
         history_show_graph: file.history_show_graph,
@@ -591,6 +594,7 @@ pub struct UiSettings {
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
     pub mergetool_vertical_split: Option<bool>,
+    pub mergetool_output_scroll_sync: Option<bool>,
     pub change_tracking_height: Option<u32>,
     pub untracked_height: Option<u32>,
     pub history_show_graph: Option<bool>,
@@ -689,6 +693,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.mergetool_vertical_split {
             file.mergetool_vertical_split = Some(value);
+        }
+        if let Some(value) = settings.mergetool_output_scroll_sync {
+            file.mergetool_output_scroll_sync = Some(value);
         }
         if let Some(value) = settings.diff_word_wrap {
             file.diff_word_wrap = Some(value);

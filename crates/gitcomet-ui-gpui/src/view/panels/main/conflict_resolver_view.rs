@@ -565,7 +565,7 @@ impl MainPaneView {
                                     self.conflict_resolver.three_way_visible_len()
                                 }
                                 ConflictResolverViewMode::TwoWayDiff => {
-                                    self.conflict_resolver.two_way_split_visible_len()
+                                    self.conflict_resolver.two_way_visible_len()
                                 }
                             };
                             // Bottom overscroll: a few empty rows below the last
@@ -1728,6 +1728,7 @@ impl MainPaneView {
                                     )
                                 })
                                 .child({
+                                    self.prepare_conflict_resolved_output_editor(cx);
                                     self.rebuild_resolved_output_visible_projection();
                                     self.sync_conflict_resolved_output_gutter_scroll();
                                     let mut bottom_section =
@@ -1767,6 +1768,19 @@ impl MainPaneView {
                                                     .track_scroll(
                                                         &self.conflict_resolved_preview_gutter_scroll,
                                                     );
+
+                                                    // Above the size guard the merged output stays
+                                                    // read-only streamed (rendered from the
+                                                    // projection); otherwise it is the editable
+                                                    // free-text `TextInput`.
+                                                    let streamed =
+                                                        self.conflict_resolved_output_is_streamed();
+                                                    let overscroll_spacer_h =
+                                                        crate::ui_scale::design_px_from_percent(
+                                                            20.0,
+                                                            ui_scale_percent,
+                                                        )
+                                                            * CONFLICT_BOTTOM_OVERSCROLL_ROWS as f32;
 
                                                     div()
                                                         .id("conflict_resolver_output_body")
@@ -1808,12 +1822,23 @@ impl MainPaneView {
                                                                         .items_start()
                                                                         .h_full()
                                                                         .min_h(px(0.0))
-                                                                        .min_w_full()
+                                                                        // Bound (not min) the width so the editable output's
+                                                                        // scroll container clips and overflows horizontally
+                                                                        // instead of the whole row growing to the content width.
+                                                                        .w_full()
+                                                                        .min_w(px(0.0))
                                                                         .pr(
-                                                                            components::Scrollbar::visible_gutter(
-                                                                                self.conflict_resolved_preview_scroll.clone(),
-                                                                                components::ScrollbarAxis::Vertical,
-                                                                            ),
+                                                                            if streamed {
+                                                                                components::Scrollbar::visible_gutter(
+                                                                                    self.conflict_resolved_preview_scroll.clone(),
+                                                                                    components::ScrollbarAxis::Vertical,
+                                                                                )
+                                                                            } else {
+                                                                                components::Scrollbar::visible_gutter(
+                                                                                    self.conflict_resolved_output_editor_scroll.clone(),
+                                                                                    components::ScrollbarAxis::Vertical,
+                                                                                )
+                                                                            },
                                                                         )
                                                                         .child(
                                                                             div()
@@ -1839,7 +1864,10 @@ impl MainPaneView {
                                                                                 .h_full()
                                                                                 .min_h(px(0.0))
                                                                                 .pl_2()
-                                                                                .child(
+                                                                                .child(if streamed {
+                                                                                    // Read-only streamed output: a virtualized
+                                                                                    // uniform_list over the projection, scrolling
+                                                                                    // both axes so it stays coupled to the columns.
                                                                                     uniform_list(
                                                                                         "conflict_resolved_output_list",
                                                                                         outline_len,
@@ -1852,33 +1880,88 @@ impl MainPaneView {
                                                                                     ))
                                                                                     .h_full()
                                                                                     .min_h(px(0.0))
-                                                                                    .track_scroll(&self.conflict_resolved_preview_scroll)
+                                                                                    .track_scroll(
+                                                                                        &self.conflict_resolved_preview_scroll,
+                                                                                    )
                                                                                     .with_horizontal_sizing_behavior(
                                                                                         gpui::ListHorizontalSizingBehavior::Unconstrained,
                                                                                     )
-                                                                                    .into_any_element(),
-                                                                                ),
+                                                                                    .into_any_element()
+                                                                                } else {
+                                                                                    // The editable resolved-output pane: the
+                                                                                    // `TextInput` lays out at full content size
+                                                                                    // inside this `overflow_scroll` container, which
+                                                                                    // owns the shared scroll handle the input reads
+                                                                                    // to window its shaping. Scrolling both axes
+                                                                                    // keeps it coupled to the columns horizontally.
+                                                                                    div()
+                                                                                        .id("conflict_resolver_output_editor_scroll")
+                                                                                        .h_full()
+                                                                                        .min_h(px(0.0))
+                                                                                        // flex-col so the input stacks above the
+                                                                                        // bottom overscroll spacer (vertical overflow)
+                                                                                        // and, on the cross axis, the content-width
+                                                                                        // input overflows to the right instead of
+                                                                                        // being main-axis flex-shrunk to the viewport —
+                                                                                        // which is what gives the container a
+                                                                                        // horizontal `max_offset` to scroll-sync.
+                                                                                        .flex()
+                                                                                        .flex_col()
+                                                                                        .items_start()
+                                                                                        .w_full()
+                                                                                        .min_w(px(0.0))
+                                                                                        .overflow_scroll()
+                                                                                        .track_scroll(
+                                                                                            &self.conflict_resolved_output_editor_scroll,
+                                                                                        )
+                                                                                        .child(self.conflict_resolver_input.clone())
+                                                                                        // Bottom overscroll: mirror the gutter
+                                                                                        // list's CONFLICT_BOTTOM_OVERSCROLL_ROWS
+                                                                                        // trailing blanks as a spacer so the text
+                                                                                        // side's scrollable height matches and the
+                                                                                        // shared scroll sync can reach the bottom.
+                                                                                        .child(div().h(overscroll_spacer_h))
+                                                                                        .into_any_element()
+                                                                                }),
                                                                         ),
                                                                 ),
                                                         )
-                                                        .child(
+                                                        .child(if streamed {
                                                             components::Scrollbar::new(
                                                                 "conflict_resolver_output_scrollbar",
                                                                 self.conflict_resolved_preview_scroll
                                                                     .clone(),
                                                             )
                                                             .always_visible()
-                                                            .render(theme),
-                                                        )
-                                                        .child(
+                                                            .render(theme)
+                                                            .into_any_element()
+                                                        } else {
+                                                            components::Scrollbar::new(
+                                                                "conflict_resolver_output_scrollbar",
+                                                                self.conflict_resolved_output_editor_scroll
+                                                                    .clone(),
+                                                            )
+                                                            .always_visible()
+                                                            .render(theme)
+                                                            .into_any_element()
+                                                        })
+                                                        .child(if streamed {
                                                             components::Scrollbar::horizontal(
                                                                 "conflict_resolver_output_hscrollbar",
                                                                 self.conflict_resolved_preview_scroll
                                                                     .clone(),
                                                             )
-                                                            .always_visible()
-                                                            .render(theme),
-                                                        )
+                                                            .render(theme)
+                                                            .into_any_element()
+                                                        } else {
+                                                            components::Scrollbar::horizontal(
+                                                                "conflict_resolver_output_hscrollbar",
+                                                                self.conflict_resolved_output_editor_scroll
+                                                                    .clone(),
+                                                            )
+                                                            .render(theme)
+                                                            .into_any_element()
+                                                        })
                                                 },
                                             );
                                     bottom_section.style().flex_grow = Some(1.0 - vsplit_ratio);

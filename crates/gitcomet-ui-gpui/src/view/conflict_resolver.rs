@@ -8,7 +8,7 @@ use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_S
 pub use split_row_index::{ConflictSplitRowIndex, TwoWaySplitProjection, TwoWaySplitVisibleRow};
 #[cfg(any(test, feature = "benchmarks"))]
 pub use word_highlight::compute_three_way_word_highlights;
-pub use word_highlight::compute_word_highlights_for_row;
+pub use word_highlight::{compute_word_highlights_for_row, compute_word_highlights_for_texts};
 #[cfg(feature = "benchmarks")]
 pub use word_highlight::{TwoWayWordHighlights, compute_two_way_word_highlights};
 
@@ -535,6 +535,13 @@ pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
 pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
+/// Above this merged-output line count the resolved output stays in read-only
+/// streamed mode instead of materializing the whole text into the editable
+/// `TextInput` buffer — the perf guard for whole-file conflicts. Sits above
+/// [`LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES`] (a large-but-editable output still
+/// materializes) and below the whole-file streamed fixtures at `+ 1_000`.
+pub(crate) const RESOLVED_OUTPUT_EDITABLE_MAX_LINES: usize =
+    LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 500;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
 #[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
@@ -2710,6 +2717,35 @@ pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) ->
         common.saturating_mul(4) >= side_count
     };
     shared_enough(ours, ours_count) && shared_enough(theirs, theirs_count)
+}
+
+/// Whether computing the direct two-way alignment is practical (§30 aligned
+/// row space, no-base fallback). Same rationale as
+/// [`three_way_alignment_is_practical`], with ours standing in for the base
+/// as the similarity anchor.
+pub fn two_way_alignment_is_practical(ours: &str, theirs: &str) -> bool {
+    const ALWAYS_ALIGN_TOTAL_LINES: usize = 2_000;
+    const MAX_TOTAL_LINES: usize = 100_000;
+
+    let ours_count = ours.lines().count();
+    let theirs_count = theirs.lines().count();
+    let total = ours_count + theirs_count;
+    if total > MAX_TOTAL_LINES {
+        return false;
+    }
+    if total <= ALWAYS_ALIGN_TOTAL_LINES {
+        return true;
+    }
+
+    if theirs_count == 0 {
+        return true;
+    }
+    let ours_set: std::collections::HashSet<&str> = ours.lines().collect();
+    let common = theirs
+        .lines()
+        .filter(|line| ours_set.contains(line))
+        .count();
+    common.saturating_mul(4) >= theirs_count
 }
 
 pub fn select_conflict_rendering_mode(

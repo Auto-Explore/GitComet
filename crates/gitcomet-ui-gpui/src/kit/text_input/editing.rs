@@ -342,6 +342,13 @@ impl TextInput {
         self.interaction.vertical_scroll_handle = handle;
     }
 
+    /// Enable content-width layout: a multiline input lays out at its widest-line
+    /// width so an outer `overflow_scroll` container can scroll it horizontally
+    /// and drive a real horizontal `max_offset` on the shared scroll handle.
+    pub fn set_content_width_layout(&mut self, enabled: bool) {
+        self.interaction.content_width_layout = enabled;
+    }
+
     pub(super) fn queue_cursor_autoscroll(&mut self) {
         self.interaction.pending_cursor_autoscroll = true;
         self.interaction.cursor_autoscroll_retry_exhausted = false;
@@ -392,7 +399,13 @@ impl TextInput {
 
         let task = cx.spawn(
             async move |input: gpui::WeakEntity<TextInput>, cx: &mut gpui::AsyncApp| loop {
-                smol::Timer::after(Duration::from_millis(16)).await;
+                // Route the poll delay through gpui's executor rather than
+                // `smol::Timer`: the smol timer drives on the global async-io
+                // reactor thread, which breaks the deterministic test scheduler
+                // (it asserts against cross-thread activity at teardown).
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
 
                 let should_continue = input
                     .update(cx, |input, cx| {

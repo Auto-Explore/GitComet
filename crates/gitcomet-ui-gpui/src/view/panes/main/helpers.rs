@@ -105,6 +105,19 @@ fn build_resolved_output_syntax_state_with_source(
         return ResolvedOutputSyntaxState::default();
     }
 
+    // Large outputs skip foreground syntax entirely — render plain, then let the
+    // background pass upgrade — matching the streamed path and the diff view's
+    // `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING` gate. Without this a big editable
+    // output could shape syntax on the UI thread during a recompute.
+    if line_starts.len() > rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+        return ResolvedOutputSyntaxState {
+            highlights: Vec::new(),
+            prepared_document: None,
+            highlight_provider: None,
+            needs_background_prepare: true,
+        };
+    }
+
     match rows::prepare_diff_syntax_document_with_budget_reuse_text(
         language,
         rows::DiffSyntaxMode::Auto,
@@ -2326,6 +2339,11 @@ pub(crate) struct MainPaneView {
     /// §30 merge tool: stack the source columns vertically instead of
     /// side-by-side. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_vertical_split: bool,
+    /// §30 merge tool: sync the resolved output pane's scroll with the source
+    /// columns (in modes where they share a row space). Persisted UI setting
+    /// (cog menu). Merge-tool-specific rather than a general diff setting
+    /// because the resolver ships as a standalone tool.
+    pub(in crate::view) mergetool_output_scroll_sync: bool,
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) annotate_enabled: bool,
     /// Width (design px) of the annotate column; user-resizable, session-local.
@@ -2565,6 +2583,13 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_preview_last_synced_x: [Pixels; 4],
     pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 4],
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
+    /// Scroll handle for the editable resolved-output `TextInput`. The input lays
+    /// out at full content height inside an `overflow_y_scroll` container that
+    /// tracks this handle, and the input reads the same handle to window its line
+    /// shaping. It is also the output member (index 3) of the conflict-preview
+    /// scroll-sync group, so it stands in for `conflict_resolved_preview_scroll`
+    /// (which now only backs the read-only projection paths).
+    pub(in crate::view) conflict_resolved_output_editor_scroll: ScrollHandle,
     pub(in crate::view) conflict_resolved_preview_gutter_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_resolved_preview_gutter_last_synced_y: [Pixels; 2],
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,

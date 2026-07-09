@@ -4,15 +4,20 @@ use super::*;
 /// resolver-specific view options that used to borrow the diff-actions menu.
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let pane = host.main_pane.read(cx);
-    let (auto_advance, _collapse_default, _vertical_split) = pane.mergetool_preferences();
+    let (auto_advance, _collapse_default, _vertical_split, output_scroll_sync) =
+        pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
-    model_for_mergetool_settings(auto_advance, collapse_context)
+    model_for_mergetool_settings(auto_advance, collapse_context, output_scroll_sync)
 }
 
 // NOTE: a "Stack columns vertically" entry (backed by the persisted
 // `mergetool_vertical_split` setting and `SetMergetoolVerticalSplit`) is
 // deliberately not offered yet — the stacked column rendering is deferred.
-fn model_for_mergetool_settings(auto_advance: bool, collapse_context: bool) -> ContextMenuModel {
+fn model_for_mergetool_settings(
+    auto_advance: bool,
+    collapse_context: bool,
+    output_scroll_sync: bool,
+) -> ContextMenuModel {
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Merge tool settings".into()),
         ContextMenuItem::Separator,
@@ -32,6 +37,15 @@ fn model_for_mergetool_settings(auto_advance: bool, collapse_context: bool) -> C
             disabled: false,
             action: Box::new(ContextMenuAction::ToggleMergetoolCollapseUnchanged),
         },
+        ContextMenuItem::Entry {
+            label: "Sync resolved output scroll with source".into(),
+            icon: output_scroll_sync.then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetMergetoolOutputScrollSync {
+                enabled: !output_scroll_sync,
+            }),
+        },
     ])
 }
 
@@ -41,7 +55,7 @@ mod tests {
 
     #[test]
     fn model_marks_enabled_options_and_toggles_them() {
-        let model = model_for_mergetool_settings(true, false);
+        let model = model_for_mergetool_settings(true, false, true);
 
         assert!(model.items.iter().any(|item| {
             matches!(

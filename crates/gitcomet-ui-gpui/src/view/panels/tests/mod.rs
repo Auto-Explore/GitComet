@@ -588,6 +588,18 @@ pub(super) fn reset_uniform_list_offsets(handles: &[&gpui::UniformListScrollHand
     }
 }
 
+pub(super) fn scroll_handle_offset(handle: &gpui::ScrollHandle) -> gpui::Point<Pixels> {
+    handle.offset()
+}
+
+pub(super) fn scroll_handle_max_offset(handle: &gpui::ScrollHandle) -> gpui::Size<Pixels> {
+    handle.max_offset().into()
+}
+
+pub(super) fn set_scroll_handle_offset(handle: &gpui::ScrollHandle, offset: gpui::Point<Pixels>) {
+    handle.set_offset(offset);
+}
+
 pub(super) fn set_diff_scroll_sync_for_test(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
