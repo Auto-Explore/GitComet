@@ -638,6 +638,7 @@ impl MainPaneView {
                 let nd = non_drop_count(&st.entries);
                 let current_action = st.entries.get(ix).map(|e| e.action);
                 let can_drop = current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
+                let can_squash = squash_target(&st.entries, ix).is_some();
                 let wh = window.window_handle();
                 let root = this.root_view.clone();
                 cx.defer(move |cx| {
@@ -648,6 +649,7 @@ impl MainPaneView {
                                     ix,
                                     is_bottom,
                                     can_drop,
+                                    can_squash,
                                 },
                                 bounds,
                                 window,
@@ -855,6 +857,7 @@ impl MainPaneView {
                     let nd = non_drop_count(&st.entries);
                     let current_action = st.entries.get(ix).map(|e| e.action);
                     let can_drop = current_action == Some(InteractiveRebaseAction::Drop) || nd > 1;
+                    let can_squash = squash_target(&st.entries, ix).is_some();
                     let wh = window.window_handle();
                     let root = this.root_view.clone();
                     let pos = e.position;
@@ -866,6 +869,7 @@ impl MainPaneView {
                                         ix,
                                         is_bottom,
                                         can_drop,
+                                        can_squash,
                                     },
                                     pos,
                                     window,

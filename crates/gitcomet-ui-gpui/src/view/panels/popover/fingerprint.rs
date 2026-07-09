@@ -691,11 +691,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             ix,
             is_bottom,
             can_drop,
+            can_squash,
         } => {
             78u8.hash(hasher);
             ix.hash(hasher);
             is_bottom.hash(hasher);
             can_drop.hash(hasher);
+            can_squash.hash(hasher);
         }
         PopoverKind::InteractiveRebaseAutosquashMenu => {
             79u8.hash(hasher);

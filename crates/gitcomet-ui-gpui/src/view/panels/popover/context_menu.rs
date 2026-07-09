@@ -388,6 +388,7 @@ impl PopoverHost {
                 ix,
                 is_bottom,
                 can_drop,
+                can_squash,
             } => {
                 let is_squash_target = self
                     .main_pane
@@ -396,6 +397,7 @@ impl PopoverHost {
                     *ix,
                     *is_bottom,
                     *can_drop,
+                    *can_squash,
                     is_squash_target,
                 ))
             }
@@ -1482,6 +1484,7 @@ fn interactive_rebase_action_menu_model(
     ix: usize,
     is_bottom: bool,
     can_drop: bool,
+    can_squash: bool,
     is_squash_target: bool,
 ) -> ContextMenuModel {
     let mut items = vec![
@@ -1523,7 +1526,7 @@ fn interactive_rebase_action_menu_model(
             label: "squash".into(),
             icon: None,
             shortcut: None,
-            disabled: false,
+            disabled: !can_squash,
             action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
                 ix,
                 action: InteractiveRebaseAction::Squash,

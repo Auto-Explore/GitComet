@@ -2704,6 +2704,7 @@ pub(super) enum PopoverKind {
         ix: usize,
         is_bottom: bool,
         can_drop: bool,
+        can_squash: bool,
     },
     InteractiveRebaseAutosquashMenu,
 }
