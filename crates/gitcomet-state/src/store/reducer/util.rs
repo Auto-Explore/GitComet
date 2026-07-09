@@ -349,7 +349,7 @@ fn head_path_is_gitlink(workdir: &Path, path: &Path) -> bool {
         path
     };
 
-    let Ok(repo) = gix::open(workdir) else {
+    let Ok(repo) = crate::store::open_worktree_repo(workdir) else {
         return false;
     };
     let Ok(head_id) = repo.head_id() else {

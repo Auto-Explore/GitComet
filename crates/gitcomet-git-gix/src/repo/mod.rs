@@ -222,7 +222,7 @@ impl GixRepo {
     }
 
     pub(super) fn reopen_repo(&self) -> Result<gix::Repository> {
-        gix::open(&self.spec.workdir).map_err(|e| match e {
+        crate::open::open_worktree_repo(&self.spec.workdir).map_err(|e| match e {
             gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
             gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
             e => Error::new(ErrorKind::Backend(format!("gix open fresh repo: {e}"))),

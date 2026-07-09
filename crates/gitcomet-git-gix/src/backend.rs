@@ -32,7 +32,7 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
-        let repo = gix::open(&workdir).map_err(|e| match e {
+        let repo = crate::open::open_worktree_repo(&workdir).map_err(|e| match e {
             gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
             gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
             e => Error::new(ErrorKind::Backend(format!("gix open: {e}"))),
