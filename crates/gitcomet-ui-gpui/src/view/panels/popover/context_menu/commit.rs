@@ -1,4 +1,78 @@
 use super::*;
+use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+
+fn multi_cherry_pick_plan(
+    this: &PopoverHost,
+    repo_id: RepoId,
+    commit_id: &CommitId,
+) -> Option<(Vec<InteractiveRebaseEntry>, Vec<(String, u8)>)> {
+    let repo = this.active_repo().filter(|repo| repo.id == repo_id)?;
+    let selection = &repo.history_state.multi_selection;
+    if !(selection.is_multi() && selection.contains(commit_id)) {
+        return None;
+    }
+    let Loadable::Ready(page) = &repo.log else {
+        return None;
+    };
+
+    let branches = match &repo.branches {
+        Loadable::Ready(branches) => Some(branches),
+        _ => None,
+    };
+    let remote_branches = match &repo.remote_branches {
+        Loadable::Ready(branches) => Some(branches),
+        _ => None,
+    };
+    let branch_heads = branches
+        .into_iter()
+        .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref()))
+        .chain(
+            remote_branches
+                .into_iter()
+                .flat_map(|branches| branches.iter().map(|branch| branch.target.as_ref())),
+        )
+        .collect::<Vec<_>>();
+    let head_target = repo.head_commit_id();
+    let graph_rows = crate::view::history_graph::compute_graph(
+        &page.commits,
+        this.theme,
+        branch_heads,
+        head_target.as_ref().map(|head| head.as_ref()),
+    );
+
+    let mut selected = page
+        .commits
+        .iter()
+        .enumerate()
+        .filter(|(_, commit)| selection.contains(&commit.id))
+        .collect::<Vec<_>>();
+    if selected.len() < 2 {
+        return None;
+    }
+    selected.reverse();
+
+    let mut entries = Vec::with_capacity(selected.len());
+    let mut source_colors = Vec::with_capacity(selected.len());
+    for (page_ix, commit) in selected {
+        entries.push(InteractiveRebaseEntry {
+            action: InteractiveRebaseAction::Pick,
+            commit_id: commit.id.as_ref().to_string(),
+            summary: commit.summary.to_string(),
+            // The log page only carries the subject; the cherry-pick backend
+            // re-reads full messages from the source commits itself.
+            message: commit.summary.to_string(),
+            new_message: None,
+        });
+        let color_ix = graph_rows
+            .get(page_ix)
+            .and_then(|row| row.lanes_now.get(usize::from(row.node_col)))
+            .map(|lane| lane.color_ix)
+            .unwrap_or(0);
+        source_colors.push((commit.id.as_ref().to_string(), color_ix));
+    }
+
+    Some((entries, source_colors))
+}
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
@@ -44,6 +118,16 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         ));
     }
     items.push(ContextMenuItem::Separator);
+    let multi_cherry_pick_plan = multi_cherry_pick_plan(this, repo_id, commit_id);
+    let has_multi_cherry_pick = multi_cherry_pick_plan.is_some();
+    let cherry_pick_disabled = this
+        .active_repo()
+        .filter(|repo| repo.id == repo_id)
+        .is_some_and(|repo| {
+            repo.local_actions_in_flight > 0
+                || matches!(repo.rebase_in_progress, Loadable::Ready(true))
+                || matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
+        });
 
     // "Squash N commits" appears only when the right-clicked commit is part
     // of the active multi-selection and the whole selection passes the squash
@@ -71,6 +155,21 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),
+        });
+        items.push(ContextMenuItem::Separator);
+    }
+    if let Some((entries, source_colors)) = multi_cherry_pick_plan {
+        let label = format!("Cherry-pick {} commits…", entries.len()).into();
+        items.push(ContextMenuItem::Entry {
+            label,
+            icon: Some("icons/arrow_up.svg".into()),
+            shortcut: Some("P".into()),
+            disabled: cherry_pick_disabled,
+            action: Box::new(ContextMenuAction::OpenInteractiveCherryPickSetup {
+                repo_id,
+                entries,
+                source_colors,
+            }),
         });
         items.push(ContextMenuItem::Separator);
     }
@@ -129,16 +228,18 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
-    items.push(ContextMenuItem::Entry {
-        label: "Cherry-pick".into(),
-        icon: Some("icons/arrow_up.svg".into()),
-        shortcut: Some("P".into()),
-        disabled: false,
-        action: Box::new(ContextMenuAction::CherryPickCommit {
-            repo_id,
-            commit_id: commit_id.clone(),
-        }),
-    });
+    if !has_multi_cherry_pick {
+        items.push(ContextMenuItem::Entry {
+            label: "Cherry-pick".into(),
+            icon: Some("icons/arrow_up.svg".into()),
+            shortcut: Some("P".into()),
+            disabled: cherry_pick_disabled,
+            action: Box::new(ContextMenuAction::CherryPickCommit {
+                repo_id,
+                commit_id: commit_id.clone(),
+            }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "Revert".into(),
         icon: Some("icons/undo.svg".into()),

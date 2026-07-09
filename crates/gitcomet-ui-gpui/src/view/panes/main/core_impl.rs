@@ -730,6 +730,69 @@ fn blame_path_rev_for_target(
 }
 
 impl MainPaneView {
+    pub(in crate::view) fn sync_interactive_commit_editor_states(&mut self) {
+        let repos_with_setup: Vec<RepoId> = self
+            .state
+            .repos
+            .iter()
+            .filter(|r| {
+                r.interactive_rebase_setup.is_some() || r.interactive_cherry_pick_setup.is_some()
+            })
+            .map(|r| r.id)
+            .collect();
+        self.interactive_rebase_states
+            .retain(|repo_id, _| repos_with_setup.contains(repo_id));
+        for repo in self.state.repos.iter() {
+            if let Some(setup) = repo.interactive_rebase_setup.as_ref() {
+                let Loadable::Ready(entries) = &setup.entries else {
+                    continue;
+                };
+                let replace = self
+                    .interactive_rebase_states
+                    .get(&repo.id)
+                    .is_none_or(|st| {
+                        st.mode != ICommitEditorMode::Rebase || st.original_entries != *entries
+                    });
+                if replace {
+                    self.interactive_rebase_states.insert(
+                        repo.id,
+                        IRebaseViewState {
+                            mode: ICommitEditorMode::Rebase,
+                            entries: entries.clone(),
+                            original_entries: entries.clone(),
+                            ..Default::default()
+                        },
+                    );
+                }
+            } else if let Some(setup) = repo.interactive_cherry_pick_setup.as_ref() {
+                let source_colors = setup
+                    .source_colors
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::HashMap<_, _>>();
+                let replace = self
+                    .interactive_rebase_states
+                    .get(&repo.id)
+                    .is_none_or(|st| {
+                        st.mode != ICommitEditorMode::CherryPick
+                            || st.original_entries != setup.entries
+                    });
+                if replace {
+                    self.interactive_rebase_states.insert(
+                        repo.id,
+                        IRebaseViewState {
+                            mode: ICommitEditorMode::CherryPick,
+                            entries: setup.entries.clone(),
+                            original_entries: setup.entries.clone(),
+                            source_colors,
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         use std::hash::{Hash, Hasher};
 
@@ -3836,35 +3899,11 @@ impl MainPaneView {
 
         self.ensure_rendered_patch_diff_cache(cx);
 
-        // Sync per-repo interactive rebase editing state. Each repo with a setup
+        // Sync per-repo interactive commit editing state. Each repo with a setup
         // gets its own `IRebaseViewState`, populated once its entries become Ready
         // and kept (with local edits) across repo-tab switches. State for repos
         // whose setup is gone (cancelled, started, repo closed) is dropped.
-        // Collect ids first: `retain`'s closure cannot also borrow `self.state`.
-        let repos_with_setup: Vec<RepoId> = self
-            .state
-            .repos
-            .iter()
-            .filter(|r| r.interactive_rebase_setup.is_some())
-            .map(|r| r.id)
-            .collect();
-        self.interactive_rebase_states
-            .retain(|repo_id, _| repos_with_setup.contains(repo_id));
-        for repo in self.state.repos.iter() {
-            let Some(setup) = repo.interactive_rebase_setup.as_ref() else {
-                continue;
-            };
-            let Loadable::Ready(entries) = &setup.entries else {
-                continue;
-            };
-            self.interactive_rebase_states
-                .entry(repo.id)
-                .or_insert_with(|| IRebaseViewState {
-                    entries: entries.clone(),
-                    original_entries: entries.clone(),
-                    ..Default::default()
-                });
-        }
+        self.sync_interactive_commit_editor_states();
 
         // History caches are now managed by HistoryView.
     }

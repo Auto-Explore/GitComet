@@ -563,6 +563,11 @@ pub trait GitRepository: Send + Sync {
     }
     fn checkout_commit(&self, id: &CommitId) -> Result<()>;
     fn cherry_pick(&self, id: &CommitId) -> Result<()>;
+    fn cherry_pick_with_output(&self, _id: &CommitId, _commit: bool) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git cherry-pick is not implemented for this backend",
+        )))
+    }
     fn revert(&self, id: &CommitId) -> Result<()>;
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
@@ -623,6 +628,14 @@ pub trait GitRepository: Send + Sync {
     ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git rebase -i is not implemented for this backend",
+        )))
+    }
+    fn interactive_cherry_pick_with_output(
+        &self,
+        _entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "interactive cherry-pick is not implemented for this backend",
         )))
     }
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

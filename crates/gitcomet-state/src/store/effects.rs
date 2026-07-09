@@ -624,9 +624,22 @@ fn send_unavailable_git_effect_result(
         Effect::CheckoutCommit { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::CheckoutCommit, runtime, &send)
         }
-        Effect::CherryPickCommit { repo_id, .. } => {
-            send_repo_action_unavailable(repo_id, RepoActionKind::CherryPickCommit, runtime, &send)
-        }
+        Effect::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            summary,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::CherryPick {
+                    commit_id,
+                    commit,
+                    summary,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::RevertCommit { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::RevertCommit, runtime, &send)
         }
@@ -1051,6 +1064,13 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::InteractiveRebase { base, interactive },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::InteractiveCherryPick { repo_id, entries } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::InteractiveCherryPick { entries },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1868,8 +1888,15 @@ pub(super) fn schedule_effect(
         Effect::CheckoutCommit { repo_id, commit_id } => {
             repo_actions::schedule_checkout_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-        Effect::CherryPickCommit { repo_id, commit_id } => {
-            repo_actions::schedule_cherry_pick_commit(executor, repos, msg_tx, repo_id, commit_id);
+        Effect::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            summary,
+        } => {
+            repo_commands::schedule_cherry_pick_commit(
+                executor, repos, msg_tx, repo_id, commit_id, commit, summary,
+            );
         }
         Effect::RevertCommit { repo_id, commit_id } => {
             repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
@@ -2201,6 +2228,11 @@ pub(super) fn schedule_effect(
             entries,
             interactive,
         ),
+        Effect::InteractiveCherryPick { repo_id, entries } => {
+            repo_commands::schedule_interactive_cherry_pick(
+                executor, repos, msg_tx, repo_id, entries,
+            )
+        }
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)
         }

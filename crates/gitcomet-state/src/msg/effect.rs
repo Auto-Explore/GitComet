@@ -222,6 +222,8 @@ pub enum Effect {
     CherryPickCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        summary: String,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -476,6 +478,10 @@ pub enum Effect {
         /// rebases (e.g. squashing history without HEAD).
         interactive: bool,
     }, // entries held here so the effect dispatcher can pass them to the scheduler
+    InteractiveCherryPick {
+        repo_id: RepoId,
+        entries: Vec<InteractiveRebaseEntry>,
+    },
     MergeAbort {
         repo_id: RepoId,
     },

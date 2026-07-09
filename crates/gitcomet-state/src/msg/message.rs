@@ -372,6 +372,8 @@ pub enum Msg {
     CherryPickCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        summary: String,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -606,12 +608,24 @@ pub enum Msg {
         repo_id: RepoId,
         base: String,
     },
+    OpenInteractiveCherryPickSetup {
+        repo_id: RepoId,
+        entries: Vec<InteractiveRebaseEntry>,
+        source_colors: Vec<(String, u8)>,
+    },
     InteractiveRebase {
         repo_id: RepoId,
         base: String,
         entries: Vec<InteractiveRebaseEntry>,
     },
+    InteractiveCherryPick {
+        repo_id: RepoId,
+        entries: Vec<InteractiveRebaseEntry>,
+    },
     CancelInteractiveRebaseSetup {
+        repo_id: RepoId,
+    },
+    CancelInteractiveCherryPickSetup {
         repo_id: RepoId,
     },
     MergeAbort {

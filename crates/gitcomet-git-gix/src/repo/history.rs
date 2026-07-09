@@ -103,6 +103,42 @@ fn commit_author_env(repo: &gix::Repository, spec: &str) -> Result<(String, Stri
     Ok((author.name.to_string(), author.email.to_string(), date))
 }
 
+fn commit_message(repo: &gix::Repository, spec: &str) -> Result<String> {
+    let commit = peel_commit(repo, spec)?;
+    Ok(
+        bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
+            .trim_end()
+            .to_string(),
+    )
+}
+
+fn append_command_output(acc: &mut CommandOutput, output: CommandOutput) {
+    if !acc.stdout.is_empty() && !output.stdout.is_empty() {
+        acc.stdout.push('\n');
+    }
+    acc.stdout.push_str(&output.stdout);
+    if !acc.stderr.is_empty() && !output.stderr.is_empty() {
+        acc.stderr.push('\n');
+    }
+    acc.stderr.push_str(&output.stderr);
+    acc.exit_code = output.exit_code;
+}
+
+const CHERRY_PICK_ALREADY_APPLIED_SENTINEL: &str = "GITCOMET_CHERRY_PICK_ALREADY_APPLIED";
+
+fn is_empty_cherry_pick_output(output: &std::process::Output) -> bool {
+    let combined = format!(
+        "{}\n{}",
+        bytes_to_text_preserving_utf8(&output.stdout),
+        bytes_to_text_preserving_utf8(&output.stderr)
+    )
+    .to_ascii_lowercase();
+
+    (combined.contains("previous cherry-pick is now empty")
+        || combined.contains("cherry-pick is now empty"))
+        && combined.contains("nothing to commit")
+}
+
 impl GixRepo {
     pub(super) fn reset_with_output_impl(
         &self,
@@ -233,6 +269,53 @@ impl GixRepo {
         run_git_with_output(cmd, &format!("git rebase {onto}"))
     }
 
+    pub(super) fn cherry_pick_with_output_impl(
+        &self,
+        id: &CommitId,
+        commit: bool,
+    ) -> Result<CommandOutput> {
+        validate_hex_commit_id(id)?;
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("cherry-pick");
+        if !commit {
+            cmd.arg("--no-commit");
+        }
+        cmd.arg("--").arg(id.as_ref());
+        let label = if commit {
+            format!("git cherry-pick {}", id.as_ref())
+        } else {
+            format!("git cherry-pick --no-commit {}", id.as_ref())
+        };
+
+        let output = run_git_raw_output(cmd, &label)
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("failed to run {label}: {e}"))))?;
+        if output.status.success() {
+            return Ok(CommandOutput {
+                command: label,
+                stdout: bytes_to_text_preserving_utf8(&output.stdout),
+                stderr: bytes_to_text_preserving_utf8(&output.stderr),
+                exit_code: output.status.code(),
+            });
+        }
+
+        if is_empty_cherry_pick_output(&output) {
+            if self.rebase_in_progress_impl()? {
+                let mut abort = self.git_workdir_cmd();
+                abort.arg("cherry-pick").arg("--abort");
+                run_git_with_output(abort, "git cherry-pick --abort")?;
+            }
+            return Ok(CommandOutput {
+                command: label,
+                stdout: CHERRY_PICK_ALREADY_APPLIED_SENTINEL.to_string(),
+                stderr: bytes_to_text_preserving_utf8(&output.stderr),
+                exit_code: Some(0),
+            });
+        }
+
+        Err(git_command_failed_error(&label, output))
+    }
+
     pub(super) fn rebase_continue_with_output_impl(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
         let repo = self._repo.to_thread_local();
@@ -284,7 +367,19 @@ impl GixRepo {
             }
         }
         cmd.arg("rebase").arg("--continue");
-        self.run_rebase_step_output(cmd, "git rebase --continue")
+        match self.run_rebase_step_output(cmd, "git rebase --continue") {
+            Ok(output) => Ok(output),
+            Err(rebase_error) => {
+                let mut cherry_pick_cmd = self.git_workdir_cmd();
+                cherry_pick_cmd.arg("cherry-pick").arg("--continue");
+                match self
+                    .run_cherry_pick_step_output(cherry_pick_cmd, "git cherry-pick --continue")
+                {
+                    Ok(output) => Ok(output),
+                    Err(_) => Err(rebase_error),
+                }
+            }
+        }
     }
 
     /// Run a rebase step (`rebase -i` / `rebase --continue`). A non-zero exit
@@ -326,6 +421,24 @@ impl GixRepo {
         }
     }
 
+    /// Run a cherry-pick step (`cherry-pick --continue`). Like the rebase
+    /// path, a non-zero exit that leaves the cherry-pick still in progress
+    /// means git paused at the next conflict — report it as success so the
+    /// UI surfaces the conflict instead of a hard error.
+    fn run_cherry_pick_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
+        let output = run_git_raw_output(cmd, label)?;
+        if output.status.success() || self.cherry_pick_in_progress_impl()? {
+            Ok(CommandOutput {
+                command: label.to_string(),
+                stdout: bytes_to_text_preserving_utf8(&output.stdout),
+                stderr: bytes_to_text_preserving_utf8(&output.stderr),
+                exit_code: output.status.code(),
+            })
+        } else {
+            Err(git_command_failed_error(label, output))
+        }
+    }
+
     /// Whether the index holds unmerged (conflict) entries — the signature
     /// of a rebase genuinely paused at a conflict.
     fn index_has_conflicts(&self) -> bool {
@@ -356,6 +469,12 @@ impl GixRepo {
         match run_git_with_output(cmd, "git rebase --abort") {
             Ok(output) => Ok(output),
             Err(rebase_error) => {
+                let mut cherry_pick_cmd = self.git_workdir_cmd();
+                cherry_pick_cmd.arg("cherry-pick").arg("--abort");
+                if let Ok(output) = run_git_with_output(cherry_pick_cmd, "git cherry-pick --abort")
+                {
+                    return Ok(output);
+                }
                 // `git am` uses its own sequencer state. Falling back here allows a
                 // single "abort in-progress operation" UI action to handle both rebase
                 // and patch-apply flows.
@@ -384,7 +503,17 @@ impl GixRepo {
                     | gix::state::InProgress::RebaseInteractive
                     | gix::state::InProgress::ApplyMailbox
                     | gix::state::InProgress::ApplyMailboxRebase
+                    | gix::state::InProgress::CherryPick
+                    | gix::state::InProgress::CherryPickSequence
             )
+        ))
+    }
+
+    fn cherry_pick_in_progress_impl(&self) -> Result<bool> {
+        let repo = self._repo.to_thread_local();
+        Ok(matches!(
+            repo.state(),
+            Some(gix::state::InProgress::CherryPick | gix::state::InProgress::CherryPickSequence)
         ))
     }
 
@@ -488,6 +617,147 @@ impl GixRepo {
             }
         }
         result
+    }
+
+    pub(super) fn interactive_cherry_pick_with_output_impl(
+        &self,
+        entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        if entries.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(
+                "cherry-pick: no commits selected".to_string(),
+            )));
+        }
+        for entry in entries {
+            validate_hex_commit_id(&CommitId(entry.commit_id.clone().into()))?;
+        }
+
+        let pure_pick = entries
+            .iter()
+            .all(|entry| entry.action == InteractiveRebaseAction::Pick);
+        if pure_pick {
+            let mut cmd = self.git_workdir_cmd();
+            cmd.arg("cherry-pick").arg("--no-edit").arg("--");
+            for entry in entries {
+                cmd.arg(&entry.commit_id);
+            }
+            let label = format!("git cherry-pick {} commits", entries.len());
+            return run_git_with_output(cmd, &label);
+        }
+
+        let repo = self._repo.to_thread_local();
+        let mut output = CommandOutput {
+            command: format!("git cherry-pick --interactive {} commits", entries.len()),
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: Some(0),
+        };
+
+        let mut pending_messages: Vec<String> = Vec::new();
+        let mut pending_author: Option<(String, String, String)> = None;
+
+        let commit_pending_group = |this: &Self,
+                                    output: &mut CommandOutput,
+                                    pending_messages: &mut Vec<String>,
+                                    pending_author: &mut Option<(String, String, String)>|
+         -> Result<()> {
+            if pending_messages.is_empty() {
+                return Ok(());
+            }
+            let message = if pending_messages.len() == 1 {
+                pending_messages[0].clone()
+            } else {
+                gitcomet_core::squash::build_squash_message(pending_messages)
+            };
+            if message.trim().is_empty() {
+                return Err(Error::new(ErrorKind::Backend(
+                    "cherry-pick: commit message must not be empty".to_string(),
+                )));
+            }
+            let Some((author_name, author_email, author_date)) = pending_author.take() else {
+                return Err(Error::new(ErrorKind::Backend(
+                    "cherry-pick: missing author for pending commit".to_string(),
+                )));
+            };
+            let mut cmd = this.git_workdir_cmd();
+            cmd.arg("commit")
+                .arg("-m")
+                .arg(&message)
+                .env("GIT_AUTHOR_NAME", author_name)
+                .env("GIT_AUTHOR_EMAIL", author_email)
+                .env("GIT_AUTHOR_DATE", author_date);
+            let commit_output = run_git_with_output(cmd, "git commit")?;
+            append_command_output(output, commit_output);
+            pending_messages.clear();
+            Ok(())
+        };
+
+        for entry in entries {
+            match entry.action {
+                InteractiveRebaseAction::Drop => continue,
+                InteractiveRebaseAction::Pick | InteractiveRebaseAction::Reword => {
+                    commit_pending_group(
+                        self,
+                        &mut output,
+                        &mut pending_messages,
+                        &mut pending_author,
+                    )?;
+                    let mut cmd = self.git_workdir_cmd();
+                    cmd.arg("cherry-pick")
+                        .arg("--no-commit")
+                        .arg("--")
+                        .arg(&entry.commit_id);
+                    let pick_output = run_git_with_output(
+                        cmd,
+                        &format!("git cherry-pick --no-commit {}", entry.commit_id),
+                    )?;
+                    append_command_output(&mut output, pick_output);
+                    pending_author = Some(commit_author_env(&repo, &entry.commit_id)?);
+                    let message = if entry.action == InteractiveRebaseAction::Reword {
+                        entry
+                            .new_message
+                            .clone()
+                            .filter(|message| !message.trim().is_empty())
+                            .ok_or_else(|| {
+                                Error::new(ErrorKind::Backend(
+                                    "cherry-pick: reword message must not be empty".to_string(),
+                                ))
+                            })?
+                    } else {
+                        commit_message(&repo, &entry.commit_id)?
+                    };
+                    pending_messages.push(message);
+                }
+                InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup => {
+                    if pending_messages.is_empty() {
+                        return Err(Error::new(ErrorKind::Backend(
+                            "cherry-pick: squash needs a previous picked commit".to_string(),
+                        )));
+                    }
+                    let mut cmd = self.git_workdir_cmd();
+                    cmd.arg("cherry-pick")
+                        .arg("--no-commit")
+                        .arg("--")
+                        .arg(&entry.commit_id);
+                    let pick_output = run_git_with_output(
+                        cmd,
+                        &format!("git cherry-pick --no-commit {}", entry.commit_id),
+                    )?;
+                    append_command_output(&mut output, pick_output);
+                    if entry.action == InteractiveRebaseAction::Squash {
+                        pending_messages.push(commit_message(&repo, &entry.commit_id)?);
+                    }
+                }
+            }
+        }
+        commit_pending_group(
+            self,
+            &mut output,
+            &mut pending_messages,
+            &mut pending_author,
+        )?;
+
+        Ok(output)
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {

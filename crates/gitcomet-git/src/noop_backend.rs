@@ -250,6 +250,7 @@ mod tests {
         assert_unsupported(repo.delete_branch_force("feature"));
         assert_unsupported(repo.checkout_remote_branch("origin", "main", "feature"));
         assert_unsupported(repo.commit_amend("message"));
+        assert_unsupported(repo.cherry_pick_with_output(&commit, true));
         assert_unsupported(repo.rebase_with_output("main"));
         assert_unsupported(repo.rebase_continue_with_output());
         assert_unsupported(repo.rebase_abort_with_output());

@@ -952,6 +952,50 @@ pub(super) fn schedule_interactive_rebase(
     );
 }
 
+pub(super) fn schedule_interactive_cherry_pick(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    entries: Vec<InteractiveRebaseEntry>,
+) {
+    let command_entries = entries.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::InteractiveCherryPick {
+            entries: command_entries,
+        },
+        move |repo| repo.interactive_cherry_pick_with_output(&entries),
+    );
+}
+
+pub(super) fn schedule_cherry_pick_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    summary: String,
+) {
+    let command_commit_id = commit_id.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CherryPick {
+            commit_id: command_commit_id,
+            commit,
+            summary,
+        },
+        move |repo| repo.cherry_pick_with_output(&commit_id, commit),
+    );
+}
+
 pub(super) fn schedule_merge_abort(
     executor: &TaskExecutor,
     repos: &RepoMap,

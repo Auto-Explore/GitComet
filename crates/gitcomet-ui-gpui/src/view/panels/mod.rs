@@ -210,6 +210,11 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         base: String,
     },
+    OpenInteractiveCherryPickSetup {
+        repo_id: RepoId,
+        entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+        source_colors: Vec<(String, u8)>,
+    },
     SetInteractiveRebaseAction {
         ix: usize,
         action: InteractiveRebaseAction,

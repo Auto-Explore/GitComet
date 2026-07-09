@@ -4916,6 +4916,8 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CherryPickCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
+                commit: true,
+                summary: "pick me".into(),
             },
             1,
         ),

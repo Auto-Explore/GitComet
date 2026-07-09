@@ -851,6 +851,12 @@ pub struct InteractiveRebaseSetup {
 }
 
 #[derive(Clone, Debug)]
+pub struct InteractiveCherryPickSetup {
+    pub entries: Vec<InteractiveRebaseEntry>,
+    pub source_colors: Vec<(String, u8)>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -901,6 +907,7 @@ pub struct RepoState {
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
+    pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
     pub merge_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
@@ -989,6 +996,7 @@ impl RepoState {
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
             interactive_rebase_setup: None,
+            interactive_cherry_pick_setup: None,
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,

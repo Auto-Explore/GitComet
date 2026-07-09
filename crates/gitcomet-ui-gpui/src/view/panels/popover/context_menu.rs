@@ -386,18 +386,16 @@ impl PopoverHost {
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
             PopoverKind::InteractiveRebaseActionMenu {
                 ix,
-                is_bottom,
-                can_drop,
                 can_squash,
+                can_drop,
             } => {
                 let pick_locked = self
                     .main_pane
                     .read_with(cx, |pane, _| pane.active_entry_pick_locked(*ix));
                 Some(interactive_rebase_action_menu_model(
                     *ix,
-                    *is_bottom,
-                    *can_drop,
                     *can_squash,
+                    *can_drop,
                     pick_locked,
                 ))
             }
@@ -598,8 +596,22 @@ impl PopoverHost {
                     .dispatch(Msg::CheckoutCommit { repo_id, commit_id });
             }
             ContextMenuAction::CherryPickCommit { repo_id, commit_id } => {
-                self.store
-                    .dispatch(Msg::CherryPickCommit { repo_id, commit_id });
+                let anchor = self
+                    .popover_anchor
+                    .as_ref()
+                    .map(|anchor| match anchor {
+                        PopoverAnchor::Point(point) => *point,
+                        PopoverAnchor::Bounds(bounds) => bounds.bottom_right(),
+                        PopoverAnchor::Centered => point(px(64.0), px(64.0)),
+                    })
+                    .unwrap_or_else(|| point(px(64.0), px(64.0)));
+                self.open_popover_at(
+                    PopoverKind::CherryPickCommitConfirm { repo_id, commit_id },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
             }
             ContextMenuAction::RevertCommit { repo_id, commit_id } => {
                 self.store
@@ -921,6 +933,17 @@ impl PopoverHost {
             ContextMenuAction::LoadInteractiveRebaseSetup { repo_id, base } => {
                 self.store
                     .dispatch(Msg::LoadInteractiveRebaseSetup { repo_id, base });
+            }
+            ContextMenuAction::OpenInteractiveCherryPickSetup {
+                repo_id,
+                entries,
+                source_colors,
+            } => {
+                self.store.dispatch(Msg::OpenInteractiveCherryPickSetup {
+                    repo_id,
+                    entries,
+                    source_colors,
+                });
             }
             ContextMenuAction::SetInteractiveRebaseAction { ix, action } => {
                 let root_view = self.root_view.clone();
@@ -1481,9 +1504,8 @@ impl PopoverHost {
 
 fn interactive_rebase_action_menu_model(
     ix: usize,
-    is_bottom: bool,
-    can_drop: bool,
     can_squash: bool,
+    can_drop: bool,
     pick_locked: bool,
 ) -> ContextMenuModel {
     let mut items = vec![
@@ -1523,7 +1545,7 @@ fn interactive_rebase_action_menu_model(
             }),
         },
     ];
-    if !is_bottom {
+    if can_squash {
         items.push(ContextMenuItem::Entry {
             label: "squash".into(),
             icon: None,

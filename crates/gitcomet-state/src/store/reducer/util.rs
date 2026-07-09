@@ -1013,6 +1013,8 @@ fn summarize_command(
                     "Rebase"
                 }
             }
+            RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
+            RepoCommandKind::CherryPick { .. } => "Cherry-pick",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1221,6 +1223,31 @@ fn summarize_command(
                 format!("Interactive rebase onto {base}: Completed")
             } else {
                 format!("Rebase onto {base}: Completed")
+            }
+        }
+        RepoCommandKind::InteractiveCherryPick { entries } => {
+            format!("Cherry-pick {} commits: Completed", entries.len())
+        }
+        RepoCommandKind::CherryPick {
+            commit_id,
+            commit,
+            summary,
+        } => {
+            if output
+                .stdout
+                .contains("GITCOMET_CHERRY_PICK_ALREADY_APPLIED")
+            {
+                "Current branch already has all the changes from the cherry-picked commit."
+                    .to_string()
+            } else {
+                let sha = commit_id.as_ref();
+                let short = sha.get(0..7).unwrap_or(sha);
+                let summary = summary.lines().next().unwrap_or("").trim();
+                if *commit {
+                    format!("Cherry-picked {short}: {summary}")
+                } else {
+                    format!("Cherry-picked {short} without committing: {summary}")
+                }
             }
         }
         RepoCommandKind::MergeAbort => "Merge: Aborted".to_string(),
@@ -2212,6 +2239,53 @@ mod tests {
             None,
         );
         assert_eq!(squash_rebase_summary, "Rebase onto HEAD~3: Completed");
+
+        let commit_id = CommitId("abcdef1234567890".into());
+        let (_, cherry_pick_summary) = summarize_command(
+            &RepoCommandKind::CherryPick {
+                commit_id: commit_id.clone(),
+                commit: true,
+                summary: "fix parser\n\nbody".into(),
+            },
+            &command_output("git cherry-pick abcdef1", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(cherry_pick_summary, "Cherry-picked abcdef1: fix parser");
+
+        let (_, cherry_pick_no_commit_summary) = summarize_command(
+            &RepoCommandKind::CherryPick {
+                commit_id: commit_id.clone(),
+                commit: false,
+                summary: "fix parser".into(),
+            },
+            &command_output("git cherry-pick --no-commit abcdef1", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            cherry_pick_no_commit_summary,
+            "Cherry-picked abcdef1 without committing: fix parser"
+        );
+
+        let (_, cherry_pick_already_applied_summary) = summarize_command(
+            &RepoCommandKind::CherryPick {
+                commit_id,
+                commit: true,
+                summary: "fix parser".into(),
+            },
+            &command_output(
+                "git cherry-pick abcdef1",
+                "GITCOMET_CHERRY_PICK_ALREADY_APPLIED",
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            cherry_pick_already_applied_summary,
+            "Current branch already has all the changes from the cherry-picked commit."
+        );
 
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,

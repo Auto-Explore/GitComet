@@ -2017,14 +2017,18 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::CherryPickCommit {
             repo_id,
             commit_id: CommitId("deadbeef".into()),
+            commit: true,
+            summary: "pick me".into(),
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::CherryPickCommit {
             repo_id: RepoId(1),
+            commit: true,
+            summary,
             ..
-        }]
+        }] if summary == "pick me"
     ));
 
     let effects = reduce(
@@ -3638,6 +3642,8 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         Msg::CherryPickCommit {
             repo_id,
             commit_id: CommitId("3333333333333333333333333333333333333333".into()),
+            commit: true,
+            summary: "pick me".into(),
         },
     );
 
@@ -3645,6 +3651,38 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+}
+
+#[test]
+fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::InteractiveCherryPick {
+                entries: vec![gitcomet_core::services::InteractiveRebaseEntry {
+                    action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+                    commit_id: "3333333333333333333333333333333333333333".to_string(),
+                    summary: "pick me".to_string(),
+                    message: "pick me".to_string(),
+                    new_message: None,
+                }],
+            },
+            result: Ok(CommandOutput::empty_success("git cherry-pick")),
+        }),
+    );
+
     assert_eq!(state.repos[0].pending_force_push_lease, None);
 }
 

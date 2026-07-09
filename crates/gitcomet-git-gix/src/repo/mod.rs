@@ -532,6 +532,10 @@ impl GitRepository for GixRepo {
         self.cherry_pick_impl(id)
     }
 
+    fn cherry_pick_with_output(&self, id: &CommitId, commit: bool) -> Result<CommandOutput> {
+        self.cherry_pick_with_output_impl(id, commit)
+    }
+
     fn revert(&self, id: &CommitId) -> Result<()> {
         self.revert_impl(id)
     }
@@ -673,6 +677,13 @@ impl GitRepository for GixRepo {
         entries: &[InteractiveRebaseEntry],
     ) -> Result<CommandOutput> {
         self.interactive_rebase_with_output_impl(base, entries)
+    }
+
+    fn interactive_cherry_pick_with_output(
+        &self,
+        entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        self.interactive_cherry_pick_with_output_impl(entries)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

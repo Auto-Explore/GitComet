@@ -2599,8 +2599,10 @@ pub(crate) struct MainPaneView {
 /// View-local editing state for one repo's interactive rebase setup.
 #[derive(Default)]
 pub(in crate::view) struct IRebaseViewState {
+    pub(in crate::view) mode: ICommitEditorMode,
     pub(in crate::view) entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
     pub(in crate::view) original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+    pub(in crate::view) source_colors: std::collections::HashMap<String, u8>,
     /// Active auto-squash strategy, or None when auto-squash is off.
     pub(in crate::view) autosquash_mode: Option<AutosquashMode>,
     /// Commits folded away by auto-squash, keyed by the surviving commit id.
@@ -2617,6 +2619,13 @@ pub(in crate::view) struct IRebaseViewState {
     pub(in crate::view) list_sig: (u64, usize),
     /// (ix_a, ix_b, version) — the two data-indices swapped by ▲/▼; drives fade-in animation.
     pub(in crate::view) reorder_anim: Option<(usize, usize, u32)>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) enum ICommitEditorMode {
+    #[default]
+    Rebase,
+    CherryPick,
 }
 
 #[derive(Clone, Copy, Debug)]

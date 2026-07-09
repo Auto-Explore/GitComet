@@ -4,6 +4,7 @@ use gitcomet_core::services::InteractiveRebaseAction;
 mod app_menu;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
+mod cherry_pick_commit_confirm;
 mod clone_repo;
 mod commit_prompt;
 mod conflict_save_stage_confirm;
@@ -363,6 +364,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
         kind,
         PopoverKind::StashDropConfirm { .. }
             | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::CherryPickCommitConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
@@ -458,6 +460,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         }
         | PopoverKind::PushSetUpstreamPrompt { .. }
         | PopoverKind::ForcePushConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
@@ -511,9 +514,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::PushSetUpstreamPrompt { .. } => Some(DIALOG_320_WIDTH),
-        PopoverKind::ResetPrompt { .. } | PopoverKind::RebaseOntoConfirm { .. } => {
-            Some(DIALOG_380_WIDTH)
-        }
+        PopoverKind::ResetPrompt { .. }
+        | PopoverKind::RebaseOntoConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } | PopoverKind::ConflictSaveStageConfirm { .. } => {
             Some(DIALOG_360_WIDTH)
         }
@@ -2936,6 +2939,9 @@ impl PopoverHost {
             }
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
+            }
+            PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
+                cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
