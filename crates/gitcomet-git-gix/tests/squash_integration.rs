@@ -1,10 +1,10 @@
 use gitcomet_core::domain::CommitId;
-use gitcomet_core::services::{GitBackend, GitRepository};
+use gitcomet_core::services::{GitBackend, GitRepository, InteractiveRebaseAction};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
@@ -73,6 +73,15 @@ fn commit_file_with_env(
 
 fn rev_parse(repo: &Path, spec: &str) -> String {
     git_stdout(repo, &["rev-parse", spec])
+}
+
+fn git_path(repo: &Path, path: &str) -> PathBuf {
+    let path = PathBuf::from(git_stdout(repo, &["rev-parse", "--git-path", path]));
+    if path.is_absolute() {
+        path
+    } else {
+        repo.join(path)
+    }
 }
 
 fn commit_id(sha: &str) -> CommitId {
@@ -332,4 +341,160 @@ fn squash_message_preview_combines_messages_oldest_first() {
         .squash_message_preview(&commit_id(&b), &commit_id(&d))
         .expect("build message preview");
     assert_eq!(preview, "Commit B\n\nBody of B\n\nCommit C\n\nCommit D");
+}
+
+#[test]
+fn interactive_rebase_setup_captures_summary_and_full_message() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, a, b, _c, _d) = linear_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+
+    // Oldest-first, and root itself is excluded (it is the base).
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[0].commit_id, a);
+    assert_eq!(entries[0].summary, "Commit A");
+    assert_eq!(entries[0].message, "Commit A");
+
+    // Commit B has a multi-line body: summary is the subject, message is full.
+    assert_eq!(entries[1].commit_id, b);
+    assert_eq!(entries[1].summary, "Commit B");
+    assert_eq!(entries[1].message, "Commit B\n\nBody of B");
+}
+
+#[test]
+fn interactive_rebase_accepts_branch_sha_and_head_relative_bases() {
+    for case in ["branch", "sha", "head-relative"] {
+        let dir = tempfile::tempdir().expect("create tempdir");
+        let repo = dir.path().join("repo");
+        let (root, _a, _b, _c, _d) = linear_repo(&repo);
+        run_git(&repo, &["branch", "base-branch", &root]);
+
+        let base = match case {
+            "branch" => "base-branch".to_string(),
+            "sha" => root.clone(),
+            "head-relative" => "HEAD~4".to_string(),
+            _ => unreachable!(),
+        };
+        let expected_base = rev_parse(&repo, &base);
+
+        let backend = open_backend(&repo);
+        let mut entries = backend
+            .list_commits_for_interactive_rebase(&base)
+            .expect("list commits for interactive rebase");
+        assert_eq!(entries.len(), 4, "case {case}");
+        entries[0].action = InteractiveRebaseAction::Reword;
+        entries[0].new_message = Some(format!("Reworded via {case} base"));
+
+        backend
+            .interactive_rebase_with_output(&base, &entries)
+            .expect("interactive rebase");
+
+        let exclude_base = format!("^{expected_base}");
+        let first_rewritten = git_stdout(&repo, &["rev-list", "--reverse", "HEAD", &exclude_base])
+            .lines()
+            .next()
+            .expect("first rewritten commit")
+            .to_string();
+        assert_eq!(
+            rev_parse(&repo, &format!("{first_rewritten}^")),
+            expected_base
+        );
+        assert_eq!(
+            git_stdout(&repo, &["log", "-1", "--format=%B", &first_rewritten]),
+            format!("Reworded via {case} base")
+        );
+    }
+}
+
+#[test]
+fn interactive_rebase_preserves_current_reword_message_across_conflict() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "a\n", "Prerequisite");
+    commit_file(&repo, "file.txt", "b\n", "Reword me");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[1].action = InteractiveRebaseAction::Reword;
+    entries[1].new_message = Some("Reworded after conflict\n\nPreserved body".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    let persisted = git_path(&repo, "rebase-merge/gitcomet-reword");
+    assert!(persisted.is_dir(), "reword state must survive the pause");
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    let continue_output = backend
+        .rebase_continue_with_output()
+        .expect("continue interactive rebase");
+
+    assert!(
+        !backend.rebase_in_progress().expect("read rebase state"),
+        "rebase still in progress after continue: {continue_output:?}; status: {}",
+        git_stdout(&repo, &["status", "--porcelain=v2", "--branch"])
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Reworded after conflict\n\nPreserved body"
+    );
+    assert!(
+        !persisted.exists(),
+        "Git must clean up completed rebase state"
+    );
+}
+
+#[test]
+fn interactive_rebase_preserves_later_reword_message_across_conflict() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "a\n", "Prerequisite");
+    commit_file(&repo, "file.txt", "b\n", "Conflicting commit");
+    commit_file(&repo, "later.txt", "later\n", "Later reword");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[2].action = InteractiveRebaseAction::Reword;
+    entries[2].new_message = Some("Later message preserved".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    let continue_output = backend
+        .rebase_continue_with_output()
+        .expect("continue interactive rebase");
+
+    assert!(
+        !backend.rebase_in_progress().expect("read rebase state"),
+        "rebase still in progress after continue: {continue_output:?}; status: {}",
+        git_stdout(&repo, &["status", "--porcelain=v2", "--branch"])
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Later message preserved"
+    );
 }

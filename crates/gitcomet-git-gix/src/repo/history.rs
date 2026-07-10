@@ -9,7 +9,7 @@ use gitcomet_core::services::{
     CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry, ResetMode, Result,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Returns the HEAD commit id, or `None` when HEAD is unborn / empty.
@@ -25,6 +25,12 @@ pub(super) fn gix_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::
 /// Upper bound on the number of commits a single squash may cover; a runaway
 /// walk past this means `oldest` is not a first-parent ancestor of `head`.
 const MAX_SQUASH_CHAIN: usize = 10_000;
+const PERSISTED_REWORD_DIR: &str = "gitcomet-reword";
+
+#[cfg(windows)]
+const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.cmd";
+#[cfg(not(windows))]
+const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.sh";
 
 fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
     repo.rev_parse_single(spec)
@@ -226,6 +232,16 @@ impl GixRepo {
 
     pub(super) fn rebase_continue_with_output_impl(&self) -> Result<CommandOutput> {
         let mut cmd = self.git_workdir_cmd();
+        let repo = self._repo.to_thread_local();
+        if let Some((editor, messages)) = persisted_reword_paths(repo.path()) {
+            cmd.env("GIT_EDITOR", editor);
+            cmd.env("GITCOMET_MSGS_DIR", messages);
+        } else {
+            // `git rebase --continue` may open an editor to confirm the replayed
+            // commit's message. A GUI subprocess has no terminal to service it,
+            // so use a no-op editor when there is no GitComet reword plan.
+            cmd.env("GIT_EDITOR", "true");
+        }
         cmd.arg("rebase").arg("--continue");
         self.run_rebase_step_output(cmd, "git rebase --continue")
     }
@@ -296,18 +312,26 @@ impl GixRepo {
 
         let range = format!("{base}..HEAD");
         let mut cmd = self.git_workdir_cmd();
-        cmd.args(["log", "--format=%H %s", "--reverse", &range]);
+        // Fields (sha, subject, full message) are unit-separated (\x1f) and
+        // records are record-separated (\x1e) so multi-line bodies parse
+        // unambiguously.
+        cmd.args(["log", "--format=%H%x1f%s%x1f%B%x1e", "--reverse", &range]);
         let output = run_git_capture(cmd, &format!("git log {range}"))?;
 
         let entries = output
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|line| {
-                let (sha, summary) = line.split_once(' ').unwrap_or((line, ""));
+            .split('\x1e')
+            .map(|record| record.trim_start_matches('\n'))
+            .filter(|record| !record.is_empty())
+            .map(|record| {
+                let mut fields = record.splitn(3, '\x1f');
+                let sha = fields.next().unwrap_or("");
+                let summary = fields.next().unwrap_or("");
+                let message = fields.next().unwrap_or("");
                 InteractiveRebaseEntry {
                     action: InteractiveRebaseAction::Pick,
                     commit_id: sha.to_string(),
                     summary: summary.to_string(),
+                    message: message.trim_end_matches('\n').to_string(),
                     new_message: None,
                 }
             })
@@ -323,7 +347,7 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(base, "interactive rebase base")?;
 
-        let scripts = RebaseScripts::create(entries, self.git_dir_path()).map_err(|e| {
+        let scripts = RebaseScripts::create(entries).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "failed to create rebase scripts: {e}"
             )))
@@ -334,18 +358,21 @@ impl GixRepo {
         if let Some(ref msg_editor) = scripts.msg_editor_path {
             cmd.env("GIT_EDITOR", msg_editor);
             cmd.env("GITCOMET_MSGS_DIR", &scripts.msgs_dir);
-            let repo = self._repo.to_thread_local();
-            cmd.env("GITCOMET_GIT_DIR", repo.path());
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
         cmd.args(["rebase", "-i", "--", base]);
 
         let label = format!("git rebase -i {base}");
-        self.run_rebase_step_output(cmd, &label)
-    }
-
-    fn git_dir_path(&self) -> PathBuf {
-        self._repo.to_thread_local().path().to_owned()
+        let output = self.run_rebase_step_output(cmd, &label)?;
+        if self.rebase_in_progress_impl()? {
+            let repo = self._repo.to_thread_local();
+            scripts.persist_reword_state(repo.path()).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "failed to preserve interactive rebase messages: {e}"
+                )))
+            })?;
+        }
+        Ok(output)
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {
@@ -397,7 +424,7 @@ struct RebaseScripts {
 }
 
 impl RebaseScripts {
-    fn create(entries: &[InteractiveRebaseEntry], git_dir: PathBuf) -> std::io::Result<Self> {
+    fn create(entries: &[InteractiveRebaseEntry]) -> std::io::Result<Self> {
         let dir = tempfile::tempdir()?;
 
         let todo_content = build_todo_content(entries);
@@ -429,12 +456,8 @@ impl RebaseScripts {
                 }
             }
 
-            #[cfg(windows)]
-            let msg_editor_name = "gitcomet-msg-editor.cmd";
-            #[cfg(not(windows))]
-            let msg_editor_name = "gitcomet-msg-editor.sh";
-            let path = dir.path().join(msg_editor_name);
-            let script = msg_editor_script_contents(&git_dir);
+            let path = dir.path().join(MSG_EDITOR_NAME);
+            let script = msg_editor_script_contents();
             fs::write(&path, script.as_bytes())?;
             #[cfg(unix)]
             make_executable(&path)?;
@@ -449,6 +472,46 @@ impl RebaseScripts {
             msgs_dir,
         })
     }
+
+    /// Keep reword data with Git's sequencer state when the initial command
+    /// pauses. Git removes the containing `rebase-merge` directory when the
+    /// rebase completes, aborts, or quits.
+    fn persist_reword_state(&self, git_dir: &Path) -> std::io::Result<()> {
+        let Some(editor) = &self.msg_editor_path else {
+            return Ok(());
+        };
+
+        let rebase_dir = git_dir.join("rebase-merge");
+        if !rebase_dir.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "interactive rebase state directory is missing",
+            ));
+        }
+        let state_dir = rebase_dir.join(PERSISTED_REWORD_DIR);
+        let messages_dir = state_dir.join("messages");
+        fs::create_dir_all(&messages_dir)?;
+
+        let persisted_editor = state_dir.join(MSG_EDITOR_NAME);
+        fs::copy(editor, &persisted_editor)?;
+        #[cfg(unix)]
+        make_executable(&persisted_editor)?;
+
+        for entry in fs::read_dir(&self.msgs_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                fs::copy(entry.path(), messages_dir.join(entry.file_name()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn persisted_reword_paths(git_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    let state_dir = git_dir.join("rebase-merge").join(PERSISTED_REWORD_DIR);
+    let editor = state_dir.join(MSG_EDITOR_NAME);
+    let messages = state_dir.join("messages");
+    (editor.is_file() && messages.is_dir()).then_some((editor, messages))
 }
 
 fn build_todo_content(entries: &[InteractiveRebaseEntry]) -> String {
@@ -485,11 +548,17 @@ fn seq_editor_script_contents() -> &'static [u8] {
 }
 
 #[cfg(windows)]
-fn msg_editor_script_contents(_git_dir: &PathBuf) -> String {
+fn msg_editor_script_contents() -> String {
     r#"@echo off
-set "REBASE_HEAD_FILE=%GITCOMET_GIT_DIR%\REBASE_HEAD"
-if not exist "%REBASE_HEAD_FILE%" exit /b 0
-set /p sha=<"%REBASE_HEAD_FILE%"
+set "EDITOR_GIT_DIR=%~dp1"
+set "REBASE_HEAD_FILE=%EDITOR_GIT_DIR%REBASE_HEAD"
+set "DONE_FILE=%EDITOR_GIT_DIR%rebase-merge\done"
+set "sha="
+if exist "%REBASE_HEAD_FILE%" set /p sha=<"%REBASE_HEAD_FILE%"
+if "%sha%"=="" if exist "%DONE_FILE%" (
+  for /f "tokens=2" %%s in ('type "%DONE_FILE%"') do set "sha=%%s"
+)
+if "%sha%"=="" exit /b 0
 set "msg_file=%GITCOMET_MSGS_DIR%\%sha%"
 if not exist "%msg_file%" exit /b 0
 copy /Y "%msg_file%" "%~1" >nul
@@ -498,15 +567,25 @@ copy /Y "%msg_file%" "%~1" >nul
 }
 
 #[cfg(not(windows))]
-fn msg_editor_script_contents(_git_dir: &PathBuf) -> String {
+fn msg_editor_script_contents() -> String {
     r#"#!/bin/sh
-if [ -f "$GITCOMET_GIT_DIR/REBASE_HEAD" ]; then
-  sha=$(cat "$GITCOMET_GIT_DIR/REBASE_HEAD")
+sha=
+message_file=$1
+git_dir=$(dirname "$message_file")
+if [ -f "$git_dir/REBASE_HEAD" ]; then
+  sha=$(cat "$git_dir/REBASE_HEAD")
+elif [ -f "$git_dir/rebase-merge/done" ]; then
+  line=$(tail -n 1 "$git_dir/rebase-merge/done")
+  set -- $line
+  sha=$2
+fi
+if [ -n "$sha" ]; then
   msg_file="$GITCOMET_MSGS_DIR/$sha"
   if [ -f "$msg_file" ]; then
-    cp "$msg_file" "$1"
+    cp "$msg_file" "$message_file" || exit $?
   fi
 fi
+exit 0
 "#
     .to_string()
 }

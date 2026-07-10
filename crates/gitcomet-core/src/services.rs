@@ -166,7 +166,11 @@ impl InteractiveRebaseAction {
 pub struct InteractiveRebaseEntry {
     pub action: InteractiveRebaseAction,
     pub commit_id: String,
+    /// Single-line commit subject, used for list display.
     pub summary: String,
+    /// Full original commit message (subject + body). Used to seed the reword
+    /// dialog and to build the combined message when squashing.
+    pub message: String,
     /// New commit message, used only when action is Reword.
     pub new_message: Option<String>,
 }

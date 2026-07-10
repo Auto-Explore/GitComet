@@ -5020,6 +5020,48 @@ fn rebase_replays_commits_onto_target_branch() {
 }
 
 #[test]
+fn rebase_replays_commits_onto_target_sha() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "b.txt", "feature\n");
+    run_git(repo, &["add", "b.txt"]);
+    run_git(repo, &["commit", "-m", "feature"]);
+
+    run_git(repo, &["checkout", "main"]);
+    write(repo, "c.txt", "main\n");
+    run_git(repo, &["add", "c.txt"]);
+    run_git(repo, &["commit", "-m", "main"]);
+    let target_sha = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    run_git(repo, &["checkout", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    opened.rebase_with_output(&target_sha).unwrap();
+
+    assert_eq!(run_git_output(repo, &["rev-parse", "HEAD^"]), target_sha);
+    assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
+    let status = opened.status().unwrap();
+    assert!(status.staged.is_empty());
+    assert!(status.unstaged.is_empty());
+}
+
+#[test]
 fn rebase_in_progress_and_abort_round_trip() {
     if !require_git_shell_for_status_integration_tests() {
         return;
