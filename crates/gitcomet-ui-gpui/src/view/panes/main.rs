@@ -12,8 +12,6 @@ mod helpers;
 mod interactive_rebase;
 mod preview;
 
-pub(crate) use interactive_rebase::reword_seed_message;
-
 #[cfg(feature = "benchmarks")]
 #[allow(unused_imports)]
 pub(in crate::view) use diff_search::{

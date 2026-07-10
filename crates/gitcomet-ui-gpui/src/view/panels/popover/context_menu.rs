@@ -928,11 +928,9 @@ impl PopoverHost {
                 let reword_state = if was_reword {
                     self.main_pane.read_with(cx, |pane, _| {
                         pane.active_irebase().and_then(|st| {
-                            st.entries.get(ix).map(|e| {
-                                let msg =
-                                    crate::view::panes::main::reword_seed_message(&st.entries, ix);
-                                (e.action, msg)
-                            })
+                            let action = st.entries.get(ix)?.action;
+                            let msg = gitcomet_core::squash::reword_seed_message(&st.entries, ix);
+                            Some((action, msg))
                         })
                     })
                 } else {

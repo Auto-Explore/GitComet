@@ -166,12 +166,16 @@ impl InteractiveRebaseAction {
 pub struct InteractiveRebaseEntry {
     pub action: InteractiveRebaseAction,
     pub commit_id: String,
-    /// Single-line commit subject, used for list display.
+    /// Single-line original commit subject (git's `%s`), used for list display
+    /// and autosquash grouping. Never reflects `new_message` — display code
+    /// derives an edited subject via `squash::split_subject_body`.
     pub summary: String,
-    /// Full original commit message (subject + body). Used to seed the reword
-    /// dialog and to build the combined message when squashing.
+    /// Full original commit message (subject + body). Seeds the reword dialog
+    /// (`squash::reword_seed_message`) and contributes to combined squash
+    /// messages; never edited in place.
     pub message: String,
-    /// New commit message, used only when action is Reword.
+    /// Full replacement message (subject + body), set only when action is
+    /// Reword. Its subject may differ from `summary`.
     pub new_message: Option<String>,
 }
 

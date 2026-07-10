@@ -1,41 +1,9 @@
 use super::super::super::*;
 use super::helpers::{IRebaseDragState, IRebaseViewState};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
-use gitcomet_core::squash::build_squash_message;
 use std::{cell::RefCell, rc::Rc};
 
 const ACTION_BTN_W: f32 = 76.0;
-
-/// Message to seed the reword dialog with for the entry at `ix`. When commits
-/// squash into `ix`, the seed is the combined message (the target's message
-/// followed by each squashed commit's message), matching what the rebase would
-/// otherwise produce; `fixup` commits fold in but contribute no message.
-/// Otherwise it is the entry's full original message (or a prior edit).
-pub(crate) fn reword_seed_message(entries: &[InteractiveRebaseEntry], ix: usize) -> String {
-    let Some(target) = entries.get(ix) else {
-        return String::new();
-    };
-    if let Some(msg) = &target.new_message {
-        return msg.clone();
-    }
-    let mut messages = vec![target.message.clone()];
-    for entry in &entries[ix + 1..] {
-        match entry.action {
-            InteractiveRebaseAction::Squash => messages.push(entry.message.clone()),
-            // Folds into the target but discards its message.
-            InteractiveRebaseAction::Fixup => {}
-            // Dropped commits are transparent to the squash run.
-            InteractiveRebaseAction::Drop => {}
-            // A commit of its own ends the run folding into `ix`.
-            InteractiveRebaseAction::Pick | InteractiveRebaseAction::Reword => break,
-        }
-    }
-    if messages.len() > 1 {
-        build_squash_message(&messages)
-    } else {
-        target.message.clone()
-    }
-}
 
 fn squash_target(entries: &[InteractiveRebaseEntry], k: usize) -> Option<usize> {
     (0..k)
@@ -264,16 +232,6 @@ fn non_drop_count(entries: &[InteractiveRebaseEntry]) -> usize {
         .count()
 }
 
-fn action_short_label(action: InteractiveRebaseAction) -> &'static str {
-    match action {
-        InteractiveRebaseAction::Pick => "pick",
-        InteractiveRebaseAction::Reword => "reword",
-        InteractiveRebaseAction::Drop => "drop",
-        InteractiveRebaseAction::Squash => "squash",
-        InteractiveRebaseAction::Fixup => "fixup",
-    }
-}
-
 #[derive(Clone, Copy, Debug)]
 struct IRebaseDragValue {
     ix: usize,
@@ -358,7 +316,7 @@ impl Render for IRebaseDragPreview {
                     .border_color(outlined_border)
                     .text_sm()
                     .text_color(theme.colors.text)
-                    .child(format!("{} ▾", action_short_label(self.action))),
+                    .child(format!("{} ▾", self.action.to_todo_str())),
             )
             .child(
                 div()
@@ -614,12 +572,14 @@ impl MainPaneView {
             .get(..8)
             .unwrap_or(&st.entries[ix].commit_id)
             .to_string();
+        // An edited message replaces the shown subject; core's splitter keeps
+        // the subject rule in one place.
         let summary = st.entries[ix]
             .new_message
             .as_deref()
-            .and_then(|m| m.lines().next())
-            .unwrap_or(&st.entries[ix].summary)
-            .to_owned();
+            .map(|m| gitcomet_core::squash::split_subject_body(m).0)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| st.entries[ix].summary.clone());
         let is_selected = selected_commit_id
             .as_deref()
             .is_some_and(|s| s == st.entries[ix].commit_id);
@@ -654,7 +614,7 @@ impl MainPaneView {
             Rc::new(RefCell::new(None));
         let btn_bounds_prepaint = Rc::clone(&btn_bounds);
         let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
-        let action_label = format!("{} ▾", action_short_label(action));
+        let action_label = format!("{} ▾", action.to_todo_str());
 
         let inner_btn = components::Button::new(format!("action_{ix}"), action_label)
             .style(components::ButtonStyle::Outlined)
@@ -1300,51 +1260,6 @@ mod tests {
             message: format!("summary {id}"),
             new_message: new_message.map(|s| s.to_string()),
         }
-    }
-
-    #[test]
-    fn reword_seed_is_full_message_for_plain_reword() {
-        let entries = vec![entry(InteractiveRebaseAction::Reword, "a", None)];
-        assert_eq!(reword_seed_message(&entries, 0), "summary a");
-    }
-
-    #[test]
-    fn reword_seed_prefers_prior_edit() {
-        let entries = vec![entry(InteractiveRebaseAction::Reword, "a", Some("edited"))];
-        assert_eq!(reword_seed_message(&entries, 0), "edited");
-    }
-
-    #[test]
-    fn reword_seed_combines_squashed_messages() {
-        let entries = vec![
-            entry(InteractiveRebaseAction::Reword, "a", None),
-            entry(InteractiveRebaseAction::Squash, "b", None),
-            entry(InteractiveRebaseAction::Squash, "c", None),
-        ];
-        assert_eq!(
-            reword_seed_message(&entries, 0),
-            "summary a\n\nsummary b\n\nsummary c"
-        );
-    }
-
-    #[test]
-    fn reword_seed_omits_fixup_messages() {
-        let entries = vec![
-            entry(InteractiveRebaseAction::Reword, "a", None),
-            entry(InteractiveRebaseAction::Fixup, "b", None),
-        ];
-        assert_eq!(reword_seed_message(&entries, 0), "summary a");
-    }
-
-    #[test]
-    fn reword_seed_stops_at_next_commit() {
-        let entries = vec![
-            entry(InteractiveRebaseAction::Reword, "a", None),
-            entry(InteractiveRebaseAction::Squash, "b", None),
-            entry(InteractiveRebaseAction::Pick, "c", None),
-            entry(InteractiveRebaseAction::Squash, "d", None),
-        ];
-        assert_eq!(reword_seed_message(&entries, 0), "summary a\n\nsummary b");
     }
 
     #[test]
