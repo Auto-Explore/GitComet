@@ -234,8 +234,9 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         let repo = self._repo.to_thread_local();
         if let Some((editor, messages)) = persisted_reword_paths(repo.path()) {
-            cmd.env("GIT_EDITOR", editor);
+            cmd.env("GIT_EDITOR", shell_quote_path(&editor));
             cmd.env("GITCOMET_MSGS_DIR", messages);
+            cmd.env("GITCOMET_GIT_DIR", repo.path());
         } else {
             // `git rebase --continue` may open an editor to confirm the replayed
             // commit's message. A GUI subprocess has no terminal to service it,
@@ -354,10 +355,15 @@ impl GixRepo {
         })?;
 
         let mut cmd = self.git_workdir_cmd();
-        cmd.env("GIT_SEQUENCE_EDITOR", &scripts.seq_editor_path);
+        cmd.env(
+            "GIT_SEQUENCE_EDITOR",
+            shell_quote_path(&scripts.seq_editor_path),
+        );
         if let Some(ref msg_editor) = scripts.msg_editor_path {
-            cmd.env("GIT_EDITOR", msg_editor);
+            cmd.env("GIT_EDITOR", shell_quote_path(msg_editor));
             cmd.env("GITCOMET_MSGS_DIR", &scripts.msgs_dir);
+            let repo = self._repo.to_thread_local();
+            cmd.env("GITCOMET_GIT_DIR", repo.path());
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
         cmd.args(["rebase", "-i", "--", base]);
@@ -514,6 +520,13 @@ impl RebaseScripts {
     }
 }
 
+/// Shell-quotes a script path for `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR`: git
+/// launches editors via `sh -c '<value> "$@"'` (on Windows too, through its
+/// bundled sh), so an unquoted path containing spaces word-splits.
+fn shell_quote_path(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
+}
+
 fn persisted_reword_paths(git_dir: &Path) -> Option<(PathBuf, PathBuf)> {
     let state_dir = git_dir.join("rebase-merge").join(PERSISTED_REWORD_DIR);
     let editor = state_dir.join(MSG_EDITOR_NAME);
@@ -557,18 +570,22 @@ fn seq_editor_script_contents() -> &'static [u8] {
 #[cfg(windows)]
 fn msg_editor_script_contents() -> String {
     r#"@echo off
-set "EDITOR_GIT_DIR=%~dp1"
-set "REBASE_HEAD_FILE=%EDITOR_GIT_DIR%REBASE_HEAD"
-set "DONE_FILE=%EDITOR_GIT_DIR%rebase-merge\done"
+set "EDITOR_GIT_DIR=%GITCOMET_GIT_DIR%"
+if "%EDITOR_GIT_DIR%"=="" set "EDITOR_GIT_DIR=%~dp1."
+set "REBASE_HEAD_FILE=%EDITOR_GIT_DIR%\REBASE_HEAD"
+set "DONE_FILE=%EDITOR_GIT_DIR%\rebase-merge\done"
 set "sha="
 if exist "%REBASE_HEAD_FILE%" set /p sha=<"%REBASE_HEAD_FILE%"
 if "%sha%"=="" if exist "%DONE_FILE%" (
   for /f "tokens=2" %%s in ('type "%DONE_FILE%"') do set "sha=%%s"
 )
 if "%sha%"=="" exit /b 0
-set "msg_file=%GITCOMET_MSGS_DIR%\%sha%"
-if not exist "%msg_file%" exit /b 0
-copy /Y "%msg_file%" "%~1" >nul
+rem Message files are keyed by full object id; match by prefix so an
+rem abbreviated id in the done file still finds its file.
+for %%f in ("%GITCOMET_MSGS_DIR%\%sha%*") do (
+  copy /Y "%%f" "%~1" >nul
+  exit /b 0
+)
 "#
     .to_string()
 }
@@ -578,20 +595,24 @@ fn msg_editor_script_contents() -> String {
     r#"#!/bin/sh
 sha=
 message_file=$1
-git_dir=$(dirname "$message_file")
+git_dir=${GITCOMET_GIT_DIR:-$(dirname "$message_file")}
 if [ -f "$git_dir/REBASE_HEAD" ]; then
   sha=$(cat "$git_dir/REBASE_HEAD")
 elif [ -f "$git_dir/rebase-merge/done" ]; then
-  line=$(tail -n 1 "$git_dir/rebase-merge/done")
-  set -- $line
-  sha=$2
+  sha=$(tail -n 1 "$git_dir/rebase-merge/done" | cut -d' ' -f2)
 fi
-if [ -n "$sha" ]; then
-  msg_file="$GITCOMET_MSGS_DIR/$sha"
+# Message files are keyed by full object id; reject non-hex tokens (a
+# non-pick done line) and match by prefix so an abbreviated id in the
+# done file still finds its file.
+case "$sha" in
+  '' | *[!0-9a-f]*) exit 0 ;;
+esac
+for msg_file in "$GITCOMET_MSGS_DIR/$sha"*; do
   if [ -f "$msg_file" ]; then
-    cp "$msg_file" "$message_file" || exit $?
+    cp "$msg_file" "$message_file" || exit 1
   fi
-fi
+  break
+done
 exit 0
 "#
     .to_string()

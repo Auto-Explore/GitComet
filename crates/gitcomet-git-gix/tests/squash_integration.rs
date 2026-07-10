@@ -524,6 +524,48 @@ fn interactive_rebase_edited_squash_message_survives_conflict() {
 }
 
 #[test]
+fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo with spaces");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "a\n", "Prerequisite");
+    commit_file(&repo, "file.txt", "b\n", "Reword me");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[1].action = InteractiveRebaseAction::Reword;
+    entries[1].new_message = Some("Reworded in spaced path".to_string());
+
+    // The conflict pause forces the continue path, whose persisted editor
+    // lives under the space-containing repo's .git dir — the case that
+    // word-splits when GIT_EDITOR is not shell-quoted.
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    let continue_output = backend
+        .rebase_continue_with_output()
+        .expect("continue interactive rebase");
+
+    assert!(
+        !backend.rebase_in_progress().expect("read rebase state"),
+        "rebase still in progress after continue: {continue_output:?}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Reworded in spaced path"
+    );
+}
+
+#[test]
 fn interactive_rebase_preserves_current_reword_message_across_conflict() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
