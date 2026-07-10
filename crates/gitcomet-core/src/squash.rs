@@ -106,6 +106,36 @@ pub fn squash_eligibility(
     }
 }
 
+/// Number of commits an operation on the range `target..head` covers — the
+/// commits from `head` (inclusive) down to `target` (exclusive) — when that
+/// range is a strictly linear first-parent chain within the loaded page.
+///
+/// On a strictly linear chain the first-parent count equals `|target..head|`
+/// exactly. Returns `None` whenever exactness cannot be guaranteed: a merge on
+/// the chain (the range then also contains side-branch commits), the chain
+/// leaving the loaded page, or page ordering not listing a child before its
+/// parent. Scans `commits` forward with a resuming cursor — log order lists
+/// children before parents — so the walk allocates nothing and visits each
+/// page entry at most once.
+pub fn linear_first_parent_distance(
+    commits: &[Commit],
+    head: &CommitId,
+    target: &CommitId,
+) -> Option<usize> {
+    let mut count = 0;
+    let mut current = head;
+    let mut cursor = commits.iter();
+    while current != target {
+        let commit = cursor.find(|c| &c.id == current)?;
+        if commit.parent_ids.len() != 1 {
+            return None;
+        }
+        count += 1;
+        current = &commit.parent_ids[0];
+    }
+    Some(count)
+}
+
 /// Splits a commit message into a single-line subject and the remaining body,
 /// following git's convention: the subject is the first line and the body is
 /// everything after the first line break, with a single leading blank-line
@@ -362,6 +392,64 @@ mod tests {
             commit("a", &[], 30),
         ];
         assert!(squash_eligibility(&log, &[id("d"), id("c"), id("x")], &id("d")).is_none());
+    }
+
+    #[test]
+    fn linear_distance_counts_range_size() {
+        let log = linear_log();
+        assert_eq!(
+            linear_first_parent_distance(&log, &id("d"), &id("a")),
+            Some(3)
+        );
+        assert_eq!(
+            linear_first_parent_distance(&log, &id("d"), &id("c")),
+            Some(1)
+        );
+        assert_eq!(
+            linear_first_parent_distance(&log, &id("d"), &id("d")),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn linear_distance_rejects_target_off_the_page() {
+        let log = linear_log();
+        assert_eq!(
+            linear_first_parent_distance(&log, &id("d"), &id("zzz")),
+            None
+        );
+    }
+
+    #[test]
+    fn linear_distance_rejects_merge_on_the_chain() {
+        // d..HEAD would also replay the merge's side branch, so a first-parent
+        // count would understate the range.
+        let log = vec![
+            commit("e", &["m"], 0),
+            commit("m", &["c", "x"], 5),
+            commit("c", &["b"], 10),
+            commit("x", &["b"], 11),
+            commit("b", &["a"], 20),
+            commit("a", &[], 30),
+        ];
+        assert_eq!(linear_first_parent_distance(&log, &id("e"), &id("b")), None);
+    }
+
+    #[test]
+    fn linear_distance_tolerates_interleaved_rows() {
+        // Rows not on the chain (e.g. stash helpers) are skipped by the
+        // resuming scan as long as children precede parents.
+        let log = vec![
+            commit("d", &["c"], 0),
+            commit("stash", &["a", "idx"], 5),
+            commit("c", &["b"], 10),
+            commit("b", &["a"], 20),
+            commit("a", &[], 30),
+        ];
+        assert_eq!(
+            linear_first_parent_distance(&log, &id("d"), &id("b")),
+            Some(2)
+        );
     }
 
     fn rebase_entry(action: InteractiveRebaseAction, sha: &str) -> InteractiveRebaseEntry {

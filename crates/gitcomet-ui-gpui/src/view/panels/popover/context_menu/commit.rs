@@ -1,26 +1,5 @@
 use super::*;
 
-/// Number of commits on the first-parent chain between `target` (exclusive) and
-/// `head` (inclusive) — i.e. how many commits an interactive rebase based at
-/// `target` would rewrite. Returns `None` when `target` is not reachable from
-/// `head` on the first-parent chain within the loaded page.
-fn first_parent_children_count(
-    commits: &[gitcomet_core::domain::Commit],
-    head: &CommitId,
-    target: &CommitId,
-) -> Option<usize> {
-    let by_id: std::collections::HashMap<&CommitId, &gitcomet_core::domain::Commit> =
-        commits.iter().map(|c| (&c.id, c)).collect();
-    let mut current = head;
-    let mut count = 0;
-    while current != target {
-        let commit = by_id.get(current)?;
-        count += 1;
-        current = commit.parent_ids.first()?;
-    }
-    Some(count)
-}
-
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
     let short: SharedString = sha.get(0..8).unwrap_or(&sha).to_string().into();
@@ -210,18 +189,21 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
                 },
             }),
         });
-        // Count the commits stacked on top of this one (its first-parent
-        // children up to HEAD) — that is how many the interactive rebase will
-        // rewrite. Fall back to the onto-style label when the count is unknown.
+        // Count the commits the interactive rebase will rewrite (`this..HEAD`).
+        // The count is only exact on a strictly linear chain — merges pull in
+        // side-branch commits — so fall back to the onto-style label, which
+        // claims no count, whenever exactness is not guaranteed.
         let children_count = this
             .active_repo()
             .filter(|repo| repo.id == repo_id)
             .and_then(|repo| {
                 let head = repo.head_commit_id()?;
                 match &repo.log {
-                    Loadable::Ready(page) => {
-                        first_parent_children_count(&page.commits, &head, commit_id)
-                    }
+                    Loadable::Ready(page) => gitcomet_core::squash::linear_first_parent_distance(
+                        &page.commits,
+                        &head,
+                        commit_id,
+                    ),
                     _ => None,
                 }
             });
@@ -278,66 +260,4 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     }
 
     ContextMenuModel::new(items)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gitcomet_core::domain::{Commit, CommitParentIds};
-    use std::time::SystemTime;
-
-    fn commit(id: &str, parent: Option<&str>) -> Commit {
-        let mut parent_ids = CommitParentIds::new();
-        if let Some(p) = parent {
-            parent_ids.push(CommitId(p.into()));
-        }
-        Commit {
-            id: CommitId(id.into()),
-            parent_ids,
-            summary: "summary".into(),
-            author: "author".into(),
-            time: SystemTime::UNIX_EPOCH,
-        }
-    }
-
-    // d(HEAD) -> c -> b -> a
-    fn linear() -> Vec<Commit> {
-        vec![
-            commit("d", Some("c")),
-            commit("c", Some("b")),
-            commit("b", Some("a")),
-            commit("a", None),
-        ]
-    }
-
-    #[test]
-    fn counts_first_parent_children_up_to_head() {
-        let commits = linear();
-        let head = CommitId("d".into());
-        assert_eq!(
-            first_parent_children_count(&commits, &head, &CommitId("a".into())),
-            Some(3)
-        );
-        assert_eq!(
-            first_parent_children_count(&commits, &head, &CommitId("c".into())),
-            Some(1)
-        );
-    }
-
-    #[test]
-    fn head_target_has_no_children() {
-        let commits = linear();
-        let head = CommitId("d".into());
-        assert_eq!(first_parent_children_count(&commits, &head, &head), Some(0));
-    }
-
-    #[test]
-    fn unreachable_target_returns_none() {
-        let commits = linear();
-        let head = CommitId("d".into());
-        assert_eq!(
-            first_parent_children_count(&commits, &head, &CommitId("zzz".into())),
-            None
-        );
-    }
 }
