@@ -565,6 +565,168 @@ fn interactive_rebase_reword_works_in_repo_path_with_spaces() {
     );
 }
 
+/// Runs git allowing a non-zero exit (a rebase pausing at a conflict).
+fn run_git_allow_fail(repo: &Path, args: &[&str], envs: &[(&str, &str)]) {
+    let mut cmd = Command::new("git");
+    test_git_env::apply(&mut cmd);
+    let cmd = cmd
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    cmd.status().expect("git command to run");
+}
+
+/// Writes a GIT_SEQUENCE_EDITOR script that installs `todo` verbatim,
+/// simulating an interactive rebase planned outside GitComet.
+#[cfg(unix)]
+fn write_external_seq_editor(dir: &Path, todo: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+    let todo_file = dir.join("external-todo");
+    fs::write(&todo_file, todo).expect("write external todo");
+    let script = dir.join("external-seq-editor.sh");
+    fs::write(
+        &script,
+        format!("#!/bin/sh\ncp \"{}\" \"$1\"\n", todo_file.display()),
+    )
+    .expect("write seq editor script");
+    let mut permissions = fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script, permissions).unwrap();
+    script
+}
+
+/// root <- P("Prerequisite") <- T("Reword me"); dropping P makes replaying T
+/// conflict. Returns (root, p, t).
+fn conflict_repo(repo: &Path) -> (String, String, String) {
+    init_repo(repo);
+    commit_file(repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(repo, "HEAD");
+    commit_file(repo, "file.txt", "a\n", "Prerequisite");
+    let p = rev_parse(repo, "HEAD");
+    commit_file(repo, "file.txt", "b\n", "Reword me");
+    let t = rev_parse(repo, "HEAD");
+    (root, p, t)
+}
+
+#[cfg(unix)]
+#[test]
+fn rebase_continue_blocks_external_rebase_with_pending_reword() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, p, t) = conflict_repo(&repo);
+
+    let seq_editor = write_external_seq_editor(dir.path(), &format!("drop {p}\nreword {t}\n"));
+    run_git_allow_fail(
+        &repo,
+        &["rebase", "-i", &root],
+        &[(
+            "GIT_SEQUENCE_EDITOR",
+            seq_editor.to_str().expect("utf-8 path"),
+        )],
+    );
+
+    let backend = open_backend(&repo);
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    // Resolve the conflict so only the guard stands between continue and
+    // silently finalizing the reword with its unedited message.
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+
+    let err = backend
+        .rebase_continue_with_output()
+        .expect_err("continue must refuse to finalize an unplanned reword");
+    assert!(
+        err.to_string().contains("pending reword/squash"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        backend.rebase_in_progress().expect("read rebase state"),
+        "rebase must stay paused and recoverable"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rebase_continue_allows_external_rebase_without_message_steps() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, p, t) = conflict_repo(&repo);
+
+    let seq_editor = write_external_seq_editor(dir.path(), &format!("drop {p}\npick {t}\n"));
+    run_git_allow_fail(
+        &repo,
+        &["rebase", "-i", &root],
+        &[(
+            "GIT_SEQUENCE_EDITOR",
+            seq_editor.to_str().expect("utf-8 path"),
+        )],
+    );
+
+    let backend = open_backend(&repo);
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    backend
+        .rebase_continue_with_output()
+        .expect("continue a pick-only external rebase");
+
+    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "Reword me"
+    );
+}
+
+#[test]
+fn rebase_continue_rejects_damaged_persisted_reword_state() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _p, _t) = conflict_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[1].action = InteractiveRebaseAction::Reword;
+    entries[1].new_message = Some("Edited".to_string());
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    // Damage the persisted plan: the state dir survives but the editor is gone.
+    let persisted = git_path(&repo, "rebase-merge/gitcomet-reword");
+    let editor = fs::read_dir(&persisted)
+        .expect("read persisted state dir")
+        .map(|e| e.expect("dir entry").path())
+        .find(|p| p.is_file())
+        .expect("persisted editor script");
+    fs::remove_file(editor).expect("remove persisted editor");
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+
+    let err = backend
+        .rebase_continue_with_output()
+        .expect_err("continue must reject incomplete reword state");
+    assert!(
+        err.to_string().contains("incomplete"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        backend.rebase_in_progress().expect("read rebase state"),
+        "rebase must stay paused and recoverable"
+    );
+}
+
 #[test]
 fn interactive_rebase_preserves_current_reword_message_across_conflict() {
     let dir = tempfile::tempdir().expect("create tempdir");
