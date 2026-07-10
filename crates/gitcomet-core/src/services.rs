@@ -145,7 +145,6 @@ pub enum RemoteUrlKind {
 pub enum InteractiveRebaseAction {
     Pick,
     Reword,
-    Edit,
     Squash,
     Fixup,
     Drop,
@@ -156,21 +155,9 @@ impl InteractiveRebaseAction {
         match self {
             Self::Pick => "pick",
             Self::Reword => "reword",
-            Self::Edit => "edit",
             Self::Squash => "squash",
             Self::Fixup => "fixup",
             Self::Drop => "drop",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pick => "Pick",
-            Self::Reword => "Reword",
-            Self::Edit => "Edit",
-            Self::Squash => "Squash",
-            Self::Fixup => "Fixup",
-            Self::Drop => "Drop",
         }
     }
 }

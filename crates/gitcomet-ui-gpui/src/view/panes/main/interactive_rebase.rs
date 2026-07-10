@@ -239,7 +239,6 @@ fn action_short_label(action: InteractiveRebaseAction) -> &'static str {
         InteractiveRebaseAction::Drop => "drop",
         InteractiveRebaseAction::Squash => "squash",
         InteractiveRebaseAction::Fixup => "fixup",
-        InteractiveRebaseAction::Edit => "edit",
     }
 }
 
