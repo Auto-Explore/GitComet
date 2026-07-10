@@ -412,6 +412,41 @@ fn interactive_rebase_accepts_branch_sha_and_head_relative_bases() {
 }
 
 #[test]
+fn interactive_rebase_setup_survives_separator_bytes_in_messages() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    // Record/unit separator bytes are legal in commit messages and must not
+    // corrupt record framing.
+    commit_file(
+        &repo,
+        "file.txt",
+        "a\n",
+        "Weird subject\n\nBody with \x1e record and \x1f unit bytes",
+    );
+    let a = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "b\n", "Plain commit");
+    let b = rev_parse(&repo, "HEAD");
+
+    let backend = open_backend(&repo);
+    let entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].commit_id, a);
+    assert_eq!(entries[0].summary, "Weird subject");
+    assert_eq!(
+        entries[0].message,
+        "Weird subject\n\nBody with \x1e record and \x1f unit bytes"
+    );
+    assert_eq!(entries[1].commit_id, b);
+    assert_eq!(entries[1].summary, "Plain commit");
+}
+
+#[test]
 fn interactive_rebase_edited_squash_message_is_applied_once() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");

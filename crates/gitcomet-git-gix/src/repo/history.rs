@@ -335,32 +335,13 @@ impl GixRepo {
 
         let range = format!("{base}..HEAD");
         let mut cmd = self.git_workdir_cmd();
-        // Fields (sha, subject, full message) are unit-separated (\x1f) and
-        // records are record-separated (\x1e) so multi-line bodies parse
-        // unambiguously.
-        cmd.args(["log", "--format=%H%x1f%s%x1f%B%x1e", "--reverse", &range]);
+        // NUL-framed fields (sha, subject, full message): commit messages are
+        // NUL-free by construction, so unlike other control bytes NUL cannot
+        // collide with message content. `-z` NUL-terminates each record.
+        cmd.args(["log", "-z", "--format=%H%x00%s%x00%B", "--reverse", &range]);
         let output = run_git_capture(cmd, &format!("git log {range}"))?;
 
-        let entries = output
-            .split('\x1e')
-            .map(|record| record.trim_start_matches('\n'))
-            .filter(|record| !record.is_empty())
-            .map(|record| {
-                let mut fields = record.splitn(3, '\x1f');
-                let sha = fields.next().unwrap_or("");
-                let summary = fields.next().unwrap_or("");
-                let message = fields.next().unwrap_or("");
-                InteractiveRebaseEntry {
-                    action: InteractiveRebaseAction::Pick,
-                    commit_id: sha.to_string(),
-                    summary: summary.to_string(),
-                    message: message.trim_end_matches('\n').to_string(),
-                    new_message: None,
-                }
-            })
-            .collect();
-
-        Ok(entries)
+        parse_interactive_rebase_log(&output)
     }
 
     pub(super) fn interactive_rebase_with_output_impl(
@@ -627,6 +608,45 @@ fn rebase_pending_message_edit(git_dir: &Path) -> bool {
     false
 }
 
+/// Parses `git log -z --format=%H%x00%s%x00%B` output: a flat sequence of
+/// NUL-separated field triples. Every record must have exactly three fields
+/// and a full hex commit id — the ids are later written into the rebase todo,
+/// so malformed output must fail here rather than corrupt the todo.
+fn parse_interactive_rebase_log(output: &str) -> Result<Vec<InteractiveRebaseEntry>> {
+    let mut fields: Vec<&str> = output.split('\0').collect();
+    // `-z` terminates the final record, leaving one empty trailing field.
+    if fields.last() == Some(&"") {
+        fields.pop();
+    }
+    if !fields.len().is_multiple_of(3) {
+        return Err(Error::new(ErrorKind::Backend(
+            "unexpected git log output while preparing interactive rebase".to_string(),
+        )));
+    }
+
+    fields
+        .chunks_exact(3)
+        .map(|record| {
+            let (sha, summary, message) = (record[0], record[1], record[2]);
+            let full_hex_id =
+                (sha.len() == 40 || sha.len() == 64) && sha.bytes().all(|b| b.is_ascii_hexdigit());
+            if !full_hex_id {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "unexpected commit id {sha:?} in git log output while preparing \
+                     interactive rebase"
+                ))));
+            }
+            Ok(InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: sha.to_string(),
+                summary: summary.to_string(),
+                message: message.trim_end_matches('\n').to_string(),
+                new_message: None,
+            })
+        })
+        .collect()
+}
+
 fn build_todo_content(entries: &[InteractiveRebaseEntry]) -> String {
     entries
         .iter()
@@ -709,4 +729,47 @@ done
 exit 0
 "#
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_interactive_rebase_log;
+
+    const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn parses_records_with_multiline_bodies_and_control_bytes() {
+        let output = format!(
+            "{SHA_A}\0Subject A\0Subject A\n\nBody \x1e with \x1f separators\n\0\
+             {SHA_B}\0Subject B\0Subject B\n\0"
+        );
+        let entries = parse_interactive_rebase_log(&output).expect("parse");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].commit_id, SHA_A);
+        assert_eq!(entries[0].summary, "Subject A");
+        assert_eq!(
+            entries[0].message,
+            "Subject A\n\nBody \x1e with \x1f separators"
+        );
+        assert_eq!(entries[1].commit_id, SHA_B);
+        assert_eq!(entries[1].message, "Subject B");
+    }
+
+    #[test]
+    fn empty_output_parses_to_no_entries() {
+        assert_eq!(parse_interactive_rebase_log("").expect("parse").len(), 0);
+    }
+
+    #[test]
+    fn rejects_record_with_missing_fields() {
+        let output = format!("{SHA_A}\0Subject only\0");
+        assert!(parse_interactive_rebase_log(&output).is_err());
+    }
+
+    #[test]
+    fn rejects_record_with_invalid_commit_id() {
+        let output = "not-a-sha\0Subject\0Subject\n\0";
+        assert!(parse_interactive_rebase_log(output).is_err());
+    }
 }
