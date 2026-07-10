@@ -799,6 +799,115 @@ fn rebase_continue_rejects_damaged_persisted_reword_state() {
 }
 
 #[test]
+fn rebase_continue_with_unresolved_conflict_keeps_git_error() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _p, _t) = conflict_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase (pauses at conflict)");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    // Continue without resolving: git fails without advancing, and that
+    // failure must reach the caller instead of masquerading as a pause.
+    let err = backend
+        .rebase_continue_with_output()
+        .expect_err("continue with unresolved conflicts must fail");
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("conflict") || msg.contains("unmerged") || msg.contains("fix them"),
+        "error should carry git's message: {err}"
+    );
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+}
+
+#[cfg(unix)]
+#[test]
+fn rebase_continue_with_signing_failure_keeps_git_error() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _p, _t) = conflict_repo(&repo);
+
+    // Signing options are captured when the rebase starts, so a broken
+    // signing setup must be in place before then. The dropped first entry
+    // means no commit (and no signing) happens until continue.
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Drop;
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase (pauses at conflict)");
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+
+    // The commit fails to sign: continue makes no progress and the failure
+    // must not be reported as a successful pause.
+    let err = backend
+        .rebase_continue_with_output()
+        .expect_err("continue must surface the signing failure");
+    assert!(
+        err.to_string().contains("commit"),
+        "error should carry git's commit failure: {err}"
+    );
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+}
+
+#[test]
+fn rebase_continue_pausing_at_next_conflict_is_success() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "a.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "a.txt", "a1\n", "Prerequisite A");
+    commit_file(&repo, "b.txt", "b1\n", "Prerequisite B");
+    commit_file(&repo, "a.txt", "a2\n", "Conflicts A");
+    commit_file(&repo, "b.txt", "b2\n", "Conflicts B");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    // Dropping both prerequisites makes each remaining pick conflict in turn.
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[1].action = InteractiveRebaseAction::Drop;
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase (pauses at first conflict)");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    fs::write(repo.join("a.txt"), "a2\n").expect("resolve first conflict");
+    run_git(&repo, &["add", "a.txt"]);
+    // Advancing to the second conflict is a pause, not a failure.
+    backend
+        .rebase_continue_with_output()
+        .expect("advancing to the next conflict is a successful pause");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    fs::write(repo.join("b.txt"), "b2\n").expect("resolve second conflict");
+    run_git(&repo, &["add", "b.txt"]);
+    backend
+        .rebase_continue_with_output()
+        .expect("finish the rebase");
+    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+}
+
+#[test]
 fn interactive_rebase_preserves_current_reword_message_across_conflict() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");

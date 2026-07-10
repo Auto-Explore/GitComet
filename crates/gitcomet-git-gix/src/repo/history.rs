@@ -270,14 +270,26 @@ impl GixRepo {
     }
 
     /// Run a rebase step (`rebase -i` / `rebase --continue`). A non-zero exit
-    /// that leaves the rebase *still in progress* means git paused at the next
-    /// conflict — a normal outcome, not a failure. Report it as success (with
-    /// the captured output) so the UI treats it as "paused at conflict": it
-    /// clears the loading state, reloads status, and surfaces the new conflict,
-    /// instead of showing a hard error and getting stuck on a spinner.
+    /// can be a normal outcome: git advanced and paused at the next conflict
+    /// with the rebase left in progress. That case — and only that case — is
+    /// reported as success (with the captured output) so the UI treats it as
+    /// "paused at conflict": it clears the loading state, reloads status, and
+    /// surfaces the new conflict. A non-zero exit that made no sequencer
+    /// progress (unresolved conflicts on continue, hook/signing/editor
+    /// failures) keeps the original git error.
     fn run_rebase_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
+        let steps_before = self.rebase_progress_marker();
         let output = run_git_raw_output(cmd, label)?;
-        if output.status.success() || self.rebase_in_progress_impl()? {
+        let paused_after_progress = !output.status.success()
+            && self.rebase_in_progress_impl()?
+            && match (steps_before, self.rebase_progress_marker()) {
+                // The command started the rebase and paused mid-way.
+                (None, Some(_)) => true,
+                // The command advanced past the step it was stuck on.
+                (Some(before), Some(after)) => after > before,
+                (_, None) => false,
+            };
+        if output.status.success() || paused_after_progress {
             Ok(CommandOutput {
                 command: label.to_string(),
                 stdout: bytes_to_text_preserving_utf8(&output.stdout),
@@ -287,6 +299,22 @@ impl GixRepo {
         } else {
             Err(git_command_failed_error(label, output))
         }
+    }
+
+    /// Completed-step count of the rebase in progress, from the merge
+    /// backend's `done` file or the apply backend's `next` counter. `None`
+    /// when no rebase state exists.
+    fn rebase_progress_marker(&self) -> Option<usize> {
+        let repo = self._repo.to_thread_local();
+        let git_dir = repo.path();
+        if let Ok(done) = fs::read_to_string(git_dir.join("rebase-merge").join("done")) {
+            return Some(done.lines().count());
+        }
+        fs::read_to_string(git_dir.join("rebase-apply").join("next"))
+            .ok()?
+            .trim()
+            .parse()
+            .ok()
     }
 
     pub(super) fn rebase_abort_with_output_impl(&self) -> Result<CommandOutput> {
