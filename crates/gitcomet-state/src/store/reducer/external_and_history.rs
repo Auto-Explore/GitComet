@@ -14,7 +14,7 @@ use crate::model::{AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, R
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::InteractiveRebaseEntry;
+use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
 use std::sync::Arc;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
@@ -77,6 +77,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_stashes(Loadable::NotLoaded);
     repo_state.reflog = Loadable::NotLoaded;
     repo_state.set_rebase_in_progress(Loadable::Loading);
+    repo_state.set_sequencer_state(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
     repo_state.history_state.file_history_path = None;
     repo_state.history_state.file_history = Loadable::NotLoaded;
@@ -277,18 +278,23 @@ pub(super) fn load_more_history(
 pub(super) fn rebase_state_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
-    result: std::result::Result<bool, Error>,
+    result: std::result::Result<SequencerState, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let value = match result {
-            Ok(v) => Loadable::Ready(v),
+        let (sequencer_value, rebase_value) = match result {
+            Ok(v) => (
+                Loadable::Ready(v),
+                Loadable::Ready(v != SequencerState::None),
+            ),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                let error = e.to_string();
+                push_diagnostic(repo_state, DiagnosticKind::Error, error.clone());
+                (Loadable::Error(error.clone()), Loadable::Error(error))
             }
         };
-        repo_state.set_rebase_in_progress(value);
+        repo_state.set_sequencer_state(sequencer_value);
+        repo_state.set_rebase_in_progress(rebase_value);
         if repo_state
             .loads_in_flight
             .finish(RepoLoadsInFlight::REBASE_STATE)

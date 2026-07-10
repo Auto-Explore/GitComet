@@ -7,7 +7,7 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{
-    BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext,
+    BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
     SubmoduleTrustTarget,
 };
 use serde::{Deserialize, Serialize};
@@ -905,6 +905,7 @@ pub struct RepoState {
     pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
     pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
+    pub sequencer_state: Loadable<SequencerState>,
     pub merge_commit_message: Loadable<Option<String>>,
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
@@ -994,6 +995,7 @@ impl RepoState {
             recent_commit_messages: Loadable::NotLoaded,
             recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
+            sequencer_state: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
@@ -1408,6 +1410,11 @@ impl RepoState {
 
     pub(crate) fn set_rebase_in_progress(&mut self, v: Loadable<bool>) {
         self.rebase_in_progress = v;
+        self.merge_message_rev = self.merge_message_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_sequencer_state(&mut self, v: Loadable<SequencerState>) {
+        self.sequencer_state = v;
         self.merge_message_rev = self.merge_message_rev.wrapping_add(1);
     }
 

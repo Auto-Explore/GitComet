@@ -3781,6 +3781,58 @@ fn repo_action_finished_err_records_diagnostic() {
 }
 
 #[test]
+fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].local_actions_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id,
+            action: RepoActionKind::CherryPickCommit,
+            result: Err(Error::new(ErrorKind::Backend("conflict".to_string()))),
+        }),
+    );
+
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(
+        state.repos[0]
+            .last_error
+            .as_deref()
+            .is_some_and(|error| error.contains("conflict"))
+    );
+    assert!(
+        has_status_refresh_effects(&effects, repo_id),
+        "cherry-pick errors should refresh status so conflicts are visible, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadLog { repo_id: candidate, .. } if *candidate == repo_id)
+        ),
+        "cherry-pick errors should refresh the log, got {effects:?}"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadRebaseAndMergeState { repo_id: candidate } if *candidate == repo_id
+        )),
+        "cherry-pick errors should refresh merge/rebase/cherry-pick state, got {effects:?}"
+    );
+}
+
+#[test]
 fn repo_action_finished_bumps_load_epoch_and_forces_fresh_status_load_when_stale_in_flight() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

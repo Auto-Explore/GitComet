@@ -7,6 +7,7 @@ use gitcomet_core::domain::CommitId;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
     CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry, ResetMode, Result,
+    SequencerState,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -494,19 +495,24 @@ impl GixRepo {
         run_git_with_output(cmd, "git merge --abort")
     }
 
-    pub(super) fn rebase_in_progress_impl(&self) -> Result<bool> {
+    pub(super) fn sequencer_state_impl(&self) -> Result<SequencerState> {
         let repo = self._repo.to_thread_local();
-        Ok(matches!(
-            repo.state(),
+        Ok(match repo.state() {
             Some(
                 gix::state::InProgress::Rebase
-                    | gix::state::InProgress::RebaseInteractive
-                    | gix::state::InProgress::ApplyMailbox
-                    | gix::state::InProgress::ApplyMailboxRebase
-                    | gix::state::InProgress::CherryPick
-                    | gix::state::InProgress::CherryPickSequence
-            )
-        ))
+                | gix::state::InProgress::RebaseInteractive
+                | gix::state::InProgress::ApplyMailbox
+                | gix::state::InProgress::ApplyMailboxRebase,
+            ) => SequencerState::RebaseOrApply,
+            Some(
+                gix::state::InProgress::CherryPick | gix::state::InProgress::CherryPickSequence,
+            ) => SequencerState::CherryPick,
+            _ => SequencerState::None,
+        })
+    }
+
+    pub(super) fn rebase_in_progress_impl(&self) -> Result<bool> {
+        Ok(self.sequencer_state_impl()? != SequencerState::None)
     }
 
     fn cherry_pick_in_progress_impl(&self) -> Result<bool> {
@@ -714,15 +720,15 @@ impl GixRepo {
                     append_command_output(&mut output, pick_output);
                     pending_author = Some(commit_author_env(&repo, &entry.commit_id)?);
                     let message = if entry.action == InteractiveRebaseAction::Reword {
-                        entry
-                            .new_message
-                            .clone()
-                            .filter(|message| !message.trim().is_empty())
-                            .ok_or_else(|| {
-                                Error::new(ErrorKind::Backend(
+                        match &entry.new_message {
+                            Some(message) if message.trim().is_empty() => {
+                                return Err(Error::new(ErrorKind::Backend(
                                     "cherry-pick: reword message must not be empty".to_string(),
-                                ))
-                            })?
+                                )));
+                            }
+                            Some(message) => message.clone(),
+                            None => commit_message(&repo, &entry.commit_id)?,
+                        }
                     } else {
                         commit_message(&repo, &entry.commit_id)?
                     };

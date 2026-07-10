@@ -9,7 +9,7 @@ use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
     CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, InteractiveRebaseEntry,
     PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -836,7 +836,7 @@ pub enum InternalMsg {
     },
     RebaseStateLoaded {
         repo_id: RepoId,
-        result: Result<bool, Error>,
+        result: Result<SequencerState, Error>,
     },
     InteractiveRebaseSetupLoaded {
         repo_id: RepoId,

@@ -1,5 +1,7 @@
 use gitcomet_core::domain::CommitId;
-use gitcomet_core::services::{GitBackend, GitRepository};
+use gitcomet_core::services::{
+    GitBackend, GitRepository, InteractiveRebaseAction, InteractiveRebaseEntry, SequencerState,
+};
 use gitcomet_git_gix::GixBackend;
 #[path = "support/test_git_env.rs"]
 mod test_git_env;
@@ -160,6 +162,116 @@ fn already_applied_cherry_pick_is_successful_noop_and_cleans_state() {
 }
 
 #[test]
+fn interactive_reword_without_changed_message_uses_original_message() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let picked = commit_file(&repo, "feature.txt", "feature\n", "feature change");
+    run_git(&repo, &["checkout", "main"]);
+
+    open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[InteractiveRebaseEntry {
+            action: InteractiveRebaseAction::Reword,
+            commit_id: picked,
+            summary: "feature change".to_string(),
+            message: "feature change".to_string(),
+            new_message: None,
+        }])
+        .expect("reword without edited message should use original message");
+
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "feature change"
+    );
+}
+
+fn setup_conflicting_cherry_pick_repo(repo: &Path) -> String {
+    init_repo(repo);
+    commit_file(repo, "file.txt", "base\n", "base");
+    run_git(repo, &["checkout", "-b", "feature"]);
+    let picked = commit_file(repo, "file.txt", "feature\n", "feature change");
+    run_git(repo, &["checkout", "main"]);
+    picked
+}
+
+#[test]
+fn conflicting_cherry_pick_returns_error_and_leaves_worktree_conflicted() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let picked = setup_conflicting_cherry_pick_repo(&repo);
+    commit_file(&repo, "file.txt", "main\n", "main change");
+
+    let err = open_backend(&repo)
+        .cherry_pick(&commit_id(&picked))
+        .expect_err("conflicting cherry-pick should fail");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("could not apply") || message.contains("CONFLICT"),
+        "unexpected conflict error: {message}"
+    );
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU file.txt");
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+    assert!(
+        git_output(&repo, &["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn dirty_worktree_rejects_cherry_pick_and_preserves_local_change() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let picked = setup_conflicting_cherry_pick_repo(&repo);
+    fs::write(repo.join("file.txt"), "dirty worktree\n").expect("write dirty worktree");
+
+    let err = open_backend(&repo)
+        .cherry_pick(&commit_id(&picked))
+        .expect_err("dirty worktree should reject cherry-pick");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("local changes") || message.contains("would be overwritten"),
+        "unexpected dirty-worktree error: {message}"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("file.txt")).unwrap(),
+        "dirty worktree\n"
+    );
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "M file.txt");
+}
+
+#[test]
+fn dirty_index_rejects_cherry_pick_and_preserves_staged_change() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let picked = setup_conflicting_cherry_pick_repo(&repo);
+    fs::write(repo.join("file.txt"), "staged change\n").expect("write staged change");
+    run_git(&repo, &["add", "file.txt"]);
+
+    let err = open_backend(&repo)
+        .cherry_pick(&commit_id(&picked))
+        .expect_err("dirty index should reject cherry-pick");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("local changes") || message.contains("would be overwritten"),
+        "unexpected dirty-index error: {message}"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("file.txt")).unwrap(),
+        "staged change\n"
+    );
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "M  file.txt");
+}
+
+#[test]
 fn continue_falls_back_to_cherry_pick_continue_when_cherry_pick_is_paused() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
@@ -178,6 +290,10 @@ fn continue_falls_back_to_cherry_pick_continue_when_cherry_pick_is_paused() {
         "cherry-pick should pause at a conflict"
     );
     assert!(open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
 
     fs::write(repo.join("file.txt"), "resolved\n").expect("resolve conflict");
     run_git(&repo, &["add", "file.txt"]);

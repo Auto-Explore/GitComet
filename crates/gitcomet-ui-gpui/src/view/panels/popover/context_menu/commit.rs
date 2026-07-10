@@ -1,5 +1,5 @@
 use super::*;
-use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry, SequencerState};
 
 fn multi_cherry_pick_plan(
     this: &PopoverHost,
@@ -120,11 +120,20 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     items.push(ContextMenuItem::Separator);
     let multi_cherry_pick_plan = multi_cherry_pick_plan(this, repo_id, commit_id);
     let has_multi_cherry_pick = multi_cherry_pick_plan.is_some();
+    let is_head_commit = this
+        .active_repo()
+        .filter(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.head_commit_id())
+        .is_some_and(|head| head == *commit_id);
     let cherry_pick_disabled = this
         .active_repo()
         .filter(|repo| repo.id == repo_id)
         .is_some_and(|repo| {
             repo.local_actions_in_flight > 0
+                || matches!(
+                    repo.sequencer_state,
+                    Loadable::Ready(SequencerState::CherryPick)
+                )
                 || matches!(repo.rebase_in_progress, Loadable::Ready(true))
                 || matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
         });
@@ -158,7 +167,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         });
         items.push(ContextMenuItem::Separator);
     }
-    if let Some((entries, source_colors)) = multi_cherry_pick_plan {
+    if !is_head_commit && let Some((entries, source_colors)) = multi_cherry_pick_plan {
         let label = format!("Cherry-pick {} commits…", entries.len()).into();
         items.push(ContextMenuItem::Entry {
             label,
@@ -228,7 +237,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
-    if !has_multi_cherry_pick {
+    if !has_multi_cherry_pick && !is_head_commit {
         items.push(ContextMenuItem::Entry {
             label: "Cherry-pick".into(),
             icon: Some("icons/arrow_up.svg".into()),
@@ -264,11 +273,6 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     // no-op (plain rebase) or produces an empty `HEAD..HEAD` todo list
     // (interactive), so skip both entries on the HEAD commit. The topmost
     // commit is still editable via an interactive rebase from the commit below.
-    let is_head_commit = this
-        .active_repo()
-        .filter(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.head_commit_id())
-        .is_some_and(|head| head == *commit_id);
     if !is_head_commit {
         // Prefer a branch name at the target commit; fall back to the abbreviated
         // sha for the label and the full sha for the actual rebase target.

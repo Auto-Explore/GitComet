@@ -301,14 +301,14 @@ struct IRebaseDragValue {
 fn data_ix_for_display(st: &IRebaseViewState, display_pos: usize) -> usize {
     match st.mode {
         ICommitEditorMode::Rebase => st.entries.len() - 1 - display_pos,
-        ICommitEditorMode::CherryPick => display_pos,
+        ICommitEditorMode::CherryPick => st.entries.len() - 1 - display_pos,
     }
 }
 
 fn display_pos_for_data_ix(st: &IRebaseViewState, ix: usize) -> usize {
     match st.mode {
         ICommitEditorMode::Rebase => st.entries.len() - 1 - ix,
-        ICommitEditorMode::CherryPick => ix,
+        ICommitEditorMode::CherryPick => st.entries.len() - 1 - ix,
     }
 }
 
@@ -328,9 +328,9 @@ fn insertion_data_ix_for_display(
         }
         ICommitEditorMode::CherryPick => {
             if display_pos <= source_dp {
-                display_pos
+                st.entries.len() - 1 - display_pos
             } else {
-                display_pos.saturating_sub(1)
+                st.entries.len() - display_pos
             }
         }
     }
@@ -727,6 +727,11 @@ impl MainPaneView {
             InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
         );
         let is_dropped = action == InteractiveRebaseAction::Drop;
+        let row_text_color = if is_dropped {
+            theme.colors.text_muted
+        } else {
+            theme.colors.text
+        };
         let autosquash_active =
             st.mode == ICommitEditorMode::Rebase && st.autosquash_mode.is_some();
         let is_autosquash_eligible =
@@ -860,7 +865,11 @@ impl MainPaneView {
             .id(("gripper", ix))
             .cursor(gpui::CursorStyle::PointingHand)
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(if is_dropped {
+                with_alpha(theme.colors.text_muted, 0.7)
+            } else {
+                theme.colors.text_muted
+            })
             .child("⠿")
             .on_drag(drag_val, move |_drag, _offset, _window, cx| {
                 cx.new(|_cx| IRebaseDragPreview {
@@ -961,7 +970,11 @@ impl MainPaneView {
                         div()
                             .flex_shrink_0()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(if is_dropped {
+                                with_alpha(theme.colors.text_muted, 0.7)
+                            } else {
+                                theme.colors.text_muted
+                            })
                             .font_family("monospace")
                             .child(sha.clone()),
                     )
@@ -969,7 +982,7 @@ impl MainPaneView {
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme.colors.text)
+                            .text_color(row_text_color)
                             .when(is_autosquash_eligible, |d| {
                                 d.text_color(theme.colors.accent)
                             })

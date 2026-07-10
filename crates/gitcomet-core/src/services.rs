@@ -176,6 +176,14 @@ impl InteractiveRebaseAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SequencerState {
+    #[default]
+    None,
+    RebaseOrApply,
+    CherryPick,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
     pub action: InteractiveRebaseAction,
@@ -651,6 +659,22 @@ pub trait GitRepository: Send + Sync {
         let in_progress = self.rebase_in_progress()?;
         cancellation.check_cancelled()?;
         Ok(in_progress)
+    }
+    fn sequencer_state(&self) -> Result<SequencerState> {
+        Ok(if self.rebase_in_progress()? {
+            SequencerState::RebaseOrApply
+        } else {
+            SequencerState::None
+        })
+    }
+    fn sequencer_state_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<SequencerState> {
+        cancellation.check_cancelled()?;
+        let state = self.sequencer_state()?;
+        cancellation.check_cancelled()?;
+        Ok(state)
     }
 
     fn merge_commit_message(&self) -> Result<Option<String>> {

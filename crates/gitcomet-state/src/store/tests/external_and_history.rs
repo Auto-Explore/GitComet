@@ -523,7 +523,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
             repo_id: RepoId(1),
-            result: Ok(false),
+            result: Ok(gitcomet_core::services::SequencerState::None),
         }),
     );
     reduce(
@@ -752,7 +752,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
             repo_id: RepoId(1),
-            result: Ok(false),
+            result: Ok(gitcomet_core::services::SequencerState::None),
         }),
     );
     assert!(matches!(

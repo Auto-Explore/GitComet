@@ -49,7 +49,7 @@ pub(super) fn panel(
                 .py_1()
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
-                .child("Cherry-pick commit?"),
+                .child("Commit cherry-picked commit?"),
         )
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(

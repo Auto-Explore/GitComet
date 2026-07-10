@@ -995,7 +995,7 @@ pub(super) fn schedule_load_rebase_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress_cancellable(&cancellation),
+                    result: repo.sequencer_state_cancellable(&cancellation),
                 }),
             );
         },
@@ -1029,7 +1029,7 @@ pub(super) fn schedule_load_rebase_and_merge_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress_cancellable(&cancellation),
+                    result: repo.sequencer_state_cancellable(&cancellation),
                 }),
             );
             send_or_log(

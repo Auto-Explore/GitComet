@@ -19,6 +19,18 @@ fn context_menu_entry_disabled(model: &ContextMenuModel, label: &str) -> bool {
         .unwrap_or_else(|| panic!("expected `{label}` context menu entry"))
 }
 
+fn context_menu_has_entry(model: &ContextMenuModel, label: &str) -> bool {
+    model.items.iter().any(|item| {
+        matches!(
+            item,
+            ContextMenuItem::Entry {
+                label: entry_label,
+                ..
+            } if entry_label.as_ref() == label
+        )
+    })
+}
+
 fn commit_menu_test_repo(repo_id: RepoId, commit_id: &CommitId) -> RepoState {
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_commit_menu",
@@ -40,6 +52,7 @@ fn commit_menu_test_repo(repo_id: RepoId, commit_id: &CommitId) -> RepoState {
     );
     repo.tags = Loadable::Ready(Arc::new(vec![]));
     repo.rebase_in_progress = Loadable::Ready(false);
+    repo.sequencer_state = Loadable::Ready(gitcomet_core::services::SequencerState::None);
     repo.merge_commit_message = Loadable::Ready(None);
     repo
 }
@@ -135,6 +148,42 @@ fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppCo
                 );
             });
         });
+    });
+}
+
+#[gpui::test]
+fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.detached_head_commit = Some(commit_id.clone());
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit context menu model");
+
+        assert!(!context_menu_has_entry(&model, "Cherry-pick"));
     });
 }
 

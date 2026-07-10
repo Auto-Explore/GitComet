@@ -12,7 +12,7 @@ use gitcomet_core::services::{
     BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
     ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult, PullMode,
     RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -699,6 +699,20 @@ impl GitRepository for GixRepo {
         let in_progress = self.rebase_in_progress_impl()?;
         cancellation.check_cancelled()?;
         Ok(in_progress)
+    }
+
+    fn sequencer_state(&self) -> Result<SequencerState> {
+        self.sequencer_state_impl()
+    }
+
+    fn sequencer_state_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<SequencerState> {
+        cancellation.check_cancelled()?;
+        let state = self.sequencer_state_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(state)
     }
 
     fn merge_commit_message(&self) -> Result<Option<String>> {
