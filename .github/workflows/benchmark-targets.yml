@@ -2,9 +2,9 @@ name: Benchmark Targets
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "dev"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
   workflow_dispatch:
 
 permissions:
