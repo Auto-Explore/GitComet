@@ -2,7 +2,7 @@ name: Deployment CI
 
 on:
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deploy-aur.yml"
@@ -19,7 +19,7 @@ on:
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
   push:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - ".github/workflows/build-release-artifacts.yml"
       - ".github/workflows/deploy-aur.yml"
