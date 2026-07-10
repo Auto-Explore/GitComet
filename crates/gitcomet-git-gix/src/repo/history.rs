@@ -351,6 +351,24 @@ impl GixRepo {
     ) -> Result<CommandOutput> {
         validate_ref_like_arg(base, "interactive rebase base")?;
 
+        // The plan was made from a possibly stale snapshot. Re-list the live
+        // range before spawning git: the installed todo replaces git's own,
+        // so a commit added (or history rewritten) since setup would
+        // otherwise be silently dropped from the branch. Order is not
+        // compared — reordering entries is part of the feature.
+        let live = self.list_commits_for_interactive_rebase_impl(base)?;
+        let mut live_ids: Vec<&str> = live.iter().map(|e| e.commit_id.as_str()).collect();
+        let mut planned_ids: Vec<&str> = entries.iter().map(|e| e.commit_id.as_str()).collect();
+        live_ids.sort_unstable();
+        planned_ids.sort_unstable();
+        if live_ids != planned_ids {
+            return Err(Error::new(ErrorKind::Backend(
+                "interactive rebase aborted: the branch changed since the rebase was set \
+                 up; reload the setup and try again"
+                    .to_string(),
+            )));
+        }
+
         let scripts = RebaseScripts::create(entries).map_err(|e| {
             Error::new(ErrorKind::Backend(format!(
                 "failed to create rebase scripts: {e}"

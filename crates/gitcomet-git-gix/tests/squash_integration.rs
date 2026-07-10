@@ -447,6 +447,42 @@ fn interactive_rebase_setup_survives_separator_bytes_in_messages() {
 }
 
 #[test]
+fn interactive_rebase_aborts_when_branch_changes_after_setup() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _a, _b, _c, _d) = linear_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    entries[0].action = InteractiveRebaseAction::Reword;
+    entries[0].new_message = Some("Stale plan".to_string());
+
+    // A commit lands after the setup snapshot: executing the stale plan
+    // would install a todo that silently drops it.
+    commit_file(&repo, "file.txt", "e\n", "Late commit");
+    let head_before = rev_parse(&repo, "HEAD");
+    let count_before = git_stdout(&repo, &["rev-list", "--count", "HEAD"]);
+
+    let err = backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect_err("stale plan must be rejected");
+    assert!(
+        err.to_string().contains("changed since"),
+        "unexpected error: {err}"
+    );
+
+    // Nothing was rewritten and no rebase is in progress.
+    assert_eq!(rev_parse(&repo, "HEAD"), head_before);
+    assert_eq!(
+        git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
+        count_before
+    );
+    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+}
+
+#[test]
 fn interactive_rebase_edited_squash_message_is_applied_once() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
