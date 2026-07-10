@@ -2,6 +2,7 @@
 //! range of history commits into one.
 
 use crate::domain::{Commit, CommitId};
+use crate::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use std::collections::{HashMap, HashSet};
 
 /// A validated squash of `commit_count` commits in a linear first-parent
@@ -118,6 +119,34 @@ pub fn split_subject_body(message: &str) -> (String, String) {
         ),
         None => (message.to_string(), String::new()),
     }
+}
+
+/// Index of the entry whose editor invocation determines the final message of
+/// the squash run folding into the reword target at `ix`, when that run
+/// contains at least one `squash`.
+///
+/// Git accumulates squashed messages and opens the message editor at the last
+/// squash/fixup step of the run — not at the target's own reword step — so a
+/// replacement message must be applied there or git re-appends the squashed
+/// messages over it. Returns `None` when no editor opens after the target
+/// (plain reword, or only fixups/drops follow), in which case the target's own
+/// reword step is where a replacement message applies. `drop` entries neither
+/// extend nor end the run.
+pub fn squash_run_final_entry(entries: &[InteractiveRebaseEntry], ix: usize) -> Option<usize> {
+    let mut last_fold = None;
+    let mut has_squash = false;
+    for (k, entry) in entries.iter().enumerate().skip(ix + 1) {
+        match entry.action {
+            InteractiveRebaseAction::Squash => {
+                has_squash = true;
+                last_fold = Some(k);
+            }
+            InteractiveRebaseAction::Fixup => last_fold = Some(k),
+            InteractiveRebaseAction::Drop => {}
+            InteractiveRebaseAction::Pick | InteractiveRebaseAction::Reword => break,
+        }
+    }
+    if has_squash { last_fold } else { None }
 }
 
 /// Builds the combined squash message: the oldest commit's full message is the
@@ -333,6 +362,81 @@ mod tests {
             commit("a", &[], 30),
         ];
         assert!(squash_eligibility(&log, &[id("d"), id("c"), id("x")], &id("d")).is_none());
+    }
+
+    fn rebase_entry(action: InteractiveRebaseAction, sha: &str) -> InteractiveRebaseEntry {
+        InteractiveRebaseEntry {
+            action,
+            commit_id: sha.to_string(),
+            summary: format!("summary {sha}"),
+            message: format!("summary {sha}"),
+            new_message: None,
+        }
+    }
+
+    #[test]
+    fn run_final_entry_is_last_squash() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Reword, "a"),
+            rebase_entry(Squash, "b"),
+            rebase_entry(Squash, "c"),
+            rebase_entry(Pick, "d"),
+        ];
+        assert_eq!(squash_run_final_entry(&entries, 0), Some(2));
+    }
+
+    #[test]
+    fn run_final_entry_is_trailing_fixup_after_squash() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Reword, "a"),
+            rebase_entry(Squash, "b"),
+            rebase_entry(Fixup, "c"),
+        ];
+        // The run contains a squash, so git opens the editor at the run's last
+        // fold step even though that step is a fixup.
+        assert_eq!(squash_run_final_entry(&entries, 0), Some(2));
+    }
+
+    #[test]
+    fn run_final_entry_skips_drops_within_the_run() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Reword, "a"),
+            rebase_entry(Squash, "b"),
+            rebase_entry(Drop, "c"),
+            rebase_entry(Squash, "d"),
+        ];
+        assert_eq!(squash_run_final_entry(&entries, 0), Some(3));
+    }
+
+    #[test]
+    fn run_final_entry_none_for_plain_reword() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![rebase_entry(Reword, "a"), rebase_entry(Pick, "b")];
+        assert_eq!(squash_run_final_entry(&entries, 0), None);
+    }
+
+    #[test]
+    fn run_final_entry_none_for_fixup_only_run() {
+        use InteractiveRebaseAction::*;
+        // Fixup-only runs open no squash editor; the target's reword step is
+        // the only editor invocation.
+        let entries = vec![rebase_entry(Reword, "a"), rebase_entry(Fixup, "b")];
+        assert_eq!(squash_run_final_entry(&entries, 0), None);
+    }
+
+    #[test]
+    fn run_final_entry_stops_at_next_standalone_commit() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Reword, "a"),
+            rebase_entry(Squash, "b"),
+            rebase_entry(Pick, "c"),
+            rebase_entry(Squash, "d"),
+        ];
+        assert_eq!(squash_run_final_entry(&entries, 0), Some(1));
     }
 
     #[test]

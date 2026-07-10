@@ -412,6 +412,118 @@ fn interactive_rebase_accepts_branch_sha_and_head_relative_bases() {
 }
 
 #[test]
+fn interactive_rebase_edited_squash_message_is_applied_once() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _a, _b, c, d) = linear_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    // Squash B into A with a fully edited message: the user's text must be
+    // the final message verbatim — git must not re-append B's message.
+    entries[0].action = InteractiveRebaseAction::Reword;
+    entries[0].new_message = Some("Combined subject\n\nCombined body".to_string());
+    entries[1].action = InteractiveRebaseAction::Squash;
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("interactive rebase");
+
+    let exclude_base = format!("^{root}");
+    let rewritten = git_stdout(&repo, &["rev-list", "--reverse", "HEAD", &exclude_base]);
+    let rewritten: Vec<&str> = rewritten.lines().collect();
+    assert_eq!(rewritten.len(), 3, "A+B squashed, C and D replayed");
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", rewritten[0]]),
+        "Combined subject\n\nCombined body"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s", rewritten[1]]),
+        git_stdout(&repo, &["log", "-1", "--format=%s", &c]),
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s", rewritten[2]]),
+        git_stdout(&repo, &["log", "-1", "--format=%s", &d]),
+    );
+}
+
+#[test]
+fn interactive_rebase_edited_message_applies_at_trailing_fixup() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let (root, _a, _b, _c, _d) = linear_repo(&repo);
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    // Run is squash B then fixup C: git opens the message editor at the fixup
+    // step (the run's last fold), so the edited message must be applied there.
+    entries[0].action = InteractiveRebaseAction::Reword;
+    entries[0].new_message = Some("Edited run message".to_string());
+    entries[1].action = InteractiveRebaseAction::Squash;
+    entries[2].action = InteractiveRebaseAction::Fixup;
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("interactive rebase");
+
+    let exclude_base = format!("^{root}");
+    let rewritten = git_stdout(&repo, &["rev-list", "--reverse", "HEAD", &exclude_base]);
+    let rewritten: Vec<&str> = rewritten.lines().collect();
+    assert_eq!(rewritten.len(), 2, "A+B+C folded, D replayed");
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B", rewritten[0]]),
+        "Edited run message"
+    );
+}
+
+#[test]
+fn interactive_rebase_edited_squash_message_survives_conflict() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "a\n", "Prerequisite");
+    commit_file(&repo, "file.txt", "b\n", "Target");
+    commit_file(&repo, "later.txt", "later\n", "Squash into target");
+
+    let backend = open_backend(&repo);
+    let mut entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    // Dropping the prerequisite makes replaying the target conflict; the
+    // edited squash-run message must still be applied after continue.
+    entries[0].action = InteractiveRebaseAction::Drop;
+    entries[1].action = InteractiveRebaseAction::Reword;
+    entries[1].new_message = Some("Squashed after conflict\n\nKept body".to_string());
+    entries[2].action = InteractiveRebaseAction::Squash;
+
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("start interactive rebase");
+    assert!(backend.rebase_in_progress().expect("read rebase state"));
+
+    fs::write(repo.join("file.txt"), "b\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    let continue_output = backend
+        .rebase_continue_with_output()
+        .expect("continue interactive rebase");
+
+    assert!(
+        !backend.rebase_in_progress().expect("read rebase state"),
+        "rebase still in progress after continue: {continue_output:?}"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%B"]),
+        "Squashed after conflict\n\nKept body"
+    );
+}
+
+#[test]
 fn interactive_rebase_preserves_current_reword_message_across_conflict() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");

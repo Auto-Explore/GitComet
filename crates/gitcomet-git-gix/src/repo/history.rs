@@ -447,11 +447,18 @@ impl RebaseScripts {
             .any(|e| e.action == InteractiveRebaseAction::Reword);
         if has_reword {
             fs::create_dir_all(&msgs_dir)?;
-            for entry in entries {
+            for (ix, entry) in entries.iter().enumerate() {
                 if entry.action == InteractiveRebaseAction::Reword
                     && let Some(ref msg) = entry.new_message
                 {
-                    let msg_file = msgs_dir.join(&entry.commit_id);
+                    // When commits squash into this entry, git builds the
+                    // final message at the run's last squash/fixup step and
+                    // would re-append the squashed messages over anything
+                    // installed at the reword step — so the replacement
+                    // message must be keyed to that step's commit instead.
+                    let key_entry = gitcomet_core::squash::squash_run_final_entry(entries, ix)
+                        .map_or(entry, |k| &entries[k]);
+                    let msg_file = msgs_dir.join(&key_entry.commit_id);
                     fs::write(msg_file, msg.as_bytes())?;
                 }
             }
