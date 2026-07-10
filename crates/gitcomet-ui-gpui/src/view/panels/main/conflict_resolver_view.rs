@@ -77,8 +77,7 @@ impl MainPaneView {
                 let conflict_count = self.conflict_resolver_conflict_count();
                 let active_conflict = self.conflict_resolver.active_conflict;
                 let can_jump_first = conflict_count > 0 && active_conflict > 0;
-                let can_jump_last =
-                    conflict_count > 0 && active_conflict + 1 < conflict_count;
+                let can_jump_last = conflict_count > 0 && active_conflict + 1 < conflict_count;
                 let can_prev_unresolved = self.conflict_has_prev_unresolved();
                 let can_next_unresolved = self.conflict_has_next_unresolved();
 
@@ -162,10 +161,7 @@ impl MainPaneView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_prev_unresolved(cx);
                         })
-                        .gitcomet_tooltip(
-                            theme,
-                            "Previous unresolved conflict (Ctrl+PgUp)".into(),
-                        ),
+                        .gitcomet_tooltip(theme, "Previous unresolved conflict (Ctrl+PgUp)".into()),
                 )
                 .child(
                     components::Button::new("conflict_next_unresolved", "")
@@ -179,10 +175,7 @@ impl MainPaneView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_next_unresolved(cx);
                         })
-                        .gitcomet_tooltip(
-                            theme,
-                            "Next unresolved conflict (Ctrl+PgDn)".into(),
-                        ),
+                        .gitcomet_tooltip(theme, "Next unresolved conflict (Ctrl+PgDn)".into()),
                 )
             })
             .when(
@@ -199,6 +192,8 @@ impl MainPaneView {
                         .unwrap_or(false);
                     let selected =
                         self.conflict_resolver_selected_choices_for_conflict_ix(active_ix);
+                    let is_three_way =
+                        self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
                     let mut pick_btn =
                         |id: &'static str,
                          label: &'static str,
@@ -216,43 +211,75 @@ impl MainPaneView {
                                 })
                                 .gitcomet_tooltip(theme, tooltip.into())
                         };
-                    d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
-                        .child(pick_btn(
-                            "conflict_pick_base",
-                            "Base",
-                            "A",
-                            conflict_resolver::ConflictChoice::Base,
-                            has_base,
-                            "Pick the base (ancestor) version for the active conflict \
-                             (A or Ctrl+1; U un-resolves)",
-                        ))
-                        .child(pick_btn(
-                            "conflict_pick_ours",
-                            "Ours",
-                            "B",
-                            conflict_resolver::ConflictChoice::Ours,
-                            true,
-                            "Pick the local (ours) version for the active conflict \
-                             (B or Ctrl+2; U un-resolves)",
-                        ))
-                        .child(pick_btn(
-                            "conflict_pick_theirs",
-                            "Theirs",
-                            "C",
-                            conflict_resolver::ConflictChoice::Theirs,
-                            true,
-                            "Pick the incoming (theirs) version for the active conflict \
-                             (C or Ctrl+3; U un-resolves)",
-                        ))
-                        .child(pick_btn(
-                            "conflict_pick_both",
-                            "Both",
-                            "D",
-                            conflict_resolver::ConflictChoice::Both,
-                            true,
-                            "Keep both versions (ours, then theirs) for the active conflict \
-                             (D; U un-resolves)",
-                        ))
+                    let cluster = d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border));
+                    if is_three_way {
+                        cluster
+                            .child(pick_btn(
+                                "conflict_pick_base",
+                                "Base",
+                                "A",
+                                conflict_resolver::ConflictChoice::Base,
+                                has_base,
+                                "Pick the base (ancestor) version for the active conflict \
+                                 (A or Ctrl+1; U un-resolves)",
+                            ))
+                            .child(pick_btn(
+                                "conflict_pick_ours",
+                                "Ours",
+                                "B",
+                                conflict_resolver::ConflictChoice::Ours,
+                                true,
+                                "Pick the local (ours) version for the active conflict \
+                                 (B or Ctrl+2; U un-resolves)",
+                            ))
+                            .child(pick_btn(
+                                "conflict_pick_theirs",
+                                "Theirs",
+                                "C",
+                                conflict_resolver::ConflictChoice::Theirs,
+                                true,
+                                "Pick the incoming (theirs) version for the active conflict \
+                                 (C or Ctrl+3; U un-resolves)",
+                            ))
+                            .child(pick_btn(
+                                "conflict_pick_both",
+                                "Both",
+                                "D",
+                                conflict_resolver::ConflictChoice::Both,
+                                true,
+                                "Keep both versions (ours, then theirs) for the active conflict \
+                                 (D; U un-resolves)",
+                            ))
+                    } else {
+                        cluster
+                            .child(pick_btn(
+                                "conflict_pick_ours",
+                                "Local",
+                                "A",
+                                conflict_resolver::ConflictChoice::Ours,
+                                true,
+                                "Pick the local (ours) version for the active conflict \
+                                 (A or Ctrl+1; U un-resolves)",
+                            ))
+                            .child(pick_btn(
+                                "conflict_pick_theirs",
+                                "Remote",
+                                "B",
+                                conflict_resolver::ConflictChoice::Theirs,
+                                true,
+                                "Pick the incoming (theirs) version for the active conflict \
+                                 (B or Ctrl+2; U un-resolves)",
+                            ))
+                            .child(pick_btn(
+                                "conflict_pick_both",
+                                "Both",
+                                "C",
+                                conflict_resolver::ConflictChoice::Both,
+                                true,
+                                "Keep both versions (ours, then theirs) for the active conflict \
+                                 (C or Ctrl+3; U un-resolves)",
+                            ))
+                    }
                 },
             )
             .when_some(next_file_btn, |d, btn| d.child(btn));
@@ -276,7 +303,11 @@ impl MainPaneView {
                         .style(components::ButtonStyle::Outlined)
                         .on_click(theme, cx, move |this, _e, _w, cx| {
                             if this.view_mode == GitCometViewMode::FocusedMergetool {
-                                this.focused_mergetool_save_and_exit(repo_id, save_path.clone(), cx);
+                                this.focused_mergetool_save_and_exit(
+                                    repo_id,
+                                    save_path.clone(),
+                                    cx,
+                                );
                                 return;
                             }
                             let text = this.conflict_resolver_save_contents(cx);
@@ -305,8 +336,7 @@ impl MainPaneView {
                                         PopoverKind::ConflictSaveStageConfirm {
                                             repo_id,
                                             path: stage_path.clone(),
-                                            has_conflict_markers: stage_safety
-                                                .has_conflict_markers,
+                                            has_conflict_markers: stage_safety.has_conflict_markers,
                                             unresolved_blocks: stage_safety.unresolved_blocks,
                                         },
                                         e.position(),
@@ -314,8 +344,7 @@ impl MainPaneView {
                                         cx,
                                     );
                                 } else {
-                                    let text =
-                                        this.conflict_resolver_save_contents_from_text(text);
+                                    let text = this.conflict_resolver_save_contents_from_text(text);
                                     this.store.dispatch(Msg::SaveWorktreeFile {
                                         repo_id,
                                         path: stage_path.clone(),
@@ -1599,6 +1628,16 @@ impl MainPaneView {
                                 .child(start_controls);
                             let autosolve_summary =
                                 self.conflict_resolver.last_autosolve_summary.clone();
+                            let auto_solved_on_open = self
+                                .conflict_resolver
+                                .auto_solved_on_open
+                                .unwrap_or_else(|| self.conflict_resolver_auto_resolved_count());
+                            let conflict_summary =
+                                conflict_resolver::format_conflict_count_summary(
+                                    self.conflict_resolver_conflict_count(),
+                                    auto_solved_on_open,
+                                    self.conflict_resolver_resolved_count(),
+                                );
 
                             // Vertical resize handle between merge inputs and resolved output
                             let vsplit_ratio = self.conflict_resolver_vsplit_ratio;
@@ -1707,6 +1746,24 @@ impl MainPaneView {
                                 })
                                 .child(vsplit_handle)
                                 .child(output_header)
+                                .when_some(conflict_summary, |d, summary| {
+                                    d.child(
+                                        div()
+                                            .id("conflict_resolver_count_summary")
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded(px(theme.radii.row))
+                                            .bg(theme.colors.surface_bg_elevated)
+                                            .border_1()
+                                            .border_color(theme.colors.border)
+                                            .text_xs()
+                                            .text_color(theme.colors.text)
+                                            .child(summary),
+                                    )
+                                })
                                 .when_some(autosolve_summary, |d, summary| {
                                     // §30: make the autosolve pass visible on
                                     // open — accent chip, not a muted footnote.
@@ -1840,7 +1897,9 @@ impl MainPaneView {
                                                                                 )
                                                                             },
                                                                         )
-                                                                        .child(
+                                                                        .when(
+                                                                            self.mergetool_show_line_numbers,
+                                                                            |d| d.child(
                                                                             div()
                                                                                 .id("conflict_resolver_output_gutter")
                                                                                 .w(px(92.0))
@@ -1852,7 +1911,7 @@ impl MainPaneView {
                                                                                     theme.colors.border,
                                                                                 )
                                                                                 .child(outline_list),
-                                                                        )
+                                                                        ))
                                                                         .child(
                                                                             div()
                                                                                 .id(

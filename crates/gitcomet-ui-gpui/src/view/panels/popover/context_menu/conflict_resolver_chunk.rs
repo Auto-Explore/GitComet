@@ -69,15 +69,13 @@ pub(super) fn model(
             }),
         });
     } else {
-        // Two-way labels follow the shared keyboard model: B = local
-        // (ours), C = remote (theirs) — same as the toolbar pick cluster.
         items.push(ContextMenuItem::Entry {
-            label: "Pick B (Local)".into(),
+            label: "Pick A (Local)".into(),
             icon: Some(conflict_source_icon(
                 selected_choices.contains(&conflict_resolver::ConflictChoice::Ours),
                 "icons/computer.svg",
             )),
-            shortcut: Some("B / Ctrl+2".into()),
+            shortcut: Some("A / Ctrl+1".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
@@ -88,12 +86,12 @@ pub(super) fn model(
             }),
         });
         items.push(ContextMenuItem::Entry {
-            label: "Pick C (Remote)".into(),
+            label: "Pick B (Remote)".into(),
             icon: Some(conflict_source_icon(
                 selected_choices.contains(&conflict_resolver::ConflictChoice::Theirs),
                 "icons/cloud.svg",
             )),
-            shortcut: Some("C / Ctrl+3".into()),
+            shortcut: Some("B / Ctrl+2".into()),
             disabled: false,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
@@ -106,12 +104,20 @@ pub(super) fn model(
     }
 
     items.push(ContextMenuItem::Entry {
-        label: "Keep both (B + C)".into(),
+        label: if is_three_way {
+            "Keep both (B + C)".into()
+        } else {
+            "Keep both (A + B)".into()
+        },
         icon: Some(conflict_source_icon(
             selected_choices.contains(&conflict_resolver::ConflictChoice::Both),
             "icons/copy.svg",
         )),
-        shortcut: Some("D".into()),
+        shortcut: Some(if is_three_way {
+            "D".into()
+        } else {
+            "C / Ctrl+3".into()
+        }),
         disabled: false,
         action: Box::new(ContextMenuAction::ConflictResolverPick {
             target: ResolverPickTarget::Chunk {
@@ -183,9 +189,40 @@ mod tests {
 
     #[test]
     fn model_two_way_includes_b_c_both_and_unresolve() {
-        // Header + B/C picks + Keep both + separator + Unresolve.
+        // Header + A/B picks + Keep both + separator + Unresolve.
         let model = super::model(1, false, false, &[], Some(3));
         assert_eq!(model.items.len(), 6);
+    }
+
+    #[test]
+    fn model_two_way_uses_a_b_c_labels_and_shortcuts() {
+        let model = super::model(1, false, false, &[], Some(3));
+        let entries: Vec<(String, Option<String>)> = model
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label, shortcut, ..
+                } => Some((label.to_string(), shortcut.as_ref().map(|s| s.to_string()))),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            entries,
+            vec![
+                ("Pick A (Local)".to_string(), Some("A / Ctrl+1".to_string())),
+                (
+                    "Pick B (Remote)".to_string(),
+                    Some("B / Ctrl+2".to_string())
+                ),
+                (
+                    "Keep both (A + B)".to_string(),
+                    Some("C / Ctrl+3".to_string()),
+                ),
+                ("Unresolve".to_string(), Some("U".to_string())),
+            ]
+        );
     }
 
     #[test]

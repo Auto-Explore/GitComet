@@ -1308,6 +1308,11 @@ pub(super) struct ConflictResolverUiState {
     pub(super) conflict_kind: Option<gitcomet_core::domain::FileConflictKind>,
     /// Last autosolve trace summary shown in resolver UI.
     pub(super) last_autosolve_summary: Option<SharedString>,
+    /// Conflicts that were auto-solved when this resolver file opened.
+    ///
+    /// This stays fixed while the user makes manual picks, so the count summary
+    /// describes the open-time autosolve result rather than live current state.
+    pub(super) auto_solved_on_open: Option<usize>,
     /// Tracks the last-seen `conflict_rev` from state so we can detect
     /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
     /// that don't change the underlying file content.
@@ -1363,6 +1368,7 @@ impl Default for ConflictResolverUiState {
             strategy: None,
             conflict_kind: None,
             last_autosolve_summary: None,
+            auto_solved_on_open: None,
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),

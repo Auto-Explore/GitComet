@@ -1364,6 +1364,7 @@ impl MainPaneView {
             mergetool_collapse_unchanged: false,
             mergetool_vertical_split: false,
             mergetool_output_scroll_sync: true,
+            mergetool_show_line_numbers: true,
             diff_view: diff_view_mode,
             annotate_enabled,
             annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
@@ -2072,7 +2073,6 @@ impl MainPaneView {
         if self.conflict_resolved_preview_syntax_inflight == Some(request_key) {
             return;
         }
-        eprintln!("PROBE: output background syntax prepare SPAWN reached");
         self.conflict_resolved_preview_syntax_inflight = Some(request_key);
         let output_text = output_snapshot.as_shared_string();
         let output_line_starts = output_snapshot.shared_line_starts();
@@ -2142,7 +2142,6 @@ impl MainPaneView {
         if self.conflict_three_way_syntax_inflight[side] {
             return;
         }
-        eprintln!("PROBE: THREE-WAY background syntax prepare SPAWN reached side={side:?}");
         self.conflict_three_way_syntax_inflight[side] = true;
         let expected_source_hash = source_hash;
         cx.spawn(
@@ -2533,16 +2532,18 @@ impl MainPaneView {
             return false;
         }
 
-        let mut old_affected = dirty_byte_range_to_line_range(
+        let old_dirty_lines = dirty_byte_range_to_line_range(
             old_line_starts.as_ref(),
             old_text.len(),
             delta.old_range.clone(),
         );
-        let mut new_affected = dirty_byte_range_to_line_range(
+        let new_dirty_lines = dirty_byte_range_to_line_range(
             new_line_starts.as_ref(),
             output_text.len(),
             delta.new_range.clone(),
         );
+        let mut old_affected = old_dirty_lines.clone();
+        let mut new_affected = new_dirty_lines.clone();
         old_affected.start = old_affected.start.saturating_sub(1);
         old_affected.end = old_affected.end.saturating_add(1).min(old_line_count);
         new_affected.start = new_affected.start.saturating_sub(1);
@@ -2553,11 +2554,17 @@ impl MainPaneView {
         else {
             return false;
         };
-        let Some(new_block_ranges) = resolved_output_conflict_block_ranges_in_text(
+        let new_block_ranges = match resolved_output_conflict_block_ranges_in_text(
             &self.conflict_resolver.marker_segments,
             output_text,
-        ) else {
-            return false;
+        ) {
+            Some(ranges) if ranges.len() == old_block_ranges.len() => ranges,
+            _ => remap_resolved_output_conflict_block_ranges_for_delta(
+                old_block_ranges.as_slice(),
+                old_dirty_lines.clone(),
+                new_dirty_lines.clone(),
+                new_line_count,
+            ),
         };
         if old_block_ranges.len() != new_block_ranges.len() {
             return false;
@@ -2654,10 +2661,14 @@ impl MainPaneView {
             for line_ix in new_affected.clone() {
                 let output_line =
                     rows::resolved_output_line_text(output_text, new_line_starts.as_ref(), line_ix);
-                let (source, input_line) = source_lookup
+                let (mut source, mut input_line) = source_lookup
                     .get(output_line)
                     .copied()
                     .unwrap_or((conflict_resolver::ResolvedLineSource::Manual, None));
+                if new_dirty_lines.contains(&line_ix) {
+                    source = conflict_resolver::ResolvedLineSource::Manual;
+                    input_line = None;
+                }
                 middle_meta.push(conflict_resolver::ResolvedLineMeta {
                     output_line: u32::try_from(line_ix).unwrap_or(u32::MAX),
                     source,
@@ -3659,14 +3670,15 @@ impl MainPaneView {
     }
 
     /// Persisted merge tool preferences: (auto-advance, collapse-unchanged
-    /// default, vertical split, output scroll sync). Read by the root view's
-    /// UI settings persist.
-    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool, bool) {
+    /// default, vertical split, output scroll sync, show line numbers). Read by
+    /// the root view's UI settings persist.
+    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool, bool, bool) {
         (
             self.mergetool_auto_advance,
             self.mergetool_collapse_unchanged,
             self.mergetool_vertical_split,
             self.mergetool_output_scroll_sync,
+            self.mergetool_show_line_numbers,
         )
     }
 
@@ -3711,6 +3723,19 @@ impl MainPaneView {
             return;
         }
         self.mergetool_output_scroll_sync = next;
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn set_mergetool_show_line_numbers_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.mergetool_show_line_numbers == next {
+            return;
+        }
+        self.mergetool_show_line_numbers = next;
         self.schedule_ui_settings_persist(cx);
         cx.notify();
     }
@@ -5144,7 +5169,8 @@ impl MainPaneView {
                 }
             }
             ConflictResolverViewMode::TwoWayDiff => {
-                if !self.conflict_resolver.two_way_uses_aligned_rows() || folded || !output_follows {
+                if !self.conflict_resolver.two_way_uses_aligned_rows() || folded || !output_follows
+                {
                     ConflictPreviewSyncGroup::TwoWayPair
                 } else {
                     ConflictPreviewSyncGroup::TwoWayPairAndOutput

@@ -764,7 +764,10 @@ impl MainPaneView {
                 .is_focused(window)
             && self.conflict_resolver_conflict_count() > 0
         {
-            if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(key) {
+            if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(
+                key,
+                self.conflict_resolver.view_mode,
+            ) {
                 self.conflict_resolver_pick_active_conflict(choice, cx);
                 handled = true;
             } else if key == "u" {
@@ -783,7 +786,10 @@ impl MainPaneView {
             && !mods.function
             && !mods.shift
             && self.conflict_resolver_conflict_count() > 0
-            && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(key)
+            && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
+                key,
+                self.conflict_resolver.view_mode,
+            )
         {
             self.conflict_resolver_pick_active_conflict(choice, cx);
             handled = true;
@@ -2265,7 +2271,11 @@ impl MainPaneView {
                         "Merge tool settings",
                     )
                 } else {
-                    ("diff_action_menu", PopoverKind::DiffActionMenu, "Diff actions")
+                    (
+                        "diff_action_menu",
+                        PopoverKind::DiffActionMenu,
+                        "Diff actions",
+                    )
                 };
             let diff_action_invoker: SharedString = cog_id.into();
             let diff_action_active = self

@@ -12,11 +12,11 @@ mod conflict_resolver_input_row;
 mod conflict_resolver_output;
 mod diff_actions;
 mod diff_content_mode_settings;
-mod mergetool_settings;
 mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
 mod history_branch_filter;
+mod mergetool_settings;
 mod previous_commit_messages;
 mod pull;
 mod push;
@@ -1046,6 +1046,13 @@ impl PopoverHost {
                 close_after_action = false;
                 self.main_pane.update(cx, |pane, cx| {
                     pane.set_mergetool_output_scroll_sync_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolShowLineNumbers { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_show_line_numbers_and_persist(enabled, cx);
                 });
                 cx.notify();
             }

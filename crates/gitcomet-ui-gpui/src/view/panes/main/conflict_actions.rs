@@ -683,6 +683,7 @@ impl MainPaneView {
                 strategy: conflict_strategy,
                 conflict_kind,
                 last_autosolve_summary: None,
+                auto_solved_on_open: None,
                 conflict_rev: repo.conflict_state.conflict_rev,
                 ..ConflictResolverUiState::default()
             };
@@ -1010,6 +1011,19 @@ impl MainPaneView {
                 .and_then(conflict_resolver::on_open_autosolve_summary)
                 .map(Into::into)
         };
+        let auto_solved_on_open = if is_same_conflict {
+            self.conflict_resolver.auto_solved_on_open
+        } else {
+            repo.conflict_state
+                .conflict_session
+                .as_ref()
+                .map(|session| {
+                    conflict_resolver::auto_resolved_region_count_for_blocks(
+                        session,
+                        &conflict_region_indices,
+                    )
+                })
+        };
 
         self.conflict_three_way_segments_cache.clear();
 
@@ -1098,6 +1112,7 @@ impl MainPaneView {
             strategy: conflict_strategy,
             conflict_kind,
             last_autosolve_summary,
+            auto_solved_on_open,
             conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
@@ -2281,6 +2296,7 @@ impl MainPaneView {
             );
         self.conflict_resolver.active_conflict = 0;
         self.conflict_resolver.last_autosolve_summary = None;
+        self.conflict_resolver.auto_solved_on_open = None;
         self.conflict_resolver_rebuild_visible_map();
         self.conflict_resolver_refresh_output_and_scroll(None, cx);
         if let (Some(repo_id), Some(path)) = (
@@ -2463,7 +2479,13 @@ impl MainPaneView {
         }
 
         let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-        for marker in self.conflict_resolver.resolved_outline.markers.iter().flatten() {
+        for marker in self
+            .conflict_resolver
+            .resolved_outline
+            .markers
+            .iter()
+            .flatten()
+        {
             if marker.is_start {
                 ranges.push(marker.range_start..marker.range_end);
             }
@@ -2540,7 +2562,9 @@ impl MainPaneView {
             .entry(fold_id)
             .or_default();
         if from_top {
-            reveal.top = reveal.top.saturating_add(conflict_resolver::CONFLICT_FOLD_REVEAL_STEP);
+            reveal.top = reveal
+                .top
+                .saturating_add(conflict_resolver::CONFLICT_FOLD_REVEAL_STEP);
         } else {
             reveal.bottom = reveal
                 .bottom

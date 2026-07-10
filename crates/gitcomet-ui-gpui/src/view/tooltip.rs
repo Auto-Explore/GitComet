@@ -163,6 +163,7 @@ impl GitCometView {
                             mergetool_collapse_unchanged,
                             mergetool_vertical_split,
                             mergetool_output_scroll_sync,
+                            mergetool_show_line_numbers,
                         ) = this.main_pane.read(cx).mergetool_preferences();
                         let (change_tracking_height, untracked_height) =
                             this.details_pane.read(cx).saved_status_section_heights();
@@ -205,6 +206,7 @@ impl GitCometView {
                             mergetool_collapse_unchanged: Some(mergetool_collapse_unchanged),
                             mergetool_vertical_split: Some(mergetool_vertical_split),
                             mergetool_output_scroll_sync: Some(mergetool_output_scroll_sync),
+                            mergetool_show_line_numbers: Some(mergetool_show_line_numbers),
                             change_tracking_height,
                             untracked_height,
                             history_show_graph: Some(history_show_graph),

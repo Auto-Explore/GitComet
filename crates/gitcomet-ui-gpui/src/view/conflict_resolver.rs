@@ -8,9 +8,9 @@ use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_S
 pub use split_row_index::{ConflictSplitRowIndex, TwoWaySplitProjection, TwoWaySplitVisibleRow};
 #[cfg(any(test, feature = "benchmarks"))]
 pub use word_highlight::compute_three_way_word_highlights;
-pub use word_highlight::{compute_word_highlights_for_row, compute_word_highlights_for_texts};
 #[cfg(feature = "benchmarks")]
 pub use word_highlight::{TwoWayWordHighlights, compute_two_way_word_highlights};
+pub use word_highlight::{compute_word_highlights_for_row, compute_word_highlights_for_texts};
 
 use rustc_hash::FxHashMap;
 use std::ops::Range;
@@ -550,13 +550,24 @@ pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
 pub(crate) const LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES: usize = 4_000;
 
 /// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
-pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
-    match key {
-        "a" => Some(ConflictChoice::Base),
-        "b" => Some(ConflictChoice::Ours),
-        "c" => Some(ConflictChoice::Theirs),
-        "d" => Some(ConflictChoice::Both),
-        _ => None,
+pub fn conflict_quick_pick_choice_for_key(
+    key: &str,
+    view_mode: ConflictResolverViewMode,
+) -> Option<ConflictChoice> {
+    match view_mode {
+        ConflictResolverViewMode::ThreeWay => match key {
+            "a" => Some(ConflictChoice::Base),
+            "b" => Some(ConflictChoice::Ours),
+            "c" => Some(ConflictChoice::Theirs),
+            "d" => Some(ConflictChoice::Both),
+            _ => None,
+        },
+        ConflictResolverViewMode::TwoWayDiff => match key {
+            "a" => Some(ConflictChoice::Ours),
+            "b" => Some(ConflictChoice::Theirs),
+            "c" => Some(ConflictChoice::Both),
+            _ => None,
+        },
     }
 }
 
@@ -564,12 +575,23 @@ pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
 ///
 /// Unlike the single-letter picks these also work while the output editor is
 /// focused, since they cannot collide with text input.
-pub fn conflict_ctrl_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
-    match key {
-        "1" => Some(ConflictChoice::Base),
-        "2" => Some(ConflictChoice::Ours),
-        "3" => Some(ConflictChoice::Theirs),
-        _ => None,
+pub fn conflict_ctrl_pick_choice_for_key(
+    key: &str,
+    view_mode: ConflictResolverViewMode,
+) -> Option<ConflictChoice> {
+    match view_mode {
+        ConflictResolverViewMode::ThreeWay => match key {
+            "1" => Some(ConflictChoice::Base),
+            "2" => Some(ConflictChoice::Ours),
+            "3" => Some(ConflictChoice::Theirs),
+            _ => None,
+        },
+        ConflictResolverViewMode::TwoWayDiff => match key {
+            "1" => Some(ConflictChoice::Ours),
+            "2" => Some(ConflictChoice::Theirs),
+            "3" => Some(ConflictChoice::Both),
+            _ => None,
+        },
     }
 }
 
@@ -618,6 +640,23 @@ pub fn format_autosolve_trace_summary(
     }
 }
 
+/// Build the persistent conflict-count summary shown in the resolver chrome.
+pub fn format_conflict_count_summary(
+    total: usize,
+    auto_solved: usize,
+    resolved: usize,
+) -> Option<String> {
+    if total == 0 {
+        return None;
+    }
+    let auto_solved = auto_solved.min(total);
+    let resolved = resolved.min(total);
+    let remaining = total.saturating_sub(resolved);
+    Some(format!(
+        "Conflicts: {total} total, {auto_solved} auto-solved, {remaining} remaining"
+    ))
+}
+
 /// Summarize the on-open autosolve pass from session region resolutions.
 ///
 /// On a fresh open every resolved region is an [`AutoResolved`] one (user
@@ -660,6 +699,27 @@ pub fn on_open_autosolve_summary(
         unresolved_after,
         &stats,
     ))
+}
+
+/// Count conflict blocks whose backing session regions were auto-resolved when
+/// the resolver opened.
+pub fn auto_resolved_region_count_for_blocks(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+    conflict_region_indices: &[usize],
+) -> usize {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    conflict_region_indices
+        .iter()
+        .filter(|region_ix| {
+            session.regions.get(**region_ix).is_some_and(|region| {
+                matches!(
+                    &region.resolution,
+                    ConflictRegionResolution::AutoResolved { .. }
+                )
+            })
+        })
+        .count()
 }
 
 /// Build a per-conflict autosolve trace label for the active conflict.

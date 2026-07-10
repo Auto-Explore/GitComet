@@ -623,6 +623,19 @@ fn autosolve_trace_summary_on_open_mode() {
 }
 
 #[test]
+fn conflict_count_summary_reports_total_auto_and_remaining() {
+    assert_eq!(
+        format_conflict_count_summary(5, 2, 3).as_deref(),
+        Some("Conflicts: 5 total, 2 auto-solved, 2 remaining")
+    );
+    assert_eq!(
+        format_conflict_count_summary(3, 9, 9).as_deref(),
+        Some("Conflicts: 3 total, 3 auto-solved, 0 remaining")
+    );
+    assert!(format_conflict_count_summary(0, 0, 0).is_none());
+}
+
+#[test]
 fn on_open_autosolve_summary_reconstructs_tier_breakdown_from_rules() {
     use gitcomet_core::conflict_session::{
         AutosolveConfidence, AutosolveRule, ConflictPayload, ConflictRegion,
@@ -698,6 +711,52 @@ fn on_open_autosolve_summary_is_none_without_auto_resolutions() {
     ];
 
     assert!(on_open_autosolve_summary(&session).is_none());
+}
+
+#[test]
+fn auto_resolved_region_count_for_blocks_counts_only_mapped_auto_resolutions() {
+    use gitcomet_core::conflict_session::{
+        AutosolveRule, ConflictPayload, ConflictRegion, ConflictRegionResolution as R,
+        ConflictSession,
+    };
+    use gitcomet_core::domain::FileConflictKind;
+
+    let region = |resolution: R| ConflictRegion {
+        base: None,
+        ours: "ours\n".into(),
+        theirs: "theirs\n".into(),
+        resolution,
+    };
+    let mut session = ConflictSession::new(
+        std::path::PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+    );
+    session.regions = vec![
+        region(R::AutoResolved {
+            rule: AutosolveRule::IdenticalSides,
+            confidence: AutosolveRule::IdenticalSides.confidence(),
+            content: String::new(),
+        }),
+        region(R::PickOurs),
+        region(R::AutoResolved {
+            rule: AutosolveRule::RegexEquivalentSides,
+            confidence: AutosolveRule::RegexEquivalentSides.confidence(),
+            content: String::new(),
+        }),
+        region(R::Unresolved),
+    ];
+
+    assert_eq!(
+        auto_resolved_region_count_for_blocks(&session, &[0, 1, 3, 99]),
+        1
+    );
+    assert_eq!(
+        auto_resolved_region_count_for_blocks(&session, &[0, 2]),
+        2
+    );
 }
 
 #[test]
@@ -781,40 +840,89 @@ fn active_conflict_autosolve_trace_label_returns_none_when_not_auto_or_oob() {
 #[test]
 fn quick_pick_key_mapping_matches_a_b_c_d_shortcuts() {
     assert_eq!(
-        conflict_quick_pick_choice_for_key("a"),
+        conflict_quick_pick_choice_for_key("a", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Base)
     );
     assert_eq!(
-        conflict_quick_pick_choice_for_key("b"),
+        conflict_quick_pick_choice_for_key("b", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Ours)
     );
     assert_eq!(
-        conflict_quick_pick_choice_for_key("c"),
+        conflict_quick_pick_choice_for_key("c", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Theirs)
     );
     assert_eq!(
-        conflict_quick_pick_choice_for_key("d"),
+        conflict_quick_pick_choice_for_key("d", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Both)
     );
-    assert_eq!(conflict_quick_pick_choice_for_key("x"), None);
+    assert_eq!(
+        conflict_quick_pick_choice_for_key("x", ConflictResolverViewMode::ThreeWay),
+        None
+    );
+}
+
+#[test]
+fn two_way_quick_pick_key_mapping_uses_a_b_c_without_base() {
+    assert_eq!(
+        conflict_quick_pick_choice_for_key("a", ConflictResolverViewMode::TwoWayDiff),
+        Some(ConflictChoice::Ours)
+    );
+    assert_eq!(
+        conflict_quick_pick_choice_for_key("b", ConflictResolverViewMode::TwoWayDiff),
+        Some(ConflictChoice::Theirs)
+    );
+    assert_eq!(
+        conflict_quick_pick_choice_for_key("c", ConflictResolverViewMode::TwoWayDiff),
+        Some(ConflictChoice::Both)
+    );
+    assert_eq!(
+        conflict_quick_pick_choice_for_key("d", ConflictResolverViewMode::TwoWayDiff),
+        None
+    );
 }
 
 #[test]
 fn ctrl_pick_key_mapping_matches_kdiff3_1_2_3_aliases() {
     assert_eq!(
-        conflict_ctrl_pick_choice_for_key("1"),
+        conflict_ctrl_pick_choice_for_key("1", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Base)
     );
     assert_eq!(
-        conflict_ctrl_pick_choice_for_key("2"),
+        conflict_ctrl_pick_choice_for_key("2", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Ours)
     );
     assert_eq!(
-        conflict_ctrl_pick_choice_for_key("3"),
+        conflict_ctrl_pick_choice_for_key("3", ConflictResolverViewMode::ThreeWay),
         Some(ConflictChoice::Theirs)
     );
-    assert_eq!(conflict_ctrl_pick_choice_for_key("4"), None);
-    assert_eq!(conflict_ctrl_pick_choice_for_key("a"), None);
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("4", ConflictResolverViewMode::ThreeWay),
+        None
+    );
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("a", ConflictResolverViewMode::ThreeWay),
+        None
+    );
+}
+
+#[test]
+fn two_way_ctrl_pick_key_mapping_uses_1_2_3_without_base() {
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("1", ConflictResolverViewMode::TwoWayDiff),
+        Some(ConflictChoice::Ours)
+    );
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("2", ConflictResolverViewMode::TwoWayDiff),
+        Some(ConflictChoice::Theirs)
+    );
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("3", ConflictResolverViewMode::TwoWayDiff),
+        Some(ConflictChoice::Both)
+    );
+    assert_eq!(
+        conflict_ctrl_pick_choice_for_key("4", ConflictResolverViewMode::TwoWayDiff),
+        None
+    );
 }
 
 #[test]

@@ -4581,7 +4581,7 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
 }
 
 #[gpui::test]
-fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_background_syntax(
+fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background_syntax(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -4770,13 +4770,15 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "edited conflict resolved output falls back to plain text while background syntax reparses",
+        "edited conflict resolved output keeps syntax after edit",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolved_preview_text
                 .as_ref()
                 .starts_with(inserted_prefix.as_str())
-                && pane.conflict_resolved_preview_style_cache_epoch > initial_epoch
+                && pane
+                    .conflict_resolved_preview_prepared_syntax_document
+                    .is_some()
         },
         |pane| {
             let preview_prefix: Vec<&str> = pane
@@ -4801,35 +4803,40 @@ fn edited_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgr
     let target_ix = 1usize;
     let (pending_epoch, pending_highlights_hash, pending_has_comment_highlight) =
         cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let styled = pane
-            .conflict_resolved_preview_segments_cache_get(target_ix)
-            .expect("edit redraw should populate the visible fallback resolved-output row cache");
-        assert_eq!(
-            styled.text.as_ref(),
-            inserted_comment_line,
-            "expected the cached resolved-output row to reflect the inserted comment continuation line"
-        );
-        if !styled.highlights.is_empty() {
+            let pane = view.read(app).main_pane.read(app);
             assert!(
+                pane.conflict_resolved_preview_prepared_syntax_document
+                    .is_some(),
+                "resolved-output syntax should retain a prepared document instead of dropping to plain text after edit"
+            );
+            let styled = pane
+                .conflict_resolved_preview_segments_cache_get(target_ix)
+                .expect("edit redraw should populate the visible stale resolved-output row cache");
+            assert_eq!(
+                styled.text.as_ref(),
+                inserted_comment_line,
+                "expected the cached resolved-output row to reflect the inserted comment continuation line"
+            );
+            if !styled.highlights.is_empty() {
+                assert!(
+                    styled.highlights.iter().any(|(range, style)| {
+                        range.start == 0
+                            && range.end == inserted_comment_line.len()
+                            && style.color == Some(pane.theme.syntax.comment.into())
+                    }),
+                    "if the background parse wins before the first observable redraw, the continuation row should already be comment-highlighted"
+                );
+            }
+            (
+                pane.conflict_resolved_preview_style_cache_epoch,
+                styled.highlights_hash,
                 styled.highlights.iter().any(|(range, style)| {
                     range.start == 0
                         && range.end == inserted_comment_line.len()
                         && style.color == Some(pane.theme.syntax.comment.into())
                 }),
-                "if the background parse wins before the first observable redraw, the continuation row should already be comment-highlighted"
-            );
-        }
-        (
-            pane.conflict_resolved_preview_style_cache_epoch,
-            styled.highlights_hash,
-            styled.highlights.iter().any(|(range, style)| {
-                range.start == 0
-                    && range.end == inserted_comment_line.len()
-                    && style.color == Some(pane.theme.syntax.comment.into())
-            }),
-        )
-    });
+            )
+        });
 
     wait_for_main_pane_condition_with_timeout(
         cx,

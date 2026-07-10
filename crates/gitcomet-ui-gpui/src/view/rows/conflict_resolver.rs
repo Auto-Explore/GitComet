@@ -182,11 +182,16 @@ fn conflict_input_row_min_width(
     window: &mut Window,
     text: &SharedString,
     editor_font_family: &str,
+    show_line_numbers: bool,
 ) -> Pixels {
     let pad = window.rem_size() * 0.5;
-    let line_no_width = px(38.0);
     let gap = pad;
-    let row_extra = pad * 2.0 + line_no_width + gap;
+    let line_no_width = if show_line_numbers {
+        px(38.0) + gap
+    } else {
+        px(0.0)
+    };
+    let row_extra = pad * 2.0 + line_no_width;
     (row_extra
         + conflict_row_text_width(window, text, Some(editor_font_family))
         + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
@@ -511,20 +516,17 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
-                        .when(
-                            range_ix == this.conflict_resolver.active_conflict,
-                            |d| {
-                                d.child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .top_0()
-                                        .bottom_0()
-                                        .w(px(3.0))
-                                        .bg(theme.colors.accent),
-                                )
-                            },
-                        )
+                        .when(range_ix == this.conflict_resolver.active_conflict, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(px(3.0))
+                                    .bg(theme.colors.accent),
+                            )
+                        })
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
@@ -644,10 +646,12 @@ impl MainPaneView {
                     );
                     let line_text = line_text.map(SharedString::new).unwrap_or_default();
                     let display_text = conflict_display_text(&line_text, styled, show_ws);
+                    let show_line_numbers = this.mergetool_show_line_numbers;
                     let min_width = conflict_input_row_min_width(
                         window,
                         &display_text,
                         editor_font_family.as_str(),
+                        show_line_numbers,
                     );
 
                     let is_active_conflict =
@@ -671,6 +675,7 @@ impl MainPaneView {
                             vi,
                             ix,
                             min_width,
+                            show_line_numbers,
                             line_no,
                             if is_chosen { chosen_bg } else { bg },
                             fg,
@@ -711,12 +716,14 @@ impl MainPaneView {
                                     .bg(theme.colors.accent),
                             )
                         })
-                        .child(
-                            div()
-                                .w(px(38.0))
-                                .text_color(theme.colors.text_muted)
-                                .child(line_no),
-                        )
+                        .when(show_line_numbers, |d| {
+                            d.child(
+                                div()
+                                    .w(px(38.0))
+                                    .text_color(theme.colors.text_muted)
+                                    .child(line_no),
+                            )
+                        })
                         .child(conflict_diff_text_cell(line_text.clone(), styled, show_ws));
 
                     if let Some(conflict_ix) = range_ix {
@@ -938,10 +945,12 @@ impl MainPaneView {
                     theme.colors.text_muted
                 };
                 let display_text = conflict_display_text(&text, styled, show_ws);
+                let show_line_numbers = this.mergetool_show_line_numbers;
                 let min_width = conflict_input_row_min_width(
                     window,
                     &display_text,
                     editor_font_family.as_str(),
+                    show_line_numbers,
                 );
 
                 let is_active_conflict =
@@ -965,6 +974,7 @@ impl MainPaneView {
                         visible_row_ix,
                         row_ix,
                         min_width,
+                        show_line_numbers,
                         line_number_string(line_no),
                         bg,
                         fg,
@@ -1003,12 +1013,14 @@ impl MainPaneView {
                                 .bg(theme.colors.accent),
                         )
                     })
-                    .child(
-                        div()
-                            .w(px(38.0))
-                            .text_color(theme.colors.text_muted)
-                            .child(line_number_string(line_no)),
-                    )
+                    .when(show_line_numbers, |d| {
+                        d.child(
+                            div()
+                                .w(px(38.0))
+                                .text_color(theme.colors.text_muted)
+                                .child(line_number_string(line_no)),
+                        )
+                    })
                     .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
 
                 if let Some(conflict_ix) = conflict_ix {
@@ -1177,20 +1189,17 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
-                        .when(
-                            range_ix == this.conflict_resolver.active_conflict,
-                            |d| {
-                                d.child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .top_0()
-                                        .bottom_0()
-                                        .w(px(3.0))
-                                        .bg(theme.colors.accent),
-                                )
-                            },
-                        )
+                        .when(range_ix == this.conflict_resolver.active_conflict, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(px(3.0))
+                                    .bg(theme.colors.accent),
+                            )
+                        })
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
@@ -1339,10 +1348,12 @@ impl MainPaneView {
                         theme.colors.text_muted
                     };
                     let display_text = conflict_display_text(&text, styled, show_ws);
+                    let show_line_numbers = this.mergetool_show_line_numbers;
                     let min_width = conflict_input_row_min_width(
                         window,
                         &display_text,
                         editor_font_family.as_str(),
+                        show_line_numbers,
                     );
 
                     let conflict_ix = this
@@ -1370,6 +1381,7 @@ impl MainPaneView {
                             vi,
                             row,
                             min_width,
+                            show_line_numbers,
                             line_number_string(line_no_opt),
                             bg,
                             fg,
@@ -1409,12 +1421,14 @@ impl MainPaneView {
                                     .bg(theme.colors.accent),
                             )
                         })
-                        .child(
-                            div()
-                                .w(px(38.0))
-                                .text_color(theme.colors.text_muted)
-                                .child(line_number_string(line_no_opt)),
-                        )
+                        .when(show_line_numbers, |d| {
+                            d.child(
+                                div()
+                                    .w(px(38.0))
+                                    .text_color(theme.colors.text_muted)
+                                    .child(line_number_string(line_no_opt)),
+                            )
+                        })
                         .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
 
                     if let Some(conflict_ix) = conflict_ix {
@@ -1630,9 +1644,7 @@ impl MainPaneView {
                 // each visible row to its line (folds render a matching band).
                 let ix = match this.resolved_output_item_for_visible(vi) {
                     Some(conflict_resolver::ThreeWayVisibleItem::Line(line)) => line,
-                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
-                        ..
-                    }) => {
+                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. }) => {
                         return div()
                             .id(("conflict_resolved_preview_fold", vi))
                             .h(px(20.0))
@@ -2440,6 +2452,7 @@ impl MainPaneView {
                 min_width,
                 left_col_w,
                 right_col_w,
+                self.mergetool_show_line_numbers,
                 line_number_string(row.old_line),
                 line_number_string(row.new_line),
                 left_bg,
@@ -2469,12 +2482,14 @@ impl MainPaneView {
             .text_color(left_fg)
             .whitespace_nowrap()
             .overflow_hidden()
-            .child(
-                div()
-                    .w(px(38.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(line_number_string(row.old_line)),
-            )
+            .when(self.mergetool_show_line_numbers, |d| {
+                d.child(
+                    div()
+                        .w(px(38.0))
+                        .text_color(theme.colors.text_muted)
+                        .child(line_number_string(row.old_line)),
+                )
+            })
             .child(conflict_diff_text_cell(
                 left_text.clone(),
                 left_styled,
@@ -2496,12 +2511,14 @@ impl MainPaneView {
             .text_color(right_fg)
             .whitespace_nowrap()
             .overflow_hidden()
-            .child(
-                div()
-                    .w(px(38.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(line_number_string(row.new_line)),
-            )
+            .when(self.mergetool_show_line_numbers, |d| {
+                d.child(
+                    div()
+                        .w(px(38.0))
+                        .text_color(theme.colors.text_muted)
+                        .child(line_number_string(row.new_line)),
+                )
+            })
             .child(conflict_diff_text_cell(
                 right_text.clone(),
                 right_styled,
@@ -2681,8 +2698,8 @@ fn three_way_choice_short_label(choice: conflict_resolver::ConflictChoice) -> &'
 
 fn two_way_side_label(side: ConflictPickSide) -> &'static str {
     match side {
-        ConflictPickSide::Ours => "local",
-        ConflictPickSide::Theirs => "remote",
+        ConflictPickSide::Ours => "A",
+        ConflictPickSide::Theirs => "B",
     }
 }
 
@@ -2877,8 +2894,8 @@ mod tests {
         let (line_label, line_target, chunk_label, chunk_target) =
             two_way_split_input_row_menu_targets(9, 5, ConflictPickSide::Ours);
 
-        assert_eq!(line_label.as_ref(), "Pick this line (local)");
-        assert_eq!(chunk_label.as_ref(), "Pick this chunk (local)");
+        assert_eq!(line_label.as_ref(), "Pick this line (A)");
+        assert_eq!(chunk_label.as_ref(), "Pick this chunk (A)");
         assert_eq!(
             line_target,
             ResolverPickTarget::TwoWaySplitLine {

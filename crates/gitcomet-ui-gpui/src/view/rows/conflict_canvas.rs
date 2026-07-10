@@ -41,6 +41,7 @@ pub(super) fn split_conflict_row_canvas(
     min_width: Pixels,
     left_target_width: Pixels,
     right_target_width: Pixels,
+    show_line_numbers: bool,
     left_line_no: SharedString,
     right_line_no: SharedString,
     left_bg: gpui::Rgba,
@@ -94,27 +95,31 @@ pub(super) fn split_conflict_row_canvas(
                 theme.colors.border,
             ));
 
-            paint_gutter_text(
-                &left_line_no,
-                prepaint.left_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &right_line_no,
-                prepaint.right_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
+            if show_line_numbers {
+                paint_gutter_text(
+                    &left_line_no,
+                    prepaint.left_col.left() + pad,
+                    y,
+                    theme.colors.text_muted,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+                paint_gutter_text(
+                    &right_line_no,
+                    prepaint.right_col.left() + pad,
+                    y,
+                    theme.colors.text_muted,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+            }
 
-            let left_text_bounds = split_column_text_bounds(prepaint.left_col, pad, gap);
-            let right_text_bounds = split_column_text_bounds(prepaint.right_col, pad, gap);
+            let left_text_bounds =
+                split_column_text_bounds(prepaint.left_col, pad, gap, show_line_numbers);
+            let right_text_bounds =
+                split_column_text_bounds(prepaint.right_col, pad, gap, show_line_numbers);
 
             window.paint_layer(left_text_bounds, |window| {
                 paint_conflict_text(
@@ -229,6 +234,7 @@ pub(super) fn single_column_conflict_canvas(
     visible_row_ix: usize,
     row_ix: usize,
     min_width: Pixels,
+    show_line_numbers: bool,
     line_no: SharedString,
     bg: gpui::Rgba,
     fg: gpui::Rgba,
@@ -256,24 +262,23 @@ pub(super) fn single_column_conflict_canvas(
             // §30: mark the active conflict's rows with an accent bar so a
             // click/keyboard selection is visible in the source columns.
             if active_conflict_marker {
-                let bar = gpui::Bounds::new(
-                    bounds.origin,
-                    gpui::size(px(3.0), bounds.size.height),
-                );
+                let bar = gpui::Bounds::new(bounds.origin, gpui::size(px(3.0), bounds.size.height));
                 window.paint_quad(fill(bar, theme.colors.accent));
             }
 
-            paint_gutter_text(
-                &line_no,
-                bounds.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
+            if show_line_numbers {
+                paint_gutter_text(
+                    &line_no,
+                    bounds.left() + pad,
+                    y,
+                    theme.colors.text_muted,
+                    line_metrics,
+                    window,
+                    cx,
+                );
+            }
 
-            let text_bounds = split_column_text_bounds(bounds, pad, gap);
+            let text_bounds = split_column_text_bounds(bounds, pad, gap, show_line_numbers);
             window.paint_layer(text_bounds, |window| {
                 paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx);
             });
@@ -582,10 +587,19 @@ fn three_way_columns_with_widths(
     (base_col, first_handle, ours_col, second_handle, theirs_col)
 }
 
-fn split_column_text_bounds(col: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bounds<Pixels> {
-    let line_no_width = conflict_line_no_width();
-    let left = col.left() + pad + line_no_width + gap;
-    let width = (col.size.width - pad * 2.0 - line_no_width - gap).max(px(0.0));
+fn split_column_text_bounds(
+    col: Bounds<Pixels>,
+    pad: Pixels,
+    gap: Pixels,
+    show_line_numbers: bool,
+) -> Bounds<Pixels> {
+    let gutter_width = if show_line_numbers {
+        conflict_line_no_width() + gap
+    } else {
+        px(0.0)
+    };
+    let left = col.left() + pad + gutter_width;
+    let width = (col.size.width - pad * 2.0 - gutter_width).max(px(0.0));
     Bounds::new(point(left, col.top()), size(width, col.size.height))
 }
 

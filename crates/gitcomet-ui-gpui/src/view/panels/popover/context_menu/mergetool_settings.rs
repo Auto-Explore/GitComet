@@ -4,10 +4,15 @@ use super::*;
 /// resolver-specific view options that used to borrow the diff-actions menu.
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let pane = host.main_pane.read(cx);
-    let (auto_advance, _collapse_default, _vertical_split, output_scroll_sync) =
+    let (auto_advance, _collapse_default, _vertical_split, output_scroll_sync, show_line_numbers) =
         pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
-    model_for_mergetool_settings(auto_advance, collapse_context, output_scroll_sync)
+    model_for_mergetool_settings(
+        auto_advance,
+        collapse_context,
+        output_scroll_sync,
+        show_line_numbers,
+    )
 }
 
 // NOTE: a "Stack columns vertically" entry (backed by the persisted
@@ -17,6 +22,7 @@ fn model_for_mergetool_settings(
     auto_advance: bool,
     collapse_context: bool,
     output_scroll_sync: bool,
+    show_line_numbers: bool,
 ) -> ContextMenuModel {
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Merge tool settings".into()),
@@ -46,6 +52,15 @@ fn model_for_mergetool_settings(
                 enabled: !output_scroll_sync,
             }),
         },
+        ContextMenuItem::Entry {
+            label: "Show line numbers".into(),
+            icon: show_line_numbers.then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetMergetoolShowLineNumbers {
+                enabled: !show_line_numbers,
+            }),
+        },
     ])
 }
 
@@ -55,7 +70,7 @@ mod tests {
 
     #[test]
     fn model_marks_enabled_options_and_toggles_them() {
-        let model = model_for_mergetool_settings(true, false, true);
+        let model = model_for_mergetool_settings(true, false, true, true);
 
         assert!(model.items.iter().any(|item| {
             matches!(
@@ -78,6 +93,18 @@ mod tests {
                         && matches!(
                             action.as_ref(),
                             ContextMenuAction::ToggleMergetoolCollapseUnchanged
+                        )
+            )
+        }));
+        assert!(model.items.iter().any(|item| {
+            matches!(
+                item,
+                ContextMenuItem::Entry { label, icon, action, .. }
+                    if label.as_ref() == "Show line numbers"
+                        && icon.is_some()
+                        && matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetMergetoolShowLineNumbers { enabled: false }
                         )
             )
         }));

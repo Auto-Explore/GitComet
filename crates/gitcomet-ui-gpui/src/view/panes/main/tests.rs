@@ -11,7 +11,8 @@ use super::{
     conflict_resolver_output_context_line, dirty_byte_range_to_line_range,
     first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
     output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
-    parse_conflict_canvas_rows_env, remap_line_keyed_cache_for_delta, renderable_conflict_file,
+    parse_conflict_canvas_rows_env, remap_line_keyed_cache_for_delta,
+    remap_resolved_output_conflict_block_ranges_for_delta, renderable_conflict_file,
     replace_output_lines_in_range, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
@@ -756,6 +757,45 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
             unresolved: true,
         })
     );
+}
+
+#[test]
+fn remap_resolved_output_conflict_block_ranges_expands_edited_block() {
+    let old_ranges = vec![1..3, 5..6];
+    let new_ranges =
+        remap_resolved_output_conflict_block_ranges_for_delta(&old_ranges, 2..3, 2..4, 7);
+
+    assert_eq!(new_ranges, vec![1..4, 6..7]);
+}
+
+#[test]
+fn remapped_resolved_output_conflict_markers_cover_inserted_rows() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".to_string().into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a\nb\n".to_string().into(),
+            theirs: "x\n".to_string().into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text("tail\n".to_string().into()),
+    ];
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    let old_ranges =
+        resolved_output_conflict_block_ranges_in_text(&segments, &output).expect("block ranges");
+    let new_ranges =
+        remap_resolved_output_conflict_block_ranges_for_delta(&old_ranges, 2..3, 2..4, 5);
+    let markers = build_resolved_output_conflict_markers_from_block_ranges(
+        &segments,
+        new_ranges.as_slice(),
+        5,
+    );
+
+    assert!(markers[1].is_some());
+    assert!(markers[2].is_some(), "inserted row should keep its marker");
+    assert!(markers[3].is_some());
+    assert_eq!(markers[4], None);
 }
 
 #[test]
@@ -1647,6 +1687,44 @@ fn resolved_output_syntax_state_requests_background_prepare_for_large_documents(
         syntax_state.highlights.is_empty(),
         "pending document syntax should paint plain text instead of materializing a full fallback highlight vector"
     );
+}
+
+#[test]
+fn resolved_output_syntax_state_retains_old_document_while_background_prepare_is_pending() {
+    let theme = AppTheme::gitcomet_dark();
+    let old_output = TextModel::from("fn existing() -> usize { 1 }\n");
+    let old_state = build_resolved_output_syntax_state_for_snapshot(
+        theme,
+        &old_output.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+    );
+    let old_document = old_state
+        .prepared_document
+        .expect("initial resolved output should prepare syntax");
+
+    let large_output =
+        "let value = Some(42);\n".repeat(rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1);
+    let large_model = TextModel::from(large_output);
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
+        theme,
+        &large_model.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        Some(old_document),
+        None,
+        rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::ZERO,
+        },
+    );
+
+    assert!(syntax_state.needs_background_prepare);
+    assert_eq!(syntax_state.prepared_document, Some(old_document));
+    assert!(
+        syntax_state.highlight_provider.is_some(),
+        "pending background syntax should keep the previous provider instead of flashing to plain text"
+    );
+    assert!(syntax_state.highlights.is_empty());
 }
 
 #[test]

@@ -238,6 +238,9 @@ pub(in crate::view) enum ContextMenuAction {
     SetMergetoolOutputScrollSync {
         enabled: bool,
     },
+    SetMergetoolShowLineNumbers {
+        enabled: bool,
+    },
     ConflictResolverOutputCut {
         text: String,
     },

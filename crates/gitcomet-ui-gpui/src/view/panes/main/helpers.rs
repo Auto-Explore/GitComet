@@ -89,6 +89,23 @@ fn resolved_output_highlight_provider(
     )
 }
 
+fn pending_resolved_output_syntax_state(
+    theme: AppTheme,
+    output_text: SharedString,
+    line_starts: Arc<[usize]>,
+    language: rows::DiffSyntaxLanguage,
+    old_document: Option<rows::PreparedDiffSyntaxDocument>,
+) -> ResolvedOutputSyntaxState {
+    ResolvedOutputSyntaxState {
+        highlights: Vec::new(),
+        prepared_document: old_document,
+        highlight_provider: old_document.map(|document| {
+            resolved_output_highlight_provider(theme, output_text, line_starts, language, document)
+        }),
+        needs_background_prepare: true,
+    }
+}
+
 fn build_resolved_output_syntax_state_with_source(
     theme: AppTheme,
     output_text: SharedString,
@@ -110,12 +127,13 @@ fn build_resolved_output_syntax_state_with_source(
     // `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING` gate. Without this a big editable
     // output could shape syntax on the UI thread during a recompute.
     if line_starts.len() > rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-        return ResolvedOutputSyntaxState {
-            highlights: Vec::new(),
-            prepared_document: None,
-            highlight_provider: None,
-            needs_background_prepare: true,
-        };
+        return pending_resolved_output_syntax_state(
+            theme,
+            output_text,
+            line_starts,
+            language,
+            old_document,
+        );
     }
 
     match rows::prepare_diff_syntax_document_with_budget_reuse_text(
@@ -139,12 +157,13 @@ fn build_resolved_output_syntax_state_with_source(
             )),
             needs_background_prepare: false,
         },
-        rows::PrepareDiffSyntaxDocumentResult::TimedOut => ResolvedOutputSyntaxState {
-            highlights: Vec::new(),
-            prepared_document: None,
-            highlight_provider: None,
-            needs_background_prepare: true,
-        },
+        rows::PrepareDiffSyntaxDocumentResult::TimedOut => pending_resolved_output_syntax_state(
+            theme,
+            output_text,
+            line_starts,
+            language,
+            old_document,
+        ),
         rows::PrepareDiffSyntaxDocumentResult::Unsupported => ResolvedOutputSyntaxState {
             highlights: build_resolved_output_syntax_fallback_highlights(
                 theme,
@@ -661,6 +680,40 @@ pub(super) fn remap_line_keyed_cache_for_delta<T>(
             cache.insert(shifted_line_index(line_ix, shift), value);
         }
     }
+}
+
+pub(super) fn remap_resolved_output_conflict_block_ranges_for_delta(
+    old_block_ranges: &[Range<usize>],
+    old_range: Range<usize>,
+    new_range: Range<usize>,
+    new_line_count: usize,
+) -> Vec<Range<usize>> {
+    let line_delta = new_range.len() as isize - old_range.len() as isize;
+    old_block_ranges
+        .iter()
+        .map(|range| {
+            let remapped = if range.end <= old_range.start {
+                range.clone()
+            } else if range.start >= old_range.end {
+                shifted_line_index(range.start, line_delta)
+                    ..shifted_line_index(range.end, line_delta)
+            } else {
+                let start = if old_range.start <= range.start {
+                    new_range.start
+                } else {
+                    range.start
+                };
+                let end = if range.end <= old_range.end {
+                    new_range.end
+                } else {
+                    shifted_line_index(range.end, line_delta)
+                };
+                start..end
+            };
+            remapped.start.min(new_line_count)..remapped.end.min(new_line_count)
+        })
+        .map(|range| range.start..range.end.max(range.start))
+        .collect()
 }
 
 pub(super) fn resolved_output_conflict_block_ranges_in_text(
@@ -2344,6 +2397,9 @@ pub(crate) struct MainPaneView {
     /// (cog menu). Merge-tool-specific rather than a general diff setting
     /// because the resolver ships as a standalone tool.
     pub(in crate::view) mergetool_output_scroll_sync: bool,
+    /// §30 merge tool: show per-column and resolved-output line number
+    /// gutters. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_show_line_numbers: bool,
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) annotate_enabled: bool,
     /// Width (design px) of the annotate column; user-resizable, session-local.
