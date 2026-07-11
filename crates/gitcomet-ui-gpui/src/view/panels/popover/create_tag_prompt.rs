@@ -119,35 +119,15 @@ pub(super) fn panel(
                         .child("Annotation message"),
                 )
                 .child(
-                    div()
-                        .px_2()
-                        .pb_1()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .child(
-                            restrict_scroll_to_vertical_axis(
-                                div()
-                                    .id("create_tag_message_scroll_surface")
-                                    .relative()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .max_h(scaled_px(140.0))
-                                    .pr(components::Scrollbar::visible_gutter(
-                                        message_scroll.clone(),
-                                        components::ScrollbarAxis::Vertical,
-                                    ))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&message_scroll),
-                            )
-                            .child(this.create_tag_message_input.clone()),
+                    div().px_2().pb_1().w_full().min_w(px(0.0)).child(
+                        components::ScrollContainer::vertical(
+                            "create_tag_message_scroll_surface",
+                            "create_tag_message_scrollbar",
+                            message_scroll,
+                            scaled_px(140.0),
                         )
-                        .child(
-                            components::Scrollbar::new(
-                                "create_tag_message_scrollbar",
-                                message_scroll,
-                            )
-                            .render(theme),
-                        ),
+                        .render(theme, this.create_tag_message_input.clone()),
+                    ),
                 )
         })
         .child(div().border_t_1().border_color(theme.colors.border))

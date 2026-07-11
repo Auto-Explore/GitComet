@@ -19,7 +19,7 @@ pub use avatar::{
 };
 pub use button::{Button, ButtonStyle};
 pub use commit_sha_hover_menu::{CommitShaHoverMenu, CommitShaLink};
-pub use containers::{empty_state, empty_state_message, split_columns_header};
+pub use containers::{ScrollContainer, empty_state, empty_state_message, split_columns_header};
 #[cfg(test)]
 pub use containers::{panel, pill};
 pub use context_menu::{

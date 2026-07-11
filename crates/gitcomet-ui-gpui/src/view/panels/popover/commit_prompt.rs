@@ -17,35 +17,15 @@ pub(super) fn panel(
         .child(popover_title("Commit Changes"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
-            div()
-                .px_2()
-                .py_1()
-                .w_full()
-                .min_w(px(0.0))
-                .child(
-                    restrict_scroll_to_vertical_axis(
-                        div()
-                            .id("commit_prompt_message_scroll_surface")
-                            .relative()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .max_h(px(200.0))
-                            .pr(components::Scrollbar::visible_gutter(
-                                this.commit_prompt_message_scroll.clone(),
-                                components::ScrollbarAxis::Vertical,
-                            ))
-                            .overflow_y_scroll()
-                            .track_scroll(&this.commit_prompt_message_scroll),
-                    )
-                    .child(this.commit_prompt_message_input.clone()),
+            div().px_2().py_1().w_full().min_w(px(0.0)).child(
+                components::ScrollContainer::vertical(
+                    "commit_prompt_message_scroll_surface",
+                    "commit_prompt_message_scrollbar",
+                    this.commit_prompt_message_scroll.clone(),
+                    px(200.0),
                 )
-                .child(
-                    components::Scrollbar::new(
-                        "commit_prompt_message_scrollbar",
-                        this.commit_prompt_message_scroll.clone(),
-                    )
-                    .render(theme),
-                ),
+                .render(theme, this.commit_prompt_message_input.clone()),
+            ),
         )
         .child(
             div()
