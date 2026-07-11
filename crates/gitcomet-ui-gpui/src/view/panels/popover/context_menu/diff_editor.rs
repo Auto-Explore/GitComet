@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::view::shortcut_labels::secondary_shortcut;
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn model(
     repo_id: RepoId,
@@ -134,7 +136,7 @@ pub(super) fn model(
             items.push(ContextMenuItem::Entry {
                 label: "Open in code editor".into(),
                 icon: Some("icons/open_external.svg".into()),
-                shortcut: Some("Ctrl+E".into()),
+                shortcut: Some(secondary_shortcut("E").into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::OpenInCodeEditor {
                     repo_id: Some(repo_id),

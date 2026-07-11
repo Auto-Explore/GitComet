@@ -57,7 +57,7 @@ fn force_toggle(
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -163,40 +163,14 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("submodule_add_go", "Add")
                         .focus_handle(this.submodule_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "submodule_add_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let url = this
-                                .submodule_url_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let path_text = this
-                                .submodule_path_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let branch = this.submodule_branch_input.read_with(cx, |i, _| {
-                                let text = i.text().trim().to_string();
-                                if text.is_empty() { None } else { Some(text) }
-                            });
-                            let name = this.submodule_name_input.read_with(cx, |i, _| {
-                                let text = i.text().trim().to_string();
-                                if text.is_empty() { None } else { Some(text) }
-                            });
-                            let force = this.submodule_force_enabled;
-                            if url.is_empty() || path_text.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Submodule URL and path are required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            this.store.dispatch(Msg::AddSubmodule {
-                                repo_id,
-                                url,
-                                path: std::path::PathBuf::from(path_text),
-                                branch,
-                                name,
-                                force,
-                            });
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_submodule_add(cx);
                         }),
                 ),
         )

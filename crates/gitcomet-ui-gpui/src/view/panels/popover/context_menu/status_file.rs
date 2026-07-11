@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::view::shortcut_labels::secondary_shortcut;
+
 pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
@@ -153,7 +155,7 @@ pub(super) fn model(
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
-            shortcut: Some("Ctrl+E".into()),
+            shortcut: Some(secondary_shortcut("E").into()),
             disabled: false,
             action: Box::new(ContextMenuAction::OpenInCodeEditor {
                 repo_id: Some(repo_id),
@@ -164,7 +166,7 @@ pub(super) fn model(
     items.push(ContextMenuItem::Entry {
         label: "File history".into(),
         icon: Some("icons/refresh.svg".into()),
-        shortcut: Some("Ctrl+H".into()),
+        shortcut: Some(secondary_shortcut("H").into()),
         disabled: false,
         action: Box::new(ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory {
@@ -183,7 +185,7 @@ pub(super) fn model(
                 "Resolve using ours".into()
             },
             icon: Some("icons/arrow_left.svg".into()),
-            shortcut: Some("Ctrl+O".into()),
+            shortcut: Some(secondary_shortcut("O").into()),
             disabled: false,
             action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
@@ -199,7 +201,7 @@ pub(super) fn model(
                 "Resolve using theirs".into()
             },
             icon: Some("icons/arrow_right.svg".into()),
-            shortcut: Some("Ctrl+T".into()),
+            shortcut: Some(secondary_shortcut("T").into()),
             disabled: false,
             action: Box::new(ContextMenuAction::CheckoutConflictSideSelectionOrPath {
                 repo_id,
@@ -217,7 +219,7 @@ pub(super) fn model(
                 "Resolve manually… (select 1 file)".into()
             },
             icon: Some("icons/pencil.svg".into()),
-            shortcut: Some("Ctrl+M".into()),
+            shortcut: Some(secondary_shortcut("M").into()),
             disabled: !can_manual,
             action: Box::new(ContextMenuAction::SelectConflictDiff {
                 repo_id,
@@ -250,7 +252,7 @@ pub(super) fn model(
                     "Stage".into()
                 },
                 icon: Some("icons/plus.svg".into()),
-                shortcut: Some("Ctrl+S".into()),
+                shortcut: Some(secondary_shortcut("S").into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::StageSelectionOrPath {
                     repo_id,
@@ -265,7 +267,7 @@ pub(super) fn model(
                     "Unstage".into()
                 },
                 icon: Some("icons/minus.svg".into()),
-                shortcut: Some("Ctrl+U".into()),
+                shortcut: Some(secondary_shortcut("U").into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::UnstageSelectionOrPath {
                     repo_id,
@@ -285,7 +287,7 @@ pub(super) fn model(
                 "Discard changes".into()
             },
             icon: Some("icons/refresh.svg".into()),
-            shortcut: Some("Ctrl+D".into()),
+            shortcut: Some(secondary_shortcut("D").into()),
             disabled: !can_discard_worktree_changes,
             action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
                 repo_id,
@@ -303,7 +305,7 @@ pub(super) fn model(
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),
         icon: Some("icons/copy.svg".into()),
-        shortcut: Some("Ctrl+Shift+C".into()),
+        shortcut: Some(secondary_shortcut("Shift+C").into()),
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText {
             text: copy_path_text,
@@ -346,7 +348,7 @@ fn submodule_status_model(
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
-            shortcut: Some("Ctrl+E".into()),
+            shortcut: Some(secondary_shortcut("E").into()),
             disabled: !submodule_menu_state.can_open,
             action: Box::new(ContextMenuAction::OpenInCodeEditor {
                 repo_id: Some(repo_id),
@@ -405,7 +407,7 @@ fn submodule_status_model(
                     "Stage".into()
                 },
                 icon: Some("icons/plus.svg".into()),
-                shortcut: Some("Ctrl+S".into()),
+                shortcut: Some(secondary_shortcut("S").into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::StageSelectionOrPath {
                     repo_id,
@@ -420,7 +422,7 @@ fn submodule_status_model(
                     "Unstage".into()
                 },
                 icon: Some("icons/minus.svg".into()),
-                shortcut: Some("Ctrl+U".into()),
+                shortcut: Some(secondary_shortcut("U").into()),
                 disabled: false,
                 action: Box::new(ContextMenuAction::UnstageSelectionOrPath {
                     repo_id,
@@ -447,7 +449,7 @@ fn submodule_status_model(
                 "Discard changes".into()
             },
             icon: Some("icons/refresh.svg".into()),
-            shortcut: Some("Ctrl+D".into()),
+            shortcut: Some(secondary_shortcut("D").into()),
             disabled: !can_discard_worktree_changes,
             action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
                 repo_id,
@@ -465,7 +467,7 @@ fn submodule_status_model(
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),
         icon: Some("icons/copy.svg".into()),
-        shortcut: Some("Ctrl+Shift+C".into()),
+        shortcut: Some(secondary_shortcut("Shift+C").into()),
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText {
             text: copy_path_text,

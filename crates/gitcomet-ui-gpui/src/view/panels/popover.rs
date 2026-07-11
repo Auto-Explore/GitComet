@@ -146,6 +146,7 @@ pub(in super::super) struct PopoverHost {
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
     _submodule_ref_input_subscription: gpui::Subscription,
+    _prompt_input_subscriptions: Vec<gpui::Subscription>,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -401,14 +402,14 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
 pub(super) fn hotkey_hint(
     theme: AppTheme,
     debug_selector: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
 ) -> gpui::Div {
     div()
         .debug_selector(move || debug_selector.to_string())
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
         .text_color(theme.colors.text_muted)
-        .child(label)
+        .child(label.into())
 }
 
 /// Shared Cancel button for confirm dialogs and prompt popovers: consistent
@@ -859,6 +860,33 @@ impl PopoverHost {
             .unwrap_or(false)
     }
 
+    /// Subscription that submits a prompt when Enter is pressed in one of its
+    /// inputs. Escape is consumed here; prompt dismissal is handled by the
+    /// PopoverPrompt key context.
+    fn prompt_enter_subscription(
+        input: &Entity<components::TextInput>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+        is_active: fn(&Self) -> bool,
+        submit: fn(&mut Self, &mut Window, &mut gpui::Context<Self>),
+    ) -> gpui::Subscription {
+        cx.observe_in(input, window, move |this, input, window, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let _ = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !is_active(this) {
+                return;
+            }
+
+            if enter_pressed {
+                submit(this, window, cx);
+                return;
+            }
+
+            cx.notify();
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
@@ -1104,13 +1132,21 @@ impl PopoverHost {
                     this.popover,
                     Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                 );
+                let is_checkout_remote_branch_prompt = matches!(
+                    this.popover,
+                    Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
+                );
 
-                if !is_create_branch_prompt {
+                if !is_create_branch_prompt && !is_checkout_remote_branch_prompt {
                     return;
                 }
 
                 if enter_pressed {
-                    this.submit_create_branch(window, cx);
+                    if is_create_branch_prompt {
+                        this.submit_create_branch(window, cx);
+                    } else {
+                        this.submit_checkout_remote_branch(cx);
+                    }
                     return;
                 }
 
@@ -1301,6 +1337,89 @@ impl PopoverHost {
             },
         );
 
+        let mut prompt_input_subscriptions = Vec::new();
+        for input in [&remote_name_input, &remote_url_input] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| {
+                    matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                            ..
+                        })
+                    )
+                },
+                |this, _window, cx| this.submit_remote_add(cx),
+            ));
+        }
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &remote_url_edit_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
+                        ..
+                    })
+                )
+            },
+            |this, _window, cx| this.submit_remote_edit_url(cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &push_upstream_branch_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::PushSetUpstreamPrompt { .. })
+                )
+            },
+            |this, _window, cx| this.submit_push_set_upstream(cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &worktree_path_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                        ..
+                    })
+                )
+            },
+            |this, _window, cx| this.submit_worktree_add(cx),
+        ));
+        for input in [
+            &submodule_url_input,
+            &submodule_path_input,
+            &submodule_branch_input,
+            &submodule_name_input,
+        ] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| {
+                    matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                            ..
+                        })
+                    )
+                },
+                |this, _window, cx| this.submit_submodule_add(cx),
+            ));
+        }
+
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let prompt_tab_group_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let prompt_tab_wrap_end_focus_handle = cx.focus_handle().tab_index(1).tab_stop(false);
@@ -1373,6 +1492,7 @@ impl PopoverHost {
             _squash_message_input_subscription: squash_message_input_subscription,
             _squash_description_input_subscription: squash_description_input_subscription,
             _submodule_ref_input_subscription: submodule_ref_input_subscription,
+            _prompt_input_subscriptions: prompt_input_subscriptions,
             notify_fingerprint: 0,
             root_view,
             tooltip_host,
@@ -2215,6 +2335,205 @@ impl PopoverHost {
             include_untracked: true,
         });
         self.dismiss_inline_popover(window, cx);
+    }
+
+    pub(super) fn submit_remote_add(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let name = self
+            .remote_name_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let url = self
+            .remote_url_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        if name.is_empty() || url.is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                "Remote: name and URL are required".to_string(),
+                cx,
+            );
+            return;
+        }
+        self.store.dispatch(Msg::AddRemote { repo_id, name, url });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn submit_remote_edit_url(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { name, kind }),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let url = self
+            .remote_url_edit_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        if url.is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                "Remote URL cannot be empty".to_string(),
+                cx,
+            );
+            return;
+        }
+        self.store.dispatch(Msg::SetRemoteUrl {
+            repo_id,
+            name,
+            url,
+            kind,
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn submit_push_set_upstream(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::PushSetUpstreamPrompt { repo_id, remote }) = self.popover.clone()
+        else {
+            return;
+        };
+        let branch = self
+            .push_upstream_branch_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        if branch.is_empty() {
+            return;
+        }
+        self.store.dispatch(Msg::PushSetUpstream {
+            repo_id,
+            remote,
+            branch,
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn submit_checkout_remote_branch(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::CheckoutRemoteBranchPrompt {
+            repo_id,
+            remote,
+            branch,
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let local_branch = self
+            .create_branch_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        if local_branch.is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                "Branch name cannot be empty".to_string(),
+                cx,
+            );
+            return;
+        }
+
+        let local_branch_exists = self
+            .state
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .and_then(|repo| match &repo.branches {
+                Loadable::Ready(branches) => {
+                    Some(branches.iter().any(|b| b.name == local_branch.as_str()))
+                }
+                _ => None,
+            })
+            .unwrap_or(false);
+        if local_branch_exists {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Branch already exists: {local_branch}"),
+                cx,
+            );
+            return;
+        }
+
+        self.store.dispatch(Msg::CheckoutRemoteBranch {
+            repo_id,
+            remote,
+            branch,
+            local_branch,
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.rebuild_diff_cache(cx);
+            cx.notify();
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn submit_worktree_add(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let folder = self
+            .worktree_path_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        if folder.is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                "Worktree folder is required".to_string(),
+                cx,
+            );
+            return;
+        }
+        let reference = self.worktree_ref_source_target.trim().to_string();
+        let reference = (!reference.is_empty()).then_some(reference);
+        self.store.dispatch(Msg::AddWorktree {
+            repo_id,
+            path: std::path::PathBuf::from(folder),
+            reference,
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn submit_submodule_add(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        let url = self
+            .submodule_url_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let path_text = self
+            .submodule_path_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let branch = self.submodule_branch_input.read_with(cx, |i, _| {
+            let text = i.text().trim().to_string();
+            if text.is_empty() { None } else { Some(text) }
+        });
+        let name = self.submodule_name_input.read_with(cx, |i, _| {
+            let text = i.text().trim().to_string();
+            if text.is_empty() { None } else { Some(text) }
+        });
+        let force = self.submodule_force_enabled;
+        if url.is_empty() || path_text.is_empty() {
+            self.push_toast(
+                components::ToastKind::Error,
+                "Submodule URL and path are required".to_string(),
+                cx,
+            );
+            return;
+        }
+        self.store.dispatch(Msg::AddSubmodule {
+            repo_id,
+            url,
+            path: std::path::PathBuf::from(path_text),
+            branch,
+            name,
+            force,
+        });
+        self.close_popover(cx);
     }
 
     pub(in super::super) fn open_popover_at(

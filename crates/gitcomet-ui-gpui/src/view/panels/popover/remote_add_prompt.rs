@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -51,24 +51,14 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("add_remote_go", "Add")
                         .focus_handle(this.remote_add_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "add_remote_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let name = this
-                                .remote_name_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let url = this
-                                .remote_url_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if name.is_empty() || url.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Remote: name and URL are required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            this.store.dispatch(Msg::AddRemote { repo_id, name, url });
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_remote_add(cx);
                         }),
                 ),
         )

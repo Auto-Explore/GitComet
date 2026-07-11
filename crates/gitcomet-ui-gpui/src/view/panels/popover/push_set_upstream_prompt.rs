@@ -2,12 +2,11 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     remote: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let remote_for_action = remote.clone();
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
@@ -50,20 +49,14 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("push_upstream_go", "Push")
                         .focus_handle(this.push_upstream_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "push_upstream_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let branch = this
-                                .push_upstream_branch_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if branch.is_empty() {
-                                return;
-                            }
-                            this.store.dispatch(Msg::PushSetUpstream {
-                                repo_id,
-                                remote: remote_for_action.clone(),
-                                branch,
-                            });
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_push_set_upstream(cx);
                         }),
                 ),
         )

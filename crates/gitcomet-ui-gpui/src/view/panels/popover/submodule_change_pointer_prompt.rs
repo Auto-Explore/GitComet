@@ -54,6 +54,11 @@ pub(super) fn panel(
                 )
                 .child(
                     components::Button::new("submodule_change_pointer_go", "Change")
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "submodule_change_pointer_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_submit)
                         .on_click(theme, cx, |this, _e, window, cx| {

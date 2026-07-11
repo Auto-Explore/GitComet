@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     name: String,
     kind: RemoteUrlKind,
     cx: &mut gpui::Context<PopoverHost>,
@@ -59,26 +59,14 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("edit_remote_url_go", "Save")
                         .focus_handle(this.remote_edit_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "edit_remote_url_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let url = this
-                                .remote_url_edit_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if url.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Remote URL cannot be empty".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            this.store.dispatch(Msg::SetRemoteUrl {
-                                repo_id,
-                                name: name.clone(),
-                                url,
-                                kind,
-                            });
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_remote_edit_url(cx);
                         }),
                 ),
         )

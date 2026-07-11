@@ -2,15 +2,13 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     remote: String,
     branch: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let upstream = format!("{remote}/{branch}");
-    let remote_for_action = remote.clone();
-    let branch_for_action = branch.clone();
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
@@ -59,53 +57,14 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("checkout_remote_branch_go", "Checkout")
                         .focus_handle(this.checkout_remote_branch_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "checkout_remote_branch_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let local_branch = this
-                                .create_branch_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if local_branch.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Branch name cannot be empty".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-
-                            let local_branch_exists = this
-                                .state
-                                .repos
-                                .iter()
-                                .find(|r| r.id == repo_id)
-                                .and_then(|repo| match &repo.branches {
-                                    Loadable::Ready(branches) => Some(
-                                        branches.iter().any(|b| b.name == local_branch.as_str()),
-                                    ),
-                                    _ => None,
-                                })
-                                .unwrap_or(false);
-                            if local_branch_exists {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    format!("Branch already exists: {local_branch}"),
-                                    cx,
-                                );
-                                return;
-                            }
-
-                            this.store.dispatch(Msg::CheckoutRemoteBranch {
-                                repo_id,
-                                remote: remote_for_action.clone(),
-                                branch: branch_for_action.clone(),
-                                local_branch: local_branch.clone(),
-                            });
-                            this.main_pane.update(cx, |pane, cx| {
-                                pane.rebuild_diff_cache(cx);
-                                cx.notify();
-                            });
-
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_checkout_remote_branch(cx);
                         }),
                 ),
         )

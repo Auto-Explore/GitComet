@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::view::shortcut_labels::secondary_shortcut;
+
 pub(super) fn model(host: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let workdir = host
         .state
@@ -50,7 +52,7 @@ fn model_for_state(
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
-            shortcut: Some("Ctrl+Shift+E".into()),
+            shortcut: Some(secondary_shortcut("Shift+E").into()),
             disabled: false,
             action: Box::new(ContextMenuAction::OpenInCodeEditor {
                 repo_id: None,

@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
@@ -155,27 +155,14 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("worktree_add_go", "Add")
                         .focus_handle(this.worktree_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "worktree_add_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let folder = this
-                                .worktree_path_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if folder.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Worktree folder is required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            let reference = this.worktree_ref_source_target.trim().to_string();
-                            let reference = (!reference.is_empty()).then_some(reference);
-                            this.store.dispatch(Msg::AddWorktree {
-                                repo_id,
-                                path: std::path::PathBuf::from(folder),
-                                reference,
-                            });
-                            this.close_popover(cx);
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_worktree_add(cx);
                         }),
                 ),
         )

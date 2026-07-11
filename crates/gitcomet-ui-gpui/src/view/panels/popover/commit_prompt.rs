@@ -64,6 +64,11 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("commit_prompt_submit", "Commit")
                         .focus_handle(this.commit_prompt_submit_focus_handle.clone())
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "commit_prompt_submit_hint",
+                            crate::view::shortcut_labels::secondary_shortcut("Enter"),
+                        ))
                         .style(components::ButtonStyle::Filled)
                         .disabled(!can_commit)
                         .on_click(theme, cx, move |this, _e, window, cx| {
