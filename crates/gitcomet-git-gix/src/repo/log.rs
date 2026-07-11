@@ -278,49 +278,130 @@ impl NextCommitIdCache {
     }
 }
 
+/// Per-file line stats are skipped entirely for commits touching more files
+/// than this, so pathological commits can't stall the details panel.
+const COMMIT_STATS_MAX_FILES: usize = 400;
+/// Blobs larger than this are treated as "stats unknown" instead of diffed.
+const COMMIT_STATS_MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
+/// Git's binary heuristic: a NUL byte within the leading window.
+const COMMIT_STATS_BINARY_SNIFF_BYTES: usize = 8000;
+
+fn commit_stats_blob_bytes(repo: &gix::Repository, id: Option<gix::ObjectId>) -> Option<Vec<u8>> {
+    let Some(id) = id.filter(|id| !id.is_null()) else {
+        // No blob on this side (pure addition/deletion) diffs as empty content.
+        return Some(Vec::new());
+    };
+    let object = repo.find_object(id).ok()?;
+    if object.kind != gix::object::Kind::Blob {
+        return None;
+    }
+    Some(object.detach().data)
+}
+
+fn commit_stats_looks_binary(bytes: &[u8]) -> bool {
+    bytes[..bytes.len().min(COMMIT_STATS_BINARY_SNIFF_BYTES)].contains(&0)
+}
+
+fn commit_stats_line_count(bytes: &[u8]) -> u32 {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let newlines = bytes.iter().filter(|&&b| b == b'\n').count();
+    let trailing = usize::from(*bytes.last().expect("checked non-empty") != b'\n');
+    u32::try_from(newlines + trailing).unwrap_or(u32::MAX)
+}
+
+/// Added/removed line counts between two blob versions; `(None, None)` when
+/// either side is binary, too large, or unreadable.
+fn commit_file_line_stats(
+    repo: &gix::Repository,
+    old_id: Option<gix::ObjectId>,
+    new_id: Option<gix::ObjectId>,
+) -> (Option<u32>, Option<u32>) {
+    let Some(old) = commit_stats_blob_bytes(repo, old_id) else {
+        return (None, None);
+    };
+    let Some(new) = commit_stats_blob_bytes(repo, new_id) else {
+        return (None, None);
+    };
+    if old.len() > COMMIT_STATS_MAX_BLOB_BYTES
+        || new.len() > COMMIT_STATS_MAX_BLOB_BYTES
+        || commit_stats_looks_binary(&old)
+        || commit_stats_looks_binary(&new)
+    {
+        return (None, None);
+    }
+
+    // One side empty means every line of the other side changed; skip the diff.
+    if old.is_empty() || new.is_empty() {
+        return (
+            Some(commit_stats_line_count(&new)),
+            Some(commit_stats_line_count(&old)),
+        );
+    }
+
+    use gix::diff::blob::InternedInput;
+    let input = InternedInput::new(old.as_slice(), new.as_slice());
+    let diff = gix::diff::blob::Diff::compute(gix::diff::blob::Algorithm::Histogram, &input);
+    (Some(diff.count_additions()), Some(diff.count_removals()))
+}
+
 fn commit_file_change_from_diff(
+    repo: &gix::Repository,
     change: gix::object::tree::diff::ChangeDetached,
+    compute_stats: bool,
 ) -> Result<Option<CommitFileChange>> {
     use gitcomet_core::domain::FileStatusKind;
     use gix::object::tree::diff::ChangeDetached;
 
-    let (location, is_tree, is_submodule, kind) = match change {
+    let (location, is_tree, is_submodule, kind, old_id, new_id) = match change {
         ChangeDetached::Addition {
             entry_mode,
             location,
+            id,
             ..
         } => (
             location,
             entry_mode.is_tree(),
             entry_mode.is_commit(),
             FileStatusKind::Added,
+            None,
+            Some(id),
         ),
         ChangeDetached::Deletion {
             entry_mode,
             location,
+            id,
             ..
         } => (
             location,
             entry_mode.is_tree(),
             entry_mode.is_commit(),
             FileStatusKind::Deleted,
+            Some(id),
+            None,
         ),
         ChangeDetached::Modification {
             previous_entry_mode,
             entry_mode,
             location,
-            ..
+            previous_id,
+            id,
         } => (
             location,
             previous_entry_mode.is_tree() || entry_mode.is_tree(),
             previous_entry_mode.is_commit() || entry_mode.is_commit(),
             FileStatusKind::Modified,
+            Some(previous_id),
+            Some(id),
         ),
         ChangeDetached::Rewrite {
             source_entry_mode,
             entry_mode,
             location,
             copy,
+            source_id,
+            id,
             ..
         } => (
             location,
@@ -331,16 +412,27 @@ fn commit_file_change_from_diff(
             } else {
                 FileStatusKind::Renamed
             },
+            Some(source_id),
+            Some(id),
         ),
     };
 
     if is_tree {
         return Ok(None);
     }
+
+    let (additions, deletions) = if compute_stats && !is_submodule {
+        commit_file_line_stats(repo, old_id, new_id)
+    } else {
+        (None, None)
+    };
+
     Ok(Some(CommitFileChange {
         path: path_buf_from_git_bytes(location.as_ref(), "gix commit details diff path")?,
         kind,
         is_submodule,
+        additions,
+        deletions,
     }))
 }
 
@@ -369,9 +461,10 @@ fn commit_file_changes(
         .diff_tree_to_tree(parent_tree.as_ref(), &commit_tree, None)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
 
+    let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
     changes
         .into_iter()
-        .filter_map(|change| commit_file_change_from_diff(change).transpose())
+        .filter_map(|change| commit_file_change_from_diff(repo, change, compute_stats).transpose())
         .collect()
 }
 
@@ -1266,6 +1359,14 @@ impl GixRepo {
         let message = bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
             .trim_end()
             .to_string();
+        let (author_name, author_email, authored_at_unix) = match commit.author() {
+            Ok(signature) => (
+                bytes_to_text_preserving_utf8(signature.name.as_ref()).to_string(),
+                bytes_to_text_preserving_utf8(signature.email.as_ref()).to_string(),
+                signature.time().ok().map(|time| time.seconds).unwrap_or(0),
+            ),
+            Err(_) => (String::new(), String::new(), 0),
+        };
         let committed_at = commit
             .time()
             .map(|time| time.format_or_unix(gix::date::time::format::ISO8601_STRICT))
@@ -1283,6 +1384,9 @@ impl GixRepo {
         Ok(CommitDetails {
             id: id.clone(),
             message,
+            author_name,
+            author_email,
+            authored_at_unix,
             committed_at,
             parent_ids,
             files,

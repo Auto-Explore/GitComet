@@ -49,6 +49,7 @@ pub struct UiSession {
     pub terminal_external_args: Option<Vec<String>>,
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
+    pub history_relative_dates: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -177,6 +178,7 @@ struct UiSessionFile {
     terminal_external_args: Option<Vec<String>>,
     terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
+    history_relative_dates: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
@@ -282,6 +284,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         terminal_external_args: file.terminal_external_args,
         terminal_action_bar_target: file.terminal_action_bar_target,
         history_show_tags: file.history_show_tags,
+        history_relative_dates: file.history_relative_dates,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
@@ -587,6 +590,7 @@ pub struct UiSettings {
     pub terminal_external_args: Option<Vec<String>>,
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
+    pub history_relative_dates: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -708,6 +712,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.history_show_tags {
             file.history_show_tags = Some(value);
+        }
+        if let Some(value) = settings.history_relative_dates {
+            file.history_relative_dates = Some(value);
         }
         if let Some(value) = settings.history_tag_fetch_mode {
             file.history_tag_fetch_mode = Some(value);

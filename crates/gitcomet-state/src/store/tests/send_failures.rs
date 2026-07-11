@@ -76,6 +76,9 @@ impl GitRepository for ReadyOpenRepo {
         Ok(CommitDetails {
             id: id.clone(),
             message: String::new(),
+            author_name: String::new(),
+            author_email: String::new(),
+            authored_at_unix: 0,
             committed_at: String::new(),
             parent_ids: Vec::new(),
             files: Vec::new(),
@@ -319,6 +322,9 @@ impl GitRepository for BlockingDiffRepo {
         Ok(CommitDetails {
             id: id.clone(),
             message: String::new(),
+            author_name: String::new(),
+            author_email: String::new(),
+            authored_at_unix: 0,
             committed_at: String::new(),
             parent_ids: Vec::new(),
             files: Vec::new(),

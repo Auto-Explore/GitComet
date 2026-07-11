@@ -64,14 +64,14 @@ struct WorktreeBadgeColors {
     hover_text: gpui::Rgba,
 }
 
+/// Shared chip palette for the sidebar badges (workspace/worktree/upstream),
+/// matching the history table's ref chips: an elevated pill with a quiet
+/// border at rest, accent-tinted when the badge refers to an open workspace.
 fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
     WorktreeBadgePalette {
-        bg: gpui::rgba(0x00000000),
-        active_bg: gpui::rgba(0x00000000),
-        border: with_alpha(
-            theme.colors.text_muted,
-            if theme.is_dark { 0.38 } else { 0.28 },
-        ),
+        bg: theme.colors.surface_bg_elevated,
+        active_bg: with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 }),
+        border: with_alpha(theme.colors.border, 0.90),
         hover_border: with_alpha(
             theme.colors.text_muted,
             if theme.is_dark { 0.55 } else { 0.40 },
@@ -373,7 +373,7 @@ impl SidebarPaneView {
                 } => {
                     let (icon_path, label): (&'static str, SharedString) = match section {
                         BranchSection::Local => ("icons/computer.svg", "Local Branches".into()),
-                        BranchSection::Remote => ("icons/cloud.svg", "Remote branches".into()),
+                        BranchSection::Remote => ("icons/cloud.svg", "Remote Branches".into()),
                     };
                     let tooltip = label.clone();
                     let section_key = match section {
@@ -839,12 +839,15 @@ impl SidebarPaneView {
                                             .flex()
                                             .items_center()
                                             .gap(scaled_px(3.0))
-                                            .px(scaled_px(4.0))
-                                            .py(scaled_px(0.0))
+                                            .px(scaled_px(6.0))
                                             .rounded(px(theme.radii.pill))
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
-                                            .bg(worktree_badge_palette.bg)
+                                            .bg(if worktree_tab_open {
+                                                worktree_badge_palette.active_bg
+                                            } else {
+                                                worktree_badge_palette.bg
+                                            })
                                             .text_size(scaled_px(11.0))
                                             .text_color(branch_badge_colors.text)
                                             .id(("worktree_branch_badge", ix))
@@ -1446,21 +1449,16 @@ impl SidebarPaneView {
                             badge
                         };
                     let upstream_badge = |debug_selector: Option<String>| {
+                        // Accent-tinted variant of the shared badge chip, in
+                        // line with the history table's tag chips.
                         let mut badge = div()
-                            .px(scaled_px(3.0))
-                            .py(scaled_px(0.0))
+                            .px(scaled_px(6.0))
                             .rounded(px(theme.radii.pill))
                             .text_size(scaled_px(11.0))
-                            .text_color(theme.colors.text_muted)
-                            .bg(with_alpha(
-                                theme.colors.accent,
-                                if theme.is_dark { 0.16 } else { 0.10 },
-                            ))
+                            .text_color(theme.colors.accent)
+                            .bg(with_alpha(theme.colors.accent, 0.12))
                             .border_1()
-                            .border_color(with_alpha(
-                                theme.colors.accent,
-                                if theme.is_dark { 0.32 } else { 0.22 },
-                            ))
+                            .border_color(with_alpha(theme.colors.accent, 0.35))
                             .child("Upstream");
                         if let Some(debug_selector) = debug_selector {
                             badge = badge.debug_selector(move || debug_selector.clone());
@@ -1592,12 +1590,15 @@ impl SidebarPaneView {
                             .flex()
                             .items_center()
                             .gap(scaled_px(3.0))
-                            .px(scaled_px(4.0))
-                            .py(scaled_px(0.0))
+                            .px(scaled_px(6.0))
                             .rounded(px(theme.radii.pill))
                             .border_1()
                             .border_color(badge_colors.border)
-                            .bg(worktree_badge_palette.bg)
+                            .bg(if has_active_workspace {
+                                worktree_badge_palette.active_bg
+                            } else {
+                                worktree_badge_palette.bg
+                            })
                             .text_size(scaled_px(11.0))
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
@@ -1609,9 +1610,13 @@ impl SidebarPaneView {
                                         .border_color(worktree_badge_palette.active_border)
                                         .text_color(worktree_badge_palette.active_text)
                                 } else {
-                                    s.bg(worktree_badge_palette.bg)
-                                        .border_color(badge_colors.hover_border)
-                                        .text_color(badge_colors.hover_text)
+                                    s.bg(if has_active_workspace {
+                                        worktree_badge_palette.active_bg
+                                    } else {
+                                        worktree_badge_palette.bg
+                                    })
+                                    .border_color(badge_colors.hover_border)
+                                    .text_color(badge_colors.hover_text)
                                 }
                             })
                             .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -1903,6 +1908,13 @@ impl DetailsPaneView {
                                 .render(cx),
                             ),
                     )
+                    .when(f.additions.is_some() || f.deletions.is_some(), |row| {
+                        row.child(div().flex_none().child(components::diff_stat(
+                            theme,
+                            f.additions.unwrap_or(0) as usize,
+                            f.deletions.unwrap_or(0) as usize,
+                        )))
+                    })
                     .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                         if !e.standard_click() {
                             return;

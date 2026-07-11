@@ -1608,6 +1608,7 @@ impl GitCometView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(false);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
@@ -1736,6 +1737,7 @@ impl GitCometView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                history_relative_dates,
                 diff_scroll_sync,
                 diff_content_mode,
                 diff_whitespace_mode,
@@ -2556,6 +2558,17 @@ impl GitCometView {
     pub(in crate::view) fn reset_history_column_widths(&mut self, cx: &mut gpui::Context<Self>) {
         self.main_pane
             .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
+        self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_history_relative_dates(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_relative_dates(enabled, cx);
+        });
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3502,7 +3515,15 @@ impl Render for GitCometView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text);
+            .text_color(theme.colors.text)
+            // Any click anywhere hides visible tooltips (both gpui-managed
+            // bubbles and the canvas-driven TooltipHost overlay).
+            .capture_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                tooltip::dismiss_tooltips_on_mouse_down(cx);
+                this.tooltip_host.update(cx, |host, cx| {
+                    host.clear_tooltip(cx);
+                });
+            }));
 
         if show_custom_window_chrome {
             body = body.child(stable_cached_fixed_height_view(

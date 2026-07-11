@@ -16,6 +16,72 @@ fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
 
+/// Author identity block: avatar + name + muted email, with the authored date
+/// as a relative label (absolute date lives in the "Commit date" row below).
+fn commit_details_author_row(
+    theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
+    details: &gitcomet_core::domain::CommitDetails,
+) -> Option<Div> {
+    if details.author_name.is_empty() && details.author_email.is_empty() {
+        return None;
+    }
+    let display_name = if details.author_name.is_empty() {
+        details.author_email.clone()
+    } else {
+        details.author_name.clone()
+    };
+    let authored_relative = (details.authored_at_unix != 0).then(|| {
+        crate::view::date_time::format_relative_time(
+            details.authored_at_unix,
+            std::time::SystemTime::now(),
+        )
+    });
+
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .min_w(px(0.0))
+            .child(components::author_avatar(theme, ui_scale, &display_name))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(display_name),
+                    )
+                    .when(!details.author_email.is_empty(), |column| {
+                        column.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child(details.author_email.clone()),
+                        )
+                    }),
+            )
+            .when_some(authored_relative, |row, relative| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(relative),
+                )
+            }),
+    )
+}
+
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
     div()
         .flex()
@@ -39,6 +105,41 @@ fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
         .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
         .child(value)
         .into_any_element()
+}
+
+/// Emphasis for the commit message's summary line (everything before the first
+/// newline), skipping stretches already claimed by SHA-link highlights so the
+/// resulting highlight set stays sorted and non-overlapping.
+fn commit_message_summary_highlights(
+    message: &str,
+    theme: AppTheme,
+    sha_highlights: &TextHighlights,
+) -> TextHighlights {
+    let summary_end = message.find('\n').unwrap_or(message.len());
+    if summary_end == 0 {
+        return Vec::new();
+    }
+    let style = gpui::HighlightStyle {
+        color: Some(theme.colors.emphasis_text.into()),
+        font_weight: Some(FontWeight::SEMIBOLD),
+        ..gpui::HighlightStyle::default()
+    };
+
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    for (range, _) in sha_highlights
+        .iter()
+        .filter(|(range, _)| range.start < summary_end)
+    {
+        if range.start > cursor {
+            out.push((cursor..range.start.min(summary_end), style));
+        }
+        cursor = cursor.max(range.end);
+    }
+    if cursor < summary_end {
+        out.push((cursor..summary_end, style));
+    }
+    out
 }
 
 fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
@@ -554,12 +655,15 @@ impl DetailsPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (highlights, links) = commit_message_sha_highlights(message, theme);
+        let (mut highlights, links) = commit_message_sha_highlights(message, theme);
+        let mut merged = commit_message_summary_highlights(message, theme, &highlights);
+        merged.append(&mut highlights);
+        merged.sort_by_key(|(range, _)| range.start);
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
-            input.set_highlights(highlights, cx);
+            input.set_highlights(merged, cx);
         });
         self.commit_details_message_sha_menu.update(cx, |menu, cx| {
             menu.sync(
@@ -877,6 +981,9 @@ impl DetailsPaneView {
                                         .w_full()
                                         .min_w(px(0.0))
                                         .child(message)
+                                        .children(commit_details_author_row(
+                                            theme, ui_scale, details,
+                                        ))
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Commit SHA",
@@ -907,11 +1014,17 @@ impl DetailsPaneView {
                                         .flex_1()
                                         .h_full()
                                         .min_h(commit_files_section_min_height)
+                                        .border_t_1()
+                                        .border_color(theme.colors.border_variant)
+                                        .pt_2()
                                         .child(
                                             div()
                                                 .text_sm()
                                                 .text_color(theme.colors.text_muted)
-                                                .child("Committed files"),
+                                                .child(format!(
+                                                    "Committed files ({})",
+                                                    details.files.len()
+                                                )),
                                         )
                                         .child(files),
                                 )
@@ -1053,6 +1166,7 @@ impl DetailsPaneView {
                                     .w_full()
                                     .min_w(px(0.0))
                                     .child(message)
+                                    .children(commit_details_author_row(theme, ui_scale, details))
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",
@@ -1085,11 +1199,13 @@ impl DetailsPaneView {
                                     .flex_1()
                                     .h_full()
                                     .min_h(commit_files_section_min_height)
+                                    .border_t_1()
+                                    .border_color(theme.colors.border_variant)
+                                    .pt_2()
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.colors.text_muted)
-                                            .child("Committed files"),
+                                        div().text_sm().text_color(theme.colors.text_muted).child(
+                                            format!("Committed files ({})", details.files.len()),
+                                        ),
                                     )
                                     .child(files),
                             )

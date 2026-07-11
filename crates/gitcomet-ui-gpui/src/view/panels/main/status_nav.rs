@@ -459,6 +459,9 @@ mod tests {
             Loadable::Ready(std::sync::Arc::new(gitcomet_core::domain::CommitDetails {
                 id: commit_id.clone(),
                 message: "subject".into(),
+                author_name: String::new(),
+                author_email: String::new(),
+                authored_at_unix: 0,
                 committed_at: "2026-04-14 12:00:00 +0300".into(),
                 parent_ids: vec![],
                 files: vec![
@@ -466,16 +469,22 @@ mod tests {
                         path: file_a.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         is_submodule: false,
+                        additions: None,
+                        deletions: None,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_b.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         is_submodule: false,
+                        additions: None,
+                        deletions: None,
                     },
                     gitcomet_core::domain::CommitFileChange {
                         path: file_c.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         is_submodule: false,
+                        additions: None,
+                        deletions: None,
                     },
                 ],
             }));

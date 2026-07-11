@@ -289,6 +289,7 @@ pub(crate) struct SettingsWindowView {
     history_show_author: bool,
     history_show_date: bool,
     history_show_sha: bool,
+    history_relative_dates: bool,
     history_show_tags: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
@@ -663,6 +664,7 @@ impl SettingsWindowView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(false);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
@@ -861,6 +863,7 @@ impl SettingsWindowView {
             history_show_author,
             history_show_date,
             history_show_sha,
+            history_relative_dates,
             history_show_tags,
             history_tag_fetch_mode,
             default_history_mode,
@@ -942,6 +945,7 @@ impl SettingsWindowView {
             history_show_author: Some(self.history_show_author),
             history_show_date: Some(self.history_show_date),
             history_show_sha: Some(self.history_show_sha),
+            history_relative_dates: Some(self.history_relative_dates),
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
@@ -1674,6 +1678,19 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    fn set_history_relative_dates(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.history_relative_dates == enabled {
+            return;
+        }
+
+        self.history_relative_dates = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_relative_dates(enabled, cx);
+        });
+        cx.notify();
+    }
+
     fn set_history_show_tags(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
         if self.history_show_tags == enabled {
             return;
@@ -1786,6 +1803,10 @@ impl SettingsWindowView {
             .child(
                 div()
                     .w(px(16.0))
+                    // Match the label's line box so the check mark centers on
+                    // the first text line instead of hugging the row's top.
+                    .h(px(20.0))
+                    .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1800,7 +1821,13 @@ impl SettingsWindowView {
                     .flex()
                     .flex_col()
                     .gap_0p5()
-                    .child(div().text_sm().text_color(text_color).child(label.into()))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(px(20.0))
+                            .text_color(text_color)
+                            .child(label.into()),
+                    )
                     .when_some(detail, |this, detail| {
                         this.child(
                             div()
@@ -2103,7 +2130,16 @@ impl SettingsWindowView {
                     .items_center()
                     .justify_end()
                     .overflow_hidden()
-                    .child(components::switch(theme, self.ui_scale_percent, enabled)),
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(if enabled {
+                                theme.colors.text
+                            } else {
+                                theme.colors.text_muted
+                            })
+                            .child(if enabled { "On" } else { "Off" }),
+                    ),
             )
     }
 
@@ -3238,6 +3274,17 @@ impl Render for SettingsWindowView {
                             this.toggle_section(SettingsSection::GitLogColumns, cx);
                         }));
 
+    let relative_dates_row = self
+                        .toggle_row(
+                            "settings_window_git_log_relative_dates",
+                            "Relative dates in history view",
+                            self.history_relative_dates,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_history_relative_dates(!this.history_relative_dates, cx);
+                        }));
+
                     let show_history_tags_row = self
                         .toggle_row(
                             "settings_window_git_log_show_tags",
@@ -4216,6 +4263,7 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    git_log_card = git_log_card.child(relative_dates_row);
                     git_log_card = git_log_card.child(show_history_tags_row);
                     if self.history_show_tags {
                         git_log_card = git_log_card.child(auto_fetch_tags_row);
@@ -4770,7 +4818,11 @@ impl Render for SettingsWindowView {
             .size_full()
             .cursor(cursor)
             .text_color(theme.colors.text)
-            .relative();
+            .relative()
+            // Any click anywhere hides visible tooltips.
+            .capture_any_mouse_down(cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
+                crate::view::tooltip::dismiss_tooltips_on_mouse_down(cx);
+            }));
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             let Decorations::Client { tiling } = window.window_decorations() else {

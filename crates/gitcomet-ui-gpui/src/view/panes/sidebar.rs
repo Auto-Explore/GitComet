@@ -389,6 +389,9 @@ impl SidebarPaneView {
 
         let store_branches = Arc::clone(&self.store);
         let store_files = Arc::clone(&self.store);
+        // `theme.colors.hover` is nearly identical to the sidebar chrome bg,
+        // so use a text-tinted overlay that actually reads on hover.
+        let tab_hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
 
         let branches_tab = div()
             .flex()
@@ -405,9 +408,9 @@ impl SidebarPaneView {
                 d.bg(gpui::transparent_black())
                     .text_color(theme.colors.text_muted)
             })
-            .hover(|d| {
+            .hover(move |d| {
                 if mode != SidebarMode::Branches {
-                    d.bg(theme.colors.hover)
+                    d.bg(tab_hover_bg)
                 } else {
                     d
                 }
@@ -439,9 +442,9 @@ impl SidebarPaneView {
                 d.bg(gpui::transparent_black())
                     .text_color(theme.colors.text_muted)
             })
-            .hover(|d| {
+            .hover(move |d| {
                 if mode != SidebarMode::Files {
-                    d.bg(theme.colors.hover)
+                    d.bg(tab_hover_bg)
                 } else {
                     d
                 }
@@ -502,16 +505,14 @@ impl SidebarPaneView {
         .min_h(px(0.0))
         .track_scroll(&self.branches_scroll);
         let list = restrict_scroll_to_vertical_axis(list);
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            self.branches_scroll.clone(),
-            components::ScrollbarAxis::Vertical,
-        );
+        // Rows use the full pane width; the scrollbar overlays them (its track
+        // is transparent, only the thumb paints while scrolling/hovering).
         let list = div()
             .flex_1()
             .min_h(px(0.0))
             .pt(px(SIDEBAR_TOP_INSET_PX))
             .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
-            .pr(px(components::ROW_HIGHLIGHT_INSET_PX) + scrollbar_gutter)
+            .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
             .child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
@@ -670,16 +671,13 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .track_scroll(&self.file_browser_scroll);
             let list = restrict_scroll_to_vertical_axis(list);
-            let scrollbar_gutter = components::Scrollbar::visible_gutter(
-                self.file_browser_scroll.clone(),
-                components::ScrollbarAxis::Vertical,
-            );
+            // Same overlay-scrollbar treatment as the branches list above.
             let list = div()
                 .flex_1()
                 .min_h(px(0.0))
                 .pt(px(2.0))
                 .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
-                .pr(px(components::ROW_HIGHLIGHT_INSET_PX) + scrollbar_gutter)
+                .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
                 .child(list);
             div()
                 .id("file_browser_scroll_container")

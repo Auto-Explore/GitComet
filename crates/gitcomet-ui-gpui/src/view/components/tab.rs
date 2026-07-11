@@ -12,9 +12,13 @@ pub struct Tab {
 
 impl Tab {
     const END_TAB_SLOT_SIZE_PX: f32 = 14.0;
-    /// Tab height inside the 32px bar slot; the difference is the top inset
-    /// that lets the active tab rise from the bar like a browser tab.
-    const TAB_HEIGHT_PX: f32 = 28.0;
+    /// Tab height inside the title bar; the difference to the bar height is
+    /// the top inset that lets the active tab rise like a browser tab.
+    const TAB_HEIGHT_PX: f32 = 34.0;
+    /// Bottom padding matching the title bar's top inset. The tab is fused to
+    /// the bar's bottom edge, so without this its label would sit below the
+    /// bar midline that the title bar icons center on.
+    const TAB_BOTTOM_FUSE_PAD_PX: f32 = 4.0;
     /// Tabs shrink no further than this before the strip scrolls.
     const TAB_MIN_WIDTH_PX: f32 = 96.0;
     /// Long repository names truncate rather than widening the tab past this.
@@ -43,10 +47,6 @@ impl Tab {
     pub fn child(mut self, child: impl IntoElement) -> Self {
         self.children.push(child.into_any_element());
         self
-    }
-
-    pub fn container_height(ui_scale: impl Into<UiScale>) -> gpui::Pixels {
-        ui_scale.into().px(32.0)
     }
 
     pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
@@ -83,6 +83,7 @@ impl Tab {
             .max_w(scaled_px(Self::TAB_MAX_WIDTH_PX))
             .mx(scaled_px(3.0))
             .px(scaled_px(10.0))
+            .pb(scaled_px(Self::TAB_BOTTOM_FUSE_PAD_PX))
             .flex()
             .items_center()
             .gap_1()

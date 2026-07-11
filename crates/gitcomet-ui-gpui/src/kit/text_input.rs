@@ -64,6 +64,9 @@ actions!(
     ]
 );
 
+/// Height of single-line boxed inputs: a touch taller than the shared control
+/// height so the caret keeps a few pixels of air above and below.
+const SINGLE_LINE_INPUT_HEIGHT_PX: f32 = CONTROL_HEIGHT_PX + 4.0;
 const MAX_UNDO_STEPS: usize = 100;
 const TEXT_INPUT_GUARD_ROWS: usize = 2;
 const TEXT_INPUT_PROVIDER_PREFETCH_GUARD_ROWS: usize = 24;

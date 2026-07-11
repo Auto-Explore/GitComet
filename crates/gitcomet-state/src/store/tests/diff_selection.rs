@@ -475,12 +475,17 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
     repo_state.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
         id: commit_id,
         message: "remove report".to_string(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
         committed_at: "2026-04-07T12:00:00Z".to_string(),
         parent_ids: vec![],
         files: vec![CommitFileChange {
             path: PathBuf::from("report.json"),
             kind: FileStatusKind::Deleted,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         }],
     }));
     state.repos.push(repo_state);
@@ -998,12 +1003,17 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
             result: Ok(CommitDetails {
                 id: commit_id,
                 message: "remove report".to_string(),
+                author_name: String::new(),
+                author_email: String::new(),
+                authored_at_unix: 0,
                 committed_at: "2026-04-07T12:00:00Z".to_string(),
                 parent_ids: vec![],
                 files: vec![CommitFileChange {
                     path: PathBuf::from("report.json"),
                     kind: FileStatusKind::Deleted,
                     is_submodule: false,
+                    additions: None,
+                    deletions: None,
                 }],
             }),
         }),

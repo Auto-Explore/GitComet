@@ -107,6 +107,10 @@ pub type LogScope = HistoryMode;
 pub struct CommitDetails {
     pub id: CommitId,
     pub message: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// Author timestamp in unix seconds; 0 when unavailable.
+    pub authored_at_unix: i64,
     pub committed_at: String,
     pub parent_ids: Vec<CommitId>,
     pub files: Vec<CommitFileChange>,
@@ -117,6 +121,11 @@ pub struct CommitFileChange {
     pub path: PathBuf,
     pub kind: FileStatusKind,
     pub is_submodule: bool,
+    /// Added line count; `None` for binary files, submodules, or when the
+    /// commit was too large to compute per-file stats.
+    pub additions: Option<u32>,
+    /// Removed line count; `None` under the same conditions as `additions`.
+    pub deletions: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

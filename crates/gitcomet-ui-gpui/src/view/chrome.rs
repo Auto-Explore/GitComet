@@ -2,7 +2,7 @@ use super::*;
 use crate::ui_scale;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
-pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 34.0;
+pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 38.0;
 const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 #[cfg(test)]
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
@@ -617,14 +617,13 @@ impl Render for TitleBarView {
             .gitcomet_tooltip(theme, free_badge_tooltip.clone())
             .child("FREE");
 
-        // Leading and trailing clusters center within the same bottom-aligned
-        // zone the tabs occupy, so their icons line up with tab labels.
-        let tab_zone_height = scaled_px(28.0);
+        // Leading and trailing clusters center on the full bar height; tab
+        // labels compensate for their bottom fusion (see `Tab::render`) so
+        // icons and tab text share the bar's true midline.
         let leading = div()
             .flex()
             .items_center()
-            .self_end()
-            .h(tab_zone_height)
+            .h_full()
             .gap(scaled_px(2.0))
             .when(is_macos, |d| {
                 d.pl(macos_traffic_lights_safe_inset(ui_scale_percent))
@@ -688,8 +687,7 @@ impl Render for TitleBarView {
                 div()
                     .flex()
                     .items_center()
-                    .self_end()
-                    .h(tab_zone_height)
+                    .h_full()
                     .gap(scaled_px(4.0))
                     .child(free_badge)
                     .when(!is_macos, |d| d.child(min).child(max).child(close))

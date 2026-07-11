@@ -536,7 +536,13 @@ impl Render for HistoryRefsHoverHost {
                     } else if frozen {
                         row
                     } else {
-                        row.bg(theme.colors.hover)
+                        // `theme.colors.hover` is nearly identical to the
+                        // elevated popover surface; use a text-tinted overlay
+                        // that reads clearly.
+                        row.bg(with_alpha(
+                            theme.colors.text,
+                            if theme.is_dark { 0.08 } else { 0.05 },
+                        ))
                     }
                 })
                 .active(move |row| {

@@ -1343,6 +1343,8 @@ fn commit_details_reports_root_and_rename_file_changes() {
             path: Path::new("old name.txt").to_path_buf(),
             kind: FileStatusKind::Added,
             is_submodule: false,
+            additions: Some(1),
+            deletions: Some(0),
         }]
     );
 
@@ -1355,6 +1357,8 @@ fn commit_details_reports_root_and_rename_file_changes() {
             path: Path::new("new name.txt").to_path_buf(),
             kind: FileStatusKind::Renamed,
             is_submodule: false,
+            additions: Some(0),
+            deletions: Some(0),
         }]
     );
 }

@@ -121,7 +121,7 @@ impl Render for TextInput {
             .text_size(crate::ui_scale::design_px_from_window(13.0, window))
             .when(!multiline && !chromeless, |d| {
                 d.h(crate::ui_scale::design_px_from_window(
-                    CONTROL_HEIGHT_PX,
+                    SINGLE_LINE_INPUT_HEIGHT_PX,
                     window,
                 ))
             })

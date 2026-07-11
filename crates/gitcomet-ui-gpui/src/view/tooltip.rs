@@ -7,12 +7,39 @@ thread_local! {
     static VISIBLE_TOOLTIP_TEXT_FOR_TEST: RefCell<Option<SharedString>> = const { RefCell::new(None) };
 }
 
+/// Bumped on every mouse-down (see [`dismiss_tooltips_on_mouse_down`]); a
+/// visible tooltip bubble compares against the epoch it was built at and
+/// renders empty once the epoch moves on, so clicks always hide tooltips.
+#[derive(Default)]
+pub(super) struct TooltipDismissEpoch(u64);
+
+impl gpui::Global for TooltipDismissEpoch {}
+
+pub(super) fn current_tooltip_dismiss_epoch(cx: &App) -> u64 {
+    cx.try_global::<TooltipDismissEpoch>()
+        .map(|epoch| epoch.0)
+        .unwrap_or(0)
+}
+
+/// Hides every visible gpui-managed tooltip bubble. Registered on window
+/// roots via `capture_any_mouse_down` so it runs for clicks anywhere.
+pub(super) fn dismiss_tooltips_on_mouse_down(cx: &mut App) {
+    let next = current_tooltip_dismiss_epoch(cx).wrapping_add(1);
+    cx.set_global(TooltipDismissEpoch(next));
+}
+
 pub(super) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
     fn gitcomet_tooltip(self, theme: AppTheme, text: SharedString) -> Self {
         self.tooltip(move |_window, cx| {
-            AnyView::from(cx.new(|_cx| TooltipBubbleView {
-                theme,
-                text: text.clone(),
+            let epoch = current_tooltip_dismiss_epoch(cx);
+            AnyView::from(cx.new(|cx| {
+                let epoch_observer = cx.observe_global::<TooltipDismissEpoch>(|_, cx| cx.notify());
+                TooltipBubbleView {
+                    theme,
+                    text: text.clone(),
+                    epoch,
+                    _epoch_observer: epoch_observer,
+                }
             }))
         })
     }
@@ -23,10 +50,18 @@ impl<T: gpui::StatefulInteractiveElement> GitCometTooltipExt for T {}
 struct TooltipBubbleView {
     theme: AppTheme,
     text: SharedString,
+    /// Dismiss epoch at build time; a later epoch means a click happened
+    /// while this bubble was up, so it must disappear.
+    epoch: u64,
+    _epoch_observer: gpui::Subscription,
 }
 
 impl Render for TooltipBubbleView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if current_tooltip_dismiss_epoch(cx) != self.epoch {
+            return div();
+        }
+
         #[cfg(test)]
         VISIBLE_TOOLTIP_TEXT_FOR_TEST.with(|value| {
             value.replace(Some(self.text.clone()));
@@ -95,6 +130,8 @@ impl GitCometView {
                             .main_pane
                             .read(cx)
                             .history_tag_preferences(cx);
+                        let history_relative_dates =
+                            this.main_pane.read(cx).history_relative_dates(cx);
                         let (change_tracking_height, untracked_height) =
                             this.details_pane.read(cx).saved_status_section_heights();
                         let repo_sidebar_collapsed_items =
@@ -138,6 +175,7 @@ impl GitCometView {
                             history_show_author: Some(history_show_author),
                             history_show_date: Some(history_show_date),
                             history_show_sha: Some(history_show_sha),
+                            history_relative_dates: Some(history_relative_dates),
                             terminal_external_mode: None,
                             terminal_external_program: None,
                             terminal_external_args: None,

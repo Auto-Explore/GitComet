@@ -1,5 +1,9 @@
 use super::*;
 
+/// Slimmer than the tab-bar slot the bottom bar used to borrow; it only hosts
+/// the zoom control, so every saved pixel goes to the content area.
+const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
+
 pub(in super::super) struct BottomStatusBarView {
     theme: AppTheme,
     root_view: WeakEntity<GitCometView>,
@@ -104,7 +108,7 @@ impl Render for BottomStatusBarView {
         div()
             .id("bottom_status_bar")
             .w_full()
-            .h(components::Tab::container_height(ui_scale_percent))
+            .h(scaled_px(BOTTOM_STATUS_BAR_HEIGHT_PX))
             .flex_none()
             .flex()
             .items_center()

@@ -953,26 +953,30 @@ impl GitCometView {
                                                         !this.sidebar_collapsed,
                                                         cx,
                                                     );
-                                                }),
+                                                })
+                                                .gitcomet_tooltip(
+                                                    theme,
+                                                    if self.sidebar_collapsed {
+                                                        "Show sidebar".into()
+                                                    } else {
+                                                        "Hide sidebar".into()
+                                                    },
+                                                ),
                                         ),
                                 ),
                         )
-                        .child(self.pane_resize_handle(
-                            theme,
-                            "pane_resize_sidebar",
-                            PaneResizeHandle::Sidebar,
-                            cx,
-                        ))
                         .child(
                             // Main + details share one card silhouette; the panes stay
-                            // independently resizable inside it.
+                            // independently resizable inside it. The card sits flush
+                            // against the action bar and sidebar (no top/left gap); the
+                            // sidebar resize strip overlays the card's left edge below.
                             div()
                                 .flex_1()
                                 .min_w(px(0.0))
                                 .min_h(px(0.0))
                                 .flex()
                                 .flex_row()
-                                .my(px(CONTENT_CARD_GAP_PX))
+                                .mb(px(CONTENT_CARD_GAP_PX / 2.0))
                                 .mr(px(CONTENT_CARD_GAP_PX))
                                 .relative()
                                 .rounded(px(theme.radii.panel))
@@ -1049,14 +1053,35 @@ impl GitCometView {
                                                                 !this.details_collapsed,
                                                                 cx,
                                                             );
-                                                        }),
+                                                        })
+                                                        .gitcomet_tooltip(
+                                                            theme,
+                                                            if self.details_collapsed {
+                                                                "Show details panel".into()
+                                                            } else {
+                                                                "Hide details panel".into()
+                                                            },
+                                                        ),
                                                 ),
                                         ),
                                 )
                                 .child(card_corner_caps(
                                     px((theme.radii.panel - 1.0).max(0.0)),
                                     theme.colors.sidebar_bg,
-                                )),
+                                ))
+                                .child(
+                                    // Sidebar resize grab strip overlaying the card's
+                                    // left edge, so the boundary consumes no layout
+                                    // space of its own.
+                                    div().absolute().left_0().top_0().bottom_0().child(
+                                        self.pane_resize_handle(
+                                            theme,
+                                            "pane_resize_sidebar",
+                                            PaneResizeHandle::Sidebar,
+                                            cx,
+                                        ),
+                                    ),
+                                ),
                         ),
                 )
                 .child(

@@ -900,6 +900,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) date_time_format: DateTimeFormat,
     pub(in super::super) timezone: Timezone,
     pub(in super::super) show_timezone: bool,
+    pub(in super::super) history_relative_dates: bool,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
@@ -938,6 +939,9 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
+    /// Minute tick that re-renders the table while the relative date format is
+    /// active, so "2 mins ago" labels don't freeze. `None` for absolute formats.
+    relative_time_tick: Option<gpui::Task<()>>,
 }
 
 impl HistoryView {
@@ -977,6 +981,7 @@ impl HistoryView {
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        history_relative_dates: bool,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -1028,6 +1033,7 @@ impl HistoryView {
             date_time_format,
             timezone,
             show_timezone,
+            history_relative_dates,
             _ui_model_subscription: subscription,
             root_view,
             notify_fingerprint: initial_fingerprint,
@@ -1063,7 +1069,34 @@ impl HistoryView {
             history_stash_ids_cache: None,
             history_scroll: UniformListScrollHandle::default(),
             history_panel_focus_handle,
+            relative_time_tick: None,
         }
+    }
+
+    /// Keeps a minute-interval re-render task alive while relative history
+    /// dates are enabled; drops it (cancelling the task) otherwise.
+    pub(in super::super) fn ensure_relative_time_tick(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.history_relative_dates {
+            self.relative_time_tick = None;
+            return;
+        }
+        if self.relative_time_tick.is_some() {
+            return;
+        }
+        // The test scheduler would treat a sleeping loop as forever-pending work.
+        if !crate::ui_runtime::current().uses_live_store_poller() {
+            return;
+        }
+        self.relative_time_tick = Some(cx.spawn(
+            async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
+                loop {
+                    smol::Timer::after(std::time::Duration::from_secs(60)).await;
+                    if view.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            },
+        ));
     }
 
     pub(in super::super) fn active_repo_id(&self) -> Option<RepoId> {
@@ -1362,6 +1395,19 @@ impl HistoryView {
             return;
         }
         self.date_time_format = next;
+        cx.notify();
+    }
+
+    pub(in super::super) fn set_history_relative_dates(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_relative_dates == enabled {
+            return;
+        }
+        self.history_relative_dates = enabled;
+        self.ensure_relative_time_tick(cx);
         cx.notify();
     }
 
@@ -3244,6 +3290,7 @@ mod tests {
                             DateTimeFormat::YmdHm,
                             Timezone::Utc,
                             true,
+                            false,
                         ))
                         .as_ref()
                         .to_owned(),
@@ -3301,6 +3348,7 @@ mod tests {
                             DateTimeFormat::MdyHm,
                             Timezone::Utc,
                             true,
+                            false,
                         ))
                         .as_ref()
                         .to_owned(),
@@ -4493,6 +4541,9 @@ mod tests {
             Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
                 id: selected_commit.clone(),
                 message: "commit 50".into(),
+                author_name: String::new(),
+                author_email: String::new(),
+                authored_at_unix: 0,
                 committed_at: "2026-05-26 12:00:00 +0300".into(),
                 parent_ids: vec![],
                 files: vec![],

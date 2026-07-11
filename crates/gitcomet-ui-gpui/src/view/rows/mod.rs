@@ -551,11 +551,15 @@ mod tests {
                 path: PathBuf::from("src/lib.rs"),
                 kind: FileStatusKind::Modified,
                 is_submodule: false,
+                additions: None,
+                deletions: None,
             },
             CommitFileChange {
                 path: PathBuf::from("README.md"),
                 kind: FileStatusKind::Added,
                 is_submodule: false,
+                additions: None,
+                deletions: None,
             },
         ];
 
@@ -566,6 +570,8 @@ mod tests {
                 path: PathBuf::from("should/not/appear.rs"),
                 kind: FileStatusKind::Deleted,
                 is_submodule: false,
+                additions: None,
+                deletions: None,
             }],
         );
 
@@ -592,6 +598,8 @@ mod tests {
                 path: PathBuf::from("docs/guide.md"),
                 kind: FileStatusKind::Renamed,
                 is_submodule: false,
+                additions: None,
+                deletions: None,
             }],
         );
 
@@ -618,11 +626,15 @@ mod tests {
                 path: PathBuf::from("src/lib.rs"),
                 kind: FileStatusKind::Modified,
                 is_submodule: false,
+                additions: None,
+                deletions: None,
             },
             CommitFileChange {
                 path: PathBuf::from("README.md"),
                 kind: FileStatusKind::Added,
                 is_submodule: false,
+                additions: None,
+                deletions: None,
             },
         ];
 

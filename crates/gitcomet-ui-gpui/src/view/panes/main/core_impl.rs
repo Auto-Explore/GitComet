@@ -949,6 +949,7 @@ impl MainPaneView {
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        history_relative_dates: bool,
         diff_scroll_sync: DiffScrollSync,
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
@@ -1132,6 +1133,7 @@ impl MainPaneView {
                 date_time_format,
                 timezone,
                 show_timezone,
+                history_relative_dates,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -2782,6 +2784,20 @@ impl MainPaneView {
         self.history_view
             .update(cx, |view, cx| view.set_date_time_format(next, cx));
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_history_relative_dates(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view
+            .update(cx, |view, cx| view.set_history_relative_dates(enabled, cx));
+        cx.notify();
+    }
+
+    pub(in crate::view) fn history_relative_dates(&self, cx: &App) -> bool {
+        self.history_view.read(cx).history_relative_dates
     }
 
     pub(in crate::view) fn set_timezone(&mut self, next: Timezone, cx: &mut gpui::Context<Self>) {

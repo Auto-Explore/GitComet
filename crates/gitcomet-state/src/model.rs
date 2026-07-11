@@ -1782,6 +1782,9 @@ mod tests {
         repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
             id: CommitId("c1".into()),
             message: "m".to_string(),
+            author_name: String::new(),
+            author_email: String::new(),
+            authored_at_unix: 0,
             committed_at: "t".to_string(),
             parent_ids: Vec::new(),
             files: Vec::new(),

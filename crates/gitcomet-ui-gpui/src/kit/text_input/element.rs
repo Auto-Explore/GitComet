@@ -167,8 +167,10 @@ impl Element for TextElement {
                     );
                     let mut selections = Vec::with_capacity(4);
                     let cursor_quad = if selected_range.is_empty() {
-                        let control_height =
-                            crate::ui_scale::design_px_from_window(CONTROL_HEIGHT_PX, window);
+                        let control_height = crate::ui_scale::design_px_from_window(
+                            SINGLE_LINE_INPUT_HEIGHT_PX,
+                            window,
+                        );
                         let x = truncated_line_x_for_source_offset(&truncated_line, cursor);
                         let caret_inset_y = px(3.0);
                         let caret_h = if !input.chromeless {
@@ -313,13 +315,13 @@ impl Element for TextElement {
                 let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                 let cursor_quad = if selected_range.is_empty() {
                     let control_height =
-                        crate::ui_scale::design_px_from_window(CONTROL_HEIGHT_PX, window);
+                        crate::ui_scale::design_px_from_window(SINGLE_LINE_INPUT_HEIGHT_PX, window);
                     let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
                     let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
                     let caret_inset_y = px(3.0);
                     let caret_h = if !input.multiline && !input.chromeless {
                         // Cap caret to fit within the fixed-height container
-                        // (CONTROL_HEIGHT_PX minus 2px border minus insets).
+                        // (SINGLE_LINE_INPUT_HEIGHT_PX minus 2px border minus insets).
                         (control_height - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
                     } else {
                         (line_height - caret_inset_y * 2.0).max(px(2.0))

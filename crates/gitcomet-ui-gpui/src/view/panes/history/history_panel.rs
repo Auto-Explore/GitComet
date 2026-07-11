@@ -27,6 +27,7 @@ impl HistoryView {
         let theme = self.theme;
         let scrollbar_gutter = super::history_scrollbar_gutter();
         self.ensure_history_cache(cx);
+        self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
         let repo = self.active_repo();
@@ -151,11 +152,16 @@ impl HistoryView {
                 }
             }))
             .child(
-                div().w_full().bg(bg).child(
-                    div()
-                        .pr(scrollbar_gutter)
-                        .child(self.history_column_headers(cx)),
-                ),
+                div()
+                    .w_full()
+                    .bg(bg)
+                    .border_b_1()
+                    .border_color(theme.colors.border_variant)
+                    .child(
+                        div()
+                            .pr(scrollbar_gutter)
+                            .child(self.history_column_headers(cx)),
+                    ),
             )
             .child(
                 div()
@@ -426,7 +432,7 @@ impl HistoryView {
             .items_center()
             .px_2()
             .text_xs()
-            .font_weight(FontWeight::BOLD)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.colors.text_muted)
             .child(
                 div()
@@ -454,6 +460,9 @@ impl HistoryView {
                                     .h(scaled_px(18.0))
                                     .line_height(scaled_px(18.0))
                                     .rounded(px(theme.radii.row))
+                                    .bg(theme.colors.surface_bg_elevated)
+                                    .border_1()
+                                    .border_color(theme.colors.border_variant)
                                     .when(scope_active, |d| d.bg(theme.colors.active))
                                     .hover(move |s| {
                                         if scope_active {
@@ -521,15 +530,12 @@ impl HistoryView {
                     ),
             )
             .when(show_graph, |header| {
+                // The graph column explains itself; a header label only adds noise.
                 header.child(
                     div()
                         .w(self.history_col_graph)
-                        .flex()
-                        .justify_center()
                         .px(cell_pad)
-                        .whitespace_nowrap()
-                        .overflow_hidden()
-                        .child("GRAPH"),
+                        .overflow_hidden(),
                 )
             })
             .child(
@@ -546,7 +552,7 @@ impl HistoryView {
                             .min_w(px(0.0))
                             .line_clamp(1)
                             .whitespace_nowrap()
-                            .child("COMMIT MESSAGE"),
+                            .child("MESSAGE"),
                     ),
             )
             .when(show_author, |header| {
@@ -555,8 +561,10 @@ impl HistoryView {
                         .w(col_author)
                         .flex()
                         .items_center()
-                        .justify_end()
-                        .px(cell_pad)
+                        // Clear the column resize handle straddling the left
+                        // boundary so the label never sits under it.
+                        .pl(handle_half + cell_pad)
+                        .pr(cell_pad)
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .child("AUTHOR"),
@@ -573,8 +581,7 @@ impl HistoryView {
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .child("Commit date"),
+                    .child("DATE"),
             );
         }
 
@@ -588,7 +595,6 @@ impl HistoryView {
                     .px(cell_pad)
                     .whitespace_nowrap()
                     .overflow_hidden()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
                     .child("SHA"),
             );
         }

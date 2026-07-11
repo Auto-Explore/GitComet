@@ -1,3 +1,4 @@
+mod avatar;
 mod button;
 mod commit_sha_hover_menu;
 mod containers;
@@ -5,13 +6,15 @@ mod context_menu;
 mod diff_stat;
 mod picker_prompt;
 mod split_button;
-mod switch;
 mod tab;
 mod tab_bar;
 mod toast;
 mod tokens;
 mod truncated_text;
 
+pub use avatar::{
+    AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
+};
 pub use button::{Button, ButtonStyle};
 pub use commit_sha_hover_menu::{CommitShaHoverMenu, CommitShaLink};
 pub use containers::{empty_state, split_columns_header};
@@ -24,7 +27,6 @@ pub use context_menu::{
 pub use diff_stat::diff_stat;
 pub use picker_prompt::{PickerPrompt, PickerPromptItem, PickerPromptItemPart};
 pub use split_button::{SplitButton, SplitButtonStyle};
-pub use switch::switch;
 pub use tab::Tab;
 pub use tab_bar::TabBar;
 pub use toast::{ToastKind, toast};

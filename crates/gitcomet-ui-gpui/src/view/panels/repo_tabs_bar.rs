@@ -496,9 +496,8 @@ impl Render for RepoTabsBarView {
             .flex_none()
             .h_full()
             .flex()
-            .items_end()
+            .items_center()
             .px(scaled_px(2.0))
-            .pb(scaled_px(3.0))
             .child(
                 components::Button::new("add_repo_menu", "")
                     .start_slot(svg_icon(
