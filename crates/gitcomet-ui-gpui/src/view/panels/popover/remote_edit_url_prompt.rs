@@ -12,8 +12,7 @@ pub(super) fn panel(
         RemoteUrlKind::Fetch => "fetch",
         RemoteUrlKind::Push => "push",
     };
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
@@ -51,14 +50,14 @@ pub(super) fn panel(
                         "edit_remote_url_cancel_hint",
                         theme,
                     )
-                    .focus_handle(this.remote_edit_cancel_focus_handle.clone())
+                    .focus_handle(this.remote_edit_focus.cancel.clone())
                     .on_click(theme, cx, |this, _e, window, cx| {
                         this.dismiss_prompt_popover(window, cx);
                     }),
                 )
                 .child(
                     components::Button::new("edit_remote_url_go", "Save")
-                        .focus_handle(this.remote_edit_submit_focus_handle.clone())
+                        .focus_handle(this.remote_edit_focus.submit.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "edit_remote_url_go_hint",

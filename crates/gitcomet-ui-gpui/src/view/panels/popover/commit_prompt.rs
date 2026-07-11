@@ -7,8 +7,7 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let can_commit = this.can_submit_commit_prompt(cx);
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
@@ -36,14 +35,14 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     cancel_button("commit_prompt_cancel", "commit_prompt_cancel_hint", theme)
-                        .focus_handle(this.commit_prompt_cancel_focus_handle.clone())
+                        .focus_handle(this.commit_prompt_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("commit_prompt_submit", "Commit")
-                        .focus_handle(this.commit_prompt_submit_focus_handle.clone())
+                        .focus_handle(this.commit_prompt_focus.submit.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "commit_prompt_submit_hint",

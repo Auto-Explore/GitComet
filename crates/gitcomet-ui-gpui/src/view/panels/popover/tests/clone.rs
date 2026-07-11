@@ -225,7 +225,7 @@ fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestA
         assert_window_focus(
             window,
             app,
-            host.clone_repo_cancel_focus_handle.clone(),
+            host.clone_repo_focus.cancel.clone(),
             "expected Tab to move from Browse to Cancel",
         );
     });
@@ -237,7 +237,7 @@ fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestA
         assert_window_focus(
             window,
             app,
-            host.clone_repo_submit_focus_handle.clone(),
+            host.clone_repo_focus.submit.clone(),
             "expected Tab to move from Cancel to Clone",
         );
     });
@@ -261,7 +261,7 @@ fn clone_repo_popover_tabs_between_inputs_buttons_and_wraps(cx: &mut gpui::TestA
         assert_window_focus(
             window,
             app,
-            host.clone_repo_submit_focus_handle.clone(),
+            host.clone_repo_focus.submit.clone(),
             "expected Shift-Tab to wrap from URL back to Clone",
         );
     });

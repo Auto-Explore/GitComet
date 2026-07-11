@@ -6,8 +6,7 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
@@ -43,14 +42,14 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     cancel_button("add_remote_cancel", "add_remote_cancel_hint", theme)
-                        .focus_handle(this.remote_add_cancel_focus_handle.clone())
+                        .focus_handle(this.remote_add_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("add_remote_go", "Add")
-                        .focus_handle(this.remote_add_submit_focus_handle.clone())
+                        .focus_handle(this.remote_add_focus.submit.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "add_remote_go_hint",

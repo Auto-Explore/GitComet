@@ -9,8 +9,7 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let upstream = format!("{remote}/{branch}");
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
@@ -49,14 +48,14 @@ pub(super) fn panel(
                         "checkout_remote_branch_cancel_hint",
                         theme,
                     )
-                    .focus_handle(this.checkout_remote_branch_cancel_focus_handle.clone())
+                    .focus_handle(this.checkout_remote_branch_focus.cancel.clone())
                     .on_click(theme, cx, |this, _e, window, cx| {
                         this.dismiss_prompt_popover(window, cx);
                     }),
                 )
                 .child(
                     components::Button::new("checkout_remote_branch_go", "Checkout")
-                        .focus_handle(this.checkout_remote_branch_submit_focus_handle.clone())
+                        .focus_handle(this.checkout_remote_branch_focus.submit.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "checkout_remote_branch_go_hint",

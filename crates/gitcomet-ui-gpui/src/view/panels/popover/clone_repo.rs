@@ -3,8 +3,7 @@ use super::*;
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let can_clone = this.can_submit_clone_repo(cx);
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
@@ -83,14 +82,14 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .justify_between()
                 .child(
                     cancel_button("clone_repo_cancel", "clone_repo_cancel_hint", theme)
-                        .focus_handle(this.clone_repo_cancel_focus_handle.clone())
+                        .focus_handle(this.clone_repo_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("clone_repo_go", "Clone")
-                        .focus_handle(this.clone_repo_submit_focus_handle.clone())
+                        .focus_handle(this.clone_repo_focus.submit.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "clone_repo_go_hint",

@@ -181,14 +181,14 @@ pub(super) fn panel(
                         "create_branch_from_ref_cancel_hint",
                         theme,
                     )
-                    .focus_handle(this.create_branch_from_ref_cancel_focus_handle.clone())
+                    .focus_handle(this.create_branch_from_ref_focus.cancel.clone())
                     .on_click(theme, cx, |this, _e, window, cx| {
                         this.dismiss_prompt_popover(window, cx);
                     }),
                 )
                 .child(
                     components::Button::new("create_branch_from_ref_go", "Create")
-                        .focus_handle(this.create_branch_from_ref_submit_focus_handle.clone())
+                        .focus_handle(this.create_branch_from_ref_focus.submit.clone())
                         .separated_end_slot(hotkey_hint(
                             theme,
                             "create_branch_from_ref_go_hint",

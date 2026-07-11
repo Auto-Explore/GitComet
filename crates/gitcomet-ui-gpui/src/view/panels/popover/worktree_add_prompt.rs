@@ -147,14 +147,14 @@ pub(super) fn panel(
                 .justify_between()
                 .child(
                     cancel_button("worktree_add_cancel", "worktree_add_cancel_hint", theme)
-                        .focus_handle(this.worktree_cancel_focus_handle.clone())
+                        .focus_handle(this.worktree_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("worktree_add_go", "Add")
-                        .focus_handle(this.worktree_submit_focus_handle.clone())
+                        .focus_handle(this.worktree_focus.submit.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "worktree_add_go_hint",

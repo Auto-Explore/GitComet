@@ -481,7 +481,7 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
         assert_window_focus(
             window,
             app,
-            host.create_branch_from_ref_cancel_focus_handle.clone(),
+            host.create_branch_from_ref_focus.cancel.clone(),
             "expected Tab to move from Checkout to Cancel",
         );
     });
@@ -493,7 +493,7 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
         assert_window_focus(
             window,
             app,
-            host.create_branch_from_ref_submit_focus_handle.clone(),
+            host.create_branch_from_ref_focus.submit.clone(),
             "expected Tab to move from Cancel to Create",
         );
     });
@@ -517,7 +517,7 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
         assert_window_focus(
             window,
             app,
-            host.create_branch_from_ref_submit_focus_handle.clone(),
+            host.create_branch_from_ref_focus.submit.clone(),
             "expected Shift-Tab to wrap from the name input back to Create",
         );
     });
