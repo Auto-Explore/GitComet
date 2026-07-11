@@ -416,7 +416,7 @@ struct GitignoreMatcher {
 
 impl GitignoreMatcher {
     fn load(workdir: &Path) -> Option<Self> {
-        let repo = gix::open(workdir).ok()?;
+        let repo = crate::store::open_worktree_repo(workdir).ok()?;
         let worktree = repo.worktree()?;
         let index = worktree.index().ok()?;
         let excludes = repo

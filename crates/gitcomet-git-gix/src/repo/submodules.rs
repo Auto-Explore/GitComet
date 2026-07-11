@@ -1209,7 +1209,7 @@ fn cleanup_failed_submodule_add_error(
 }
 
 fn failed_submodule_add_left_clone_only_state(workdir: &Path, path: &Path) -> Result<bool> {
-    let repo = gix::open(workdir).map_err(|e| {
+    let repo = crate::open::open_worktree_repo(workdir).map_err(|e| {
         Error::new(ErrorKind::Backend(format!(
             "open repo after failed submodule add {}: {e}",
             workdir.display()
@@ -1484,7 +1484,7 @@ fn open_gitlink_repo(
     };
     let path = workdir.join(relative_path);
 
-    match gix::open(&path) {
+    match crate::open::open_worktree_repo(&path) {
         Ok(repo) => Ok(Some(repo)),
         Err(gix::open::Error::NotARepository { .. }) => Ok(None),
         Err(gix::open::Error::Io(io)) if io.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -1505,6 +1505,10 @@ fn open_configured_submodule_repo(
     if !(state.repository_exists && state.worktree_checkout) {
         return Ok(None);
     }
+    // gix's own `Submodule::open` opens the submodule's git directory directly
+    // (`modules/<name>`, following the worktree `.git` pointer) and sets the
+    // workdir by hand, so it already handles submodule worktrees whose directory
+    // ends in `.git` — no `git_dir_for_workdir` shim is needed here.
     submodule
         .open()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix submodule open: {e}"))))

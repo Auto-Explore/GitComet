@@ -2924,6 +2924,183 @@ fn merge_start_prefills_default_commit_message(cx: &mut gpui::TestAppContext) {
     });
 }
 
+fn state_with_recent_commit_message(
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &str,
+    recent: gitcomet_state::model::Loadable<Arc<Vec<gitcomet_core::domain::RecentCommitMessage>>>,
+) -> Arc<AppState> {
+    let mut repo = opening_repo_state(repo_id, Path::new(workdir));
+    repo.recent_commit_messages_rev = u64::from(!matches!(
+        recent,
+        gitcomet_state::model::Loadable::NotLoaded
+    ));
+    repo.recent_commit_messages = recent;
+    app_state_with_repo(repo, repo_id)
+}
+
+fn recent_messages(
+    messages: &[&str],
+) -> gitcomet_state::model::Loadable<Arc<Vec<gitcomet_core::domain::RecentCommitMessage>>> {
+    gitcomet_state::model::Loadable::Ready(Arc::new(
+        messages
+            .iter()
+            .enumerate()
+            .map(|(ix, message)| gitcomet_core::domain::RecentCommitMessage {
+                id: gitcomet_core::domain::CommitId(format!("commit{ix}").into()),
+                summary: (*message).into(),
+                message: (*message).to_string(),
+            })
+            .collect(),
+    ))
+}
+
+#[gpui::test]
+fn amend_prefills_commit_message_from_previous_commit_when_empty(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(50);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(
+                this,
+                state_with_recent_commit_message(
+                    repo_id,
+                    "/tmp/repo-amend-prefill",
+                    recent_messages(&["previous subject\n\nbody"]),
+                ),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_commit_amend_enabled(true, cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            pane.read(app).commit_message_input.read(app).text(),
+            "previous subject\n\nbody"
+        );
+    });
+}
+
+#[gpui::test]
+fn amend_does_not_overwrite_existing_commit_message(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(51);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(
+                this,
+                state_with_recent_commit_message(
+                    repo_id,
+                    "/tmp/repo-amend-no-overwrite",
+                    recent_messages(&["previous subject"]),
+                ),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.commit_message_input.update(cx, |input, cx| {
+                    input.set_text("draft message".to_string(), cx)
+                });
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_commit_amend_enabled(true, cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            pane.read(app).commit_message_input.read(app).text(),
+            "draft message"
+        );
+    });
+}
+
+#[gpui::test]
+fn amend_prefills_commit_message_once_recent_messages_load(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(52);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(
+                this,
+                state_with_recent_commit_message(
+                    repo_id,
+                    "/tmp/repo-amend-deferred",
+                    gitcomet_state::model::Loadable::NotLoaded,
+                ),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.set_commit_amend_enabled(true, cx);
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        assert_eq!(pane.read(app).commit_message_input.read(app).text(), "");
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(
+                this,
+                state_with_recent_commit_message(
+                    repo_id,
+                    "/tmp/repo-amend-deferred",
+                    recent_messages(&["deferred subject"]),
+                ),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.clone();
+        assert_eq!(
+            pane.read(app).commit_message_input.read(app).text(),
+            "deferred subject"
+        );
+    });
+}
+
 #[gpui::test]
 fn commit_message_focus_after_initial_draw_accepts_typed_input(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
