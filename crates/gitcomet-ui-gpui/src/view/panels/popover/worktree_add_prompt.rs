@@ -175,9 +175,7 @@ pub(super) fn panel(
                                 path: std::path::PathBuf::from(folder),
                                 reference,
                             });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 ),
         )

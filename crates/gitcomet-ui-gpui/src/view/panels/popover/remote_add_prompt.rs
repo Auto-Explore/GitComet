@@ -68,9 +68,7 @@ pub(super) fn panel(
                                 return;
                             }
                             this.store.dispatch(Msg::AddRemote { repo_id, name, url });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 ),
         )

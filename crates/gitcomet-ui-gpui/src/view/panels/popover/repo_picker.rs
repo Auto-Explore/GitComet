@@ -63,9 +63,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .render(theme, ui_scale_percent, cx)
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     this.store.dispatch(Msg::SetActiveRepo { repo_id: id });
-                    this.popover = None;
-                    this.popover_anchor = None;
-                    cx.notify();
+                    this.close_popover(cx);
                 })),
             );
         }

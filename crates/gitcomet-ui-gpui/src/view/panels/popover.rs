@@ -414,14 +414,159 @@ pub(super) fn hotkey_hint(
 /// Shared Cancel button for confirm dialogs and prompt popovers: consistent
 /// label, outlined style, and "Esc" hint. Attach the dismiss handler with
 /// `.on_click(...)` at the call site.
+pub(super) fn cancel_button_labeled(
+    id: &'static str,
+    hint_debug_selector: &'static str,
+    label: impl Into<SharedString>,
+    theme: AppTheme,
+) -> components::Button {
+    components::Button::new(id, label)
+        .separated_end_slot(hotkey_hint(theme, hint_debug_selector, "Esc"))
+        .style(components::ButtonStyle::Outlined)
+}
+
 pub(super) fn cancel_button(
     id: &'static str,
     hint_debug_selector: &'static str,
     theme: AppTheme,
 ) -> components::Button {
-    components::Button::new(id, "Cancel")
-        .separated_end_slot(hotkey_hint(theme, hint_debug_selector, "Esc"))
-        .style(components::ButtonStyle::Outlined)
+    cancel_button_labeled(id, hint_debug_selector, "Cancel", theme)
+}
+
+/// Cancel button whose click simply closes the popover.
+pub(super) fn dialog_cancel_button(
+    id: &'static str,
+    hint_debug_selector: &'static str,
+    theme: AppTheme,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
+    cancel_button(id, hint_debug_selector, theme).on_click(theme, cx, |this, _e, _w, cx| {
+        this.close_popover(cx);
+    })
+}
+
+pub(super) fn dialog_divider(theme: AppTheme) -> gpui::Div {
+    div().border_t_1().border_color(theme.colors.border)
+}
+
+/// Shared scaffolding for confirm-style dialogs: title, divider, body
+/// sections, divider, then a footer with a cancel button on the left and the
+/// action button(s) on the right. Width comes from the same `PopoverWidthSpec`
+/// constants used by `popover_width_spec`, so the two can't drift apart.
+pub(super) struct ConfirmDialog {
+    title: SharedString,
+    width: PopoverWidthSpec,
+    sections: Vec<AnyElement>,
+}
+
+impl ConfirmDialog {
+    pub(super) fn new(title: impl Into<SharedString>, width: PopoverWidthSpec) -> Self {
+        Self {
+            title: title.into(),
+            width,
+            sections: Vec::new(),
+        }
+    }
+
+    /// Muted body paragraph.
+    pub(super) fn text(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .py_1()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child(text.into())
+                .into_any_element(),
+        );
+        self
+    }
+
+    /// Smaller muted footnote.
+    pub(super) fn note(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .pb_1()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(text.into())
+                .into_any_element(),
+        );
+        self
+    }
+
+    /// Monospace value line (branch name, path, stash ref…).
+    pub(super) fn mono_value(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .py_1()
+                .text_sm()
+                .child(
+                    div()
+                        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                        .text_color(theme.colors.text_muted)
+                        .child(text.into()),
+                )
+                .into_any_element(),
+        );
+        self
+    }
+
+    /// Monospace git command preview.
+    pub(super) fn command(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .pb_1()
+                .text_xs()
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_color(theme.colors.text_muted)
+                .child(text.into())
+                .into_any_element(),
+        );
+        self
+    }
+
+    pub(super) fn divider(mut self, theme: AppTheme) -> Self {
+        self.sections.push(dialog_divider(theme).into_any_element());
+        self
+    }
+
+    /// Escape hatch for dialog-specific body content.
+    pub(super) fn section(mut self, section: impl IntoElement) -> Self {
+        self.sections.push(section.into_any_element());
+        self
+    }
+
+    pub(super) fn render(
+        self,
+        theme: AppTheme,
+        cancel: impl IntoElement,
+        actions: impl IntoElement,
+        cx: &mut gpui::Context<PopoverHost>,
+    ) -> gpui::Div {
+        let ui_scale = popover_ui_scale(cx);
+        div()
+            .flex()
+            .flex_col()
+            .min_w(self.width.preferred_px(ui_scale))
+            .child(popover_title(self.title))
+            .child(dialog_divider(theme))
+            .children(self.sections)
+            .child(dialog_divider(theme))
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(cancel)
+                    .child(actions),
+            )
+    }
 }
 
 pub(super) fn popover_title(title: impl Into<SharedString>) -> gpui::Div {

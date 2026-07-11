@@ -14,80 +14,45 @@ pub(super) fn panel(
     } else {
         "Remove worktree".into()
     };
-    let description: Option<SharedString> = branch.as_ref().map(|branch| {
-        format!("This will remove the worktree folder and delete the local branch '{branch}'.")
-            .into()
-    });
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
-    div()
-        .flex()
-        .flex_col()
-        .min_w(scaled_px(420.0))
-        .child(popover_title(header))
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.text_muted)
-                .child(path.display().to_string()),
-        )
-        .when_some(description, |this, description| {
-            this.child(div().border_t_1().border_color(theme.colors.border))
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_sm()
-                        .text_color(theme.colors.text_muted)
-                        .child(description),
-                )
-        })
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    cancel_button(
-                        "worktree_remove_cancel",
-                        "worktree_remove_cancel_hint",
-                        theme,
-                    )
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        this.popover = None;
-                        this.popover_anchor = None;
-                        cx.notify();
-                    }),
-                )
-                .child(
-                    components::Button::new("worktree_remove_go", "Remove")
-                        .style(components::ButtonStyle::Danger)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            if let Some(branch) = remove_branch.clone() {
-                                let root_view = this.root_view.clone();
-                                let _ = root_view.update(cx, |root, _cx| {
-                                    root.register_pending_worktree_branch_removal(
-                                        repo_id,
-                                        path.clone(),
-                                        branch,
-                                    );
-                                });
-                            }
-                            this.store.dispatch(Msg::RemoveWorktree {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
-                ),
-        )
+    let mut dialog = ConfirmDialog::new(header, DIALOG_420_WIDTH)
+        .text(theme, path.display().to_string());
+    if let Some(branch) = branch.as_ref() {
+        dialog = dialog.divider(theme).text(
+            theme,
+            format!(
+                "This will remove the worktree folder and delete the local branch '{branch}'."
+            ),
+        );
+    }
+
+    dialog.render(
+        theme,
+        dialog_cancel_button(
+            "worktree_remove_cancel",
+            "worktree_remove_cancel_hint",
+            theme,
+            cx,
+        ),
+        components::Button::new("worktree_remove_go", "Remove")
+            .style(components::ButtonStyle::Danger)
+            .on_click(theme, cx, move |this, _e, _w, cx| {
+                if let Some(branch) = remove_branch.clone() {
+                    let root_view = this.root_view.clone();
+                    let _ = root_view.update(cx, |root, _cx| {
+                        root.register_pending_worktree_branch_removal(
+                            repo_id,
+                            path.clone(),
+                            branch,
+                        );
+                    });
+                }
+                this.store.dispatch(Msg::RemoveWorktree {
+                    repo_id,
+                    path: path.clone(),
+                });
+                this.close_popover(cx);
+            }),
+        cx,
+    )
 }

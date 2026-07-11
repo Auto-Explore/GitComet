@@ -45,16 +45,9 @@ pub(super) fn panel(
     };
     let sources = prompt.sources.clone();
     let operation = prompt.operation.clone();
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
-    div()
-        .flex()
-        .flex_col()
-        .w(scaled_px(640.0))
-        .child(popover_title(title))
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
+    let mut dialog = ConfirmDialog::new(title, DIALOG_640_WIDTH)
+        .section(
             div()
                 .px_2()
                 .pt_1()
@@ -62,15 +55,9 @@ pub(super) fn panel(
                 .text_color(theme.colors.text_muted)
                 .child("Git blocks local file transport for submodules by default. Trusting these sources will allow GitComet to enable file transport only for this repo/source pair."),
         )
-        .child(
-            div()
-                .px_2()
-                .pb_1()
-                .child(
-                    components::Button::new(
-                        "submodule_trust_cve_link",
-                        "Read about CVE-2022-39253",
-                    )
+        .section(
+            div().px_2().pb_1().child(
+                components::Button::new("submodule_trust_cve_link", "Read about CVE-2022-39253")
                     .style(components::ButtonStyle::Filled)
                     .borderless()
                     .no_hover_border()
@@ -78,9 +65,11 @@ pub(super) fn panel(
                     .on_click(theme, cx, |_this, _e, _window, cx| {
                         cx.open_url(SUBMODULE_TRUST_CVE_URL);
                     }),
-                ),
-        )
-        .children(sources.into_iter().map(|source| {
+            ),
+        );
+
+    for source in sources {
+        dialog = dialog.section(
             div()
                 .px_2()
                 .pb_1()
@@ -91,10 +80,7 @@ pub(super) fn panel(
                     div()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
-                        .child(format!(
-                            "Submodule: {}",
-                            source.submodule_path.display()
-                        )),
+                        .child(format!("Submodule: {}", source.submodule_path.display())),
                 )
                 .child(
                     div()
@@ -111,123 +97,115 @@ pub(super) fn panel(
                             "Local path: {}",
                             source.local_source_path.display()
                         )),
-                )
-        }))
-        .when(add_branch.is_some() || add_name.is_some() || add_force, |panel| {
-            panel.child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .flex()
-                    .flex_col()
-                    .gap_0p5()
-                    .when_some(add_branch.clone(), |details, branch| {
-                        details.child(
-                            div()
-                                .text_xs()
-                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                                .text_color(theme.colors.text_muted)
-                                .child(format!("Branch: {branch}")),
-                        )
-                    })
-                    .when_some(add_name.clone(), |details, name| {
-                        details.child(
-                            div()
-                                .text_xs()
-                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                                .text_color(theme.colors.text_muted)
-                                .child(format!("Logical name: {name}")),
-                        )
-                    })
-                    .when(add_force, |details| {
-                        details.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child("Force: enabled"),
-                        )
-                    }),
-            )
-        })
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
+                ),
+        );
+    }
+
+    if add_branch.is_some() || add_name.is_some() || add_force {
+        dialog = dialog.section(
             div()
                 .px_2()
-                .py_1()
+                .pb_1()
                 .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    components::Button::new("submodule_trust_cancel", cancel_label)
-                        .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, move |this, _e, window, cx| {
-                            this.store.dispatch(Msg::CancelSubmoduleTrustPrompt);
-                            match operation.clone() {
-                                SubmoduleTrustPromptOperation::Add {
-                                    url,
-                                    path,
-                                    branch,
-                                    name,
-                                    force,
-                                } => {
-                                    let theme = this.theme;
-                                    let restored_branch = branch.unwrap_or_default();
-                                    let restored_branch_for_input = restored_branch.clone();
-                                    let restored_name = name.unwrap_or_default();
-                                    let restored_name_for_input = restored_name.clone();
-                                    this.submodule_url_input.update(cx, |input, cx| {
-                                        input.set_theme(theme, cx);
-                                        input.set_text(&url, cx);
-                                        cx.notify();
-                                    });
-                                    this.submodule_path_input.update(cx, |input, cx| {
-                                        input.set_theme(theme, cx);
-                                        input.set_text(path.display().to_string(), cx);
-                                        cx.notify();
-                                    });
-                                    this.submodule_branch_input.update(cx, move |input, cx| {
-                                        input.set_theme(theme, cx);
-                                        input.set_text(&restored_branch_for_input, cx);
-                                        cx.notify();
-                                    });
-                                    this.submodule_name_input.update(cx, move |input, cx| {
-                                        input.set_theme(theme, cx);
-                                        input.set_text(&restored_name_for_input, cx);
-                                        cx.notify();
-                                    });
-                                    this.submodule_add_advanced_expanded =
-                                        !restored_name.is_empty() || force;
-                                    this.submodule_force_enabled = force;
-                                    this.popover = Some(PopoverKind::submodule(
-                                        repo_id,
-                                        SubmodulePopoverKind::AddPrompt,
-                                    ));
-                                    let focus = this
-                                        .submodule_url_input
-                                        .read_with(cx, |input, _| input.focus_handle());
-                                    window.focus(&focus, cx);
-                                }
-                                SubmoduleTrustPromptOperation::Update => {
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                }
-                                SubmoduleTrustPromptOperation::Load { .. } => {
-                                    this.popover = None;
-                                    this.popover_anchor = None;
-                                }
-                            }
-                            cx.notify();
-                        }),
-                )
-                .child(
-                    components::Button::new("submodule_trust_confirm", confirm_label)
-                        .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            this.store.dispatch(Msg::ConfirmSubmoduleTrustPrompt);
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
-                ),
+                .flex_col()
+                .gap_0p5()
+                .when_some(add_branch.clone(), |details, branch| {
+                    details.child(
+                        div()
+                            .text_xs()
+                            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                            .text_color(theme.colors.text_muted)
+                            .child(format!("Branch: {branch}")),
+                    )
+                })
+                .when_some(add_name.clone(), |details, name| {
+                    details.child(
+                        div()
+                            .text_xs()
+                            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                            .text_color(theme.colors.text_muted)
+                            .child(format!("Logical name: {name}")),
+                    )
+                })
+                .when(add_force, |details| {
+                    details.child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child("Force: enabled"),
+                    )
+                }),
+        );
+    }
+
+    dialog.render(
+        theme,
+        cancel_button_labeled(
+            "submodule_trust_cancel",
+            "submodule_trust_cancel_hint",
+            cancel_label,
+            theme,
         )
+        .on_click(theme, cx, move |this, _e, window, cx| {
+            this.store.dispatch(Msg::CancelSubmoduleTrustPrompt);
+            match operation.clone() {
+                SubmoduleTrustPromptOperation::Add {
+                    url,
+                    path,
+                    branch,
+                    name,
+                    force,
+                } => {
+                    let theme = this.theme;
+                    let restored_branch = branch.unwrap_or_default();
+                    let restored_branch_for_input = restored_branch.clone();
+                    let restored_name = name.unwrap_or_default();
+                    let restored_name_for_input = restored_name.clone();
+                    this.submodule_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(&url, cx);
+                        cx.notify();
+                    });
+                    this.submodule_path_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(path.display().to_string(), cx);
+                        cx.notify();
+                    });
+                    this.submodule_branch_input.update(cx, move |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(&restored_branch_for_input, cx);
+                        cx.notify();
+                    });
+                    this.submodule_name_input.update(cx, move |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(&restored_name_for_input, cx);
+                        cx.notify();
+                    });
+                    this.submodule_add_advanced_expanded =
+                        !restored_name.is_empty() || force;
+                    this.submodule_force_enabled = force;
+                    this.popover = Some(PopoverKind::submodule(
+                        repo_id,
+                        SubmodulePopoverKind::AddPrompt,
+                    ));
+                    let focus = this
+                        .submodule_url_input
+                        .read_with(cx, |input, _| input.focus_handle());
+                    window.focus(&focus, cx);
+                    cx.notify();
+                }
+                SubmoduleTrustPromptOperation::Update
+                | SubmoduleTrustPromptOperation::Load { .. } => {
+                    this.close_popover(cx);
+                }
+            }
+        }),
+        components::Button::new("submodule_trust_confirm", confirm_label)
+            .style(components::ButtonStyle::Filled)
+            .on_click(theme, cx, |this, _e, _window, cx| {
+                this.store.dispatch(Msg::ConfirmSubmoduleTrustPrompt);
+                this.close_popover(cx);
+            }),
+        cx,
+    )
 }

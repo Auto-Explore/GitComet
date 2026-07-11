@@ -63,9 +63,7 @@ pub(super) fn panel(
                                 remote: remote_for_action.clone(),
                                 branch,
                             });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 ),
         )

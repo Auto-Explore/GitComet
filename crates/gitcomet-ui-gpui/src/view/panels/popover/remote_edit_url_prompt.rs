@@ -78,9 +78,7 @@ pub(super) fn panel(
                                 url,
                                 kind,
                             });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 ),
         )

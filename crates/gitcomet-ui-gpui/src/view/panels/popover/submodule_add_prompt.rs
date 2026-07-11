@@ -196,9 +196,7 @@ pub(super) fn panel(
                                 name,
                                 force,
                             });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                            this.close_popover(cx);
                         }),
                 ),
         )
