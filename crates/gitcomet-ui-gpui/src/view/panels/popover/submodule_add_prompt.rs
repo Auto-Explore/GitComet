@@ -63,6 +63,7 @@ pub(super) fn panel(
     let theme = this.theme;
     let advanced_expanded = this.submodule_add_advanced_expanded;
     let force_enabled = this.submodule_force_enabled;
+    let can_submit = this.can_submit_submodule_add(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
@@ -162,6 +163,7 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("submodule_add_go", "Add")
                         .focus_handle(this.submodule_focus.submit.clone())
+                        .disabled(!can_submit)
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "submodule_add_go_hint",

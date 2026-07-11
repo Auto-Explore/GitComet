@@ -9,6 +9,7 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let upstream = format!("{remote}/{branch}");
+    let can_submit = this.can_submit_checkout_remote_branch(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
@@ -56,6 +57,7 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("checkout_remote_branch_go", "Checkout")
                         .focus_handle(this.checkout_remote_branch_focus.submit.clone())
+                        .disabled(!can_submit)
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "checkout_remote_branch_go_hint",

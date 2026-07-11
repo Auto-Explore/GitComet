@@ -225,8 +225,8 @@ impl Render for ActionBarView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
-        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
+        let hover_bg = theme.hover_overlay();
+        let active_bg = theme.active_overlay();
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));

@@ -7,6 +7,7 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let can_submit = this.can_submit_push_set_upstream(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
@@ -48,6 +49,7 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("push_upstream_go", "Push")
                         .focus_handle(this.push_upstream_focus.submit.clone())
+                        .disabled(!can_submit)
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "push_upstream_go_hint",

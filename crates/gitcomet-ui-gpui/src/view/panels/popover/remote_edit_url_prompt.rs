@@ -12,6 +12,7 @@ pub(super) fn panel(
         RemoteUrlKind::Fetch => "fetch",
         RemoteUrlKind::Push => "push",
     };
+    let can_submit = this.can_submit_remote_edit_url(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
@@ -58,6 +59,7 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("edit_remote_url_go", "Save")
                         .focus_handle(this.remote_edit_focus.submit.clone())
+                        .disabled(!can_submit)
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "edit_remote_url_go_hint",

@@ -2237,6 +2237,14 @@ impl PopoverHost {
         self.dismiss_inline_popover(window, cx);
     }
 
+    pub(super) fn can_submit_remote_add(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.remote_name_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+            && self
+                .remote_url_input
+                .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
     pub(super) fn submit_remote_add(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::Repo {
             repo_id,
@@ -2245,22 +2253,22 @@ impl PopoverHost {
         else {
             return;
         };
+        if !self.can_submit_remote_add(cx) {
+            return;
+        }
         let name = self
             .remote_name_input
             .read_with(cx, |i, _| i.text().trim().to_string());
         let url = self
             .remote_url_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        if name.is_empty() || url.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Remote: name and URL are required".to_string(),
-                cx,
-            );
-            return;
-        }
         self.store.dispatch(Msg::AddRemote { repo_id, name, url });
         self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_remote_edit_url(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.remote_url_edit_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
     }
 
     pub(super) fn submit_remote_edit_url(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2271,17 +2279,12 @@ impl PopoverHost {
         else {
             return;
         };
+        if !self.can_submit_remote_edit_url(cx) {
+            return;
+        }
         let url = self
             .remote_url_edit_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        if url.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Remote URL cannot be empty".to_string(),
-                cx,
-            );
-            return;
-        }
         self.store.dispatch(Msg::SetRemoteUrl {
             repo_id,
             name,
@@ -2291,23 +2294,33 @@ impl PopoverHost {
         self.close_popover(cx);
     }
 
+    pub(super) fn can_submit_push_set_upstream(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.push_upstream_branch_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
     pub(super) fn submit_push_set_upstream(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::PushSetUpstreamPrompt { repo_id, remote }) = self.popover.clone()
         else {
             return;
         };
+        if !self.can_submit_push_set_upstream(cx) {
+            return;
+        }
         let branch = self
             .push_upstream_branch_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        if branch.is_empty() {
-            return;
-        }
         self.store.dispatch(Msg::PushSetUpstream {
             repo_id,
             remote,
             branch,
         });
         self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_checkout_remote_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.create_branch_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
     }
 
     pub(super) fn submit_checkout_remote_branch(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2319,17 +2332,12 @@ impl PopoverHost {
         else {
             return;
         };
+        if !self.can_submit_checkout_remote_branch(cx) {
+            return;
+        }
         let local_branch = self
             .create_branch_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        if local_branch.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Branch name cannot be empty".to_string(),
-                cx,
-            );
-            return;
-        }
 
         let local_branch_exists = self
             .state
@@ -2365,6 +2373,11 @@ impl PopoverHost {
         self.close_popover(cx);
     }
 
+    pub(super) fn can_submit_worktree_add(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.worktree_path_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
     pub(super) fn submit_worktree_add(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::Repo {
             repo_id,
@@ -2373,17 +2386,12 @@ impl PopoverHost {
         else {
             return;
         };
+        if !self.can_submit_worktree_add(cx) {
+            return;
+        }
         let folder = self
             .worktree_path_input
             .read_with(cx, |i, _| i.text().trim().to_string());
-        if folder.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Worktree folder is required".to_string(),
-                cx,
-            );
-            return;
-        }
         let reference = self.worktree_ref_source_target.trim().to_string();
         let reference = (!reference.is_empty()).then_some(reference);
         self.store.dispatch(Msg::AddWorktree {
@@ -2394,6 +2402,14 @@ impl PopoverHost {
         self.close_popover(cx);
     }
 
+    pub(super) fn can_submit_submodule_add(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.submodule_url_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+            && self
+                .submodule_path_input
+                .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
     pub(super) fn submit_submodule_add(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(PopoverKind::Repo {
             repo_id,
@@ -2402,6 +2418,9 @@ impl PopoverHost {
         else {
             return;
         };
+        if !self.can_submit_submodule_add(cx) {
+            return;
+        }
         let url = self
             .submodule_url_input
             .read_with(cx, |i, _| i.text().trim().to_string());
@@ -2417,14 +2436,6 @@ impl PopoverHost {
             if text.is_empty() { None } else { Some(text) }
         });
         let force = self.submodule_force_enabled;
-        if url.is_empty() || path_text.is_empty() {
-            self.push_toast(
-                components::ToastKind::Error,
-                "Submodule URL and path are required".to_string(),
-                cx,
-            );
-            return;
-        }
         self.store.dispatch(Msg::AddSubmodule {
             repo_id,
             url,

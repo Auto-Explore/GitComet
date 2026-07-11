@@ -6,6 +6,7 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let can_submit = this.can_submit_remote_add(cx);
     let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
@@ -50,6 +51,7 @@ pub(super) fn panel(
                 .child(
                     components::Button::new("add_remote_go", "Add")
                         .focus_handle(this.remote_add_focus.submit.clone())
+                        .disabled(!can_submit)
                         .separated_end_slot(super::hotkey_hint(
                             theme,
                             "add_remote_go_hint",

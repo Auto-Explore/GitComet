@@ -369,9 +369,9 @@ impl Render for TitleBarView {
         let app_menu_open_active_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.48 } else { 0.38 });
         let app_menu_hover_bg =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
+            theme.titlebar_hover_overlay();
         let app_menu_active_bg =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
+            theme.titlebar_active_overlay();
         let bar_bg = if window.is_window_active() {
             lighten(
                 theme.colors.surface_bg,
