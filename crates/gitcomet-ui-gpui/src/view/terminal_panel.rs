@@ -2638,18 +2638,20 @@ fn terminal_tab_default_title() -> String {
 /// collapse to the program stem ("pwsh"); anything else is a deliberate
 /// application-set title and passes through untouched.
 fn friendly_terminal_title(title: String) -> String {
-    let looks_like_exe_path = (title.contains('\\') || title.contains('/'))
-        && std::path::Path::new(&title)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"));
-    if !looks_like_exe_path {
+    let Some(program) = title
+        .contains(['\\', '/'])
+        .then(|| title.rsplit(['\\', '/']).next())
+        .flatten()
+    else {
+        return title;
+    };
+    let Some((stem, extension)) = program.rsplit_once('.') else {
+        return title;
+    };
+    if stem.is_empty() || !extension.eq_ignore_ascii_case("exe") {
         return title;
     }
-    std::path::Path::new(&title)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(ToOwned::to_owned)
-        .unwrap_or(title)
+    stem.to_owned()
 }
 
 fn terminal_repo_name(workdir: &std::path::Path) -> String {

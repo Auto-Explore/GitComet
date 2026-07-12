@@ -470,10 +470,10 @@ mod tests {
     #[test]
     fn contiguous_matches_rank_above_gapped_ones() {
         let (push_score, _) = fuzzy_subsequence_match("Push", "push").expect("match");
-        let (pop_stash_score, _) = fuzzy_subsequence_match("Pop Stash", "push").expect("match");
+        let (pull_stash_score, _) = fuzzy_subsequence_match("Pull Stash", "push").expect("match");
         assert!(
-            push_score < pop_stash_score,
-            "exact word must outrank scattered letters ({push_score} vs {pop_stash_score})"
+            push_score < pull_stash_score,
+            "exact word must outrank scattered letters ({push_score} vs {pull_stash_score})"
         );
     }
 
