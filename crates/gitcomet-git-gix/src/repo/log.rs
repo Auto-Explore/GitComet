@@ -1367,10 +1367,11 @@ impl GixRepo {
             ),
             Err(_) => (String::new(), String::new(), 0),
         };
-        let committed_at = commit
+        let commit_time = commit
             .time()
-            .map(|time| time.format_or_unix(gix::date::time::format::ISO8601_STRICT))
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit time {spec}: {e}"))))?;
+        let committed_at = commit_time.format_or_unix(gix::date::time::format::ISO8601_STRICT);
+        let committed_at_unix = commit_time.seconds;
         let parent_oids = commit
             .parent_ids()
             .map(|parent| parent.detach())
@@ -1388,6 +1389,7 @@ impl GixRepo {
             author_email,
             authored_at_unix,
             committed_at,
+            committed_at_unix,
             parent_ids,
             files,
         })

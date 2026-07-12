@@ -345,6 +345,7 @@ pub(crate) fn build_repo_switch_repo_state(
             author_email: String::new(),
             authored_at_unix: 0,
             committed_at: "2023-11-14 22:13".to_string(),
+            committed_at_unix: 0,
             parent_ids: selected_commit.parent_ids.to_vec(),
             files: (0..48)
                 .map(|ix| CommitFileChange {
@@ -827,6 +828,7 @@ pub(crate) fn build_synthetic_commit_details_with_message(
         author_email: String::new(),
         authored_at_unix: 0,
         committed_at: "2024-01-01T00:00:00Z".to_string(),
+        committed_at_unix: 0,
         parent_ids: vec![CommitId("c".repeat(40).into())],
         files: out,
     }
@@ -885,6 +887,7 @@ pub(crate) fn build_synthetic_commit_details_unique_paths(
         author_email: String::new(),
         authored_at_unix: 0,
         committed_at: "2024-01-01T00:00:00Z".to_string(),
+        committed_at_unix: 0,
         parent_ids: vec![CommitId("d".repeat(40).into())],
         files: out,
     }

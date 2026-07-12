@@ -4545,6 +4545,7 @@ mod tests {
                 author_email: String::new(),
                 authored_at_unix: 0,
                 committed_at: "2026-05-26 12:00:00 +0300".into(),
+                committed_at_unix: 0,
                 parent_ids: vec![],
                 files: vec![],
             }));

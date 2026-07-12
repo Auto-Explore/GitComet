@@ -2310,7 +2310,7 @@ fn diff_row(
             ))
             .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
                 let (a, r) = file_stat.unwrap_or_default();
-                this.child(components::diff_stat(theme, a, r))
+                this.child(components::diff_stat(theme, ui_scale_percent, a, r))
             })
             .on_click(on_click);
 
@@ -2555,7 +2555,7 @@ fn collapsed_inline_header_row(
                 ))
                 .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
                     let (a, r) = file_stat.unwrap_or_default();
-                    this.child(components::diff_stat(theme, a, r))
+                    this.child(components::diff_stat(theme, ui_scale_percent, a, r))
                 });
 
             div()
@@ -2911,7 +2911,7 @@ fn patch_split_header_row(
                 ))
                 .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
                     let (a, r) = file_stat.unwrap_or_default();
-                    this.child(components::diff_stat(theme, a, r))
+                    this.child(components::diff_stat(theme, ui_scale_percent, a, r))
                 })
                 .on_click(on_click);
 
@@ -3077,7 +3077,7 @@ fn collapsed_split_header_row(
                 ))
                 .when(file_stat.is_some_and(|(a, r)| a > 0 || r > 0), |this| {
                     let (a, r) = file_stat.unwrap_or_default();
-                    this.child(components::diff_stat(theme, a, r))
+                    this.child(components::diff_stat(theme, ui_scale_percent, a, r))
                 });
 
             div()

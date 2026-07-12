@@ -112,28 +112,16 @@ pub(in crate::view) fn window_top_left_corner(window: &Window) -> Point<Pixels> 
     }
 }
 
-pub(super) fn titlebar_control_icon(
-    path: &'static str,
-    color: gpui::Rgba,
-    ui_scale_percent: u32,
-) -> gpui::Svg {
-    svg_icon(
-        path,
-        color,
-        ui_scale::design_px_from_percent(16.0, ui_scale_percent),
-    )
-}
-
 pub(super) fn titlebar_control_button(
-    theme: AppTheme,
     ui_scale_percent: u32,
     id: &'static str,
-    icon: gpui::Svg,
-    hover_bg: gpui::Rgba,
-    active_bg: gpui::Rgba,
+    icon_path: &'static str,
+    idle_color: gpui::Rgba,
+    hover_color: gpui::Rgba,
 ) -> gpui::Div {
     let hitbox_width = ui_scale::design_px_from_percent(32.0, ui_scale_percent);
     let visual_size = ui_scale::design_px_from_percent(26.0, ui_scale_percent);
+    let icon_size = ui_scale::design_px_from_percent(16.0, ui_scale_percent);
 
     div()
         .h_full()
@@ -145,22 +133,29 @@ pub(super) fn titlebar_control_button(
         .child(
             div()
                 .id(id)
+                .group(id)
                 .h_full()
                 .w_full()
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(theme.radii.pill))
-                .hover(move |s| s.bg(hover_bg))
-                .active(move |s| s.bg(active_bg))
                 .child(
                     div()
                         .size(visual_size)
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(theme.radii.pill))
-                        .child(icon),
+                        .child(
+                            // Hovering anywhere in the hitbox recolors the
+                            // glyph itself — deliberately no background plate.
+                            gpui::svg()
+                                .path(icon_path)
+                                .w(icon_size)
+                                .h(icon_size)
+                                .flex_shrink_0()
+                                .text_color(idle_color)
+                                .group_hover(id, move |s| s.text_color(hover_color)),
+                        ),
                 ),
         )
 }
@@ -486,20 +481,13 @@ impl Render for TitleBarView {
                 }
             }));
 
-        let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
-        let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let min_tooltip: SharedString = "Minimize window".into();
         let min = titlebar_control_button(
-            theme,
             ui_scale_percent,
             "win_min_btn",
-            titlebar_control_icon(
-                "icons/generic_minimize.svg",
-                theme.colors.text_muted,
-                ui_scale_percent,
-            ),
-            min_hover,
-            min_active,
+            "icons/generic_minimize.svg",
+            theme.colors.text_muted,
+            theme.colors.text,
         )
         .id("win_min")
         .debug_selector(|| "titlebar_win_min".to_string())
@@ -520,15 +508,12 @@ impl Render for TitleBarView {
         } else {
             "Maximize window".into()
         };
-        let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
-        let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let max = titlebar_control_button(
-            theme,
             ui_scale_percent,
             "win_max_btn",
-            titlebar_control_icon(max_icon, theme.colors.text_muted, ui_scale_percent),
-            max_hover,
-            max_active,
+            max_icon,
+            theme.colors.text_muted,
+            theme.colors.text,
         )
         .id("win_max")
         .debug_selector(|| "titlebar_win_max".to_string())
@@ -540,20 +525,13 @@ impl Render for TitleBarView {
             cx.notify();
         }));
 
-        let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
-        let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
         let close_tooltip: SharedString = "Close window".into();
         let close = titlebar_control_button(
-            theme,
             ui_scale_percent,
             "win_close_btn",
-            titlebar_control_icon(
-                "icons/generic_close.svg",
-                theme.colors.text_muted,
-                ui_scale_percent,
-            ),
-            close_hover,
-            close_active,
+            "icons/generic_close.svg",
+            theme.colors.text_muted,
+            theme.colors.danger,
         )
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
@@ -752,16 +730,11 @@ mod tests {
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
-                    theme,
                     ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_1",
-                    titlebar_control_icon(
-                        "icons/generic_minimize.svg",
-                        theme.colors.text_muted,
-                        ui_scale::DEFAULT_UI_SCALE_PERCENT,
-                    ),
-                    theme.colors.hover,
-                    theme.colors.active,
+                    "icons/generic_minimize.svg",
+                    theme.colors.text_muted,
+                    theme.colors.text,
                 );
             })
             .is_ok()
@@ -769,16 +742,11 @@ mod tests {
         assert!(
             std::panic::catch_unwind(|| {
                 let _ = titlebar_control_button(
-                    theme,
                     ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_2",
-                    titlebar_control_icon(
-                        "icons/generic_close.svg",
-                        theme.colors.text_muted,
-                        ui_scale::DEFAULT_UI_SCALE_PERCENT,
-                    ),
-                    with_alpha(theme.colors.danger, 0.25),
-                    with_alpha(theme.colors.danger, 0.35),
+                    "icons/generic_close.svg",
+                    theme.colors.text_muted,
+                    theme.colors.danger,
                 );
             })
             .is_ok()

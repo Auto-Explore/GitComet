@@ -3523,6 +3523,9 @@ pub struct GitCometView {
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
+    /// View mode stashed when enabling blame forced Split → Inline; restored
+    /// on toggle-off unless the user changed modes in the meantime.
+    pub(super) diff_view_mode_before_annotate: Option<DiffViewMode>,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,

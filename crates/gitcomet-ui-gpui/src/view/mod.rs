@@ -670,8 +670,8 @@ impl GitCometView {
                         let cmd_to_execute = this
                             .command_palette
                             .selected_index
-                            .and_then(|i| matches.get(i).copied())
-                            .or_else(|| matches.first().copied());
+                            .and_then(|i| matches.get(i))
+                            .or_else(|| matches.first());
                         if let Some(cmd) = cmd_to_execute {
                             let command_id: SharedString = cmd.id.into();
                             this.close_command_palette(window, cx);
@@ -784,44 +784,36 @@ impl GitCometView {
         list = restrict_scroll_to_vertical_axis(list);
         let selected_index = self.command_palette.selected_index;
 
-        let render_label = |label_str: &str| -> AnyElement {
+        let render_label = |label_str: &str, positions: &[usize]| -> AnyElement {
             let label = label_str.to_string();
-            let match_pos = if !query.is_empty() {
-                label_str
-                    .to_ascii_lowercase()
-                    .find(&query.to_ascii_lowercase())
-            } else {
-                None
+            let highlight = gpui::HighlightStyle {
+                color: Some(theme.colors.accent.into()),
+                font_weight: Some(FontWeight::BOLD),
+                ..gpui::HighlightStyle::default()
             };
-            if let Some(pos) = match_pos {
-                let end = pos + query.len();
-                let highlight = gpui::HighlightStyle {
-                    color: Some(theme.colors.accent.into()),
-                    font_weight: Some(FontWeight::BOLD),
-                    ..gpui::HighlightStyle::default()
-                };
-                components::TruncatedText::new(label)
-                    .profile(components::TextTruncationProfile::End)
-                    .text_color(theme.colors.text)
-                    .text_sm()
-                    .focus_range(Some(pos..end))
-                    .highlights([(pos..end, highlight)])
-                    .render(cx)
-                    .into_any_element()
-            } else {
-                let highlight = gpui::HighlightStyle {
-                    color: Some(theme.colors.accent.into()),
-                    font_weight: Some(FontWeight::BOLD),
-                    ..gpui::HighlightStyle::default()
-                };
-                components::TruncatedText::new(label)
-                    .profile(components::TextTruncationProfile::End)
-                    .text_color(theme.colors.text)
-                    .text_sm()
-                    .highlights([(0..0, highlight)])
-                    .render(cx)
-                    .into_any_element()
+            // Merge the fuzzy matcher's per-character hits into contiguous
+            // highlight ranges.
+            let mut ranges: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
+            for &pos in positions {
+                match ranges.last_mut() {
+                    Some((range, _)) if range.end == pos => range.end = pos + 1,
+                    _ => ranges.push((pos..pos + 1, highlight)),
+                }
             }
+            let focus_range = ranges.first().map(|(range, _)| range.clone());
+            let mut text = components::TruncatedText::new(label)
+                .profile(components::TextTruncationProfile::End)
+                .text_color(theme.colors.text)
+                .text_sm();
+            if let Some(focus_range) = focus_range {
+                text = text.focus_range(Some(focus_range));
+            }
+            if ranges.is_empty() {
+                text = text.highlights([(0..0, highlight)]);
+            } else {
+                text = text.highlights(ranges);
+            }
+            text.render(cx).into_any_element()
         };
 
         let mut current_category = None;
@@ -880,7 +872,7 @@ impl GitCometView {
                             .overflow_hidden()
                             .flex_1()
                             .min_w(px(0.0))
-                            .child(render_label(cmd.label)),
+                            .child(render_label(cmd.label, &cmd.positions)),
                     )
                     .child(
                         div()
@@ -904,7 +896,7 @@ impl GitCometView {
                             .flex_1()
                             .min_w(px(0.0))
                             .overflow_hidden()
-                            .child(render_label(cmd.label)),
+                            .child(render_label(cmd.label, &cmd.positions)),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -1775,6 +1767,9 @@ impl GitCometView {
                     untracked_height: restored_untracked_height,
                     ui_scale_percent: ui_scale.percent,
                     commit_push_after_enabled,
+                    date_time_format,
+                    timezone,
+                    show_timezone,
                     root_view: weak_view.clone(),
                     tooltip_host: tooltip_host.downgrade(),
                 },
@@ -2015,6 +2010,7 @@ impl GitCometView {
             diff_whitespace_mode,
             diff_view_mode,
             annotate_enabled,
+            diff_view_mode_before_annotate: None,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2334,6 +2330,11 @@ impl GitCometView {
             return;
         }
 
+        // An explicit mode change while blame is on overrides the automatic
+        // Split → Inline switch, so don't restore the stashed mode later.
+        if self.annotate_enabled {
+            self.diff_view_mode_before_annotate = None;
+        }
         self.diff_view_mode = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
@@ -2352,6 +2353,19 @@ impl GitCometView {
         self.annotate_enabled = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
+        // The blame gutter and split panes don't fit side by side at typical
+        // widths — run blame in the inline view and restore the previous mode
+        // when it's toggled off (unless the user changed modes meanwhile).
+        if next {
+            if self.diff_view_mode == DiffViewMode::Split {
+                self.set_diff_view_mode(DiffViewMode::Inline, cx);
+                self.diff_view_mode_before_annotate = Some(DiffViewMode::Split);
+            }
+        } else if let Some(previous) = self.diff_view_mode_before_annotate.take()
+            && self.diff_view_mode == DiffViewMode::Inline
+        {
+            self.set_diff_view_mode(previous, cx);
+        }
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -2841,19 +2855,21 @@ impl GitCometView {
         // regions inside the content card. The sidebar handle sits on the
         // bare canvas and stays invisible until hovered or dragged.
         let idle_line = matches!(handle, PaneResizeHandle::Details);
+        let dragging = self.pane_resize.is_some_and(|state| state.handle == handle);
         div()
             .id(id)
+            .group(id)
             .w(self.pane_resize_handle_width())
             .h_full()
-            .flex()
-            .items_center()
-            .justify_center()
             .cursor(CursorStyle::ResizeLeftRight)
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
-            .active(move |s| s.bg(theme.colors.active))
-            .when(idle_line, |d| {
-                d.child(div().w(px(1.0)).h_full().bg(theme.colors.border_variant))
-            })
+            .child(components::resize_grip(
+                theme,
+                self.ui_scale_percent,
+                id,
+                components::ResizeGripAxis::Vertical,
+                dragging,
+                idle_line.then_some(theme.colors.border_variant),
+            ))
             .on_drag(handle, |_handle, _offset, _window, cx| {
                 cx.new(|_cx| PaneResizeDragGhost)
             })

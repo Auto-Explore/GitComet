@@ -17,6 +17,9 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
+    pub(in super::super) date_time_format: crate::view::date_time::DateTimeFormat,
+    pub(in super::super) timezone: crate::view::date_time::Timezone,
+    pub(in super::super) show_timezone: bool,
     _ui_model_subscription: gpui::Subscription,
     _commit_message_input_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
@@ -80,6 +83,9 @@ pub(in super::super) struct DetailsPaneInit {
     pub(in super::super) untracked_height: Option<u32>,
     pub(in super::super) ui_scale_percent: u32,
     pub(in super::super) commit_push_after_enabled: bool,
+    pub(in super::super) date_time_format: crate::view::date_time::DateTimeFormat,
+    pub(in super::super) timezone: crate::view::date_time::Timezone,
+    pub(in super::super) show_timezone: bool,
     pub(in super::super) root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
 }
@@ -214,6 +220,9 @@ impl DetailsPaneView {
             untracked_height,
             ui_scale_percent,
             commit_push_after_enabled,
+            date_time_format,
+            timezone,
+            show_timezone,
             root_view,
             tooltip_host,
         } = init;
@@ -361,6 +370,9 @@ impl DetailsPaneView {
             theme,
             change_tracking_view,
             ui_scale_percent,
+            date_time_format,
+            timezone,
+            show_timezone,
             _ui_model_subscription: subscription,
             _commit_message_input_subscription: commit_message_subscription,
             root_view,
@@ -444,6 +456,46 @@ impl DetailsPaneView {
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
         ui_scale::UiScale::from_percent(self.ui_scale_percent)
+    }
+
+    pub(in super::super) fn set_date_settings(
+        &mut self,
+        format: crate::view::date_time::DateTimeFormat,
+        timezone: crate::view::date_time::Timezone,
+        show_timezone: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.date_time_format == format
+            && self.timezone == timezone
+            && self.show_timezone == show_timezone
+        {
+            return;
+        }
+        self.date_time_format = format;
+        self.timezone = timezone;
+        self.show_timezone = show_timezone;
+        cx.notify();
+    }
+
+    /// Commit date for the details pane: the committer timestamp rendered per
+    /// the user's date preferences, falling back to the backend-provided
+    /// string when no timestamp is available.
+    pub(in super::super) fn commit_details_date_display(
+        &self,
+        details: &gitcomet_core::domain::CommitDetails,
+    ) -> String {
+        if details.committed_at_unix == 0 {
+            return details.committed_at.clone();
+        }
+        let mut buf = String::with_capacity(24);
+        crate::view::date_time::format_datetime_into(
+            &mut buf,
+            crate::view::date_time::system_time_from_unix(details.committed_at_unix),
+            self.date_time_format,
+            self.timezone,
+            self.show_timezone,
+        );
+        buf
     }
 
     fn change_tracking_height_design(&self) -> Option<f32> {

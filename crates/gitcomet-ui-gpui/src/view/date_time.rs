@@ -47,7 +47,9 @@ impl DateTimeFormat {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) enum Timezone {
+    /// The device's timezone, resolved per timestamp (DST-correct via jiff).
     #[default]
+    SystemLocal,
     Utc,
     /// Fixed offset from UTC in seconds (positive = east of UTC).
     Fixed(i32),
@@ -57,6 +59,7 @@ impl Timezone {
     pub(super) fn all() -> &'static [Timezone] {
         use Timezone::*;
         &[
+            SystemLocal,
             Utc,
             Fixed(-12 * 3600),
             Fixed(-11 * 3600),
@@ -100,6 +103,7 @@ impl Timezone {
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Timezone::SystemLocal => "System local",
             Timezone::Utc => "UTC",
             Timezone::Fixed(s) => match s {
                 -43200 => "UTC\u{2212}12",
@@ -146,6 +150,7 @@ impl Timezone {
 
     pub(super) fn key(self) -> String {
         match self {
+            Timezone::SystemLocal => "system_local".to_string(),
             Timezone::Utc => "utc".to_string(),
             Timezone::Fixed(s) => format!("fixed_{s}"),
         }
@@ -153,6 +158,7 @@ impl Timezone {
 
     pub(super) fn from_key(s: &str) -> Option<Self> {
         match s {
+            "system_local" => Some(Timezone::SystemLocal),
             "utc" => Some(Timezone::Utc),
             _ => {
                 let suffix = s.strip_prefix("fixed_")?;
@@ -164,6 +170,7 @@ impl Timezone {
 
     pub(super) fn cities(self) -> &'static str {
         match self {
+            Timezone::SystemLocal => "This device's timezone",
             Timezone::Utc => "London, Reykjavik",
             Timezone::Fixed(s) => match s {
                 -43200 => "Baker Island",
@@ -208,8 +215,14 @@ impl Timezone {
         }
     }
 
-    pub(super) fn offset_seconds(self) -> i64 {
+    /// UTC offset in seconds for the given unix timestamp. `SystemLocal`
+    /// resolves the device timezone per timestamp, so historical commits keep
+    /// their correct DST offset.
+    pub(super) fn offset_seconds_at(self, unix_seconds: i64) -> i64 {
         match self {
+            Timezone::SystemLocal => jiff::Timestamp::from_second(unix_seconds)
+                .map(|ts| i64::from(jiff::tz::TimeZone::system().to_offset(ts).seconds()))
+                .unwrap_or(0),
             Timezone::Utc => 0,
             Timezone::Fixed(s) => s as i64,
         }
@@ -308,8 +321,9 @@ pub(super) fn format_datetime_into(
 
     buf.clear();
 
-    let offset = timezone.offset_seconds();
-    let secs = unix_seconds(time).saturating_add(offset);
+    let unix = unix_seconds(time);
+    let offset = timezone.offset_seconds_at(unix);
+    let secs = unix.saturating_add(offset);
     let days = floor_div(secs, 86_400);
     let sec_of_day = secs - days * 86_400;
     let sec_of_day: i64 = if sec_of_day < 0 {
@@ -387,7 +401,34 @@ pub(super) fn format_datetime_into(
     }
     if show_timezone {
         buf.push(' ');
-        buf.push_str(timezone.label());
+        match timezone {
+            // The static label ("System local") would hide the actual offset;
+            // print the offset that was applied instead.
+            Timezone::SystemLocal => push_utc_offset_label(buf, offset),
+            other => buf.push_str(other.label()),
+        }
+    }
+}
+
+/// Append "UTC", "UTC+3", "UTC−9:30", … matching the fixed-offset labels.
+fn push_utc_offset_label(buf: &mut String, offset_seconds: i64) {
+    use std::fmt::Write;
+
+    buf.push_str("UTC");
+    if offset_seconds == 0 {
+        return;
+    }
+    let (sign, magnitude) = if offset_seconds < 0 {
+        ('\u{2212}', -offset_seconds)
+    } else {
+        ('+', offset_seconds)
+    };
+    buf.push(sign);
+    let hours = magnitude / 3600;
+    let minutes = (magnitude % 3600) / 60;
+    let _ = write!(buf, "{hours}");
+    if minutes != 0 {
+        let _ = write!(buf, ":{minutes:02}");
     }
 }
 
@@ -395,6 +436,16 @@ pub(super) fn format_datetime_into(
 #[cfg(test)]
 pub(super) fn format_datetime_utc(time: std::time::SystemTime, format: DateTimeFormat) -> String {
     format_datetime(time, format, Timezone::Utc, true)
+}
+
+/// Convert unix seconds to a `SystemTime`, handling pre-epoch values.
+pub(super) fn system_time_from_unix(secs: i64) -> std::time::SystemTime {
+    use std::time::{Duration, UNIX_EPOCH};
+    if secs >= 0 {
+        UNIX_EPOCH + Duration::from_secs(secs as u64)
+    } else {
+        UNIX_EPOCH - Duration::from_secs(secs.unsigned_abs())
+    }
 }
 
 /// Format a unix timestamp (seconds) as a coarse relative duration such as
@@ -474,12 +525,34 @@ mod tests {
             let key = timezone.key();
             assert_eq!(Timezone::from_key(&key), Some(timezone));
             assert_eq!(
-                Timezone::from_key(&key).map(Timezone::offset_seconds),
-                Some(timezone.offset_seconds())
+                Timezone::from_key(&key).map(|tz| tz.offset_seconds_at(0)),
+                Some(timezone.offset_seconds_at(0))
             );
         }
 
         assert_eq!(Timezone::from_key("fixed_not_a_number"), None);
+    }
+
+    #[test]
+    fn system_local_is_the_default_and_formats_a_resolved_offset_suffix() {
+        assert_eq!(Timezone::default(), Timezone::SystemLocal);
+
+        // The concrete offset depends on the machine; the suffix must be the
+        // resolved "UTC±X" form, never the static "System local" label.
+        let formatted = format_datetime(
+            UNIX_EPOCH,
+            DateTimeFormat::YmdHm,
+            Timezone::SystemLocal,
+            true,
+        );
+        let suffix = formatted
+            .split_once(" UTC")
+            .map(|(_, rest)| rest)
+            .expect("expected a UTC-offset suffix");
+        assert!(
+            suffix.is_empty() || suffix.starts_with('+') || suffix.starts_with('\u{2212}'),
+            "unexpected suffix in {formatted:?}"
+        );
     }
 
     #[test]

@@ -5,7 +5,6 @@ use std::sync::OnceLock;
 
 const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/splash_backdrop.png"));
-const PANE_TOGGLE_EDGE_INSET_PX: f32 = 3.0;
 /// Gap (on the 8px grid) around the inset content/details cards so they read as
 /// rounded surfaces floating on the shared window canvas, with the sidebar
 /// blended into that canvas.
@@ -889,9 +888,6 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
-        let ui_scale_percent = self.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
@@ -930,40 +926,7 @@ impl GitCometView {
                                 .bg(theme.colors.sidebar_bg)
                                 .when(!self.sidebar_collapsed, |d| {
                                     d.child(self.sidebar_pane.clone())
-                                })
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .bottom(px(6.0))
-                                        .right(px(PANE_TOGGLE_EDGE_INSET_PX))
-                                        .child(
-                                            components::Button::new("sidebar_toggle", "")
-                                                .start_slot(svg_icon(
-                                                    if self.sidebar_collapsed {
-                                                        "icons/arrow_right.svg"
-                                                    } else {
-                                                        "icons/arrow_left.svg"
-                                                    },
-                                                    theme.colors.text_muted,
-                                                    scaled_px(12.0),
-                                                ))
-                                                .style(components::ButtonStyle::Transparent)
-                                                .on_click(theme, cx, |this, _e, _w, cx| {
-                                                    this.set_sidebar_collapsed(
-                                                        !this.sidebar_collapsed,
-                                                        cx,
-                                                    );
-                                                })
-                                                .gitcomet_tooltip(
-                                                    theme,
-                                                    if self.sidebar_collapsed {
-                                                        "Show sidebar".into()
-                                                    } else {
-                                                        "Hide sidebar".into()
-                                                    },
-                                                ),
-                                        ),
-                                ),
+                                }),
                         )
                         .child(
                             // Main + details share one card silhouette; the panes stay
@@ -976,7 +939,9 @@ impl GitCometView {
                                 .min_h(px(0.0))
                                 .flex()
                                 .flex_row()
-                                .mb(px(CONTENT_CARD_GAP_PX / 2.0))
+                                // Kept minimal so the bottom bar's icons (pane
+                                // toggles + zoom) read as one row hugging the card.
+                                .mb(px(2.0))
                                 .mr(px(CONTENT_CARD_GAP_PX))
                                 .relative()
                                 .rounded(px(theme.radii.panel))
@@ -1030,40 +995,7 @@ impl GitCometView {
                                                     .min_h(px(0.0))
                                                     .child(self.details_pane.clone()),
                                             )
-                                        })
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .bottom(px(6.0))
-                                                .left(px(PANE_TOGGLE_EDGE_INSET_PX))
-                                                .child(
-                                                    components::Button::new("details_toggle", "")
-                                                        .start_slot(svg_icon(
-                                                            if self.details_collapsed {
-                                                                "icons/arrow_left.svg"
-                                                            } else {
-                                                                "icons/arrow_right.svg"
-                                                            },
-                                                            theme.colors.text_muted,
-                                                            scaled_px(12.0),
-                                                        ))
-                                                        .style(components::ButtonStyle::Transparent)
-                                                        .on_click(theme, cx, |this, _e, _w, cx| {
-                                                            this.set_details_collapsed(
-                                                                !this.details_collapsed,
-                                                                cx,
-                                                            );
-                                                        })
-                                                        .gitcomet_tooltip(
-                                                            theme,
-                                                            if self.details_collapsed {
-                                                                "Show details panel".into()
-                                                            } else {
-                                                                "Hide details panel".into()
-                                                            },
-                                                        ),
-                                                ),
-                                        ),
+                                        }),
                                 )
                                 .child(card_corner_caps(
                                     px((theme.radii.panel - 1.0).max(0.0)),

@@ -15,6 +15,25 @@ pub(super) struct TooltipDismissEpoch(u64);
 
 impl gpui::Global for TooltipDismissEpoch {}
 
+/// True while a popover / context menu is open. The overlay's anchor stays
+/// hovered after the opening click, so its tooltip would re-show painted on
+/// top of the open surface; bubbles render empty while this is set.
+#[derive(Default)]
+pub(super) struct TooltipOverlaySuppression(bool);
+
+impl gpui::Global for TooltipOverlaySuppression {}
+
+pub(super) fn set_tooltips_suppressed_by_overlay(open: bool, cx: &mut App) {
+    if tooltips_suppressed_by_overlay(cx) != open {
+        cx.set_global(TooltipOverlaySuppression(open));
+    }
+}
+
+fn tooltips_suppressed_by_overlay(cx: &App) -> bool {
+    cx.try_global::<TooltipOverlaySuppression>()
+        .is_some_and(|state| state.0)
+}
+
 pub(super) fn current_tooltip_dismiss_epoch(cx: &App) -> u64 {
     cx.try_global::<TooltipDismissEpoch>()
         .map(|epoch| epoch.0)
@@ -34,11 +53,14 @@ pub(super) trait GitCometTooltipExt: gpui::StatefulInteractiveElement + Sized {
             let epoch = current_tooltip_dismiss_epoch(cx);
             AnyView::from(cx.new(|cx| {
                 let epoch_observer = cx.observe_global::<TooltipDismissEpoch>(|_, cx| cx.notify());
+                let overlay_observer =
+                    cx.observe_global::<TooltipOverlaySuppression>(|_, cx| cx.notify());
                 TooltipBubbleView {
                     theme,
                     text: text.clone(),
                     epoch,
                     _epoch_observer: epoch_observer,
+                    _overlay_observer: overlay_observer,
                 }
             }))
         })
@@ -54,11 +76,15 @@ struct TooltipBubbleView {
     /// while this bubble was up, so it must disappear.
     epoch: u64,
     _epoch_observer: gpui::Subscription,
+    _overlay_observer: gpui::Subscription,
 }
 
 impl Render for TooltipBubbleView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         if current_tooltip_dismiss_epoch(cx) != self.epoch {
+            return div();
+        }
+        if tooltips_suppressed_by_overlay(cx) {
             return div();
         }
 

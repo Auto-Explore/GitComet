@@ -1763,6 +1763,7 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
         author_email: String::new(),
         authored_at_unix: 0,
         committed_at: "2026-04-14 12:00:00 +0300".into(),
+        committed_at_unix: 0,
         parent_ids: vec![],
         files: files.clone(),
     }));
@@ -1848,6 +1849,7 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
         author_email: String::new(),
         authored_at_unix: 0,
         committed_at: "2026-04-14 12:00:00 +0300".into(),
+        committed_at_unix: 0,
         parent_ids: vec![],
         files: files.clone(),
     }));

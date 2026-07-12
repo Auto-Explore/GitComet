@@ -112,6 +112,10 @@ pub struct CommitDetails {
     /// Author timestamp in unix seconds; 0 when unavailable.
     pub authored_at_unix: i64,
     pub committed_at: String,
+    /// Committer timestamp in unix seconds; 0 when unavailable. Lets the UI
+    /// format the date per user preference instead of showing the raw
+    /// `committed_at` string.
+    pub committed_at_unix: i64,
     pub parent_ids: Vec<CommitId>,
     pub files: Vec<CommitFileChange>,
 }

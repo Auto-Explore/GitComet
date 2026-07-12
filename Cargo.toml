@@ -49,6 +49,8 @@ gix = { version = "0.85.0", default-features = false, features = ["max-performan
 gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "b7a78f8541c04528bb6c2db68174e3a128716dba" }
 gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "b7a78f8541c04528bb6c2db68174e3a128716dba", features = ["font-kit"] }
 image = "0.25.10"
+# Already in the tree via gix-date; used directly for system-timezone lookups.
+jiff = "0.2"
 libc = "0.2"
 lru = "0.18"
 memchr = "2.8.3"

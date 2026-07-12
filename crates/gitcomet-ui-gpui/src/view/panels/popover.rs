@@ -1239,6 +1239,7 @@ impl PopoverHost {
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         self.clear_truncated_tooltip(cx);
+        crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
@@ -1852,6 +1853,9 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         self.clear_truncated_tooltip(cx);
+        // The anchor stays hovered behind the opened surface; keep its
+        // tooltip from re-showing on top of the popover.
+        crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
@@ -2213,6 +2217,7 @@ impl PopoverHost {
         self.date_time_format = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
+        self.sync_details_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -2223,6 +2228,7 @@ impl PopoverHost {
         self.timezone = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_timezone(next, cx));
+        self.sync_details_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -2237,7 +2243,16 @@ impl PopoverHost {
         self.show_timezone = enabled;
         self.main_pane
             .update(cx, |pane, cx| pane.set_show_timezone(enabled, cx));
+        self.sync_details_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
+    }
+
+    fn sync_details_pane_date_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        let (format, timezone, show_timezone) =
+            (self.date_time_format, self.timezone, self.show_timezone);
+        self.details_pane.update(cx, |pane, cx| {
+            pane.set_date_settings(format, timezone, show_timezone, cx);
+        });
     }
 
     pub(in super::super) fn set_theme_mode(

@@ -1578,11 +1578,11 @@ fn collapsed_diff_split_header_shows_stats_without_file_header(cx: &mut gpui::Te
     });
     assert!(
         cx.debug_bounds("diff_split_header_removed_stat").is_some(),
-        "expected the removed counter to be rendered in the A (local / before) header"
+        "expected the removed counter to be rendered in the left (before) pane header"
     );
     assert!(
         cx.debug_bounds("diff_split_header_added_stat").is_some(),
-        "expected the added counter to be rendered in the B (remote / after) header"
+        "expected the added counter to be rendered in the right (after) pane header"
     );
 }
 

@@ -2284,6 +2284,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "image",
+ "jiff",
  "libc",
  "lru",
  "memchr",

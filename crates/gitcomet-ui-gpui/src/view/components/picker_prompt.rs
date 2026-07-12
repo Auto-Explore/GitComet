@@ -22,6 +22,7 @@ pub struct PickerPrompt {
     max_height: gpui::Pixels,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     selected_index: Option<usize>,
+    marked_index: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +54,7 @@ impl PickerPrompt {
             max_height: px(360.0),
             tooltip_host: None,
             selected_index: None,
+            marked_index: None,
         }
     }
 
@@ -82,6 +84,13 @@ impl PickerPrompt {
 
     pub fn selected_index(mut self, ix: Option<usize>) -> Self {
         self.selected_index = ix;
+        self
+    }
+
+    /// Item (by original index, pre-filter) rendered with a trailing check —
+    /// e.g. the currently checked-out branch in the branch picker.
+    pub fn marked_index(mut self, ix: Option<usize>) -> Self {
+        self.marked_index = ix;
         self
     }
 
@@ -157,6 +166,7 @@ impl PickerPrompt {
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
                 let is_selected = selected_index == Some(display_ix);
+                let is_marked = self.marked_index == Some(original_index);
                 let mut row = div()
                     .id(("picker_prompt_item", original_index))
                     .debug_selector(move || format!("picker_prompt_item_{original_index}"))
@@ -168,6 +178,15 @@ impl PickerPrompt {
                     .rounded(px(theme.radii.row))
                     .cursor(CursorStyle::PointingHand)
                     .child(label)
+                    .when(is_marked, |row| {
+                        row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
+                            crate::view::icons::svg_icon(
+                                "icons/check.svg",
+                                theme.colors.accent,
+                                scaled_px(12.0),
+                            ),
+                        ))
+                    })
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         (on_select)(this, original_index, event, window, cx);
                     }));

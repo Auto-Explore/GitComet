@@ -549,14 +549,15 @@ impl MainPaneView {
                                         .is_collapsed_diff_projection_active()
                                         .then(|| self.collapsed_diff_total_file_stat())
                                         .flatten();
+                                    let (left_label, right_label) = self.split_diff_pane_labels();
                                     let left_header = Self::split_column_header_label(
-                                        "A (local / before)",
+                                        left_label,
                                         collapsed_file_stat.map(|(_, removed)| removed),
                                         '-',
                                         theme.colors.diff_remove_text,
                                     );
                                     let right_header = Self::split_column_header_label(
-                                        "B (remote / after)",
+                                        right_label,
                                         collapsed_file_stat.map(|(added, _)| added),
                                         '+',
                                         theme.colors.diff_add_text,
@@ -568,25 +569,22 @@ impl MainPaneView {
                                             self.annotate_resize_handle(ui_scale_percent, theme, cx)
                                         });
 
+                                    let split_dragging = self.diff_split_resize.is_some();
                                     let resize_handle = |id: &'static str| {
                                         div()
                                             .id(id)
+                                            .group(id)
                                             .w(handle_w)
                                             .h_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
                                             .cursor(CursorStyle::ResizeLeftRight)
-                                            .hover(move |s| {
-                                                s.bg(with_alpha(theme.colors.hover, 0.65))
-                                            })
-                                            .active(move |s| s.bg(theme.colors.active))
-                                            .child(
-                                                div()
-                                                    .w(px(1.0))
-                                                    .h_full()
-                                                    .bg(theme.colors.border),
-                                            )
+                                            .child(components::resize_grip(
+                                                theme,
+                                                ui_scale_percent,
+                                                id,
+                                                components::ResizeGripAxis::Vertical,
+                                                split_dragging,
+                                                Some(theme.colors.border),
+                                            ))
                                             .on_drag(
                                                 DiffSplitResizeHandle::Divider,
                                                 |_handle, _offset, _window, cx| {

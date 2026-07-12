@@ -1728,7 +1728,7 @@ impl GitCometView {
                         match event {
                             TerminalBackendEvent::Title(title) => {
                                 if !title.is_empty() {
-                                    instance.title = title;
+                                    instance.title = friendly_terminal_title(title);
                                     cx.notify();
                                 }
                             }
@@ -2201,6 +2201,12 @@ impl GitCometView {
         let viewport_element = div()
             .flex_1()
             .min_h(px(0.0))
+            // Breathing room so the first/last column doesn't touch the panel
+            // edge; the viewport measures its own bounds, so the grid adapts.
+            .px(crate::ui_scale::design_px_from_percent(
+                6.0,
+                self.ui_scale_percent,
+            ))
             .key_context("Terminal")
             .on_mouse_down(
                 MouseButton::Right,
@@ -2528,10 +2534,18 @@ impl GitCometView {
     ) -> AnyElement {
         gpui::div()
             .id("terminal_panel_resize")
+            .group("terminal_panel_resize")
             .h(px(TERMINAL_PANEL_RESIZE_HANDLE_PX))
             .w_full()
             .cursor(CursorStyle::ResizeUpDown)
-            .bg(theme.colors.border_variant)
+            .child(components::resize_grip(
+                theme,
+                self.ui_scale_percent,
+                "terminal_panel_resize",
+                components::ResizeGripAxis::Horizontal,
+                self.terminal_panel_resize.is_some(),
+                Some(theme.colors.border_variant),
+            ))
             .on_drag(TerminalPanelResizeDrag, |_payload, _offset, _window, cx| {
                 cx.new(|_cx| super::mod_helpers::ResizeDragGhost)
             })
@@ -2617,6 +2631,25 @@ fn terminal_tab_default_title() -> String {
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "Terminal".to_string())
+}
+
+/// Console titles that are just the shell executable's path (conhost's
+/// default on Windows, e.g. `C:\Program Files\PowerShell\7\pwsh.exe`)
+/// collapse to the program stem ("pwsh"); anything else is a deliberate
+/// application-set title and passes through untouched.
+fn friendly_terminal_title(title: String) -> String {
+    let looks_like_exe_path = (title.contains('\\') || title.contains('/'))
+        && std::path::Path::new(&title)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"));
+    if !looks_like_exe_path {
+        return title;
+    }
+    std::path::Path::new(&title)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or(title)
 }
 
 fn terminal_repo_name(workdir: &std::path::Path) -> String {
@@ -3099,6 +3132,24 @@ fn terminal_clipboard_shortcut_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn friendly_terminal_title_collapses_shell_paths_to_the_program_stem() {
+        assert_eq!(
+            friendly_terminal_title("C:\\Program Files\\PowerShell\\7\\pwsh.exe".to_string()),
+            "pwsh"
+        );
+        assert_eq!(
+            friendly_terminal_title("C:/Windows/System32/cmd.EXE".to_string()),
+            "cmd"
+        );
+        // Application-set titles pass through, even when they contain paths.
+        assert_eq!(
+            friendly_terminal_title("PS C:\\Users\\sampo\\git\\GitComet".to_string()),
+            "PS C:\\Users\\sampo\\git\\GitComet"
+        );
+        assert_eq!(friendly_terminal_title("vim".to_string()), "vim");
+    }
 
     #[test]
     fn trim_terminal_copy_strips_trailing_whitespace_and_blank_lines() {

@@ -479,6 +479,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
         author_email: String::new(),
         authored_at_unix: 0,
         committed_at: "2026-04-07T12:00:00Z".to_string(),
+        committed_at_unix: 0,
         parent_ids: vec![],
         files: vec![CommitFileChange {
             path: PathBuf::from("report.json"),
@@ -1007,6 +1008,7 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
                 author_email: String::new(),
                 authored_at_unix: 0,
                 committed_at: "2026-04-07T12:00:00Z".to_string(),
+                committed_at_unix: 0,
                 parent_ids: vec![],
                 files: vec![CommitFileChange {
                     path: PathBuf::from("report.json"),

@@ -1,27 +1,30 @@
 use crate::theme::AppTheme;
+use crate::ui_scale::UiScale;
 use gpui::prelude::*;
-use gpui::{Div, div, px};
+use gpui::{Div, div};
 
-pub fn diff_stat(theme: AppTheme, added: usize, removed: usize) -> Div {
+/// Plain `+N` / `-N` counters. Each part right-aligns inside a fixed minimum
+/// width so consecutive rows line up into two tidy columns instead of a
+/// ragged ("waving") edge — the colored text carries the meaning without a
+/// chip background.
+pub fn diff_stat(theme: AppTheme, scale: impl Into<UiScale>, added: usize, removed: usize) -> Div {
+    let scale = scale.into();
+    // Fits "+9999"; wider stats simply grow and stay right-aligned.
+    let part_min_w = scale.px(30.0);
+    let part = |text: String, color: gpui::Rgba| {
+        div()
+            .min_w(part_min_w)
+            .flex()
+            .justify_end()
+            .text_xs()
+            .text_color(color)
+            .child(text)
+    };
     div()
         .flex()
         .items_center()
-        .gap_2()
-        .px_2()
-        .py(px(1.0))
-        .rounded(px(2.0))
-        .bg(theme.colors.surface_bg)
-        .border_1()
-        .border_color(theme.colors.border)
-        .text_xs()
-        .child(
-            div()
-                .text_color(theme.colors.diff_add_text)
-                .child(format!("+{added}")),
-        )
-        .child(
-            div()
-                .text_color(theme.colors.diff_remove_text)
-                .child(format!("-{removed}")),
-        )
+        .flex_none()
+        .gap_1()
+        .child(part(format!("+{added}"), theme.colors.diff_add_text))
+        .child(part(format!("-{removed}"), theme.colors.diff_remove_text))
 }

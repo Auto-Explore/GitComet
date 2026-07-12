@@ -2125,20 +2125,32 @@ impl SettingsWindowView {
             .child(
                 div()
                     .debug_selector(move || value_debug_id.clone())
-                    .min_w(px(0.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .justify_end()
-                    .overflow_hidden()
                     .child(
+                        // Toggle-switch visual; the whole row stays the click
+                        // target, so this carries no handlers of its own.
                         div()
-                            .text_sm()
-                            .text_color(if enabled {
-                                theme.colors.text
-                            } else {
-                                theme.colors.text_muted
+                            .w(px(28.0))
+                            .h(px(16.0))
+                            .rounded(px(theme.radii.pill))
+                            .flex()
+                            .items_center()
+                            .p(px(2.0))
+                            .when(enabled, |track| track.justify_end().bg(theme.colors.accent))
+                            .when(!enabled, |track| {
+                                track.justify_start().bg(with_alpha(
+                                    theme.colors.text_muted,
+                                    if theme.is_dark { 0.35 } else { 0.30 },
+                                ))
                             })
-                            .child(if enabled { "On" } else { "Off" }),
+                            .child(
+                                div()
+                                    .size(px(12.0))
+                                    .rounded(px(theme.radii.pill))
+                                    .bg(gpui::rgba(0xFFFFFFF2)),
+                            ),
                     ),
             )
     }
@@ -2257,12 +2269,11 @@ impl SettingsWindowView {
                             .overflow_hidden()
                             .child(value),
                     )
-                    .child(
-                        div()
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .flex_shrink_0()
-                            .child("->"),
-                    ),
+                    .child(svg_icon(
+                        "icons/open_external.svg",
+                        theme.colors.accent,
+                        px(13.0),
+                    )),
             )
     }
 
@@ -2906,19 +2917,12 @@ impl Render for SettingsWindowView {
                     .child(SETTINGS_WINDOW_TITLE),
             );
 
-        let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
-        let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let min = chrome::titlebar_control_button(
-            theme,
             self.ui_scale_percent,
             "settings_window_min_btn",
-            chrome::titlebar_control_icon(
-                "icons/generic_minimize.svg",
-                theme.colors.text_muted,
-                self.ui_scale_percent,
-            ),
-            min_hover,
-            min_active,
+            "icons/generic_minimize.svg",
+            theme.colors.text_muted,
+            theme.colors.text,
         )
         .id("settings_window_min")
         .debug_selector(|| "settings_window_min".to_string())
@@ -2933,15 +2937,12 @@ impl Render for SettingsWindowView {
         } else {
             "icons/generic_maximize.svg"
         };
-        let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
-        let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let max = chrome::titlebar_control_button(
-            theme,
             self.ui_scale_percent,
             "settings_window_max_btn",
-            chrome::titlebar_control_icon(max_icon, theme.colors.text_muted, self.ui_scale_percent),
-            max_hover,
-            max_active,
+            max_icon,
+            theme.colors.text_muted,
+            theme.colors.text,
         )
         .id("settings_window_max")
         .debug_selector(|| "settings_window_max".to_string())
@@ -2952,19 +2953,12 @@ impl Render for SettingsWindowView {
             cx.notify();
         }));
 
-        let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
-        let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
         let close = chrome::titlebar_control_button(
-            theme,
             self.ui_scale_percent,
             "settings_window_close_btn",
-            chrome::titlebar_control_icon(
-                "icons/generic_close.svg",
-                theme.colors.text_muted,
-                self.ui_scale_percent,
-            ),
-            close_hover,
-            close_active,
+            "icons/generic_close.svg",
+            theme.colors.text_muted,
+            theme.colors.danger,
         )
         .id("settings_window_close_btn")
         .debug_selector(|| "settings_window_close".to_string())
@@ -4521,7 +4515,7 @@ impl Render for SettingsWindowView {
                             self.link_row(
                                 "settings_window_links_theme_guide",
                                 "Theme guide",
-                                THEMES_GUIDE_URL.into(),
+                                "docs/themes.md".into(),
                                 theme,
                             )
                             .on_click(|_, _, cx| {
@@ -4532,7 +4526,7 @@ impl Render for SettingsWindowView {
                             self.link_row(
                                 "settings_window_github",
                                 "GitHub",
-                                GITHUB_URL.into(),
+                                "Auto-Explore/GitComet".into(),
                                 theme,
                             )
                             .on_click(|_, _, cx| {
@@ -4554,7 +4548,7 @@ impl Render for SettingsWindowView {
                             self.link_row(
                                 "settings_window_professional_edition_waitlist",
                                 "Professional Edition waitlist",
-                                EDITIONS_URL.into(),
+                                "gitcomet.dev".into(),
                                 theme,
                             )
                             .on_click(|_, _, cx| {
@@ -4892,13 +4886,24 @@ impl SettingsRuntimeInfo {
             git: git_runtime_info_from_state(runtime),
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
-                "{} ({}, {})",
-                std::env::consts::OS,
-                std::env::consts::FAMILY,
+                "{} ({})",
+                os_display_name(std::env::consts::OS),
                 std::env::consts::ARCH
             )
             .into(),
         }
+    }
+}
+
+/// Human-readable OS name for the Environment card ("windows" reads like a
+/// debug dump; "Windows" reads like a product).
+fn os_display_name(os: &str) -> &str {
+    match os {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "freebsd" => "FreeBSD",
+        other => other,
     }
 }
 

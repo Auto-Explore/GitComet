@@ -80,6 +80,7 @@ impl GitRepository for ReadyOpenRepo {
             author_email: String::new(),
             authored_at_unix: 0,
             committed_at: String::new(),
+            committed_at_unix: 0,
             parent_ids: Vec::new(),
             files: Vec::new(),
         })
@@ -326,6 +327,7 @@ impl GitRepository for BlockingDiffRepo {
             author_email: String::new(),
             authored_at_unix: 0,
             committed_at: String::new(),
+            committed_at_unix: 0,
             parent_ids: Vec::new(),
             files: Vec::new(),
         })

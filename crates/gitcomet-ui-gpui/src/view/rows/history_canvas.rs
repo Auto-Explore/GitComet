@@ -277,6 +277,12 @@ pub(super) fn history_commit_row_canvas(
             let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
             let scaled_px = |value| px(value * design_scale_factor);
             let base_style = window.text_style();
+            // Avatar initials are semibold, matching `components::author_avatar`.
+            let initials_style = {
+                let mut style = base_style.clone();
+                style.font_weight = gpui::FontWeight::SEMIBOLD;
+                style
+            };
             let sm_font = base_style.font_size.to_pixels(window.rem_size());
             let sm_line_height = base_style
                 .line_height
@@ -662,12 +668,12 @@ pub(super) fn history_commit_row_canvas(
                     let initials: SharedString =
                         components::author_initials(author.as_ref()).into();
                     let initials_font = scaled_px(components::AVATAR_FONT_PX);
-                    let initials_line_height = base_style
+                    let initials_line_height = initials_style
                         .line_height
                         .to_pixels(initials_font.into(), window.rem_size());
                     let initials_shaped = shape_truncated_line_cached(
                         window,
-                        &base_style,
+                        &initials_style,
                         initials_font,
                         &initials,
                         fx_hash_str(initials.as_ref()),
@@ -675,11 +681,22 @@ pub(super) fn history_commit_row_canvas(
                         identity_color,
                         None,
                     );
+                    let initials_cap_height = initials_shaped
+                        .runs
+                        .first()
+                        .map(|run| window.text_system().cap_height(run.font_id, initials_font))
+                        .unwrap_or(initials_font * 0.7);
                     let _ = initials_shaped.paint(
                         point(
                             avatar_left + (avatar_d - initials_shaped.width).max(px(0.0)) * 0.5,
-                            // Center the line box even when taller than the circle.
-                            avatar_top + (avatar_d - initials_line_height) * 0.5,
+                            components::initials_paint_origin_y(
+                                avatar_top,
+                                avatar_d,
+                                initials_line_height,
+                                initials_shaped.ascent,
+                                initials_shaped.descent,
+                                initials_cap_height,
+                            ),
                         ),
                         initials_line_height,
                         gpui::TextAlign::Left,

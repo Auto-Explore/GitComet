@@ -5,6 +5,7 @@ mod containers;
 mod context_menu;
 mod diff_stat;
 mod picker_prompt;
+mod resize_grip;
 mod split_button;
 mod tab;
 mod tab_bar;
@@ -14,10 +15,11 @@ mod truncated_text;
 
 pub use avatar::{
     AVATAR_DIAMETER_PX, AVATAR_FONT_PX, author_avatar, author_color, author_initials,
+    initials_paint_origin_y,
 };
 pub use button::{Button, ButtonStyle};
 pub use commit_sha_hover_menu::{CommitShaHoverMenu, CommitShaLink};
-pub use containers::{empty_state, split_columns_header};
+pub use containers::{empty_state, empty_state_message, split_columns_header};
 #[cfg(test)]
 pub use containers::{panel, pill};
 pub use context_menu::{
@@ -26,6 +28,7 @@ pub use context_menu::{
 };
 pub use diff_stat::diff_stat;
 pub use picker_prompt::{PickerPrompt, PickerPromptItem, PickerPromptItemPart};
+pub use resize_grip::{ResizeGripAxis, resize_grip};
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
 pub use tab_bar::TabBar;

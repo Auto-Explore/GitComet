@@ -1258,6 +1258,7 @@ fn committed_deleted_minified_utf8_json_preview_streams_from_indexed_source(
                     author_email: String::new(),
                     authored_at_unix: 0,
                     committed_at: "2026-04-07T12:00:00Z".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: file_rel.clone(),

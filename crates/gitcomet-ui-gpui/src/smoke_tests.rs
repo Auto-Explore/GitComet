@@ -59,12 +59,16 @@ fn builds_pure_components_without_panics() {
             let _ = components::empty_state(theme, "Title", "Message");
         });
 
+        assert_no_panic("components::empty_state_message", || {
+            let _ = components::empty_state_message(theme, "Message");
+        });
+
         assert_no_panic("components::panel", || {
             let _ = components::panel(theme, "Panel", None, div().child("body"));
         });
 
         assert_no_panic("components::diff_stat", || {
-            let _ = components::diff_stat(theme, 12, 4);
+            let _ = components::diff_stat(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, 12, 4);
         });
 
         assert_no_panic("components::toast", || {

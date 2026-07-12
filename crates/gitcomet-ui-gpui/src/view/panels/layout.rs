@@ -924,7 +924,7 @@ impl DetailsPaneView {
                             );
                             Self::sync_commit_details_input_value(
                                 &self.commit_details_date_input,
-                                details.committed_at.as_str(),
+                                self.commit_details_date_display(details).as_str(),
                                 cx,
                             );
                             self.sync_commit_details_parent_input(
@@ -1102,7 +1102,7 @@ impl DetailsPaneView {
                         );
                         Self::sync_commit_details_input_value(
                             &self.commit_details_date_input,
-                            details.committed_at.as_str(),
+                            self.commit_details_date_display(details).as_str(),
                             cx,
                         );
                         self.sync_commit_details_sha_menu(
@@ -1667,33 +1667,33 @@ impl DetailsPaneView {
         };
 
         let unstaged_body = if unstaged_loading {
-            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if unstaged_count == 0 {
-            components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
+            components::empty_state_message(theme, "No unstaged changes.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::CombinedUnstaged, unstaged_count)
         };
 
         let untracked_body = if untracked_loading {
-            components::empty_state(theme, "Untracked", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if untracked_count == 0 {
-            components::empty_state(theme, "Untracked", "No untracked files.").into_any_element()
+            components::empty_state_message(theme, "No untracked files.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Untracked, untracked_count)
         };
 
         let split_unstaged_body = if split_unstaged_loading {
-            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if split_unstaged_count == 0 {
-            components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
+            components::empty_state_message(theme, "No unstaged changes.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Unstaged, split_unstaged_count)
         };
 
         let staged_list = if staged_loading {
-            components::empty_state(theme, "Staged", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if staged_count == 0 {
-            components::empty_state(theme, "Staged", "No staged changes.").into_any_element()
+            components::empty_state_message(theme, "Nothing staged yet.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Staged, staged_count)
         };
@@ -1760,20 +1760,25 @@ impl DetailsPaneView {
             )
         };
 
+        let active_status_resize = self.status_section_resize;
         let build_status_resize_handle = |id: &'static str, handle: StatusSectionResizeHandle| {
+            let dragging = active_status_resize.is_some_and(|state| state.handle == handle);
             div()
                 .id(id)
                 .debug_selector(move || id.to_string())
+                .group(id)
                 .w_full()
                 .h(resize_handle_h)
                 .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
                 .cursor(CursorStyle::ResizeUpDown)
-                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
-                .active(move |s| s.bg(theme.colors.active))
-                .child(div().h(px(1.0)).w_full().bg(theme.colors.border))
+                .child(components::resize_grip(
+                    theme,
+                    ui_scale,
+                    id,
+                    components::ResizeGripAxis::Horizontal,
+                    dragging,
+                    Some(theme.colors.border),
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -2080,7 +2085,8 @@ impl DetailsPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         if count == 0 {
-            return components::empty_state(theme, "Status", "Clean.").into_any_element();
+            return components::empty_state_message(theme, "Working tree clean.")
+                .into_any_element();
         }
         match section {
             StatusSection::CombinedUnstaged => {

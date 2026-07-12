@@ -329,25 +329,26 @@ impl HistoryView {
             .as_ref()
             .is_some_and(|id| id.as_ref() == scope_invoker.as_ref());
 
+        let ui_scale_percent = self.ui_scale_percent;
+        let active_col_resize = self.history_col_resize;
         let resize_handle = |id: &'static str, handle: HistoryColResizeHandle| {
+            let dragging = active_col_resize.is_some_and(|state| state.handle == handle);
             div()
                 .id(id)
+                .group(id)
                 .absolute()
                 .w(handle_w)
                 .top_0()
                 .bottom_0()
-                .flex()
-                .items_center()
-                .justify_center()
                 .cursor(CursorStyle::ResizeLeftRight)
-                .hover(move |s| s.bg(theme.colors.hover))
-                .active(move |s| s.bg(theme.colors.active))
-                .child(
-                    div()
-                        .w(scaled_px(1.0))
-                        .h(scaled_px(14.0))
-                        .bg(theme.colors.border_variant),
-                )
+                .child(components::resize_grip(
+                    theme,
+                    ui_scale_percent,
+                    id,
+                    components::ResizeGripAxis::Vertical,
+                    dragging,
+                    Some(theme.colors.border_variant),
+                ))
                 .on_drag(handle, |_handle, _offset, _window, cx| {
                     cx.new(|_cx| HistoryColResizeDragGhost)
                 })
@@ -599,15 +600,24 @@ impl HistoryView {
             );
         }
 
+        // Absolute insets resolve against the header's padding box, while the
+        // cells start one `.px_2()` (0.5 rem = 8 design px) further in — the
+        // same inset the row canvas applies. Without this correction every
+        // handle renders 8px off its column boundary (the author handle's
+        // hairline used to touch the AUTHOR label).
+        let cell_edge_pad = scaled_px(8.0);
+
         let mut header_with_handles = header.child(
             resize_handle("history_col_resize_branch", HistoryColResizeHandle::Branch)
-                .left((self.history_col_branch - handle_half).max(px(0.0))),
+                .left((cell_edge_pad + self.history_col_branch - handle_half).max(px(0.0))),
         );
 
         if show_graph {
             header_with_handles = header_with_handles.child(
                 resize_handle("history_col_resize_graph", HistoryColResizeHandle::Graph).left(
-                    (self.history_col_branch + self.history_col_graph - handle_half).max(px(0.0)),
+                    (cell_edge_pad + self.history_col_branch + self.history_col_graph
+                        - handle_half)
+                        .max(px(0.0)),
                 ),
             );
         }
@@ -618,7 +628,7 @@ impl HistoryView {
                 + if show_sha { col_sha } else { px(0.0) };
             header_with_handles = header_with_handles.child(
                 resize_handle("history_col_resize_author", HistoryColResizeHandle::Author)
-                    .right((right_fixed - handle_half).max(px(0.0))),
+                    .right((cell_edge_pad + right_fixed - handle_half).max(px(0.0))),
             );
         }
 
@@ -626,14 +636,14 @@ impl HistoryView {
             let right_fixed = col_date + if show_sha { col_sha } else { px(0.0) };
             header_with_handles = header_with_handles.child(
                 resize_handle("history_col_resize_date", HistoryColResizeHandle::Date)
-                    .right((right_fixed - handle_half).max(px(0.0))),
+                    .right((cell_edge_pad + right_fixed - handle_half).max(px(0.0))),
             );
         }
 
         if show_sha {
             header_with_handles = header_with_handles.child(
                 resize_handle("history_col_resize_sha", HistoryColResizeHandle::Sha)
-                    .right((col_sha - handle_half).max(px(0.0))),
+                    .right((cell_edge_pad + col_sha - handle_half).max(px(0.0))),
             );
         }
 

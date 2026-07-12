@@ -1,7 +1,8 @@
 use super::*;
 
-/// Slimmer than the tab-bar slot the bottom bar used to borrow; it only hosts
-/// the zoom control, so every saved pixel goes to the content area.
+/// Slimmer than the tab-bar slot the bottom bar used to borrow; it hosts the
+/// pane collapse toggles and the zoom control on one shared centerline, so
+/// every saved pixel goes to the content area.
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
 
 pub(in super::super) struct BottomStatusBarView {
@@ -105,6 +106,67 @@ impl Render for BottomStatusBarView {
             .gitcomet_tooltip(theme, "Adjust zoom".into())
             .debug_selector(|| "bottom_status_bar_zoom".to_string());
 
+        // Pane collapse toggles live here (not floating inside the panes) so
+        // they share one centerline with the zoom control.
+        let (sidebar_collapsed, details_collapsed) = self
+            .root_view
+            .upgrade()
+            .map(|view| {
+                let root = view.read(cx);
+                (root.sidebar_collapsed, root.details_collapsed)
+            })
+            .unwrap_or((false, false));
+
+        let sidebar_toggle = components::Button::new("sidebar_toggle", "")
+            .start_slot(svg_icon(
+                if sidebar_collapsed {
+                    "icons/arrow_right.svg"
+                } else {
+                    "icons/arrow_left.svg"
+                },
+                theme.colors.text_muted,
+                scaled_px(12.0),
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .on_click(theme, cx, |this, _e, _w, cx| {
+                let _ = this.root_view.update(cx, |root, cx| {
+                    root.set_sidebar_collapsed(!root.sidebar_collapsed, cx);
+                });
+            })
+            .gitcomet_tooltip(
+                theme,
+                if sidebar_collapsed {
+                    "Show sidebar".into()
+                } else {
+                    "Hide sidebar".into()
+                },
+            );
+
+        let details_toggle = components::Button::new("details_toggle", "")
+            .start_slot(svg_icon(
+                if details_collapsed {
+                    "icons/arrow_left.svg"
+                } else {
+                    "icons/arrow_right.svg"
+                },
+                theme.colors.text_muted,
+                scaled_px(12.0),
+            ))
+            .style(components::ButtonStyle::Transparent)
+            .on_click(theme, cx, |this, _e, _w, cx| {
+                let _ = this.root_view.update(cx, |root, cx| {
+                    root.set_details_collapsed(!root.details_collapsed, cx);
+                });
+            })
+            .gitcomet_tooltip(
+                theme,
+                if details_collapsed {
+                    "Show details panel".into()
+                } else {
+                    "Hide details panel".into()
+                },
+            );
+
         div()
             .id("bottom_status_bar")
             .w_full()
@@ -112,7 +174,7 @@ impl Render for BottomStatusBarView {
             .flex_none()
             .flex()
             .items_center()
-            .justify_end()
+            .justify_between()
             .px_2()
             .bg(theme.colors.sidebar_bg)
             .when_some(
@@ -122,6 +184,14 @@ impl Render for BottomStatusBarView {
                         .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
                 },
             )
-            .child(zoom_button)
+            .child(sidebar_toggle)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(scaled_px(2.0))
+                    .child(details_toggle)
+                    .child(zoom_button),
+            )
     }
 }

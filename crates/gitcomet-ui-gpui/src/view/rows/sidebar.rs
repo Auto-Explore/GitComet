@@ -1911,6 +1911,7 @@ impl DetailsPaneView {
                     .when(f.additions.is_some() || f.deletions.is_some(), |row| {
                         row.child(div().flex_none().child(components::diff_stat(
                             theme,
+                            ui_scale_percent,
                             f.additions.unwrap_or(0) as usize,
                             f.deletions.unwrap_or(0) as usize,
                         )))
