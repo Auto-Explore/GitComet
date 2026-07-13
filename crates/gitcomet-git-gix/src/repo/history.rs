@@ -577,9 +577,25 @@ impl RebaseScripts {
     }
 }
 
-/// Shell-quotes a script path for `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR`: git
-/// launches editors via `sh -c '<value> "$@"'` (on Windows too, through its
-/// bundled sh), so an unquoted path containing spaces word-splits.
+/// Quotes a script path for `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR`.
+///
+/// Git treats the value as a shell command, so an unquoted path containing
+/// spaces word-splits. On Windows the script is a batch file and eventually
+/// crosses into `cmd.exe`, where single quotes are literal; use double quotes
+/// there and escape the characters that Git's intermediate `sh` expands.
+#[cfg(windows)]
+fn shell_quote_path(path: &Path) -> String {
+    windows_shell_quote_path(&path.to_string_lossy())
+}
+
+#[cfg(any(windows, test))]
+fn windows_shell_quote_path(path: &str) -> String {
+    let path = path.replace('"', r#"\""#);
+    let path = path.replace('$', r"\$").replace('`', r"\`");
+    format!(r#""{path}""#)
+}
+
+#[cfg(not(windows))]
 fn shell_quote_path(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
 }
@@ -779,10 +795,35 @@ exit 0
 
 #[cfg(test)]
 mod tests {
-    use super::parse_interactive_rebase_log;
+    #[cfg(not(windows))]
+    use super::shell_quote_path;
+    use super::{parse_interactive_rebase_log, windows_shell_quote_path};
+    #[cfg(not(windows))]
+    use std::path::Path;
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn editor_path_uses_cmd_compatible_quotes_on_windows() {
+        assert_eq!(
+            windows_shell_quote_path(r"C:\repo with spaces\editor.cmd"),
+            r#""C:\repo with spaces\editor.cmd""#
+        );
+        assert_eq!(
+            windows_shell_quote_path(r"C:\repo$`\editor.cmd"),
+            r#""C:\repo\$\`\editor.cmd""#
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn editor_path_uses_posix_shell_quotes() {
+        assert_eq!(
+            shell_quote_path(Path::new("/repo with 'quotes'/editor.sh")),
+            r"'/repo with '\''quotes'\''/editor.sh'"
+        );
+    }
 
     #[test]
     fn parses_records_with_multiline_bodies_and_control_bytes() {
