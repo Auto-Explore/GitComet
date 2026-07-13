@@ -29,9 +29,10 @@ const PERSISTED_REWORD_DIR: &str = "gitcomet-reword";
 const PERSISTED_REWORD_STAGING_DIR: &str = "gitcomet-reword.staging";
 const PERSISTED_PLAN_NAME: &str = "planned-todo";
 
-#[cfg(windows)]
-const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.cmd";
-#[cfg(not(windows))]
+// A POSIX sh script on every platform: Git for Windows also runs editors
+// through its bundled `sh`, and a shebang script survives a script path
+// containing spaces — a batch file does not, because the MSYS runtime
+// re-spawns it via `cmd.exe /c` with the path unquoted.
 const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.sh";
 
 fn peel_commit<'r>(repo: &'r gix::Repository, spec: &str) -> Result<gix::Commit<'r>> {
@@ -545,11 +546,7 @@ impl RebaseScripts {
         let todo_path = dir.path().join("git-rebase-todo");
         fs::write(&todo_path, &todo_content)?;
 
-        #[cfg(windows)]
-        let seq_editor_name = "gitcomet-seq-editor.cmd";
-        #[cfg(not(windows))]
-        let seq_editor_name = "gitcomet-seq-editor.sh";
-        let seq_editor_path = dir.path().join(seq_editor_name);
+        let seq_editor_path = dir.path().join("gitcomet-seq-editor.sh");
         fs::write(&seq_editor_path, seq_editor_script_contents())?;
         #[cfg(unix)]
         make_executable(&seq_editor_path)?;
@@ -655,23 +652,9 @@ impl RebaseScripts {
 
 /// Quotes a script path for `GIT_EDITOR` / `GIT_SEQUENCE_EDITOR`.
 ///
-/// Git treats the value as a shell command, so an unquoted path containing
-/// spaces word-splits. On Windows the script is a batch file and eventually
-/// crosses into `cmd.exe`, where single quotes are literal; use double quotes
-/// there and escape the characters that Git's intermediate `sh` expands.
-#[cfg(windows)]
-fn shell_quote_path(path: &Path) -> String {
-    windows_shell_quote_path(&path.to_string_lossy())
-}
-
-#[cfg(any(windows, test))]
-fn windows_shell_quote_path(path: &str) -> String {
-    let path = path.replace('"', r#"\""#);
-    let path = path.replace('$', r"\$").replace('`', r"\`");
-    format!(r#""{path}""#)
-}
-
-#[cfg(not(windows))]
+/// Git treats the value as a shell command run by `sh` — on Windows too, via
+/// Git for Windows' bundled shell — so an unquoted path containing spaces
+/// word-splits, and POSIX single-quote quoting applies on every platform.
 fn shell_quote_path(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
 }
@@ -849,9 +832,16 @@ fn make_executable(path: &PathBuf) -> std::io::Result<()> {
     fs::set_permissions(path, permissions)
 }
 
+// The Windows variants below mirror the unix ones, but first normalize the
+// Windows-style paths handed over in the environment: a `\` is an escape in
+// sh glob patterns and `dirname` only splits on `/`. (Cygwin file operations
+// accept forward-slash `C:/...` paths natively.)
+
 #[cfg(windows)]
 fn seq_editor_script_contents() -> &'static [u8] {
-    b"@echo off\ncopy /Y \"%GITCOMET_TODO_FILE%\" \"%~1\" >nul\n"
+    br#"#!/bin/sh
+cp "$(printf '%s' "$GITCOMET_TODO_FILE" | tr '\\' /)" "$1"
+"#
 }
 
 #[cfg(not(windows))]
@@ -861,23 +851,34 @@ fn seq_editor_script_contents() -> &'static [u8] {
 
 #[cfg(windows)]
 fn msg_editor_script_contents() -> String {
-    r#"@echo off
-set "EDITOR_GIT_DIR=%GITCOMET_GIT_DIR%"
-if "%EDITOR_GIT_DIR%"=="" set "EDITOR_GIT_DIR=%~dp1."
-set "REBASE_HEAD_FILE=%EDITOR_GIT_DIR%\REBASE_HEAD"
-set "DONE_FILE=%EDITOR_GIT_DIR%\rebase-merge\done"
-set "sha="
-if exist "%REBASE_HEAD_FILE%" set /p sha=<"%REBASE_HEAD_FILE%"
-if "%sha%"=="" if exist "%DONE_FILE%" (
-  for /f "tokens=2" %%s in ('type "%DONE_FILE%"') do set "sha=%%s"
-)
-if "%sha%"=="" exit /b 0
-rem Message files are keyed by full object id; match by prefix so an
-rem abbreviated id in the done file still finds its file.
-for %%f in ("%GITCOMET_MSGS_DIR%\%sha%*") do (
-  copy /Y "%%f" "%~1" >nul
-  exit /b 0
-)
+    r#"#!/bin/sh
+winpath() { printf '%s' "$1" | tr '\\' /; }
+sha=
+message_file=$(winpath "$1")
+if [ -n "$GITCOMET_GIT_DIR" ]; then
+  git_dir=$(winpath "$GITCOMET_GIT_DIR")
+else
+  git_dir=$(dirname "$message_file")
+fi
+msgs_dir=$(winpath "$GITCOMET_MSGS_DIR")
+if [ -f "$git_dir/REBASE_HEAD" ]; then
+  sha=$(tr -d '\r' <"$git_dir/REBASE_HEAD")
+elif [ -f "$git_dir/rebase-merge/done" ]; then
+  sha=$(tail -n 1 "$git_dir/rebase-merge/done" | tr -d '\r' | cut -d' ' -f2)
+fi
+# Message files are keyed by full object id; reject non-hex tokens (a
+# non-pick done line) and match by prefix so an abbreviated id in the
+# done file still finds its file.
+case "$sha" in
+  '' | *[!0-9a-f]*) exit 0 ;;
+esac
+for msg_file in "$msgs_dir/$sha"*; do
+  if [ -f "$msg_file" ]; then
+    cp "$msg_file" "$message_file" || exit 1
+  fi
+  break
+done
+exit 0
 "#
     .to_string()
 }
@@ -912,33 +913,21 @@ exit 0
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(windows))]
-    use super::shell_quote_path;
-    use super::{parse_interactive_rebase_log, windows_shell_quote_path};
-    #[cfg(not(windows))]
+    use super::{parse_interactive_rebase_log, shell_quote_path};
     use std::path::Path;
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
-    fn editor_path_uses_cmd_compatible_quotes_on_windows() {
-        assert_eq!(
-            windows_shell_quote_path(r"C:\repo with spaces\editor.cmd"),
-            r#""C:\repo with spaces\editor.cmd""#
-        );
-        assert_eq!(
-            windows_shell_quote_path(r"C:\repo$`\editor.cmd"),
-            r#""C:\repo\$\`\editor.cmd""#
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
     fn editor_path_uses_posix_shell_quotes() {
         assert_eq!(
             shell_quote_path(Path::new("/repo with 'quotes'/editor.sh")),
             r"'/repo with '\''quotes'\''/editor.sh'"
+        );
+        assert_eq!(
+            shell_quote_path(Path::new(r"C:\repo with spaces\editor.sh")),
+            r"'C:\repo with spaces\editor.sh'"
         );
     }
 
