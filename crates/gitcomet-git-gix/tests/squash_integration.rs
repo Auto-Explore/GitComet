@@ -367,6 +367,56 @@ fn interactive_rebase_setup_captures_summary_and_full_message() {
 }
 
 #[test]
+fn interactive_rebase_flattens_merges_like_git() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "root\n", "Root");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "main-a.txt", "a\n", "Mainline A");
+    run_git(&repo, &["checkout", "-b", "side"]);
+    commit_file(&repo, "side.txt", "s\n", "Side B");
+    run_git(&repo, &["checkout", "-"]);
+    commit_file(&repo, "main-c.txt", "c\n", "Mainline C");
+    run_git(&repo, &["merge", "--no-ff", "side", "-m", "Merge side"]);
+    commit_file(&repo, "top.txt", "t\n", "Top D");
+
+    let backend = open_backend(&repo);
+    let entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+
+    // The listing matches git's flattened todo: the merge commit is
+    // excluded (a `pick <merge>` todo is rejected by git) and the side
+    // branch is linearized in, parents always before children.
+    let summaries: Vec<&str> = entries.iter().map(|e| e.summary.as_str()).collect();
+    assert!(
+        !summaries.contains(&"Merge side"),
+        "merge must be excluded, got {summaries:?}"
+    );
+    assert_eq!(entries.len(), 4, "got {summaries:?}");
+    assert_eq!(summaries[0], "Mainline A");
+    assert_eq!(summaries[3], "Top D");
+    assert!(summaries.contains(&"Side B") && summaries.contains(&"Mainline C"));
+
+    // The generated todo must be executable end to end.
+    backend
+        .interactive_rebase_with_output(&root, &entries)
+        .expect("interactive rebase over a flattened merge completes");
+
+    let range = format!("{root}..HEAD");
+    assert_eq!(
+        git_stdout(&repo, &["rev-list", "--merges", "--count", &range]).trim(),
+        "0",
+        "history is linearized"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["rev-list", "--count", &range]).trim(),
+        "4"
+    );
+}
+
+#[test]
 fn interactive_rebase_accepts_branch_sha_and_head_relative_bases() {
     for case in ["branch", "sha", "head-relative"] {
         let dir = tempfile::tempdir().expect("create tempdir");

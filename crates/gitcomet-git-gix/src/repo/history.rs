@@ -26,6 +26,8 @@ pub(super) fn gix_head_id_or_none(repo: &gix::Repository) -> Result<Option<gix::
 /// walk past this means `oldest` is not a first-parent ancestor of `head`.
 const MAX_SQUASH_CHAIN: usize = 10_000;
 const PERSISTED_REWORD_DIR: &str = "gitcomet-reword";
+const PERSISTED_REWORD_STAGING_DIR: &str = "gitcomet-reword.staging";
+const PERSISTED_PLAN_NAME: &str = "planned-todo";
 
 #[cfg(windows)]
 const MSG_EDITOR_NAME: &str = "gitcomet-msg-editor.cmd";
@@ -234,7 +236,22 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         let repo = self._repo.to_thread_local();
         match persisted_reword_state(repo.path()) {
-            PersistedReword::Ready { editor, messages } => {
+            PersistedReword::Ready {
+                editor,
+                messages,
+                plan,
+            } => {
+                // The persisted editor only services steps the plan knew
+                // about; a message-editing step added to the todo outside
+                // GitComet would silently keep its old message.
+                if rebase_unplanned_message_edit(repo.path(), &plan) {
+                    return Err(Error::new(ErrorKind::Backend(
+                        "this rebase has pending reword/squash steps that GitComet did not \
+                         plan; continue it in a terminal with `git rebase --continue`, or \
+                         abort the rebase"
+                            .to_string(),
+                    )));
+                }
                 cmd.env("GIT_EDITOR", shell_quote_path(&editor));
                 cmd.env("GITCOMET_MSGS_DIR", messages);
                 cmd.env("GITCOMET_GIT_DIR", repo.path());
@@ -276,16 +293,23 @@ impl GixRepo {
     /// "paused at conflict": it clears the loading state, reloads status, and
     /// surfaces the new conflict. A non-zero exit that made no sequencer
     /// progress (unresolved conflicts on continue, hook/signing/editor
-    /// failures) keeps the original git error.
+    /// failures) keeps the original git error — as does an initial command
+    /// that progressed but left no conflict behind: GitComet plans only
+    /// pick/reword/squash/fixup/drop steps, so a conflict is the only
+    /// legitimate reason the initial `rebase -i` stops non-zero, and
+    /// anything else (a failing hook or signer) must keep git's message.
     fn run_rebase_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
         let steps_before = self.rebase_progress_marker();
         let output = run_git_raw_output(cmd, label)?;
         let paused_after_progress = !output.status.success()
             && self.rebase_in_progress_impl()?
             && match (steps_before, self.rebase_progress_marker()) {
-                // The command started the rebase and paused mid-way.
-                (None, Some(_)) => true,
-                // The command advanced past the step it was stuck on.
+                // The command started the rebase and paused at a conflict.
+                (None, Some(_)) => self.index_has_conflicts(),
+                // The command advanced past the step it was stuck on. No
+                // conflict requirement here: a continue can legitimately
+                // stop without one (a failing `exec` in an externally
+                // planned todo).
                 (Some(before), Some(after)) => after > before,
                 (_, None) => false,
             };
@@ -299,6 +323,14 @@ impl GixRepo {
         } else {
             Err(git_command_failed_error(label, output))
         }
+    }
+
+    /// Whether the index holds unmerged (conflict) entries — the signature
+    /// of a rebase genuinely paused at a conflict.
+    fn index_has_conflicts(&self) -> bool {
+        let repo = self._repo.to_thread_local();
+        repo.index_or_empty()
+            .is_ok_and(|index| index.entries().iter().any(|e| e.stage_raw() != 0))
     }
 
     /// Completed-step count of the rebase in progress, from the merge
@@ -366,7 +398,22 @@ impl GixRepo {
         // NUL-framed fields (sha, subject, full message): commit messages are
         // NUL-free by construction, so unlike other control bytes NUL cannot
         // collide with message content. `-z` NUL-terminates each record.
-        cmd.args(["log", "-z", "--format=%H%x00%s%x00%B", "--reverse", &range]);
+        //
+        // The listing must match the flattened todo `git rebase -i` itself
+        // generates: `--no-merges` because `pick` rejects merge commits (the
+        // merge is linearized away, like plain git rebase), and
+        // `--topo-order` so a parent can never sort after its child (date
+        // order allows that under clock skew, which would make the installed
+        // todo unreplayable).
+        cmd.args([
+            "log",
+            "-z",
+            "--format=%H%x00%s%x00%B",
+            "--reverse",
+            "--topo-order",
+            "--no-merges",
+            &range,
+        ]);
         let output = run_git_capture(cmd, &format!("git log {range}"))?;
 
         parse_interactive_rebase_log(&output)
@@ -418,15 +465,19 @@ impl GixRepo {
         cmd.args(["rebase", "-i", "--", base]);
 
         let label = format!("git rebase -i {base}");
-        let mut output = self.run_rebase_step_output(cmd, &label)?;
+        let mut result = self.run_rebase_step_output(cmd, &label);
         if self.rebase_in_progress_impl()? {
             let repo = self._repo.to_thread_local();
-            // The rebase has already started and paused; reporting an error
-            // now would violate run_rebase_step_output's contract and strand
-            // the UI on a repo that is mid-rebase. Degrade to a warning — the
+            // The rebase started and git's state is still on disk — whether
+            // paused at a conflict (Ok) or stopped by a non-conflict failure
+            // (Err, e.g. a broken signer): keep the planned messages with
+            // that state either way so a later continue can service them.
+            // A persist failure degrades to a warning on the Ok path — the
             // continue path refuses to finalize pending rewords without the
             // persisted state, so the messages cannot be silently lost.
-            if let Err(e) = scripts.persist_reword_state(repo.path()) {
+            if let Err(e) = scripts.persist_reword_state(repo.path())
+                && let Ok(output) = &mut result
+            {
                 if !output.stderr.is_empty() && !output.stderr.ends_with('\n') {
                     output.stderr.push('\n');
                 }
@@ -435,7 +486,7 @@ impl GixRepo {
                 ));
             }
         }
-        Ok(output)
+        result
     }
 
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {
@@ -505,10 +556,17 @@ impl RebaseScripts {
 
         let msgs_dir = dir.path().join("msgs");
         let mut msg_editor_path = None;
-        let has_reword = entries
-            .iter()
-            .any(|e| e.action == InteractiveRebaseAction::Reword);
-        if has_reword {
+        // Reword steps open an editor, and so does every fold run containing
+        // a squash (at the run's last squash/fixup step) — even when no entry
+        // is a reword. Without the no-op-capable editor installed, git would
+        // launch the user's default editor in a TTY-less subprocess there.
+        let needs_msg_editor = entries.iter().any(|e| {
+            matches!(
+                e.action,
+                InteractiveRebaseAction::Reword | InteractiveRebaseAction::Squash
+            )
+        });
+        if needs_msg_editor {
             fs::create_dir_all(&msgs_dir)?;
             for (ix, entry) in entries.iter().enumerate() {
                 if entry.action == InteractiveRebaseAction::Reword
@@ -558,14 +616,27 @@ impl RebaseScripts {
                 "interactive rebase state directory is missing",
             ));
         }
+        // Stage into a sibling directory and rename into place: the state
+        // dir either exists complete or not at all, so an interrupted
+        // persist can never be classified Ready with message files missing
+        // (continue would then silently keep original messages).
         let state_dir = rebase_dir.join(PERSISTED_REWORD_DIR);
-        let messages_dir = state_dir.join("messages");
+        let staging = rebase_dir.join(PERSISTED_REWORD_STAGING_DIR);
+        if staging.exists() {
+            fs::remove_dir_all(&staging)?;
+        }
+        let messages_dir = staging.join("messages");
         fs::create_dir_all(&messages_dir)?;
 
-        let persisted_editor = state_dir.join(MSG_EDITOR_NAME);
+        let persisted_editor = staging.join(MSG_EDITOR_NAME);
         fs::copy(editor, &persisted_editor)?;
         #[cfg(unix)]
         make_executable(&persisted_editor)?;
+
+        // The planned todo travels with the messages so the continue path
+        // can tell planned message-editing steps from ones added to the
+        // todo outside GitComet.
+        fs::copy(&self.todo_path, staging.join(PERSISTED_PLAN_NAME))?;
 
         for entry in fs::read_dir(&self.msgs_dir)? {
             let entry = entry?;
@@ -573,6 +644,11 @@ impl RebaseScripts {
                 fs::copy(entry.path(), messages_dir.join(entry.file_name()))?;
             }
         }
+
+        if state_dir.exists() {
+            fs::remove_dir_all(&state_dir)?;
+        }
+        fs::rename(&staging, &state_dir)?;
         Ok(())
     }
 }
@@ -606,9 +682,11 @@ enum PersistedReword {
     Ready {
         editor: PathBuf,
         messages: PathBuf,
+        plan: PathBuf,
     },
-    /// A plan was persisted but is missing pieces (interrupted persist,
-    /// external deletion): continuing with it would silently drop rewords.
+    /// A plan was persisted but is missing pieces (external deletion; the
+    /// persist itself is atomic): continuing with it would silently drop
+    /// rewords.
     Damaged,
 }
 
@@ -619,51 +697,90 @@ fn persisted_reword_state(git_dir: &Path) -> PersistedReword {
     }
     let editor = state_dir.join(MSG_EDITOR_NAME);
     let messages = state_dir.join("messages");
-    if editor.is_file() && messages.is_dir() {
-        PersistedReword::Ready { editor, messages }
+    let plan = state_dir.join(PERSISTED_PLAN_NAME);
+    if editor.is_file() && messages.is_dir() && plan.is_file() {
+        PersistedReword::Ready {
+            editor,
+            messages,
+            plan,
+        }
     } else {
         PersistedReword::Damaged
     }
 }
 
-/// Whether continuing the paused interactive rebase can open a commit-message
-/// editor: a `reword`/`squash`/`merge` step remains in the todo, the paused
-/// step itself is a reword, or the paused fold run contains a squash (git
-/// opens the run's editor at its last squash/fixup step).
-fn rebase_pending_message_edit(git_dir: &Path) -> bool {
-    let rebase_dir = git_dir.join("rebase-merge");
-    let first_word = |line: &str| {
-        line.split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_string()
+/// Whether the current todo contains a message-editing step the persisted
+/// plan never had — a todo edited outside GitComet (e.g. `git rebase
+/// --edit-todo` turning a later pick into a reword). The persisted editor
+/// would find no message file for it and exit 0, silently keeping the old
+/// message instead of the editor session the user asked for. Ids are
+/// compared prefix-tolerantly: git may abbreviate ids when the todo is
+/// edited or regenerated.
+fn rebase_unplanned_message_edit(git_dir: &Path, plan: &Path) -> bool {
+    use gitcomet_core::squash::{TodoLineRole, todo_line_commit_word, todo_line_role};
+    let editing = |line: &str| {
+        matches!(
+            todo_line_role(line),
+            TodoLineRole::EditsOwnMessage | TodoLineRole::FoldEditsMessage
+        )
     };
+    let Ok(plan_content) = fs::read_to_string(plan) else {
+        // Unreadable plan: refuse rather than risk a silent accept.
+        return true;
+    };
+    let planned: Vec<&str> = plan_content
+        .lines()
+        .filter(|l| editing(l))
+        .filter_map(todo_line_commit_word)
+        .collect();
+    let Ok(todo) = fs::read_to_string(git_dir.join("rebase-merge").join("git-rebase-todo")) else {
+        return false;
+    };
+    todo.lines()
+        .filter(|l| editing(l))
+        .any(|line| match todo_line_commit_word(line) {
+            Some(id) => !planned
+                .iter()
+                .any(|p| p.starts_with(id) || id.starts_with(p)),
+            None => true,
+        })
+}
 
-    if let Ok(todo) = fs::read_to_string(rebase_dir.join("git-rebase-todo")) {
-        for line in todo.lines() {
-            // `merge` is conservative: only its -c form rewords, but parsing
-            // option syntax here is not worth the risk of a silent accept.
-            if matches!(
-                first_word(line).as_str(),
-                "reword" | "r" | "squash" | "s" | "merge" | "m"
-            ) {
-                return true;
-            }
-        }
+/// Whether continuing the paused interactive rebase can open a commit-message
+/// editor: a message-editing step remains in the todo, the paused step itself
+/// is a reword, or the paused fold run still has its message editor pending
+/// (git opens the run's editor at its last squash/fixup step). Line
+/// classification lives in core ([`gitcomet_core::squash::todo_line_role`])
+/// so these rules cannot drift from the planner's.
+fn rebase_pending_message_edit(git_dir: &Path) -> bool {
+    use gitcomet_core::squash::{TodoLineRole, todo_line_role};
+    let rebase_dir = git_dir.join("rebase-merge");
+
+    if let Ok(todo) = fs::read_to_string(rebase_dir.join("git-rebase-todo"))
+        && todo.lines().any(|line| {
+            matches!(
+                todo_line_role(line),
+                TodoLineRole::EditsOwnMessage | TodoLineRole::FoldEditsMessage
+            )
+        })
+    {
+        return true;
     }
 
     if let Ok(done) = fs::read_to_string(rebase_dir.join("done")) {
         for (steps_back, line) in done.lines().rev().enumerate() {
-            match first_word(line).as_str() {
-                // The paused step: a conflicted reword commits (and opens the
-                // editor) on continue.
-                "reword" | "r" if steps_back == 0 => return true,
-                // A squash anywhere in the paused fold run means its combined
-                // message editor has not run yet.
-                "squash" | "s" => return true,
-                // Fixups extend the run; keep scanning for a squash below.
-                "fixup" | "f" => {}
-                _ => break,
+            match todo_line_role(line) {
+                // The paused step: a conflicted reword (or merge) commits and
+                // opens the editor on continue. Deeper ones already ran
+                // theirs and end the walk like any other commit-creating step.
+                TodoLineRole::EditsOwnMessage if steps_back == 0 => return true,
+                TodoLineRole::EditsOwnMessage => break,
+                // A squash or fixup -c/-C anywhere in the paused fold run
+                // means the run's message editor has not run yet.
+                TodoLineRole::FoldEditsMessage => return true,
+                // Plain fixups extend the run; drops are transparent to it.
+                TodoLineRole::FoldSilent | TodoLineRole::Transparent => {}
+                TodoLineRole::Other => break,
             }
         }
     }

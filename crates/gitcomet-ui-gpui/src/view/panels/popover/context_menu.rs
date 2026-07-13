@@ -390,15 +390,15 @@ impl PopoverHost {
                 can_drop,
                 can_squash,
             } => {
-                let is_squash_target = self
+                let pick_locked = self
                     .main_pane
-                    .read_with(cx, |pane, _| pane.active_entry_is_squash_target(*ix));
+                    .read_with(cx, |pane, _| pane.active_entry_pick_locked(*ix));
                 Some(interactive_rebase_action_menu_model(
                     *ix,
                     *is_bottom,
                     *can_drop,
                     *can_squash,
-                    is_squash_target,
+                    pick_locked,
                 ))
             }
             PopoverKind::InteractiveRebaseAutosquashMenu => {
@@ -1484,16 +1484,19 @@ fn interactive_rebase_action_menu_model(
     is_bottom: bool,
     can_drop: bool,
     can_squash: bool,
-    is_squash_target: bool,
+    pick_locked: bool,
 ) -> ContextMenuModel {
     let mut items = vec![
         ContextMenuItem::Entry {
             label: "pick".into(),
             icon: None,
             shortcut: None,
-            // A commit that a later commit squashes into cannot go back to a
-            // plain pick — it must keep receiving the squashed changes.
-            disabled: is_squash_target,
+            // A squash run's target is auto-managed: it stays Reword while
+            // commits squash into it, and a dropped entry in target position
+            // would re-promote the instant it were picked back — so `pick`
+            // locks for the position rather than turning into a surprise
+            // reword. Demote a target by dropping it or removing the squash.
+            disabled: pick_locked,
             action: Box::new(ContextMenuAction::SetInteractiveRebaseAction {
                 ix,
                 action: InteractiveRebaseAction::Pick,

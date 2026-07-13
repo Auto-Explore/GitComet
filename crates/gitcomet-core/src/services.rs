@@ -160,6 +160,20 @@ impl InteractiveRebaseAction {
             Self::Drop => "drop",
         }
     }
+
+    /// Inverse of [`Self::to_todo_str`], also accepting git's single-letter
+    /// abbreviations. `None` for todo commands that are not entry actions
+    /// (`exec`, `merge`, `label`, …).
+    pub fn from_todo_word(word: &str) -> Option<Self> {
+        Some(match word {
+            "pick" | "p" => Self::Pick,
+            "reword" | "r" => Self::Reword,
+            "squash" | "s" => Self::Squash,
+            "fixup" | "f" => Self::Fixup,
+            "drop" | "d" => Self::Drop,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

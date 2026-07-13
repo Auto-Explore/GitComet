@@ -5,11 +5,10 @@ use std::{cell::RefCell, rc::Rc};
 
 const ACTION_BTN_W: f32 = 76.0;
 
-fn squash_target(entries: &[InteractiveRebaseEntry], k: usize) -> Option<usize> {
-    (0..k)
-        .rev()
-        .find(|&j| entries[j].action != InteractiveRebaseAction::Drop)
-}
+// The entry a squash/fixup folds into is the run's actual fold target
+// (nearest preceding pick/reword); core owns that rule so it cannot drift
+// from the backend's run handling.
+use gitcomet_core::squash::squash_fold_target as squash_target;
 
 /// Whether any squash/fixup entry currently folds into the entry at `ix`.
 fn entry_is_squash_target(entries: &[InteractiveRebaseEntry], ix: usize) -> bool {
@@ -175,7 +174,9 @@ fn compute_autosquash(
 
 /// Re-expands the collapsed editing list into the todo the rebase executor
 /// consumes: each survivor is followed by its folded commits as `fixup` entries.
-/// A dropped survivor takes its folded commits with it.
+/// A dropped survivor takes its folded commits with it — they are emitted as
+/// `drop` entries rather than omitted, because the executor revalidates that
+/// the planned entries cover the live range exactly.
 fn expand_folded(
     entries: &[InteractiveRebaseEntry],
     folded: &std::collections::HashMap<String, Vec<InteractiveRebaseEntry>>,
@@ -183,10 +184,16 @@ fn expand_folded(
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         out.push(e.clone());
-        if e.action != InteractiveRebaseAction::Drop
-            && let Some(fixups) = folded.get(&e.commit_id)
-        {
-            out.extend(fixups.iter().cloned());
+        if let Some(fixups) = folded.get(&e.commit_id) {
+            let action = if e.action == InteractiveRebaseAction::Drop {
+                InteractiveRebaseAction::Drop
+            } else {
+                InteractiveRebaseAction::Fixup
+            };
+            out.extend(fixups.iter().cloned().map(|mut f| {
+                f.action = action;
+                f
+            }));
         }
     }
     out
@@ -202,11 +209,20 @@ fn validate_squash_entries(entries: &mut [InteractiveRebaseEntry]) {
         ) {
             continue;
         }
-        let has_target = (0..k)
-            .rev()
-            .any(|j| entries[j].action != InteractiveRebaseAction::Drop);
+        let has_target = squash_target(entries, k).is_some();
         if !has_target {
             entries[k].action = InteractiveRebaseAction::Pick;
+        }
+    }
+    // Promote pass: whatever entry a squash currently folds into is kept on
+    // Reword, so the target promotion set_rebase_action applies survives
+    // retargeting (dropping or undropping a target, reordering the run).
+    for k in 0..entries.len() {
+        if entries[k].action == InteractiveRebaseAction::Squash
+            && let Some(j) = squash_target(entries, k)
+            && entries[j].action == InteractiveRebaseAction::Pick
+        {
+            entries[j].action = InteractiveRebaseAction::Reword;
         }
     }
     // Second pass: an entry auto-promoted to Reword solely to absorb a squash
@@ -221,6 +237,51 @@ fn validate_squash_entries(entries: &mut [InteractiveRebaseEntry]) {
             && !entry_is_squash_target(entries, k)
         {
             entries[k].action = InteractiveRebaseAction::Pick;
+        }
+    }
+}
+
+/// Squash-run signature of every entry carrying a reword edit, keyed by
+/// commit id: the ordered squash entries whose messages the edited combined
+/// message was built over. Snapshot before a mutation that can change run
+/// membership; compare with [`clear_stale_reword_edits`] after.
+fn reword_edit_signatures(entries: &[InteractiveRebaseEntry]) -> Vec<(String, Vec<String>)> {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.new_message.is_some())
+        .map(|(ix, e)| {
+            let sources = gitcomet_core::squash::squash_run_message_entries(entries, ix)
+                .map(|s| s.commit_id.clone())
+                .collect();
+            (e.commit_id.clone(), sources)
+        })
+        .collect()
+}
+
+/// Drops reword edits whose squash-run membership changed since `before`
+/// (a commit squashed in or out, dropped, or the run reordered): the saved
+/// combined message no longer matches what the rebase would produce, and
+/// installing it would silently gain or lose commit messages in rewritten
+/// history. The reword dialog reseeds from the live run on next open.
+fn clear_stale_reword_edits(
+    before: &[(String, Vec<String>)],
+    entries: &mut [InteractiveRebaseEntry],
+) {
+    for ix in 0..entries.len() {
+        if entries[ix].new_message.is_none() {
+            continue;
+        }
+        let Some((_, old_sources)) = before.iter().find(|(id, _)| *id == entries[ix].commit_id)
+        else {
+            continue;
+        };
+        let new_sources: Vec<String> =
+            gitcomet_core::squash::squash_run_message_entries(entries, ix)
+                .map(|s| s.commit_id.clone())
+                .collect();
+        if new_sources != *old_sources {
+            entries[ix].new_message = None;
         }
     }
 }
@@ -350,10 +411,6 @@ impl MainPaneView {
     }
 
     /// Whether a later commit squashes into the active-setup entry at `ix`.
-    pub(in crate::view) fn active_entry_is_squash_target(&self, ix: usize) -> bool {
-        self.active_irebase()
-            .is_some_and(|st| entry_is_squash_target(&st.entries, ix))
-    }
 
     /// Applies an auto-squash `mode` to the active setup as a one-shot action,
     /// recomputing from the original commit list. Returns `false` when no
@@ -378,6 +435,28 @@ impl MainPaneView {
         true
     }
 
+    /// Whether the action menu locks `pick` for the entry at `ix`: it sits
+    /// directly above the fold run below it, so it either is the run's
+    /// target or — when dropped — would instantly regain targethood (and
+    /// the Reword promotion) the moment it were picked back. Locking by
+    /// position keeps "pick" meaning pick: selecting it never turns into an
+    /// automatic reword.
+    pub(in crate::view) fn active_entry_pick_locked(&self, ix: usize) -> bool {
+        self.active_irebase().is_some_and(|st| {
+            st.entries
+                .get(ix + 1..)
+                .unwrap_or_default()
+                .iter()
+                .find(|e| e.action != InteractiveRebaseAction::Drop)
+                .is_some_and(|e| {
+                    matches!(
+                        e.action,
+                        InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+                    )
+                })
+        })
+    }
+
     pub(in crate::view) fn set_rebase_action(
         &mut self,
         ix: usize,
@@ -400,6 +479,7 @@ impl MainPaneView {
         }
 
         let old_action = st.entries[ix].action;
+        let edit_signatures = reword_edit_signatures(&st.entries);
         // Capture the former squash target before we change the action.
         let former_squash_target = if matches!(
             old_action,
@@ -411,6 +491,16 @@ impl MainPaneView {
         };
 
         st.entries[ix].action = action;
+        // new_message only applies to Reword entries; leaving it on a
+        // demoted entry would keep displaying an edited subject the rebase
+        // will never write (and resurface it on a later re-promotion).
+        if old_action == InteractiveRebaseAction::Reword && action != InteractiveRebaseAction::Reword
+        {
+            st.entries[ix].new_message = None;
+        }
+        // Before the revert below reads new_message: an edit gone stale must
+        // not keep its auto-promoted target on Reword.
+        clear_stale_reword_edits(&edit_signatures, &mut st.entries);
 
         if action == InteractiveRebaseAction::Squash {
             // Auto-set the new target to Reword so the combined message can be written.
@@ -435,7 +525,14 @@ impl MainPaneView {
             }
         }
 
-        if action == InteractiveRebaseAction::Drop {
+        // Drop and Pick (undrop) can retarget squash runs above other
+        // entries: settle promotions/demotions across the whole list. Not on
+        // Reword — a fresh manual Reword has no message yet and the settle
+        // pass would read it as auto-promoted and instantly revert it.
+        if matches!(
+            action,
+            InteractiveRebaseAction::Drop | InteractiveRebaseAction::Pick
+        ) {
             validate_squash_entries(&mut st.entries);
         }
 
@@ -456,8 +553,10 @@ impl MainPaneView {
             && state.from_ix < st.entries.len()
             && state.to_ix < st.entries.len()
         {
+            let edit_signatures = reword_edit_signatures(&st.entries);
             let entry = st.entries.remove(state.from_ix);
             st.entries.insert(state.to_ix, entry);
+            clear_stale_reword_edits(&edit_signatures, &mut st.entries);
             validate_squash_entries(&mut st.entries);
             // Fade the landed row in at its new position.
             let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
@@ -676,7 +775,9 @@ impl MainPaneView {
                 let entry_display_pos = len - 1 - ix;
                 if entry_display_pos > 0 {
                     let swap_ix = len - 1 - (entry_display_pos - 1);
+                    let edit_signatures = reword_edit_signatures(&st.entries);
                     st.entries.swap(ix, swap_ix);
+                    clear_stale_reword_edits(&edit_signatures, &mut st.entries);
                     validate_squash_entries(&mut st.entries);
                     let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
                     st.reorder_anim = Some((ix, swap_ix, ver));
@@ -697,7 +798,9 @@ impl MainPaneView {
                 let entry_display_pos = len - 1 - ix;
                 if entry_display_pos + 1 < len {
                     let swap_ix = len - 1 - (entry_display_pos + 1);
+                    let edit_signatures = reword_edit_signatures(&st.entries);
                     st.entries.swap(ix, swap_ix);
+                    clear_stale_reword_edits(&edit_signatures, &mut st.entries);
                     validate_squash_entries(&mut st.entries);
                     let ver = st.reorder_anim.map(|(_, _, v)| v + 1).unwrap_or(0);
                     st.reorder_anim = Some((ix, swap_ix, ver));
@@ -1484,15 +1587,116 @@ mod tests {
     fn expand_folded_drops_fixups_with_dropped_survivor() {
         let original = vec![sc("B", "fix"), sc("D", "fix")];
         let (mut collapsed, folded) = compute_autosquash(&original, AutosquashMode::ToBottom);
-        // Drop the survivor B; its folded commit D should not be emitted.
+        // Drop the survivor B; its folded commit D is dropped with it — but
+        // emitted as a `drop` entry, because the executor revalidates that
+        // the plan covers the live range exactly.
         collapsed[0].action = InteractiveRebaseAction::Drop;
         let expanded = expand_folded(&collapsed, &folded);
+        let seq: Vec<(&str, InteractiveRebaseAction)> = expanded
+            .iter()
+            .map(|e| (e.commit_id.as_str(), e.action))
+            .collect();
         assert_eq!(
-            expanded
-                .iter()
-                .map(|e| e.commit_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["B"]
+            seq,
+            vec![
+                ("B", InteractiveRebaseAction::Drop),
+                ("D", InteractiveRebaseAction::Drop),
+            ]
         );
+    }
+
+    #[test]
+    fn dropping_a_squash_target_promotes_the_new_target() {
+        let mut entries = vec![sc("X", "base"), sc("A", "target"), sc("B", "fold")];
+        entries[1].action = InteractiveRebaseAction::Reword; // auto-promoted target
+        entries[2].action = InteractiveRebaseAction::Squash;
+        // The user drops A; the squash retargets to X, which must take over
+        // the Reword promotion.
+        entries[1].action = InteractiveRebaseAction::Drop;
+        validate_squash_entries(&mut entries);
+        assert_eq!(entries[0].action, InteractiveRebaseAction::Reword);
+    }
+
+    #[test]
+    fn undropping_a_target_repromotes_it_and_reverts_the_stand_in() {
+        let mut entries = vec![sc("X", "base"), sc("A", "target"), sc("B", "fold")];
+        entries[0].action = InteractiveRebaseAction::Reword; // promoted while A was dropped
+        entries[1].action = InteractiveRebaseAction::Drop;
+        entries[2].action = InteractiveRebaseAction::Squash;
+        // The user picks A back: it becomes the run's target again and X's
+        // auto-promotion (no typed message) reverts.
+        entries[1].action = InteractiveRebaseAction::Pick;
+        validate_squash_entries(&mut entries);
+        assert_eq!(entries[1].action, InteractiveRebaseAction::Reword);
+        assert_eq!(entries[0].action, InteractiveRebaseAction::Pick);
+    }
+
+    #[test]
+    fn squash_after_fixup_promotes_the_runs_fold_target() {
+        // [Pick A, Fixup B, Squash C]: the run folds into A, so A (not the
+        // fixup) must be auto-promoted to Reword and highlighted as target.
+        let entries = vec![
+            sc("A", "base"),
+            {
+                let mut e = sc("B", "fix");
+                e.action = InteractiveRebaseAction::Fixup;
+                e
+            },
+            {
+                let mut e = sc("C", "more");
+                e.action = InteractiveRebaseAction::Squash;
+                e
+            },
+        ];
+        assert_eq!(squash_target(&entries, 2), Some(0));
+        assert!(entry_is_squash_target(&entries, 0));
+        assert!(!entry_is_squash_target(&entries, 1));
+    }
+
+    #[test]
+    fn stale_reword_edit_cleared_when_squash_joins_the_run() {
+        // A reworded target gains a new squash member: the saved combined
+        // message no longer matches the run and must be dropped.
+        let mut entries = vec![sc("A", "base"), sc("B", "second"), sc("C", "third")];
+        entries[0].action = InteractiveRebaseAction::Reword;
+        entries[0].new_message = Some("edited".to_string());
+        entries[1].action = InteractiveRebaseAction::Squash;
+        let before = reword_edit_signatures(&entries);
+
+        entries[2].action = InteractiveRebaseAction::Squash;
+        clear_stale_reword_edits(&before, &mut entries);
+        assert_eq!(entries[0].new_message, None);
+    }
+
+    #[test]
+    fn stale_reword_edit_cleared_when_squash_leaves_the_run() {
+        let mut entries = vec![sc("A", "base"), sc("B", "second")];
+        entries[0].action = InteractiveRebaseAction::Reword;
+        entries[0].new_message = Some("combined A+B".to_string());
+        entries[1].action = InteractiveRebaseAction::Squash;
+        let before = reword_edit_signatures(&entries);
+
+        entries[1].action = InteractiveRebaseAction::Pick;
+        clear_stale_reword_edits(&before, &mut entries);
+        assert_eq!(entries[0].new_message, None);
+    }
+
+    #[test]
+    fn plain_reword_edit_survives_unrelated_changes() {
+        let mut entries = vec![sc("A", "base"), sc("B", "second"), sc("C", "third")];
+        entries[0].action = InteractiveRebaseAction::Reword;
+        entries[0].new_message = Some("edited".to_string());
+        let before = reword_edit_signatures(&entries);
+
+        // A fixup contributes no message; the edit stays valid.
+        entries[1].action = InteractiveRebaseAction::Fixup;
+        clear_stale_reword_edits(&before, &mut entries);
+        assert_eq!(entries[0].new_message.as_deref(), Some("edited"));
+
+        // Dropping an entry outside the run does not touch it either.
+        let before = reword_edit_signatures(&entries);
+        entries[2].action = InteractiveRebaseAction::Drop;
+        clear_stale_reword_edits(&before, &mut entries);
+        assert_eq!(entries[0].new_message.as_deref(), Some("edited"));
     }
 }

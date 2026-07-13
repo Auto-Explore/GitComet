@@ -179,6 +179,78 @@ pub fn squash_run_final_entry(entries: &[InteractiveRebaseEntry], ix: usize) -> 
     if has_squash { last_fold } else { None }
 }
 
+/// Index of the entry the squash/fixup at `ix` folds into: the nearest
+/// preceding entry that will create a commit (`pick`/`reword`). Squash/fixup
+/// entries in between are members of the same fold run, and `drop` entries
+/// are transparent — the same run rules [`squash_run_final_entry`] encodes
+/// looking forward.
+pub fn squash_fold_target(entries: &[InteractiveRebaseEntry], ix: usize) -> Option<usize> {
+    entries[..ix].iter().rposition(|e| {
+        matches!(
+            e.action,
+            InteractiveRebaseAction::Pick | InteractiveRebaseAction::Reword
+        )
+    })
+}
+
+/// How a raw rebase-todo (or `done`) line participates in message editing.
+/// Single source of the todo-line rules the git backend needs when deciding
+/// whether continuing a paused rebase may open a commit-message editor; kept
+/// next to [`squash_run_final_entry`] so the run rules cannot drift apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TodoLineRole {
+    /// Executes as its own commit and opens a message editor: `reword`, and
+    /// `merge` conservatively — only its `-c` form rewords, but misparsing an
+    /// option must err toward "editor pending", never a silent accept.
+    EditsOwnMessage,
+    /// Folds into the current run and leaves the run's message editor
+    /// pending: `squash`, and `fixup -c`/`-C` (`-c` reopens the editor; `-C`
+    /// replaces the run's final message without one — treated the same,
+    /// conservatively, so neither is ever silently finalized).
+    FoldEditsMessage,
+    /// Folds into the current run with no message editing: plain `fixup`.
+    FoldSilent,
+    /// Invisible to fold runs: `drop`, comments, blank lines.
+    Transparent,
+    /// Every other command (`pick`, `exec`, `label`, …): starts or ends a
+    /// run without editing a message.
+    Other,
+}
+
+/// The commit-id word of a todo line: the first non-option argument after
+/// the command (`squash <id> subject`, `fixup -c <id> subject`). Callers use
+/// it on message-editing lines; for commands whose argument is not a commit
+/// (`label onto`) it returns that argument verbatim.
+pub fn todo_line_commit_word(line: &str) -> Option<&str> {
+    let mut words = line.split_whitespace();
+    words.next()?;
+    words.find(|w| !w.starts_with('-'))
+}
+
+pub fn todo_line_role(line: &str) -> TodoLineRole {
+    let mut words = line.split_whitespace();
+    let Some(first) = words.next() else {
+        return TodoLineRole::Transparent;
+    };
+    if first.starts_with('#') {
+        return TodoLineRole::Transparent;
+    }
+    match InteractiveRebaseAction::from_todo_word(first) {
+        Some(InteractiveRebaseAction::Reword) => TodoLineRole::EditsOwnMessage,
+        Some(InteractiveRebaseAction::Squash) => TodoLineRole::FoldEditsMessage,
+        Some(InteractiveRebaseAction::Fixup) => match words.next() {
+            Some("-c" | "-C") => TodoLineRole::FoldEditsMessage,
+            _ => TodoLineRole::FoldSilent,
+        },
+        Some(InteractiveRebaseAction::Drop) => TodoLineRole::Transparent,
+        Some(InteractiveRebaseAction::Pick) => TodoLineRole::Other,
+        None => match first {
+            "merge" | "m" => TodoLineRole::EditsOwnMessage,
+            _ => TodoLineRole::Other,
+        },
+    }
+}
+
 /// Message to seed the reword dialog with for the entry at `ix`. When commits
 /// squash into `ix`, the seed is the combined message (the target's message
 /// followed by each squashed commit's message), matching what the rebase would
@@ -196,19 +268,34 @@ pub fn reword_seed_message(entries: &[InteractiveRebaseEntry], ix: usize) -> Str
         return msg.clone();
     }
     let mut messages = vec![target.message.clone()];
-    for entry in &entries[ix + 1..] {
-        match entry.action {
-            InteractiveRebaseAction::Squash => messages.push(entry.message.clone()),
-            InteractiveRebaseAction::Fixup => {}
-            InteractiveRebaseAction::Drop => {}
-            InteractiveRebaseAction::Pick | InteractiveRebaseAction::Reword => break,
-        }
-    }
+    messages.extend(squash_run_message_entries(entries, ix).map(|e| e.message.clone()));
     if messages.len() > 1 {
         build_squash_message(&messages)
     } else {
         target.message.clone()
     }
+}
+
+/// The squash entries whose messages fold into the entry at `ix`'s combined
+/// message, in run order: `fixup` folds without contributing a message,
+/// `drop` is transparent, and the next `pick`/`reword` ends the run. The
+/// single walk behind [`reword_seed_message`] and edit-staleness checks, so
+/// the two cannot disagree about a run's message sources.
+pub fn squash_run_message_entries<'a>(
+    entries: &'a [InteractiveRebaseEntry],
+    ix: usize,
+) -> impl Iterator<Item = &'a InteractiveRebaseEntry> {
+    entries
+        .get(ix + 1..)
+        .unwrap_or_default()
+        .iter()
+        .take_while(|e| {
+            !matches!(
+                e.action,
+                InteractiveRebaseAction::Pick | InteractiveRebaseAction::Reword
+            )
+        })
+        .filter(|e| e.action == InteractiveRebaseAction::Squash)
 }
 
 /// Builds the combined squash message: the oldest commit's full message is the
@@ -625,5 +712,98 @@ mod tests {
         let (subject, body) = split_subject_body("Only a subject");
         assert_eq!(subject, "Only a subject");
         assert_eq!(body, "");
+    }
+
+    #[test]
+    fn fold_target_skips_run_members_and_drops() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Pick, "a"),
+            rebase_entry(Fixup, "b"),
+            rebase_entry(Drop, "c"),
+            rebase_entry(Squash, "d"),
+        ];
+        assert_eq!(squash_fold_target(&entries, 3), Some(0));
+        assert_eq!(squash_fold_target(&entries, 1), Some(0));
+    }
+
+    #[test]
+    fn fold_target_is_nearest_pick_or_reword() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Pick, "a"),
+            rebase_entry(Reword, "b"),
+            rebase_entry(Squash, "c"),
+        ];
+        assert_eq!(squash_fold_target(&entries, 2), Some(1));
+    }
+
+    #[test]
+    fn fold_target_none_without_commit_creating_entry_above() {
+        use InteractiveRebaseAction::*;
+        let entries = vec![
+            rebase_entry(Drop, "a"),
+            rebase_entry(Fixup, "b"),
+            rebase_entry(Squash, "c"),
+        ];
+        assert_eq!(squash_fold_target(&entries, 0), None);
+        // b and c only see drops/fold members above, never a pick/reword.
+        assert_eq!(squash_fold_target(&entries, 1), None);
+    }
+
+    #[test]
+    fn todo_role_classifies_actions_and_abbreviations() {
+        use TodoLineRole::*;
+        let sha = "deadbeef";
+        for (line, role) in [
+            (format!("pick {sha} subject"), Other),
+            (format!("reword {sha} subject"), EditsOwnMessage),
+            (format!("r {sha}"), EditsOwnMessage),
+            (format!("squash {sha} subject"), FoldEditsMessage),
+            (format!("s {sha}"), FoldEditsMessage),
+            (format!("fixup {sha} subject"), FoldSilent),
+            (format!("f {sha}"), FoldSilent),
+            (format!("drop {sha} subject"), Transparent),
+            (format!("exec make test"), Other),
+            (format!("label onto"), Other),
+        ] {
+            assert_eq!(todo_line_role(&line), role, "line: {line}");
+        }
+    }
+
+    #[test]
+    fn todo_role_fixup_message_variants_leave_editor_pending() {
+        use TodoLineRole::*;
+        assert_eq!(todo_line_role("fixup -c deadbeef subj"), FoldEditsMessage);
+        assert_eq!(todo_line_role("fixup -C deadbeef subj"), FoldEditsMessage);
+        assert_eq!(todo_line_role("f -c deadbeef"), FoldEditsMessage);
+    }
+
+    #[test]
+    fn todo_role_merge_is_conservatively_editing() {
+        use TodoLineRole::*;
+        assert_eq!(todo_line_role("merge -C 1234abcd topic"), EditsOwnMessage);
+        assert_eq!(todo_line_role("m topic"), EditsOwnMessage);
+    }
+
+    #[test]
+    fn todo_role_comments_and_blanks_are_transparent() {
+        use TodoLineRole::*;
+        assert_eq!(todo_line_role(""), Transparent);
+        assert_eq!(todo_line_role("   "), Transparent);
+        assert_eq!(todo_line_role("# Rebase abc..def onto abc"), Transparent);
+    }
+
+    #[test]
+    fn from_todo_word_inverts_to_todo_str() {
+        use InteractiveRebaseAction::*;
+        for action in [Pick, Reword, Squash, Fixup, Drop] {
+            assert_eq!(
+                InteractiveRebaseAction::from_todo_word(action.to_todo_str()),
+                Some(action)
+            );
+        }
+        assert_eq!(InteractiveRebaseAction::from_todo_word("merge"), None);
+        assert_eq!(InteractiveRebaseAction::from_todo_word("exec"), None);
     }
 }
