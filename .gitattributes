@@ -20,6 +20,12 @@ CONTRIBUTING.md text eol=lf
 LICENSE-AGPL-3.0 text eol=lf
 NOTICE      text eol=lf
 
+# Merge test fixtures encode exact line endings (some are CRLF on purpose);
+# git must never normalize them.
+crates/gitcomet-core/tests/fixtures/merge/*.txt -text
+# Third-party font files ship with their own line endings.
+crates/gitcomet-ui-gpui/assets/fonts/** -text
+
 *.bat       text eol=crlf
 *.cmd       text eol=crlf
 *.ps1       text eol=crlf
