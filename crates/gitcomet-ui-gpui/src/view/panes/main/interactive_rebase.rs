@@ -410,8 +410,6 @@ impl MainPaneView {
         self.interactive_rebase_states.get_mut(&repo_id)
     }
 
-    /// Whether a later commit squashes into the active-setup entry at `ix`.
-
     /// Applies an auto-squash `mode` to the active setup as a one-shot action,
     /// recomputing from the original commit list. Returns `false` when no
     /// commits were eligible — the caller then surfaces a toast and the state is
@@ -494,7 +492,8 @@ impl MainPaneView {
         // new_message only applies to Reword entries; leaving it on a
         // demoted entry would keep displaying an edited subject the rebase
         // will never write (and resurface it on a later re-promotion).
-        if old_action == InteractiveRebaseAction::Reword && action != InteractiveRebaseAction::Reword
+        if old_action == InteractiveRebaseAction::Reword
+            && action != InteractiveRebaseAction::Reword
         {
             st.entries[ix].new_message = None;
         }

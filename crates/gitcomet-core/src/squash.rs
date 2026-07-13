@@ -281,10 +281,10 @@ pub fn reword_seed_message(entries: &[InteractiveRebaseEntry], ix: usize) -> Str
 /// `drop` is transparent, and the next `pick`/`reword` ends the run. The
 /// single walk behind [`reword_seed_message`] and edit-staleness checks, so
 /// the two cannot disagree about a run's message sources.
-pub fn squash_run_message_entries<'a>(
-    entries: &'a [InteractiveRebaseEntry],
+pub fn squash_run_message_entries(
+    entries: &[InteractiveRebaseEntry],
     ix: usize,
-) -> impl Iterator<Item = &'a InteractiveRebaseEntry> {
+) -> impl Iterator<Item = &InteractiveRebaseEntry> {
     entries
         .get(ix + 1..)
         .unwrap_or_default()
@@ -764,8 +764,8 @@ mod tests {
             (format!("fixup {sha} subject"), FoldSilent),
             (format!("f {sha}"), FoldSilent),
             (format!("drop {sha} subject"), Transparent),
-            (format!("exec make test"), Other),
-            (format!("label onto"), Other),
+            ("exec make test".to_string(), Other),
+            ("label onto".to_string(), Other),
         ] {
             assert_eq!(todo_line_role(&line), role, "line: {line}");
         }
