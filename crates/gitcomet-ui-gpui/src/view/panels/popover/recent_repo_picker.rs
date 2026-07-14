@@ -27,8 +27,10 @@ fn recent_repo_picker_item(path: &std::path::Path) -> components::PickerPromptIt
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let ui_scale = super::popover_ui_scale(cx);
+    let ui_scale_percent = ui_scale.percent();
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let width = super::RECENT_PICKER_WIDTH;
     let recent_repos = this.recent_repo_picker_cached_repos.clone();
     let labels = recent_repos
         .iter()
@@ -61,29 +63,26 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     },
                 ),
         )
-        .w(scaled_px(480.0))
-        .max_w(scaled_px(860.0))
+        // Fixed width: PickerPrompt rows size with `w_full`, which does not
+        // stretch under fit-content parents.
+        .w(width.preferred_px(ui_scale))
     } else {
         let mut menu = div()
             .flex()
             .flex_col()
-            .min_w(scaled_px(480.0))
-            .max_w(scaled_px(860.0));
+            .min_w(width.min_px(ui_scale))
+            .max_w(width.max_px(ui_scale));
         for (ix, label) in labels.into_iter().enumerate() {
             let Some(path) = recent_repos.get(ix).cloned() else {
                 continue;
             };
             menu = menu.child(
-                components::context_menu_entry(
+                components::ContextMenuEntry::new(
                     ("recent_repo_item", ix),
-                    theme,
-                    ui_scale_percent,
-                    false,
-                    false,
-                    None,
-                    label,
-                    None,
+                    components::ContextMenuText::path_single_line(label),
                 )
+                .tooltip_host(this.tooltip_host.clone())
+                .render(theme, ui_scale_percent, cx)
                 .on_click(cx.listener(
                     move |this, _event: &ClickEvent, _window, cx| {
                         select_recent_repository(this, path.clone(), cx);

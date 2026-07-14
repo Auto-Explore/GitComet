@@ -9,6 +9,7 @@ use crate::view::markdown_preview::{
 };
 use crate::view::panes::main::diff_search::DiffSearchMatcher;
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
+use gitcomet_state::msg::CommitSelectMode;
 use rustc_hash::FxHasher;
 
 #[derive(Clone)]
@@ -1780,7 +1781,9 @@ impl HistoryView {
                 let decoration_row_vm = cache.decorations.row_vms.get(visible_ix)?;
                 let connect_from_top_col =
                     (show_working_tree_summary_row && visible_ix == 0).then_some(0);
-                let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id);
+                let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id)
+                    || repo.history_state.multi_selection.is_multi()
+                        && repo.history_state.multi_selection.contains(&commit.id);
                 let selected_branch_entry_text = this.selected_branch_entry_text_for_history_row(
                     repo.id,
                     base_row_vm.is_head,
@@ -1988,10 +1991,24 @@ fn history_table_row(
         .child(commit_row)
         .on_mouse_up(
             MouseButton::Left,
-            cx.listener(move |this, _e: &MouseUpEvent, _w, cx| {
-                this.store.dispatch(Msg::SelectCommit {
+            cx.listener(move |this, e: &MouseUpEvent, _w, cx| {
+                let modifiers = e.modifiers;
+                let mode = if modifiers.shift {
+                    CommitSelectMode::Range
+                } else if modifiers.secondary() || modifiers.control || modifiers.platform {
+                    CommitSelectMode::Toggle
+                } else {
+                    CommitSelectMode::Single
+                };
+                let visible_order = (mode == CommitSelectMode::Range)
+                    .then(|| this.visible_commit_ids_for_repo(repo_id))
+                    .flatten();
+                this.store.dispatch(Msg::SelectCommitMulti {
                     repo_id,
                     commit_id: commit_id.clone(),
+                    mode,
+                    clicked_index: Some(graph_row_ix),
+                    visible_order,
                 });
                 cx.notify();
             }),

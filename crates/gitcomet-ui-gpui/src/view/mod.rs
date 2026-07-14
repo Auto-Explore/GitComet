@@ -1254,12 +1254,6 @@ impl GitCometView {
             "rebase" => {
                 // TODO: Implement rebase onto
             }
-            "rebase-continue" => {
-                // TODO: Continue rebase
-            }
-            "rebase-abort" => {
-                // TODO: Abort rebase
-            }
             "create-tag" => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window

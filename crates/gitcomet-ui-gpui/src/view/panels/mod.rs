@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
@@ -69,6 +70,10 @@ pub(in crate::view) enum ContextMenuAction {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// Opens the squash confirmation prompt for the current multi-selection.
+    SquashSelectedCommits {
+        repo_id: RepoId,
     },
     CheckoutBranch {
         repo_id: RepoId,
@@ -200,6 +205,17 @@ pub(in crate::view) enum ContextMenuAction {
     },
     OpenPopover {
         kind: PopoverKind,
+    },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    SetInteractiveRebaseAction {
+        ix: usize,
+        action: InteractiveRebaseAction,
+    },
+    SetInteractiveRebaseAutosquashMode {
+        mode: AutosquashMode,
     },
     ConflictResolverPick {
         target: ResolverPickTarget,

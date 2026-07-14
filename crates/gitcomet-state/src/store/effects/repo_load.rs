@@ -1112,6 +1112,73 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_load_squash_message_preview(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    head: gitcomet_core::domain::CommitId,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SquashMessagePreviewLoaded {
+                repo_id,
+                oldest: oldest.clone(),
+                head: head.clone(),
+                result: repo.squash_message_preview(&oldest, &head),
+            }),
+        );
+    });
+}
+
+/// Payload for scheduling a squash-via-rebase setup load. Bundled so the
+/// scheduler stays within the argument-count budget and the fields travel
+/// together into the resulting `SquashRebaseSetupLoaded` message.
+pub(super) struct SquashRebaseSetupRequest {
+    pub base: gitcomet_core::domain::CommitId,
+    pub actual_head: gitcomet_core::domain::CommitId,
+    pub selected_ids: Vec<gitcomet_core::domain::CommitId>,
+    pub reword_id: gitcomet_core::domain::CommitId,
+    pub message: String,
+    pub count: usize,
+}
+
+pub(super) fn schedule_load_squash_rebase_setup(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    request: SquashRebaseSetupRequest,
+) {
+    let SquashRebaseSetupRequest {
+        base,
+        actual_head,
+        selected_ids,
+        reword_id,
+        message,
+        count,
+    } = request;
+    let base_str = base.as_ref().to_string();
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.list_commits_for_interactive_rebase(&base_str);
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::SquashRebaseSetupLoaded {
+                repo_id,
+                base: base_str,
+                actual_head,
+                selected_ids,
+                reword_id,
+                message,
+                count,
+                result,
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_open_file_at_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1544,4 +1611,43 @@ pub(super) fn schedule_load_selected_diff(
             },
         );
     }
+}
+
+pub(super) fn schedule_load_interactive_rebase_setup(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    base: String,
+) {
+    let base_for_call = base.clone();
+    let base_for_err = base.clone();
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-interactive-rebase-setup",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.list_commits_for_interactive_rebase(&base_for_call);
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
+                    repo_id,
+                    base,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
+                    repo_id,
+                    base: base_for_err,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
 }

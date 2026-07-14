@@ -7,9 +7,9 @@ use gitcomet_core::error::Error;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
-    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, PullMode, RemoteUrlKind,
-    ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
-    SubmoduleTrustDecision, SubmoduleTrustTarget,
+    CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, InteractiveRebaseEntry,
+    PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -39,6 +39,22 @@ pub enum RepoActionKind {
     ApplyStash,
     PopStash,
     DropStash,
+}
+
+/// How a history-row click mutates the commit selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommitSelectMode {
+    /// Plain click: collapse to the clicked commit.
+    Single,
+    /// Ctrl/Cmd click: add or remove the clicked commit.
+    Toggle,
+    /// Shift click: select the range between the anchor and the clicked commit.
+    Range,
+    /// Move focus to the clicked commit while preserving an existing
+    /// multi-selection that already contains it (used by right-click so the
+    /// details pane follows the menu target); collapses to the clicked commit
+    /// when it is not part of the selection.
+    PreserveIfSelected,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,6 +193,15 @@ pub enum Msg {
     SelectCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// Modifier-aware history selection. `visible_order` (the visible commit
+    /// ids in log order) is only provided for `Range` clicks.
+    SelectCommitMulti {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        mode: CommitSelectMode,
+        clicked_index: Option<usize>,
+        visible_order: Option<Vec<CommitId>>,
     },
     ClearCommitSelection {
         repo_id: RepoId,
@@ -552,6 +577,21 @@ pub enum Msg {
         target: String,
         mode: ResetMode,
     },
+    /// Builds the squash message preview for the current multi-selection so
+    /// the squash prompt can prefill its message input.
+    PrepareSquash {
+        repo_id: RepoId,
+    },
+    /// Squashes the linear range `oldest..=expected_head` into one commit.
+    /// The reducer re-validates the range against the current selection and
+    /// log before emitting the effect.
+    SquashCommits {
+        repo_id: RepoId,
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
+    },
     Rebase {
         repo_id: RepoId,
         onto: String,
@@ -560,6 +600,18 @@ pub enum Msg {
         repo_id: RepoId,
     },
     RebaseAbort {
+        repo_id: RepoId,
+    },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    InteractiveRebase {
+        repo_id: RepoId,
+        base: String,
+        entries: Vec<InteractiveRebaseEntry>,
+    },
+    CancelInteractiveRebaseSetup {
         repo_id: RepoId,
     },
     MergeAbort {
@@ -772,6 +824,11 @@ pub enum InternalMsg {
         repo_id: RepoId,
         result: Result<bool, Error>,
     },
+    InteractiveRebaseSetupLoaded {
+        repo_id: RepoId,
+        base: String,
+        result: Result<Vec<InteractiveRebaseEntry>, Error>,
+    },
     MergeCommitMessageLoaded {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
@@ -828,6 +885,22 @@ pub enum InternalMsg {
         repo_id: RepoId,
         commit_id: CommitId,
         result: Result<CommitDetails, Error>,
+    },
+    SquashMessagePreviewLoaded {
+        repo_id: RepoId,
+        oldest: CommitId,
+        head: CommitId,
+        result: Result<String, Error>,
+    },
+    SquashRebaseSetupLoaded {
+        repo_id: RepoId,
+        base: String,
+        actual_head: CommitId,
+        selected_ids: Vec<CommitId>,
+        reword_id: CommitId,
+        message: String,
+        count: usize,
+        result: Result<Vec<InteractiveRebaseEntry>, Error>,
     },
     DiffLoaded {
         repo_id: RepoId,

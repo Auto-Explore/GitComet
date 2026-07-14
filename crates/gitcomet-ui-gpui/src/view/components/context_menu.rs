@@ -76,6 +76,19 @@ impl From<&str> for ContextMenuText {
     }
 }
 
+/// What occupies the fixed-width icon slot at the start of a menu entry.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ContextMenuIconSlot {
+    /// No icon and no reserved space; the label starts at the row edge.
+    #[default]
+    None,
+    /// Keep the icon column empty so the label stays aligned with sibling
+    /// entries that carry an icon.
+    Reserved,
+    /// An icon name or `icons/*.svg` path resolved via `context_menu_icon_path`.
+    Icon(SharedString),
+}
+
 pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
     div()
         .w_full()
@@ -99,8 +112,6 @@ pub fn context_menu_header<V: 'static>(
     let title = title.into();
     let max_lines = title.resolved_max_lines(1);
     div()
-        .w_full()
-        .self_stretch()
         .px(scaled_px(8.0))
         .py(scaled_px(4.0))
         .text_xs()
@@ -129,8 +140,6 @@ pub fn context_menu_label<V: 'static>(
     let text = text.into();
     let max_lines = text.resolved_max_lines(2);
     div()
-        .w_full()
-        .self_stretch()
         .px(scaled_px(8.0))
         .pb(scaled_px(4.0))
         .text_sm()
@@ -151,29 +160,91 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
     let ui_scale = ui_scale.into();
     let scaled_px = |value| ui_scale.px(value);
     div()
-        .w_full()
-        .self_stretch()
         .my(scaled_px(2.0))
         .border_t_1()
         .border_color(theme.colors.border)
 }
 
-pub fn context_menu_entry(
-    id: impl Into<ElementId>,
-    theme: AppTheme,
-    ui_scale: impl Into<UiScale>,
+pub struct ContextMenuEntry {
+    id: ElementId,
+    label: ContextMenuText,
+    icon: ContextMenuIconSlot,
+    shortcut: Option<SharedString>,
     selected: bool,
     disabled: bool,
-    icon: Option<SharedString>,
-    label: impl Into<SharedString>,
-    shortcut: Option<SharedString>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+}
+
+impl ContextMenuEntry {
+    pub fn new(id: impl Into<ElementId>, label: impl Into<ContextMenuText>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            icon: ContextMenuIconSlot::None,
+            shortcut: None,
+            selected: false,
+            disabled: false,
+            tooltip_host: None,
+        }
+    }
+
+    pub fn icon(mut self, icon: ContextMenuIconSlot) -> Self {
+        self.icon = icon;
+        self
+    }
+
+    pub fn shortcut(mut self, shortcut: Option<SharedString>) -> Self {
+        self.shortcut = shortcut;
+        self
+    }
+
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn tooltip_host(mut self, tooltip_host: WeakEntity<TooltipHost>) -> Self {
+        self.tooltip_host = Some(tooltip_host);
+        self
+    }
+
+    pub fn render<V: 'static>(
+        self,
+        theme: AppTheme,
+        ui_scale: impl Into<UiScale>,
+        cx: &gpui::Context<V>,
+    ) -> Stateful<Div> {
+        context_menu_entry(self, theme, ui_scale, cx)
+    }
+}
+
+fn context_menu_entry<V: 'static>(
+    entry: ContextMenuEntry,
+    theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
+    cx: &gpui::Context<V>,
 ) -> Stateful<Div> {
+    let ContextMenuEntry {
+        id,
+        label,
+        icon,
+        shortcut,
+        selected,
+        disabled,
+        tooltip_host,
+    } = entry;
     let ui_scale = ui_scale.into();
     let scaled_px = |value| ui_scale.px(value);
-    let label: SharedString = label.into();
-    let icon_path = icon
-        .as_ref()
-        .and_then(|icon| context_menu_icon_path(icon.as_ref(), label.as_ref()));
+    let max_lines = label.resolved_max_lines(2);
+    let icon_path = match &icon {
+        ContextMenuIconSlot::Icon(name) => context_menu_icon_path(name.as_ref(), label.as_ref()),
+        ContextMenuIconSlot::Reserved | ContextMenuIconSlot::None => None,
+    };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
     let text_color = if disabled {
         theme.colors.text_muted
@@ -183,15 +254,13 @@ pub fn context_menu_entry(
 
     let mut row = div()
         .id(id)
-        .h(control_height_md(ui_scale))
-        .w_full()
-        .min_w_full()
-        .self_stretch()
+        .min_h(control_height_md(ui_scale))
+        .py(scaled_px(4.0))
         .px(scaled_px(8.0))
         .flex()
         .items_center()
         .justify_between()
-        .gap(scaled_px(8.0))
+        .gap(scaled_px(20.0))
         .rounded(px(theme.radii.row))
         .text_color(text_color)
         .when(selected, |s| s.bg(theme.colors.hover))
@@ -207,20 +276,23 @@ pub fn context_menu_entry(
                 .gap(scaled_px(8.0))
                 .flex_1()
                 .min_w(px(0.0))
-                .child(
-                    div()
-                        .w(scaled_px(16.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when_some(icon_path, |this, path| {
-                            this.child(crate::view::icons::svg_icon(
-                                path,
-                                icon_color,
-                                scaled_px(13.0),
-                            ))
-                        }),
-                )
+                .overflow_hidden()
+                .when(!matches!(icon, ContextMenuIconSlot::None), |row| {
+                    row.child(
+                        div()
+                            .w(scaled_px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(icon_path, |this, path| {
+                                this.child(crate::view::icons::svg_icon(
+                                    path,
+                                    icon_color,
+                                    scaled_px(13.0),
+                                ))
+                            }),
+                    )
+                })
                 .child(
                     div()
                         .flex_1()
@@ -228,8 +300,15 @@ pub fn context_menu_entry(
                         .text_sm()
                         .line_height(scaled_px(18.0))
                         .text_color(text_color)
-                        .line_clamp(1)
-                        .child(label),
+                        .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
+                        .when(max_lines > 1, |s| s.line_clamp(max_lines))
+                        .child(context_menu_text_content(
+                            label,
+                            tooltip_host,
+                            cx,
+                            max_lines,
+                            text_color,
+                        )),
                 ),
         );
 
@@ -325,6 +404,7 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/box.svg" => Some("icons/box.svg"),
         "icons/menu.svg" => Some("icons/menu.svg"),
         "icons/swap.svg" => Some("icons/swap.svg"),
+        "icons/squash_arrow.svg" => Some("icons/squash_arrow.svg"),
         "icons/arrow_right.svg" => Some("icons/arrow_right.svg"),
         "icons/infinity.svg" => Some("icons/infinity.svg"),
         "icons/arrow_left.svg" => Some("icons/arrow_left.svg"),
@@ -439,6 +519,7 @@ mod tests {
             "icons/box.svg",
             "icons/menu.svg",
             "icons/swap.svg",
+            "icons/squash_arrow.svg",
             "icons/arrow_right.svg",
             "icons/infinity.svg",
             "icons/arrow_left.svg",
@@ -519,6 +600,7 @@ mod tests {
             "icons/box.svg",
             "icons/infinity.svg",
             "icons/swap.svg",
+            "icons/squash_arrow.svg",
             "icons/arrow_right.svg",
             "icons/arrow_left.svg",
             "icons/pencil.svg",

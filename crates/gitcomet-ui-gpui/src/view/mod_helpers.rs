@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
+use gitcomet_core::services::InteractiveRebaseAction;
 
 type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
 
@@ -2473,6 +2474,28 @@ pub(super) enum StashPickerPurpose {
     Drop,
 }
 
+/// Auto-squash strategy: which commit in each identical-message group survives,
+/// the others being folded (fixup) into it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum AutosquashMode {
+    /// Fold each duplicate group into its newest (top) commit.
+    ToTop,
+    /// Only merge duplicates that are already adjacent in the list.
+    Neighbor,
+    /// Fold each duplicate group into its oldest (bottom) commit.
+    ToBottom,
+}
+
+impl AutosquashMode {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            AutosquashMode::ToTop => "To Top Commit",
+            AutosquashMode::Neighbor => "Neighboring Commit",
+            AutosquashMode::ToBottom => "To Bottom Commit",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
@@ -2513,6 +2536,9 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         target: String,
         mode: ResetMode,
+    },
+    SquashPrompt {
+        repo_id: RepoId,
     },
     CreateTagPrompt {
         repo_id: RepoId,
@@ -2665,6 +2691,22 @@ pub(super) enum PopoverKind {
     DiffContentModeSettings,
     ChangeTrackingSettings,
     UiScalePicker,
+    RebaseOntoConfirm {
+        repo_id: RepoId,
+        onto: String,
+    },
+    RebaseReword {
+        ix: usize,
+        original_action: InteractiveRebaseAction,
+        original_message: String,
+    },
+    InteractiveRebaseActionMenu {
+        ix: usize,
+        is_bottom: bool,
+        can_drop: bool,
+        can_squash: bool,
+    },
+    InteractiveRebaseAutosquashMenu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

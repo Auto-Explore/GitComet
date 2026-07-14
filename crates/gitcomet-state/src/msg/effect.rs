@@ -2,8 +2,8 @@ use crate::model::{ConflictFileLoadMode, RepoId};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::domain::*;
 use gitcomet_core::services::{
-    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext,
-    SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -120,6 +120,23 @@ pub enum Effect {
     LoadCommitDetails {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    LoadSquashMessagePreview {
+        repo_id: RepoId,
+        oldest: CommitId,
+        head: CommitId,
+    },
+    LoadSquashRebaseSetup {
+        repo_id: RepoId,
+        base: CommitId,
+        /// The repo HEAD the plan was validated against. Re-checked once the
+        /// live `base..HEAD` list loads, so a HEAD move during the async gap
+        /// cancels the squash instead of rewriting an unintended range.
+        actual_head: CommitId,
+        selected_ids: Vec<CommitId>,
+        reword_id: CommitId,
+        message: String,
+        count: usize,
     },
     OpenFileAtCommitParent {
         repo_id: RepoId,
@@ -430,6 +447,13 @@ pub enum Effect {
         target: String,
         mode: ResetMode,
     },
+    SquashCommits {
+        repo_id: RepoId,
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
+    },
     Rebase {
         repo_id: RepoId,
         onto: String,
@@ -440,6 +464,18 @@ pub enum Effect {
     RebaseAbort {
         repo_id: RepoId,
     },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    InteractiveRebase {
+        repo_id: RepoId,
+        base: String,
+        entries: Vec<InteractiveRebaseEntry>,
+        /// True for the user-opened editor; false for automated todo-list
+        /// rebases (e.g. squashing history without HEAD).
+        interactive: bool,
+    }, // entries held here so the effect dispatcher can pass them to the scheduler
     MergeAbort {
         repo_id: RepoId,
     },

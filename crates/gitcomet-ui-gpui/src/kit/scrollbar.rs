@@ -1,7 +1,7 @@
 use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{
-    Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, MouseButton,
+    Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, ListState, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, ScrollHandle, UniformListScrollHandle,
     canvas, div, fill, point, px, size,
 };
@@ -127,6 +127,38 @@ impl ScrollbarDriver for UniformListScrollHandle {
     fn drag_started(&self, _axis: ScrollbarAxis) {}
 
     fn drag_ended(&self, _axis: ScrollbarAxis) {}
+}
+
+impl ScrollbarDriver for ListState {
+    fn max_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match axis {
+            // `list` virtualizes vertically only.
+            ScrollbarAxis::Vertical => self.max_offset_for_scrollbar().y.max(px(0.0)),
+            ScrollbarAxis::Horizontal => px(0.0),
+        }
+    }
+
+    fn raw_offset(&self, axis: ScrollbarAxis) -> Pixels {
+        match axis {
+            // Negative y = scrolled down, matching the driver's sign convention.
+            ScrollbarAxis::Vertical => self.scroll_px_offset_for_scrollbar().y,
+            ScrollbarAxis::Horizontal => px(0.0),
+        }
+    }
+
+    fn set_axis_offset(&self, axis: ScrollbarAxis, offset: Pixels) {
+        if axis == ScrollbarAxis::Vertical {
+            self.set_offset_from_scrollbar(point(px(0.0), offset));
+        }
+    }
+
+    fn drag_started(&self, _axis: ScrollbarAxis) {
+        self.scrollbar_drag_started();
+    }
+
+    fn drag_ended(&self, _axis: ScrollbarAxis) {
+        self.scrollbar_drag_ended();
+    }
 }
 
 // ---------------------------------------------------------------------------

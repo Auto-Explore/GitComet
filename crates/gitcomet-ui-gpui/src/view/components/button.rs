@@ -29,6 +29,7 @@ pub struct Button {
     selected_bg: Option<gpui::Rgba>,
     borderless: bool,
     suppress_hover_border: bool,
+    no_focus: bool,
     focus_handle: Option<FocusHandle>,
     start_slot: Option<AnyElement>,
     end_slot: Option<AnyElement>,
@@ -46,6 +47,7 @@ impl Button {
             selected_bg: None,
             borderless: false,
             suppress_hover_border: false,
+            no_focus: false,
             focus_handle: None,
             start_slot: None,
             end_slot: None,
@@ -70,6 +72,11 @@ impl Button {
 
     pub fn no_hover_border(mut self) -> Self {
         self.suppress_hover_border = true;
+        self
+    }
+
+    pub fn no_focus(mut self) -> Self {
+        self.no_focus = true;
         self
     }
 
@@ -160,6 +167,7 @@ impl Button {
             selected_bg,
             borderless,
             suppress_hover_border,
+            no_focus,
             focus_handle,
             start_slot,
             end_slot,
@@ -340,7 +348,7 @@ impl Button {
         if let Some(focus_handle) = focus_handle {
             let focus_handle = focus_handle.tab_stop(!disabled);
             base = base.track_focus(&focus_handle);
-        } else {
+        } else if !no_focus {
             base = base.tab_index(0);
         }
 

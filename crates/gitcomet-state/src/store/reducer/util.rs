@@ -1002,9 +1002,17 @@ fn summarize_command(
             RepoCommandKind::PushTag { .. } => "Push tag",
             RepoCommandKind::DeleteRemoteTag { .. } => "Delete remote tag",
             RepoCommandKind::Reset { .. } => "Reset",
+            RepoCommandKind::SquashCommits { .. } => "Squash",
             RepoCommandKind::Rebase { .. } => "Rebase",
             RepoCommandKind::RebaseContinue => "Rebase",
             RepoCommandKind::RebaseAbort => "Rebase",
+            RepoCommandKind::InteractiveRebase { interactive, .. } => {
+                if *interactive {
+                    "Interactive rebase"
+                } else {
+                    "Rebase"
+                }
+            }
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1202,9 +1210,19 @@ fn summarize_command(
             };
             format!("Reset (--{mode}) {target}: Completed")
         }
+        RepoCommandKind::SquashCommits { count, .. } => {
+            format!("Squash {count} commits: Completed")
+        }
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
         RepoCommandKind::RebaseContinue => "Rebase: Continued".to_string(),
         RepoCommandKind::RebaseAbort => "Rebase: Aborted".to_string(),
+        RepoCommandKind::InteractiveRebase { base, interactive } => {
+            if *interactive {
+                format!("Interactive rebase onto {base}: Completed")
+            } else {
+                format!("Rebase onto {base}: Completed")
+            }
+        }
         RepoCommandKind::MergeAbort => "Merge: Aborted".to_string(),
         RepoCommandKind::CreateTag { name, target, .. } => {
             format!("Tag {name} → {target}: Created")
@@ -1903,6 +1921,13 @@ mod tests {
             ),
             (RepoCommandKind::RebaseContinue, "Rebase"),
             (RepoCommandKind::RebaseAbort, "Rebase"),
+            (
+                RepoCommandKind::InteractiveRebase {
+                    base: "HEAD~3".into(),
+                    interactive: true,
+                },
+                "Interactive rebase",
+            ),
             (RepoCommandKind::MergeAbort, "Merge"),
             (
                 RepoCommandKind::CreateTag {
@@ -2161,6 +2186,32 @@ mod tests {
             None,
         );
         assert_eq!(rebase_abort_summary, "Rebase: Aborted");
+
+        let (_, interactive_rebase_summary) = summarize_command(
+            &RepoCommandKind::InteractiveRebase {
+                base: "HEAD~3".into(),
+                interactive: true,
+            },
+            &command_output("git rebase -i HEAD~3", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            interactive_rebase_summary,
+            "Interactive rebase onto HEAD~3: Completed"
+        );
+
+        // An automated squash rebase (no editor window) reports as "Rebase".
+        let (_, squash_rebase_summary) = summarize_command(
+            &RepoCommandKind::InteractiveRebase {
+                base: "HEAD~3".into(),
+                interactive: false,
+            },
+            &command_output("git rebase -i HEAD~3", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(squash_rebase_summary, "Rebase onto HEAD~3: Completed");
 
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,

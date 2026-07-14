@@ -1,5 +1,5 @@
 use super::actions_emit_effects::invalidate_loaded_blame;
-use super::effects::append_ensure_sidebar_data_effects;
+use super::effects::{append_ensure_sidebar_data_effects, select_commit_and_load_details};
 use super::repo_management::{
     append_cancel_repo_loads_effect_for_repo, append_selected_history_reload_effects,
     selected_history_reloads_for_activation,
@@ -10,10 +10,11 @@ use super::util::{
     push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, DiagnosticKind, Loadable, RepoLoadsInFlight};
+use crate::model::{AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight};
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
+use gitcomet_core::services::InteractiveRebaseEntry;
 use std::sync::Arc;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
@@ -298,6 +299,34 @@ pub(super) fn rebase_state_loaded(
     effects
 }
 
+pub(super) fn interactive_rebase_setup_loaded(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    base: String,
+    result: std::result::Result<Vec<InteractiveRebaseEntry>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        // Discard stale results: only write if setup is still active for this
+        // exact base. Guards against a cancelled setup being revived, or a
+        // result for commit X clobbering a newer load already in flight for Y.
+        if repo_state
+            .interactive_rebase_setup
+            .as_ref()
+            .is_some_and(|s| s.base == base)
+        {
+            let entries = match result {
+                Ok(v) => Loadable::Ready(v),
+                Err(e) => {
+                    push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                    Loadable::Error(e.to_string())
+                }
+            };
+            repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup { base, entries });
+        }
+    }
+    vec![]
+}
+
 pub(super) fn merge_commit_message_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
@@ -384,6 +413,51 @@ pub(super) fn log_loaded(
             && let Loadable::Ready(page) = &repo_state.log
         {
             repo_state.set_detached_head_commit(page.commits.first().map(|c| c.id.clone()));
+        }
+
+        // Reconcile the commit multi-selection against the reloaded page: drop
+        // ids that no longer exist, and drop the anchor index hint since row
+        // indices may have shifted.
+        if !repo_state.history_state.multi_selection.commits.is_empty()
+            && let Loadable::Ready(page) = &repo_state.log
+        {
+            let mut next = repo_state.history_state.multi_selection.clone();
+            next.commits
+                .retain(|id| page.commits.iter().any(|c| c.id == *id));
+            if let Some(anchor) = &next.anchor
+                && !page.commits.iter().any(|c| c.id == *anchor)
+            {
+                next.anchor = None;
+            }
+            next.anchor_index = None;
+            next.anchor_log_rev = None;
+
+            // The focused commit (which drives the details pane) may itself
+            // have vanished — an external amend/rebase can replace exactly the
+            // focused commit. Re-point focus at a surviving selected commit so
+            // the details pane never trails a commit that no longer exists.
+            let focus_gone = repo_state
+                .history_state
+                .selected_commit
+                .as_ref()
+                .is_some_and(|id| !page.commits.iter().any(|c| c.id == *id));
+            let refocus = focus_gone.then(|| next.commits.last().cloned()).flatten();
+
+            repo_state.set_commit_multi_selection(next);
+
+            if focus_gone {
+                match refocus {
+                    Some(commit_id) => {
+                        effects.extend(select_commit_and_load_details(
+                            repo_state, repo_id, commit_id,
+                        ));
+                    }
+                    None => {
+                        repo_state.set_selected_commit(None);
+                        repo_state.set_commit_details(Loadable::NotLoaded);
+                    }
+                }
+            }
         }
 
         if is_load_more {

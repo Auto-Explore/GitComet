@@ -51,11 +51,24 @@ pub enum RepoCommandKind {
         mode: ResetMode,
         target: String,
     },
+    SquashCommits {
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
+    },
     Rebase {
         onto: String,
     },
     RebaseContinue,
     RebaseAbort,
+    InteractiveRebase {
+        base: String,
+        /// True when the interactive-rebase editor was opened by the user;
+        /// false for automated todo-list rebases (e.g. squashing history that
+        /// doesn't include HEAD), which report as a plain "Rebase".
+        interactive: bool,
+    },
     MergeAbort,
     CreateTag {
         name: String,

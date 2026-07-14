@@ -10,8 +10,8 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
 use gitcomet_core::services::{
     BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
-    ConflictSide, ForcePushLease, GitRepository, MergetoolResult, PullMode, RemoteUrlKind,
-    ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
+    ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult, PullMode,
+    RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
     SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
@@ -448,6 +448,19 @@ impl GitRepository for GixRepo {
         self.squash_ref_with_output_impl(reference)
     }
 
+    fn squash_message_preview(&self, oldest: &CommitId, head: &CommitId) -> Result<String> {
+        self.squash_message_preview_impl(oldest, head)
+    }
+
+    fn squash_commits_with_output(
+        &self,
+        oldest: &CommitId,
+        expected_head: &CommitId,
+        message: &str,
+    ) -> Result<CommandOutput> {
+        self.squash_commits_with_output_impl(oldest, expected_head, message)
+    }
+
     fn diff_unified(&self, target: &DiffTarget) -> Result<String> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Diff);
         self.diff_unified_impl(target)
@@ -645,6 +658,21 @@ impl GitRepository for GixRepo {
 
     fn rebase_abort_with_output(&self) -> Result<CommandOutput> {
         self.rebase_abort_with_output_impl()
+    }
+
+    fn list_commits_for_interactive_rebase(
+        &self,
+        base: &str,
+    ) -> Result<Vec<InteractiveRebaseEntry>> {
+        self.list_commits_for_interactive_rebase_impl(base)
+    }
+
+    fn interactive_rebase_with_output(
+        &self,
+        base: &str,
+        entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        self.interactive_rebase_with_output_impl(base, entries)
     }
 
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {

@@ -7,7 +7,8 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{
-    BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
+    BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext,
+    SubmoduleTrustTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -654,6 +655,14 @@ pub struct HistoryState {
     pub selected_commit_rev: u64,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
+    pub multi_selection: CommitMultiSelection,
+    pub squash_preview: Loadable<SquashPreview>,
+    pub squash_preview_rev: u64,
+    /// The `(oldest, head)` range whose message preview is currently being
+    /// loaded. Lets a returning preview result be accepted even if the squash
+    /// plan is transiently invalid (e.g. HEAD momentarily unresolved during a
+    /// concurrent reload), as long as the range still matches what was asked.
+    pub squash_preview_pending: Option<(CommitId, CommitId)>,
 }
 
 impl Default for HistoryState {
@@ -673,8 +682,46 @@ impl Default for HistoryState {
             selected_commit_rev: 0,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
+            multi_selection: CommitMultiSelection::default(),
+            squash_preview: Loadable::NotLoaded,
+            squash_preview_rev: 0,
+            squash_preview_pending: None,
         }
     }
+}
+
+/// Multi-selected commits in the history view. `commits` always mirrors the
+/// selection (a plain single-select stores one id here); only `len() > 1`
+/// switches the UI into multi-selection presentation. The anchor is the
+/// origin for shift-click ranges; `anchor_index`/`anchor_log_rev` are a
+/// resolution hint trusted only while the log revision is unchanged.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommitMultiSelection {
+    pub commits: Vec<CommitId>,
+    pub anchor: Option<CommitId>,
+    pub anchor_index: Option<usize>,
+    pub anchor_log_rev: Option<u64>,
+}
+
+impl CommitMultiSelection {
+    pub fn is_multi(&self) -> bool {
+        self.commits.len() > 1
+    }
+
+    pub fn contains(&self, id: &CommitId) -> bool {
+        self.commits.iter().any(|c| c == id)
+    }
+}
+
+/// Backend-built default message for the squash confirmation prompt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SquashPreview {
+    pub oldest: CommitId,
+    pub head: CommitId,
+    /// Single-line subject, split from the combined message by core.
+    pub subject: String,
+    /// Message body (everything after the subject line), possibly empty.
+    pub body: String,
 }
 
 #[derive(Clone, Debug)]
@@ -798,6 +845,12 @@ fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
 }
 
 #[derive(Clone, Debug)]
+pub struct InteractiveRebaseSetup {
+    pub base: String,
+    pub entries: Loadable<Vec<InteractiveRebaseEntry>>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -847,6 +900,7 @@ pub struct RepoState {
     pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
     pub merge_commit_message: Loadable<Option<String>>,
+    pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub merge_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
@@ -934,6 +988,7 @@ impl RepoState {
             recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            interactive_rebase_setup: None,
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
@@ -1293,9 +1348,43 @@ impl RepoState {
     }
 
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
+        if v.is_none() {
+            // Clearing the selection always dissolves any multi-selection too;
+            // every clear site (scope change, repo switch, diff selection)
+            // relies on this.
+            self.history_state.multi_selection = CommitMultiSelection::default();
+        }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
+        if self.history_state.multi_selection == v {
+            return;
+        }
+        self.history_state.multi_selection = v;
+        self.history_state.selected_commit_rev =
+            self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_squash_preview(&mut self, v: Loadable<SquashPreview>) {
+        self.history_state.squash_preview = v;
+        self.history_state.squash_preview_rev =
+            self.history_state.squash_preview_rev.wrapping_add(1);
+    }
+
+    /// Resolves the commit HEAD points at: the current branch's target when
+    /// attached, else the detached HEAD commit.
+    pub fn head_commit_id(&self) -> Option<CommitId> {
+        if let Loadable::Ready(head_branch) = &self.head_branch
+            && head_branch != "HEAD"
+            && let Loadable::Ready(branches) = &self.branches
+            && let Some(branch) = branches.iter().find(|b| b.name == *head_branch)
+        {
+            return Some(branch.target.clone());
+        }
+        self.detached_head_commit.clone()
     }
 
     pub(crate) fn set_commit_details(&mut self, v: Loadable<Shared<CommitDetails>>) {

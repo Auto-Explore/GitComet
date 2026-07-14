@@ -37,6 +37,10 @@ pub(super) fn model(
     let is_current_branch = active_branch_name
         .as_ref()
         .is_some_and(|branch| branch == name);
+    // Name the branch being moved rather than the opaque "HEAD".
+    let current_branch_label = active_branch_name
+        .clone()
+        .unwrap_or_else(|| "HEAD".to_string());
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
@@ -113,6 +117,18 @@ pub(super) fn model(
                     reference: name.clone(),
                 }),
             });
+            items.push(ContextMenuItem::Entry {
+                label: format!("Rebase {current_branch_label} onto {name}").into(),
+                icon: Some("icons/arrow_up.svg".into()),
+                shortcut: Some("B".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenPopover {
+                    kind: PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name.clone(),
+                    },
+                }),
+            });
         }
         items.push(ContextMenuItem::Entry {
             label: "Delete branch".into(),
@@ -158,6 +174,18 @@ pub(super) fn model(
                 action: Box::new(ContextMenuAction::SquashRef {
                     repo_id,
                     reference: name.clone(),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: format!("Rebase {current_branch_label} onto {name}").into(),
+                icon: Some("icons/arrow_up.svg".into()),
+                shortcut: Some("B".into()),
+                disabled: false,
+                action: Box::new(ContextMenuAction::OpenPopover {
+                    kind: PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name.clone(),
+                    },
                 }),
             });
             items.push(ContextMenuItem::Separator);

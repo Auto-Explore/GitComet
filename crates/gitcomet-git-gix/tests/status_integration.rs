@@ -5020,6 +5020,48 @@ fn rebase_replays_commits_onto_target_branch() {
 }
 
 #[test]
+fn rebase_replays_commits_onto_target_sha() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "base\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "b.txt", "feature\n");
+    run_git(repo, &["add", "b.txt"]);
+    run_git(repo, &["commit", "-m", "feature"]);
+
+    run_git(repo, &["checkout", "main"]);
+    write(repo, "c.txt", "main\n");
+    run_git(repo, &["add", "c.txt"]);
+    run_git(repo, &["commit", "-m", "main"]);
+    let target_sha = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    run_git(repo, &["checkout", "feature"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    opened.rebase_with_output(&target_sha).unwrap();
+
+    assert_eq!(run_git_output(repo, &["rev-parse", "HEAD^"]), target_sha);
+    assert_eq!(fs::read_to_string(repo.join("b.txt")).unwrap(), "feature\n");
+    let status = opened.status().unwrap();
+    assert!(status.staged.is_empty());
+    assert!(status.unstaged.is_empty());
+}
+
+#[test]
 fn rebase_in_progress_and_abort_round_trip() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -5092,6 +5134,63 @@ fn rebase_continue_without_in_progress_rebase_returns_error() {
     let opened = backend.open(repo).unwrap();
 
     assert!(opened.rebase_continue_with_output().is_err());
+}
+
+#[test]
+fn rebase_continue_paused_at_next_conflict_is_ok() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "f.txt", "v0\n");
+    run_git(repo, &["add", "f.txt"]);
+    run_git(repo, &["commit", "-m", "base"]);
+    let default_branch = run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .trim()
+        .to_string();
+
+    // Two feature commits, each of which will conflict when rebased onto a
+    // divergent `onto` commit.
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "f.txt", "A\n");
+    run_git(repo, &["commit", "-am", "A"]);
+    write(repo, "f.txt", "B\n");
+    run_git(repo, &["commit", "-am", "B"]);
+
+    run_git(repo, &["checkout", &default_branch]);
+    write(repo, "f.txt", "onto\n");
+    run_git(repo, &["commit", "-am", "onto"]);
+
+    // Start rebasing `feature` onto the divergent branch: pauses at A's conflict.
+    run_git(repo, &["checkout", "feature"]);
+    run_git_expect_failure(repo, &["rebase", &default_branch]);
+
+    // Resolve the first conflict.
+    write(repo, "f.txt", "resolved-A\n");
+    run_git(repo, &["add", "f.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    // Continuing applies B, which conflicts again. This pauses the rebase at the
+    // next conflict — a normal outcome, not a failure — so it must be Ok and the
+    // rebase must still be in progress (regression test for the stuck-spinner bug).
+    let result = opened.rebase_continue_with_output();
+    assert!(
+        result.is_ok(),
+        "rebase --continue that pauses at the next conflict should be Ok, got {result:?}"
+    );
+    assert!(
+        opened.rebase_in_progress().unwrap(),
+        "rebase should still be in progress after pausing at the next conflict"
+    );
 }
 
 #[test]

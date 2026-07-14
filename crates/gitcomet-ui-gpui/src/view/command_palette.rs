@@ -341,8 +341,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "delete-remote-branch"   - Delete Remote Branch
     // TODO: "merge"                  - Merge Branch/Ref
     // TODO: "rebase"                 - Rebase Onto
-    // TODO: "rebase-continue"        - Continue Rebase (Merge/Rebase)
-    // TODO: "rebase-abort"           - Abort Rebase (Merge/Rebase)
     // TODO: "delete-tag"             - Delete Tag
     // TODO: "remove-remote"          - Remove Remote
     // TODO: "edit-remote-url"        - Edit Remote URL

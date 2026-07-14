@@ -141,6 +141,58 @@ pub enum RemoteUrlKind {
     Push,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InteractiveRebaseAction {
+    Pick,
+    Reword,
+    Squash,
+    Fixup,
+    Drop,
+}
+
+impl InteractiveRebaseAction {
+    pub fn to_todo_str(self) -> &'static str {
+        match self {
+            Self::Pick => "pick",
+            Self::Reword => "reword",
+            Self::Squash => "squash",
+            Self::Fixup => "fixup",
+            Self::Drop => "drop",
+        }
+    }
+
+    /// Inverse of [`Self::to_todo_str`], also accepting git's single-letter
+    /// abbreviations. `None` for todo commands that are not entry actions
+    /// (`exec`, `merge`, `label`, …).
+    pub fn from_todo_word(word: &str) -> Option<Self> {
+        Some(match word {
+            "pick" | "p" => Self::Pick,
+            "reword" | "r" => Self::Reword,
+            "squash" | "s" => Self::Squash,
+            "fixup" | "f" => Self::Fixup,
+            "drop" | "d" => Self::Drop,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InteractiveRebaseEntry {
+    pub action: InteractiveRebaseAction,
+    pub commit_id: String,
+    /// Single-line original commit subject (git's `%s`), used for list display
+    /// and autosquash grouping. Never reflects `new_message` — display code
+    /// derives an edited subject via `squash::split_subject_body`.
+    pub summary: String,
+    /// Full original commit message (subject + body). Seeds the reword dialog
+    /// (`squash::reword_seed_message`) and contributes to combined squash
+    /// messages; never edited in place.
+    pub message: String,
+    /// Full replacement message (subject + body), set only when action is
+    /// Reword. Its subject may differ from `summary`.
+    pub new_message: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubmoduleTrustTarget {
     pub submodule_path: PathBuf,
@@ -556,6 +608,23 @@ pub trait GitRepository: Send + Sync {
             "git rebase --abort is not implemented for this backend",
         )))
     }
+    fn list_commits_for_interactive_rebase(
+        &self,
+        _base: &str,
+    ) -> Result<Vec<InteractiveRebaseEntry>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "listing commits for interactive rebase is not implemented for this backend",
+        )))
+    }
+    fn interactive_rebase_with_output(
+        &self,
+        _base: &str,
+        _entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git rebase -i is not implemented for this backend",
+        )))
+    }
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git merge --abort is not implemented for this backend",
@@ -765,6 +834,31 @@ pub trait GitRepository: Send + Sync {
     fn squash_ref_with_output(&self, _reference: &str) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "squashing a specific ref is not implemented for this backend",
+        )))
+    }
+
+    /// Builds the default combined message for squashing the linear commit
+    /// range `oldest..=head`: the oldest commit's full message first, younger
+    /// messages appended as paragraphs.
+    fn squash_message_preview(&self, _oldest: &CommitId, _head: &CommitId) -> Result<String> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "squashing commits is not implemented for this backend",
+        )))
+    }
+
+    /// Squashes the linear first-parent range `oldest..=expected_head` (which
+    /// must end at the current HEAD) into a single commit carrying `message`,
+    /// preserving the oldest commit's author. Must not touch the worktree or
+    /// index, and must fail without changing refs when HEAD no longer equals
+    /// `expected_head`.
+    fn squash_commits_with_output(
+        &self,
+        _oldest: &CommitId,
+        _expected_head: &CommitId,
+        _message: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "squashing commits is not implemented for this backend",
         )))
     }
 
