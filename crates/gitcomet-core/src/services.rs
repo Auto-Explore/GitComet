@@ -355,6 +355,15 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Full `%B` messages of the given commits, in input order. Message-only
+    /// on purpose: callers like the cherry-pick editor need nothing else, and
+    /// implementations should skip the per-commit tree diff `commit_details`
+    /// pays for.
+    fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        ids.iter()
+            .map(|id| self.commit_details(id).map(|details| details.message))
+            .collect()
+    }
     fn recent_commit_messages(&self, _limit: usize) -> Result<Vec<RecentCommitMessage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "recent commit messages are not implemented for this backend",

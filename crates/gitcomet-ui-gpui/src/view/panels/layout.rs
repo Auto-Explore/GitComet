@@ -74,6 +74,36 @@ fn commit_message_sha_highlights(message: &str, theme: AppTheme) -> CommitMessag
     (highlights, Arc::from(links))
 }
 
+/// Bold highlights for the message's summary line, so it reads as a title
+/// over the description below. SHA-link ranges keep their own style: the
+/// summary is bolded around them, since the run builder expects
+/// non-overlapping highlight ranges.
+fn commit_message_summary_highlights(
+    message: &str,
+    occupied: &[(Range<usize>, gpui::HighlightStyle)],
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let summary_end = message.find('\n').unwrap_or(message.len());
+    let bold = gpui::HighlightStyle {
+        font_weight: Some(gpui::FontWeight::BOLD),
+        ..gpui::HighlightStyle::default()
+    };
+    let mut highlights = Vec::new();
+    let mut cursor = 0usize;
+    for (range, _) in occupied {
+        if range.start >= summary_end {
+            break;
+        }
+        if range.start > cursor {
+            highlights.push((cursor..range.start, bold));
+        }
+        cursor = cursor.max(range.end);
+    }
+    if cursor < summary_end {
+        highlights.push((cursor..summary_end, bold));
+    }
+    highlights
+}
+
 fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
     if value.is_empty() || value == "—" {
         Vec::new()
@@ -556,7 +586,8 @@ impl DetailsPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (highlights, links) = commit_message_sha_highlights(message, theme);
+        let (mut highlights, links) = commit_message_sha_highlights(message, theme);
+        highlights.extend(commit_message_summary_highlights(message, &highlights));
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
@@ -651,7 +682,7 @@ impl DetailsPaneView {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
-            input.set_highlights(Vec::new(), cx);
+            input.set_highlights(commit_message_summary_highlights(message, &[]), cx);
         });
         self.commit_details_message_sha_menu.update(cx, |menu, cx| {
             menu.sync(

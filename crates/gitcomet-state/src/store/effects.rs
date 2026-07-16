@@ -1034,7 +1034,7 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::RebaseContinue { repo_id } => send(Msg::Internal(
+        Effect::RebaseContinue { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::RebaseContinue,
@@ -1052,6 +1052,13 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::InteractiveRebaseSetupLoaded {
                 repo_id,
                 base,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::LoadInteractiveCherryPickMessages { repo_id, ids } => send(Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id,
+                requested_ids: ids,
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -2203,8 +2210,8 @@ pub(super) fn schedule_effect(
         Effect::Rebase { repo_id, onto } => {
             repo_commands::schedule_rebase(executor, repos, msg_tx, repo_id, onto)
         }
-        Effect::RebaseContinue { repo_id } => {
-            repo_commands::schedule_rebase_continue(executor, repos, msg_tx, repo_id);
+        Effect::RebaseContinue { repo_id, auth } => {
+            repo_commands::schedule_rebase_continue(executor, repos, msg_tx, repo_id, auth);
         }
         Effect::RebaseAbort { repo_id } => {
             repo_commands::schedule_rebase_abort(executor, repos, msg_tx, repo_id)
@@ -2212,6 +2219,11 @@ pub(super) fn schedule_effect(
         Effect::LoadInteractiveRebaseSetup { repo_id, base } => {
             repo_load::schedule_load_interactive_rebase_setup(
                 executor, repos, msg_tx, repo_id, base,
+            );
+        }
+        Effect::LoadInteractiveCherryPickMessages { repo_id, ids } => {
+            repo_load::schedule_load_interactive_cherry_pick_messages(
+                executor, repos, msg_tx, repo_id, ids,
             );
         }
         Effect::InteractiveRebase {

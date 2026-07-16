@@ -333,6 +333,55 @@ pub(super) fn interactive_rebase_setup_loaded(
     vec![]
 }
 
+/// Makes an interactive cherry-pick setup editable only after every selected
+/// commit's full `%B` message has loaded. The setup opens with subject-only
+/// seeds, so exposing it earlier would let a reword silently drop the body.
+/// A response for a selection that has since been replaced is ignored.
+pub(super) fn interactive_cherry_pick_messages_loaded(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    requested_ids: Vec<String>,
+    result: std::result::Result<Vec<(String, String)>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && let Some(setup) = repo_state.interactive_cherry_pick_setup.as_mut()
+    {
+        let current_ids: Vec<&str> = setup
+            .entries
+            .iter()
+            .map(|entry| entry.commit_id.as_str())
+            .collect();
+        if current_ids != requested_ids.iter().map(String::as_str).collect::<Vec<_>>() {
+            return vec![];
+        }
+
+        match result {
+            Ok(messages) => {
+                let mut loaded_messages = Vec::with_capacity(setup.entries.len());
+                for entry in &setup.entries {
+                    let Some((_, message)) = messages
+                        .iter()
+                        .find(|(id, _)| id.as_str() == entry.commit_id)
+                    else {
+                        setup.full_messages = Loadable::Error(format!(
+                            "Failed to load the full message for commit {}",
+                            entry.commit_id
+                        ));
+                        return vec![];
+                    };
+                    loaded_messages.push(message.clone());
+                }
+                for (entry, message) in setup.entries.iter_mut().zip(loaded_messages) {
+                    entry.message = message;
+                }
+                setup.full_messages = Loadable::Ready(());
+            }
+            Err(error) => setup.full_messages = Loadable::Error(error.to_string()),
+        }
+    }
+    vec![]
+}
+
 pub(super) fn merge_commit_message_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,

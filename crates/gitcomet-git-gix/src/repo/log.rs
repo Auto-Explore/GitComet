@@ -1289,6 +1289,33 @@ impl GixRepo {
         })
     }
 
+    pub(super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        let repo = self._repo.to_thread_local();
+        ids.iter()
+            .map(|id| {
+                let spec = id.as_ref();
+                let commit = repo
+                    .rev_parse_single(spec)
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}")))
+                    })?
+                    .object()
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
+                    })?
+                    .peel_to_commit()
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
+                    })?;
+                Ok(
+                    bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
+                        .trim_end()
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
     pub(super) fn recent_commit_messages_impl(
         &self,
         limit: usize,

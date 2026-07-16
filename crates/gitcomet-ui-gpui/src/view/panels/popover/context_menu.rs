@@ -1400,6 +1400,15 @@ impl PopoverHost {
                     )
                     .id(("context_menu_header", ix))
                     .into_any_element(),
+                    ContextMenuItem::Description(text) => components::context_menu_description(
+                        theme,
+                        ui_scale,
+                        text,
+                        Some(tooltip_host.clone()),
+                        cx,
+                    )
+                    .id(("context_menu_description", ix))
+                    .into_any_element(),
                     ContextMenuItem::Label(text) => components::context_menu_label(
                         theme,
                         ui_scale,

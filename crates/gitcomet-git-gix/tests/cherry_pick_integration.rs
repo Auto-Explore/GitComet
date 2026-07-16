@@ -10,6 +10,17 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 
+#[cfg(unix)]
+fn install_prepare_commit_msg_hook(repo: &Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let hook = repo.join(".git").join("hooks").join("prepare-commit-msg");
+    fs::write(&hook, script).expect("write prepare-commit-msg hook");
+    let mut permissions = fs::metadata(&hook).expect("stat hook").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(hook, permissions).expect("make hook executable");
+}
+
 fn run_git(repo: &Path, args: &[&str]) {
     let mut cmd = Command::new("git");
     test_git_env::apply(&mut cmd);
@@ -187,6 +198,586 @@ fn interactive_reword_without_changed_message_uses_original_message() {
     );
 }
 
+#[test]
+fn custom_cherry_pick_rejects_staged_changes() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let picked = commit_file(&repo, "feature.txt", "feature\n", "feature change");
+    run_git(&repo, &["checkout", "main"]);
+    let before_head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    fs::write(repo.join("unrelated.txt"), "staged work\n").expect("write staged file");
+    run_git(&repo, &["add", "unrelated.txt"]);
+
+    let err = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[InteractiveRebaseEntry {
+            action: InteractiveRebaseAction::Reword,
+            commit_id: picked,
+            summary: "feature change".to_string(),
+            message: "feature change".to_string(),
+            new_message: Some("reworded".to_string()),
+        }])
+        .expect_err("staged changes should reject a custom cherry-pick");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("uncommitted changes") || message.contains("unstaged"),
+        "unexpected dirty-index error: {message}"
+    );
+    // The staged work is untouched and nothing was committed or left in
+    // progress.
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
+    assert_eq!(
+        git_stdout(&repo, &["status", "--porcelain"]),
+        "A  unrelated.txt"
+    );
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+}
+
+#[test]
+fn custom_cherry_pick_resumes_full_plan_after_conflict() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let conflicting = commit_file(&repo, "file.txt", "feature\n", "feature change");
+    let reworded = commit_file(&repo, "second.txt", "second\n", "second change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "file.txt", "main\n", "main change");
+
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: conflicting,
+                summary: "feature change".to_string(),
+                message: "feature change".to_string(),
+                new_message: None,
+            },
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Reword,
+                commit_id: reworded,
+                summary: "second change".to_string(),
+                message: "second change".to_string(),
+                new_message: Some("second reworded".to_string()),
+            },
+        ])
+        .expect("conflicting custom cherry-pick should pause, not fail");
+    assert_ne!(output.exit_code, Some(0));
+    assert!(open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU file.txt");
+
+    fs::write(repo.join("file.txt"), "resolved\n").expect("resolve conflict");
+    run_git(&repo, &["add", "file.txt"]);
+
+    open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect("continue should finish the remaining plan");
+
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        git_stdout(&repo, &["log", "-2", "--format=%s"]),
+        "second reworded\nfeature change"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("second.txt")).unwrap(),
+        "second\n"
+    );
+}
+
+#[test]
+fn custom_cherry_pick_drops_already_applied_commits() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "shared.txt", "old\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let applied = commit_file(&repo, "shared.txt", "new\n", "same change");
+    let reworded = commit_file(&repo, "extra.txt", "extra\n", "extra change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "shared.txt", "new\n", "same change independently");
+    let before_count: u32 = git_stdout(&repo, &["rev-list", "--count", "HEAD"])
+        .parse()
+        .unwrap();
+
+    open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: applied,
+                summary: "same change".to_string(),
+                message: "same change".to_string(),
+                new_message: None,
+            },
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Reword,
+                commit_id: reworded,
+                summary: "extra change".to_string(),
+                message: "extra change".to_string(),
+                new_message: Some("extra reworded".to_string()),
+            },
+        ])
+        .expect("already-applied pick should be dropped, not strand the plan");
+
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
+        (before_count + 1).to_string()
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "extra reworded"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("extra.txt")).unwrap(),
+        "extra\n"
+    );
+}
+
+#[test]
+fn multi_cherry_pick_skips_already_applied_commits() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "shared.txt", "old\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let applied = commit_file(&repo, "shared.txt", "new\n", "same change");
+    let fresh = commit_file(&repo, "fresh.txt", "fresh\n", "fresh change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "shared.txt", "new\n", "same change independently");
+    let before_count: u32 = git_stdout(&repo, &["rev-list", "--count", "HEAD"])
+        .parse()
+        .unwrap();
+
+    let pick = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Pick,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(applied, "same change"),
+            pick(fresh, "fresh change"),
+        ])
+        .expect("empty pick should be skipped, not strand the sequence");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
+        (before_count + 1).to_string()
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "fresh change"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("fresh.txt")).unwrap(),
+        "fresh\n"
+    );
+}
+
+#[test]
+fn initial_multi_cherry_pick_conflict_is_reported_as_a_pause() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let conflicting = commit_file(&repo, "file.txt", "feature\n", "first change");
+    let later = commit_file(&repo, "later.txt", "later\n", "later change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "file.txt", "main\n", "main change");
+
+    let pick = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Pick,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(conflicting, "first change"),
+            pick(later, "later change"),
+        ])
+        .expect("initial conflict should be a valid sequencer pause");
+
+    assert_ne!(output.exit_code, Some(0));
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU file.txt");
+}
+
+#[test]
+fn cherry_pick_continue_without_resolution_is_an_error() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    fs::write(repo.join("one.txt"), "base\n").expect("write one.txt");
+    commit_file(&repo, "two.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let first = commit_file(&repo, "one.txt", "feature one\n", "first change");
+    let second = commit_file(&repo, "two.txt", "feature two\n", "second change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "one.txt", "main one\n", "main one");
+    commit_file(&repo, "two.txt", "main two\n", "main two");
+
+    let conflict = git_output(&repo, &["cherry-pick", &first, &second]);
+    assert!(
+        !conflict.status.success(),
+        "cherry-pick should pause at the first conflict"
+    );
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+
+    // Continuing without resolving anything must fail instead of being
+    // reported as a successful continue.
+    open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect_err("continue without resolution should fail");
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+
+    // A continue that commits the resolved pick and pauses at the next
+    // conflict is genuine progress and reported as a pause.
+    fs::write(repo.join("one.txt"), "resolved one\n").expect("resolve first conflict");
+    run_git(&repo, &["add", "one.txt"]);
+    let output = open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect("continue past the first conflict");
+    assert_ne!(output.exit_code, Some(0));
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "UU two.txt");
+
+    fs::write(repo.join("two.txt"), "resolved two\n").expect("resolve second conflict");
+    run_git(&repo, &["add", "two.txt"]);
+    open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect("finish the cherry-pick");
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::None
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-2", "--format=%s"]),
+        "second change\nfirst change"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cherry_pick_continue_surfaces_hook_failure_on_later_step() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let first = commit_file(&repo, "file.txt", "feature\n", "first change");
+    let second = commit_file(&repo, "second.txt", "second\n", "second change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "file.txt", "main\n", "main change");
+
+    let pick = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Pick,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(first, "first change"),
+            pick(second, "second change"),
+        ])
+        .expect("first conflict should pause");
+    install_prepare_commit_msg_hook(
+        &repo,
+        "#!/bin/sh\nif grep -q 'second change' \"$1\"; then\n  echo GITCOMET_PREPARE_HOOK_FAILURE >&2\n  exit 1\nfi\nexit 0\n",
+    );
+
+    fs::write(repo.join("file.txt"), "resolved\n").expect("resolve first conflict");
+    run_git(&repo, &["add", "file.txt"]);
+    let error = open_backend(&repo)
+        .rebase_continue_with_output()
+        .expect_err("later non-conflict hook failure must be surfaced");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("GITCOMET_PREPARE_HOOK_FAILURE"),
+        "unexpected hook error: {message}"
+    );
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+    assert_eq!(
+        git_stdout(&repo, &["diff", "--name-only", "--diff-filter=U"]),
+        ""
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "first change"
+    );
+    assert_eq!(
+        git_stdout(&repo, &["status", "--porcelain"]),
+        "A  second.txt"
+    );
+}
+
+#[test]
+fn multi_cherry_pick_preserves_intentionally_empty_commits() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "empty marker",
+        ],
+    );
+    let empty = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    let fresh = commit_file(&repo, "fresh.txt", "fresh\n", "fresh change");
+    run_git(&repo, &["checkout", "main"]);
+    let before_count: u32 = git_stdout(&repo, &["rev-list", "--count", "HEAD"])
+        .parse()
+        .unwrap();
+
+    let pick = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Pick,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(empty, "empty marker"),
+            pick(fresh, "fresh change"),
+        ])
+        .expect("intentionally empty commit should be preserved");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        git_stdout(&repo, &["rev-list", "--count", "HEAD"]),
+        (before_count + 2).to_string()
+    );
+    assert_eq!(
+        git_stdout(&repo, &["log", "-2", "--format=%s"]),
+        "fresh change\nempty marker"
+    );
+}
+
+#[test]
+fn intentionally_empty_cherry_pick_signing_failure_is_not_auto_skipped() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "empty marker",
+        ],
+    );
+    let empty = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["checkout", "main"]);
+    let before_head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["config", "commit.gpgsign", "true"]);
+    run_git(&repo, &["config", "gpg.program", "false"]);
+
+    let error = open_backend(&repo)
+        .cherry_pick_with_output(&commit_id(&empty), true)
+        .expect_err("signing failure must not be mistaken for an empty replay");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("sign") || message.contains("gpg"),
+        "unexpected signing error: {message}"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "CHERRY_PICK_HEAD"]), empty);
+}
+
+#[test]
+fn empty_pick_auto_skip_works_with_untracked_files_present() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "shared.txt", "old\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let applied = commit_file(&repo, "shared.txt", "new\n", "same change");
+    let fresh = commit_file(&repo, "fresh.txt", "fresh\n", "fresh change");
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "shared.txt", "new\n", "same change independently");
+    // An untracked file changes git's stop message ("nothing added to
+    // commit but untracked files present"); the empty stop must still be
+    // recognized from repository state.
+    fs::write(repo.join("untracked.txt"), "scratch\n").expect("write untracked file");
+
+    let pick = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Pick,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(applied, "same change"),
+            pick(fresh, "fresh change"),
+        ])
+        .expect("empty pick should be skipped despite untracked files");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(!open_backend(&repo).rebase_in_progress().unwrap());
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "fresh change"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("untracked.txt")).unwrap(),
+        "scratch\n"
+    );
+}
+
+#[test]
+fn multi_cherry_pick_rejects_merge_commits_before_starting() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "feature"]);
+    let plain = commit_file(&repo, "feature.txt", "feature\n", "feature one");
+    run_git(&repo, &["checkout", "-b", "side"]);
+    commit_file(&repo, "side.txt", "side\n", "side change");
+    run_git(&repo, &["checkout", "feature"]);
+    commit_file(&repo, "feature2.txt", "feature2\n", "feature two");
+    run_git(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "merge",
+            "--no-ff",
+            "side",
+            "-m",
+            "merge side",
+        ],
+    );
+    let merge = git_stdout(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["checkout", "main"]);
+    let before_head = git_stdout(&repo, &["rev-parse", "HEAD"]);
+
+    let pick = |commit_id: String, subject: &str| InteractiveRebaseEntry {
+        action: InteractiveRebaseAction::Pick,
+        commit_id,
+        summary: subject.to_string(),
+        message: subject.to_string(),
+        new_message: None,
+    };
+    // Without the up-front check, git would commit "feature one" and then
+    // stop on the merge with sequencer state the UI cannot act on.
+    let err = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(plain.clone(), "feature one"),
+            pick(merge.clone(), "merge side"),
+        ])
+        .expect_err("a selected merge commit should be rejected before any pick runs");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("merge commit"),
+        "unexpected merge rejection error: {message}"
+    );
+    assert_eq!(git_stdout(&repo, &["rev-parse", "HEAD"]), before_head);
+    assert_eq!(git_stdout(&repo, &["status", "--porcelain"]), "");
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::None
+    );
+
+    // A merge the plan drops never reaches git and must not block the rest.
+    let output = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[
+            pick(plain, "feature one"),
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Drop,
+                commit_id: merge,
+                summary: "merge side".to_string(),
+                message: "merge side".to_string(),
+                new_message: None,
+            },
+        ])
+        .expect("dropped merge should not block the plan");
+    assert_eq!(output.exit_code, Some(0));
+    assert_eq!(
+        git_stdout(&repo, &["log", "-1", "--format=%s"]),
+        "feature one"
+    );
+}
+
+#[test]
+fn custom_cherry_pick_on_unborn_branch_reports_clear_error() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let source = dir.path().join("source");
+    init_repo(&source);
+    let picked = commit_file(&source, "feature.txt", "feature\n", "feature change");
+
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    run_git(&repo, &["fetch", source.to_str().expect("utf8 path")]);
+
+    let err = open_backend(&repo)
+        .interactive_cherry_pick_with_output(&[InteractiveRebaseEntry {
+            action: InteractiveRebaseAction::Reword,
+            commit_id: picked,
+            summary: "feature change".to_string(),
+            message: "feature change".to_string(),
+            new_message: Some("reworded".to_string()),
+        }])
+        .expect_err("custom plan on unborn branch should be rejected clearly");
+
+    let message = err.to_string();
+    assert!(
+        message.contains("existing commit"),
+        "unexpected unborn-branch error: {message}"
+    );
+}
+
 fn setup_conflicting_cherry_pick_repo(repo: &Path) -> String {
     init_repo(repo);
     commit_file(repo, "file.txt", "base\n", "base");
@@ -311,5 +902,34 @@ fn continue_falls_back_to_cherry_pick_continue_when_cherry_pick_is_paused() {
     assert_eq!(
         fs::read_to_string(repo.join("file.txt")).unwrap(),
         "resolved\n"
+    );
+}
+
+#[test]
+fn abort_returns_active_cherry_pick_lock_error() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    let picked = setup_conflicting_cherry_pick_repo(&repo);
+    commit_file(&repo, "file.txt", "main\n", "main change");
+    let conflict = git_output(&repo, &["cherry-pick", &picked]);
+    assert!(!conflict.status.success(), "cherry-pick should conflict");
+    fs::write(repo.join(".git").join("index.lock"), "locked\n").expect("create index lock");
+
+    let error = open_backend(&repo)
+        .rebase_abort_with_output()
+        .expect_err("active cherry-pick abort error should be returned");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("index.lock") || message.contains("Unable to create"),
+        "unexpected abort error: {message}"
+    );
+    assert!(
+        !message.contains("No rebase in progress"),
+        "cherry-pick error was replaced by the rebase fallback: {message}"
+    );
+    assert_eq!(
+        open_backend(&repo).sequencer_state().unwrap(),
+        SequencerState::CherryPick
     );
 }

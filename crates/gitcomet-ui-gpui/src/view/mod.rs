@@ -578,15 +578,18 @@ impl GitCometView {
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
 
+        let theme = self.theme;
         let query_input = cx.new(|cx| {
-            components::TextInput::new(
+            let mut input = components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "Type to search commands...".into(),
                     ..Default::default()
                 },
                 window,
                 cx,
-            )
+            );
+            input.set_theme(theme, cx);
+            input
         });
 
         self.command_palette_subscription =

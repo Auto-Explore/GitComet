@@ -902,6 +902,7 @@ pub(super) fn schedule_rebase_continue(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -909,7 +910,7 @@ pub(super) fn schedule_rebase_continue(
         msg_tx,
         repo_id,
         RepoCommandKind::RebaseContinue,
-        |repo| repo.rebase_continue_with_output(),
+        move |repo| run_with_git_auth(auth, || repo.rebase_continue_with_output()),
     );
 }
 

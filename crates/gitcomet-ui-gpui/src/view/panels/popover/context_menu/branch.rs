@@ -41,6 +41,10 @@ pub(super) fn model(
     let current_branch_label = active_branch_name
         .clone()
         .unwrap_or_else(|| "HEAD".to_string());
+    // Git refuses to start a rebase while another rebase, cherry-pick,
+    // revert, or unconcluded merge is in flight; grey the entry out instead
+    // of letting the click surface that refusal.
+    let history_rewrite_disabled = repo.is_some_and(|r| r.history_rewrite_busy());
 
     items.push(ContextMenuItem::Entry {
         label: "Checkout".into(),
@@ -121,7 +125,7 @@ pub(super) fn model(
                 label: format!("Rebase {current_branch_label} onto {name}").into(),
                 icon: Some("icons/arrow_up.svg".into()),
                 shortcut: Some("B".into()),
-                disabled: false,
+                disabled: history_rewrite_disabled,
                 action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::RebaseOntoConfirm {
                         repo_id,
@@ -180,7 +184,7 @@ pub(super) fn model(
                 label: format!("Rebase {current_branch_label} onto {name}").into(),
                 icon: Some("icons/arrow_up.svg".into()),
                 shortcut: Some("B".into()),
-                disabled: false,
+                disabled: history_rewrite_disabled,
                 action: Box::new(ContextMenuAction::OpenPopover {
                     kind: PopoverKind::RebaseOntoConfirm {
                         repo_id,

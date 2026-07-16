@@ -1113,6 +1113,10 @@ impl MainPaneView {
             return div().child("No active repo");
         };
         let repo_id = repo.id;
+        // Setups can outlive the state they were opened under (a merge or
+        // pick started from another surface, or externally in a terminal);
+        // git would refuse the start, so hold the button until it can work.
+        let history_rewrite_busy = repo.history_rewrite_busy();
         let (editor_mode, base, header_title, header_detail, loading_state) =
             if let Some(setup) = repo.interactive_rebase_setup.as_ref() {
                 let base = setup.base.clone();
@@ -1142,12 +1146,18 @@ impl MainPaneView {
                 )
             } else if let Some(setup) = repo.interactive_cherry_pick_setup.as_ref() {
                 let count = setup.entries.len();
+                let entries = match &setup.full_messages {
+                    Loadable::NotLoaded => Loadable::NotLoaded,
+                    Loadable::Loading => Loadable::Loading,
+                    Loadable::Ready(()) => Loadable::Ready(setup.entries.clone()),
+                    Loadable::Error(error) => Loadable::Error(error.clone()),
+                };
                 (
                     ICommitEditorMode::CherryPick,
                     None,
                     SharedString::from("Cherry-pick"),
                     SharedString::from(format!("{count} commits")),
-                    Loadable::Ready(setup.entries.clone()),
+                    entries,
                 )
             } else {
                 return div().child("No interactive commit setup");
@@ -1423,7 +1433,8 @@ impl MainPaneView {
                                     .style(components::ButtonStyle::Filled)
                                     .disabled(
                                         entries_empty
-                                            || !matches!(loading_state, Loadable::Ready(_)),
+                                            || !matches!(loading_state, Loadable::Ready(_))
+                                            || history_rewrite_busy,
                                     )
                                     .render(theme, ui_scale_percent)
                                     .on_click(cx.listener(

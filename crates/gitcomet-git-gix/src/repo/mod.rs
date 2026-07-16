@@ -304,6 +304,10 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        self.commit_messages_impl(ids)
+    }
+
     fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
         self.recent_commit_messages_impl(limit)
     }

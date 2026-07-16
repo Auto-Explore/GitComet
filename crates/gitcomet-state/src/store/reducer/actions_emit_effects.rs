@@ -538,7 +538,10 @@ pub(super) fn rebase(repo_id: RepoId, onto: String) -> Vec<Effect> {
 }
 
 pub(super) fn rebase_continue(repo_id: RepoId) -> Vec<Effect> {
-    vec![Effect::RebaseContinue { repo_id }]
+    vec![Effect::RebaseContinue {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn rebase_abort(repo_id: RepoId) -> Vec<Effect> {
@@ -584,10 +587,19 @@ pub(super) fn open_interactive_cherry_pick_setup(
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.interactive_rebase_setup = None;
+        // The entries arrive seeded with subjects only (the log page carries
+        // no bodies); load the full messages so a reword edit doesn't start
+        // from — and then silently commit — a body-less seed.
+        let ids = entries
+            .iter()
+            .map(|entry| entry.commit_id.clone())
+            .collect();
         repo_state.interactive_cherry_pick_setup = Some(InteractiveCherryPickSetup {
             entries,
             source_colors,
+            full_messages: Loadable::Loading,
         });
+        return vec![Effect::LoadInteractiveCherryPickMessages { repo_id, ids }];
     }
     vec![]
 }

@@ -843,6 +843,15 @@ pub enum InternalMsg {
         base: String,
         result: Result<Vec<InteractiveRebaseEntry>, Error>,
     },
+    /// Full `%B` message per selected source commit id for the open
+    /// interactive cherry-pick setup. `requested_ids` identifies the setup
+    /// that launched the detached load so a late response cannot alter a
+    /// newer selection.
+    InteractiveCherryPickMessagesLoaded {
+        repo_id: RepoId,
+        requested_ids: Vec<String>,
+        result: Result<Vec<(String, String)>, Error>,
+    },
     MergeCommitMessageLoaded {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,

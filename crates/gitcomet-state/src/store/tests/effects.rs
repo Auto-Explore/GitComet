@@ -5240,7 +5240,13 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             },
             1,
         ),
-        (Effect::RebaseContinue { repo_id }, 1),
+        (
+            Effect::RebaseContinue {
+                repo_id,
+                auth: None,
+            },
+            1,
+        ),
         (Effect::RebaseAbort { repo_id }, 1),
         (Effect::MergeAbort { repo_id }, 1),
         (

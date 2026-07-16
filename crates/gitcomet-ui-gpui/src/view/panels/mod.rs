@@ -289,6 +289,8 @@ pub(in crate::view) enum ContextMenuAction {
 enum ContextMenuItem {
     Separator,
     Header(components::ContextMenuText),
+    /// Muted helper text placed directly under the menu's header.
+    Description(components::ContextMenuText),
     Label(components::ContextMenuText),
     Entry {
         label: SharedString,

@@ -1,5 +1,47 @@
 use super::*;
-use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry, SequencerState};
+use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+
+/// Stable topological order of `commits` (already oldest-first by page
+/// position) using only parent edges within the set: every commit sorts
+/// after its selected ancestors, and unrelated commits keep their input
+/// order. The history is a DAG, so the scan always makes progress; the
+/// defensive fallback appends any remainder rather than dropping commits.
+fn topo_order_oldest_first(
+    commits: Vec<(usize, &gitcomet_core::domain::Commit)>,
+) -> Vec<(usize, &gitcomet_core::domain::Commit)> {
+    let index_of: std::collections::HashMap<&str, usize> = commits
+        .iter()
+        .enumerate()
+        .map(|(ix, (_, commit))| (commit.id.as_ref(), ix))
+        .collect();
+    let mut pending_parents = vec![0usize; commits.len()];
+    let mut children: Vec<Vec<usize>> = vec![Vec::new(); commits.len()];
+    for (ix, (_, commit)) in commits.iter().enumerate() {
+        for parent in &commit.parent_ids {
+            if let Some(&parent_ix) = index_of.get(parent.as_ref()) {
+                children[parent_ix].push(ix);
+                pending_parents[ix] += 1;
+            }
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(commits.len());
+    let mut emitted = vec![false; commits.len()];
+    while let Some(next) = (0..commits.len()).find(|&ix| !emitted[ix] && pending_parents[ix] == 0)
+    {
+        emitted[next] = true;
+        ordered.push(commits[next]);
+        for &child in &children[next] {
+            pending_parents[child] -= 1;
+        }
+    }
+    for (ix, item) in commits.iter().enumerate() {
+        if !emitted[ix] {
+            ordered.push(*item);
+        }
+    }
+    ordered
+}
 
 fn multi_cherry_pick_plan(
     this: &PopoverHost,
@@ -49,7 +91,14 @@ fn multi_cherry_pick_plan(
     if selected.len() < 2 {
         return None;
     }
+    // The page is sorted newest-first by commit time, which under clock skew
+    // can place a parent above its child; merely reversing it would then
+    // schedule the child before its parent and replay the picks reversed (or
+    // hit an avoidable conflict). Reverse for the oldest-first baseline, then
+    // topologically order by parent links so a parent always precedes its
+    // child, keeping the page order as the tie-break.
     selected.reverse();
+    let selected = topo_order_oldest_first(selected);
 
     let mut entries = Vec::with_capacity(selected.len());
     let mut source_colors = Vec::with_capacity(selected.len());
@@ -58,8 +107,9 @@ fn multi_cherry_pick_plan(
             action: InteractiveRebaseAction::Pick,
             commit_id: commit.id.as_ref().to_string(),
             summary: commit.summary.to_string(),
-            // The log page only carries the subject; the cherry-pick backend
-            // re-reads full messages from the source commits itself.
+            // The log page only carries the subject; the state layer loads
+            // the full messages right after the setup opens so a reword
+            // edit does not start from a body-less seed.
             message: commit.summary.to_string(),
             new_message: None,
         });
@@ -125,18 +175,13 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         .filter(|repo| repo.id == repo_id)
         .and_then(|repo| repo.head_commit_id())
         .is_some_and(|head| head == *commit_id);
-    let cherry_pick_disabled = this
+    // Cherry-pick, revert, squash, and rebase all contend for git's single
+    // sequencer slot, so any in-flight operation (or a merge waiting to be
+    // concluded) disables starting every one of them, not just its own kind.
+    let history_rewrite_disabled = this
         .active_repo()
         .filter(|repo| repo.id == repo_id)
-        .is_some_and(|repo| {
-            repo.local_actions_in_flight > 0
-                || matches!(
-                    repo.sequencer_state,
-                    Loadable::Ready(SequencerState::CherryPick)
-                )
-                || matches!(repo.rebase_in_progress, Loadable::Ready(true))
-                || matches!(&repo.merge_commit_message, Loadable::Ready(Some(_)))
-        });
+        .is_some_and(|repo| repo.history_rewrite_busy());
 
     // "Squash N commits" appears only when the right-clicked commit is part
     // of the active multi-selection and the whole selection passes the squash
@@ -162,7 +207,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             label,
             icon: Some("icons/git_commit.svg".into()),
             shortcut: None,
-            disabled: false,
+            disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::SquashSelectedCommits { repo_id }),
         });
         items.push(ContextMenuItem::Separator);
@@ -173,7 +218,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             label,
             icon: Some("icons/arrow_up.svg".into()),
             shortcut: Some("P".into()),
-            disabled: cherry_pick_disabled,
+            disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::OpenInteractiveCherryPickSetup {
                 repo_id,
                 entries,
@@ -242,7 +287,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             label: "Cherry-pick".into(),
             icon: Some("icons/arrow_up.svg".into()),
             shortcut: Some("P".into()),
-            disabled: cherry_pick_disabled,
+            disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::CherryPickCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
@@ -253,7 +298,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         label: "Revert".into(),
         icon: Some("icons/undo.svg".into()),
         shortcut: Some("R".into()),
-        disabled: false,
+        disabled: history_rewrite_disabled,
         action: Box::new(ContextMenuAction::RevertCommit {
             repo_id,
             commit_id: commit_id.clone(),
@@ -286,7 +331,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             label: format!("Rebase {current_branch} onto {target_label}").into(),
             icon: Some("icons/arrow_up.svg".into()),
             shortcut: Some("B".into()),
-            disabled: false,
+            disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::OpenPopover {
                 kind: PopoverKind::RebaseOntoConfirm {
                     repo_id,
@@ -323,7 +368,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             label: irebase_label,
             icon: Some("icons/refresh.svg".into()),
             shortcut: Some("I".into()),
-            disabled: false,
+            disabled: history_rewrite_disabled,
             action: Box::new(ContextMenuAction::LoadInteractiveRebaseSetup {
                 repo_id,
                 base: sha.clone(),
@@ -365,4 +410,52 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     }
 
     ContextMenuModel::new(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::topo_order_oldest_first;
+    use gitcomet_core::domain::{Commit, CommitId};
+
+    fn commit(id: &str, parents: &[&str]) -> Commit {
+        Commit {
+            id: CommitId(id.into()),
+            parent_ids: parents.iter().map(|p| CommitId((*p).into())).collect(),
+            summary: id.into(),
+            author: "author".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn topo_order_puts_parents_before_children_and_keeps_stable_order() {
+        // Clock skew placed child `b` before its parent `a` in the input;
+        // unrelated `x` must keep its position between them.
+        let b = commit("b", &["a"]);
+        let x = commit("x", &["outside"]);
+        let a = commit("a", &["outside"]);
+        let input = vec![(2, &b), (1, &x), (0, &a)];
+
+        let ordered = topo_order_oldest_first(input)
+            .into_iter()
+            .map(|(_, commit)| commit.id.as_ref().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordered, ["x", "a", "b"]);
+    }
+
+    #[test]
+    fn topo_order_keeps_already_valid_order() {
+        let a = commit("a", &["outside"]);
+        let b = commit("b", &["a"]);
+        let c = commit("c", &["b"]);
+        let input = vec![(2, &a), (1, &b), (0, &c)];
+
+        let ordered = topo_order_oldest_first(input)
+            .into_iter()
+            .map(|(_, commit)| commit.id.as_ref().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ordered, ["a", "b", "c"]);
+    }
 }

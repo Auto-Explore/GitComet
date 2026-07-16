@@ -392,19 +392,30 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::Rebase { onto } => Msg::Rebase { repo_id, onto },
         RepoCommandKind::RebaseContinue => Msg::RebaseContinue { repo_id },
         RepoCommandKind::RebaseAbort => Msg::RebaseAbort { repo_id },
-        RepoCommandKind::InteractiveCherryPick { entries } => {
-            Msg::InteractiveCherryPick { repo_id, entries }
-        }
+        // Sequencer commands only reach an auth prompt through a signing
+        // passphrase failure, and by then git has already left cherry-pick
+        // or rebase state on disk: replaying the original plan would be
+        // rejected as already in progress (and its effect has no auth slot).
+        // Continue the paused sequencer with the staged auth instead.
+        RepoCommandKind::InteractiveCherryPick { .. } => Msg::RebaseContinue { repo_id },
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
             summary,
-        } => Msg::CherryPickCommit {
-            repo_id,
-            commit_id,
-            commit,
-            summary,
-        },
+        } => {
+            if commit {
+                Msg::RebaseContinue { repo_id }
+            } else {
+                // `--no-commit` picks never sign, so an auth prompt here is
+                // not a paused sequencer; replay the command itself.
+                Msg::CherryPickCommit {
+                    repo_id,
+                    commit_id,
+                    commit,
+                    summary,
+                }
+            }
+        }
         RepoCommandKind::MergeAbort => Msg::MergeAbort { repo_id },
         RepoCommandKind::CreateTag {
             name,
@@ -498,12 +509,15 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             }
         }
         RepoCommandKind::RemoveSubmodule { path } => Msg::RemoveSubmodule { repo_id, path },
+        // A signing failure mid-rebase leaves git's state (and GitComet's
+        // persisted reword messages) on disk; continue it with the staged
+        // auth like the cherry-pick commands above.
+        RepoCommandKind::InteractiveRebase { .. } => Msg::RebaseContinue { repo_id },
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
         | RepoCommandKind::UnstageHunk
-        | RepoCommandKind::ApplyWorktreePatch { .. }
-        | RepoCommandKind::InteractiveRebase { .. } => return None,
+        | RepoCommandKind::ApplyWorktreePatch { .. } => return None,
     })
 }
 
@@ -530,7 +544,8 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::PushSetUpstream { auth: slot, .. }
         | Effect::DeleteRemoteBranch { auth: slot, .. }
         | Effect::PushTag { auth: slot, .. }
-        | Effect::DeleteRemoteTag { auth: slot, .. } => {
+        | Effect::DeleteRemoteTag { auth: slot, .. }
+        | Effect::RebaseContinue { auth: slot, .. } => {
             *slot = Some(auth);
         }
         _ => {}
@@ -1412,7 +1427,11 @@ fn reduce_inner(
             actions_emit_effects::interactive_rebase(repo_id, base, entries)
         }
         Msg::InteractiveCherryPick { repo_id, entries } => {
-            begin_local_action(state, repo_id);
+            // A multi-pick can land some commits and then fail (a hook or
+            // signer on a later step), so HEAD-dependent caches must be
+            // invalidated up front like the single-pick path — the error
+            // completion path does not clear them.
+            begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::interactive_cherry_pick(repo_id, entries)
         }
         Msg::CancelInteractiveRebaseSetup { repo_id } => {
@@ -1656,6 +1675,16 @@ fn reduce_inner(
             base,
             result,
         }) => external_and_history::interactive_rebase_setup_loaded(state, repo_id, base, result),
+        Msg::Internal(crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+            repo_id,
+            requested_ids,
+            result,
+        }) => external_and_history::interactive_cherry_pick_messages_loaded(
+            state,
+            repo_id,
+            requested_ids,
+            result,
+        ),
         Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
             external_and_history::merge_commit_message_loaded(state, repo_id, result)
         }

@@ -765,19 +765,50 @@ impl MainPaneView {
                     );
                 }
             } else if let Some(setup) = repo.interactive_cherry_pick_setup.as_ref() {
+                if !matches!(setup.full_messages, Loadable::Ready(())) {
+                    // Do not retain subject-only view-local entries from this
+                    // or a replaced setup while full messages are pending.
+                    self.interactive_rebase_states.remove(&repo.id);
+                    continue;
+                }
                 let source_colors = setup
                     .source_colors
                     .iter()
                     .cloned()
                     .collect::<std::collections::HashMap<_, _>>();
-                let replace = self
-                    .interactive_rebase_states
-                    .get(&repo.id)
-                    .is_none_or(|st| {
-                        st.mode != ICommitEditorMode::CherryPick
-                            || st.original_entries != setup.entries
-                    });
-                if replace {
+                // A repeated state application for the same setup must not
+                // replace view-local reordering or action edits. A different
+                // id set is a genuinely new setup.
+                let same_plan =
+                    self.interactive_rebase_states.get(&repo.id).is_some_and(
+                        |st: &IRebaseViewState| {
+                            st.mode == ICommitEditorMode::CherryPick
+                                && st.original_entries.len() == setup.entries.len()
+                                && st.original_entries.iter().zip(setup.entries.iter()).all(
+                                    |(current, incoming)| current.commit_id == incoming.commit_id,
+                                )
+                        },
+                    );
+                if same_plan {
+                    let st = self
+                        .interactive_rebase_states
+                        .get_mut(&repo.id)
+                        .expect("same_plan implies the state exists");
+                    for (current, incoming) in
+                        st.original_entries.iter_mut().zip(setup.entries.iter())
+                    {
+                        current.message = incoming.message.clone();
+                    }
+                    for entry in st.entries.iter_mut() {
+                        if let Some(incoming) = setup
+                            .entries
+                            .iter()
+                            .find(|incoming| incoming.commit_id == entry.commit_id)
+                        {
+                            entry.message = incoming.message.clone();
+                        }
+                    }
+                } else {
                     self.interactive_rebase_states.insert(
                         repo.id,
                         IRebaseViewState {
@@ -875,6 +906,27 @@ impl MainPaneView {
                 None => {
                     0u8.hash(&mut hasher);
                 }
+            }
+            match &repo.interactive_cherry_pick_setup {
+                Some(setup) => {
+                    1u8.hash(&mut hasher);
+                    setup.entries.len().hash(&mut hasher);
+                    for entry in &setup.entries {
+                        entry.commit_id.hash(&mut hasher);
+                        entry.summary.hash(&mut hasher);
+                    }
+                    setup.source_colors.hash(&mut hasher);
+                    match &setup.full_messages {
+                        Loadable::NotLoaded => 0u8.hash(&mut hasher),
+                        Loadable::Loading => 1u8.hash(&mut hasher),
+                        Loadable::Ready(()) => 2u8.hash(&mut hasher),
+                        Loadable::Error(error) => {
+                            3u8.hash(&mut hasher);
+                            error.hash(&mut hasher);
+                        }
+                    }
+                }
+                None => 0u8.hash(&mut hasher),
             }
             // Blame/annotate data — when blame loads for the first time or changes
             // target, the annotation sidebar needs to repaint.
@@ -4903,6 +4955,46 @@ fn should_request_blame<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notify_fingerprint_tracks_cherry_pick_message_readiness() {
+        use gitcomet_core::domain::RepoSpec;
+        use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+        use gitcomet_state::model::{InteractiveCherryPickSetup, RepoState};
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.active_repo = Some(RepoId(1));
+        state.repos.push(RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        let without_setup = MainPaneView::notify_fingerprint_for(&state);
+
+        state.repos[0].interactive_cherry_pick_setup = Some(InteractiveCherryPickSetup {
+            entries: vec![InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: "1111111111111111111111111111111111111111".to_string(),
+                summary: "subject".to_string(),
+                message: "subject".to_string(),
+                new_message: None,
+            }],
+            source_colors: vec![],
+            full_messages: Loadable::Loading,
+        });
+        let loading = MainPaneView::notify_fingerprint_for(&state);
+        assert_ne!(loading, without_setup);
+
+        state.repos[0]
+            .interactive_cherry_pick_setup
+            .as_mut()
+            .expect("setup")
+            .full_messages = Loadable::Ready(());
+        let ready = MainPaneView::notify_fingerprint_for(&state);
+        assert_ne!(ready, loading);
+    }
 
     #[test]
     fn should_request_blame_retries_failure_only_when_forced() {

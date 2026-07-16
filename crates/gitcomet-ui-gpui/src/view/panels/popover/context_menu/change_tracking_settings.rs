@@ -9,6 +9,7 @@ fn model_for_view(view: ChangeTrackingView) -> ContextMenuModel {
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Change tracking".into()),
+        ContextMenuItem::Description("Controls how Untracked files are grouped".into()),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: ChangeTrackingView::Combined.menu_label().into(),
@@ -28,8 +29,6 @@ fn model_for_view(view: ChangeTrackingView) -> ContextMenuModel {
                 view: ChangeTrackingView::SplitUntracked,
             }),
         },
-        ContextMenuItem::Separator,
-        ContextMenuItem::Label("Controls how Untracked files are grouped".into()),
     ])
 }
 

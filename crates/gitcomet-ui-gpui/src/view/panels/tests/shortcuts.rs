@@ -39,6 +39,21 @@ fn context_menu_entry_disabled_by_label(model: &ContextMenuModel, expected: &str
         .unwrap_or_else(|| panic!("expected `{expected}` entry to exist"))
 }
 
+/// Like [`context_menu_entry_disabled_by_label`], but matches on a label
+/// prefix — for entries whose labels embed branch names or commit shas.
+fn context_menu_entry_disabled_by_label_prefix(model: &ContextMenuModel, prefix: &str) -> bool {
+    model
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.as_ref().starts_with(prefix) => Some(*disabled),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected entry starting with `{prefix}` to exist"))
+}
+
 fn shortcut_entry<'a>(
     model: &'a ContextMenuModel,
     shortcut: &str,
@@ -1654,7 +1669,9 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
 }
 
 #[gpui::test]
-fn commit_context_menu_disables_cherry_pick_during_active_sequencer(cx: &mut gpui::TestAppContext) {
+fn commit_context_menu_disables_history_rewrites_during_active_operations(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1663,63 +1680,71 @@ fn commit_context_menu_disables_cherry_pick_during_active_sequencer(cx: &mut gpu
     let repo_id = RepoId(1702);
     let commit_id = CommitId("cafebabecafebabe".into());
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_cherry_pick_sequencer_guard",
+        "gitcomet_ui_test_{}_history_rewrite_guard",
         std::process::id()
     ));
 
-    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
-    repo.merge_commit_message = Loadable::Ready(Some("merge message".to_string()));
-    apply_state(cx, &view, app_state_with_active_repo(repo));
-    let merge_commit_model = cx.update(|_window, app| {
-        context_menu_model_for(
-            &view,
-            app,
-            PopoverKind::CommitMenu {
-                repo_id,
-                commit_id: commit_id.clone(),
-            },
-        )
-    });
-    assert!(context_menu_entry_disabled_by_label(
-        &merge_commit_model,
-        "Cherry-pick"
-    ));
+    // Each in-flight operation must disable every history-rewriting entry:
+    // they all contend for git's single sequencer slot.
+    let busy_states: [(&str, fn(&mut RepoState)); 3] = [
+        ("pending merge", |repo| {
+            repo.merge_commit_message = Loadable::Ready(Some("merge message".to_string()));
+        }),
+        ("rebase in progress", |repo| {
+            repo.rebase_in_progress = Loadable::Ready(true);
+        }),
+        ("cherry-pick sequencer", |repo| {
+            repo.sequencer_state =
+                Loadable::Ready(gitcomet_core::services::SequencerState::CherryPick);
+        }),
+    ];
+    for (state_name, make_busy) in busy_states {
+        let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+        make_busy(&mut repo);
+        apply_state(cx, &view, app_state_with_active_repo(repo));
+        let model = cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                },
+            )
+        });
+        assert!(
+            context_menu_entry_disabled_by_label(&model, "Cherry-pick"),
+            "Cherry-pick enabled during {state_name}"
+        );
+        assert!(
+            context_menu_entry_disabled_by_label(&model, "Revert"),
+            "Revert enabled during {state_name}"
+        );
+        assert!(
+            context_menu_entry_disabled_by_label_prefix(&model, "Rebase "),
+            "Rebase onto enabled during {state_name}"
+        );
+        assert!(
+            context_menu_entry_disabled_by_label_prefix(&model, "Interactive rebase"),
+            "Interactive rebase enabled during {state_name}"
+        );
 
-    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
-    repo.rebase_in_progress = Loadable::Ready(true);
-    apply_state(cx, &view, app_state_with_active_repo(repo));
-    let rebase_commit_model = cx.update(|_window, app| {
-        context_menu_model_for(
-            &view,
-            app,
-            PopoverKind::CommitMenu {
-                repo_id,
-                commit_id: commit_id.clone(),
-            },
-        )
-    });
-    assert!(context_menu_entry_disabled_by_label(
-        &rebase_commit_model,
-        "Cherry-pick"
-    ));
-
-    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
-    repo.sequencer_state = Loadable::Ready(gitcomet_core::services::SequencerState::CherryPick);
-    apply_state(cx, &view, app_state_with_active_repo(repo));
-    let cherry_pick_model = cx.update(|_window, app| {
-        context_menu_model_for(
-            &view,
-            app,
-            PopoverKind::CommitMenu {
-                repo_id,
-                commit_id: commit_id.clone(),
-            },
-        )
-    });
-    assert!(context_menu_entry_disabled_by_label(
-        &cherry_pick_model,
-        "Cherry-pick"
-    ));
+        let branch_model = cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string(),
+                },
+            )
+        });
+        assert!(
+            context_menu_entry_disabled_by_label_prefix(&branch_model, "Rebase "),
+            "branch menu Rebase onto enabled during {state_name}"
+        );
+    }
 }
 
 #[gpui::test]
