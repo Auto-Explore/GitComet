@@ -131,6 +131,7 @@ fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppCo
     cx.update(|window, app| {
         view.update(app, |this, cx| {
             this.popover_host.update(cx, |host, cx| {
+                host.cherry_pick_mainline = Some(2);
                 host.context_menu_activate_action(
                     ContextMenuAction::CherryPickCommit {
                         repo_id,
@@ -145,6 +146,10 @@ fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppCo
                         repo_id,
                         commit_id: commit_id.clone()
                     })
+                );
+                assert_eq!(
+                    host.cherry_pick_mainline, None,
+                    "opening a single cherry-pick must not reuse an earlier parent choice"
                 );
             });
         });

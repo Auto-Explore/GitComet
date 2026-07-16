@@ -223,6 +223,7 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
         commit: bool,
+        mainline: Option<usize>,
         summary: String,
     },
     RevertCommit {

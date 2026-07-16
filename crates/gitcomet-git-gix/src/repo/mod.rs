@@ -308,6 +308,10 @@ impl GitRepository for GixRepo {
         self.commit_messages_impl(ids)
     }
 
+    fn topologically_order_commits(&self, ids: &[CommitId]) -> Result<Vec<CommitId>> {
+        self.topologically_order_commits_impl(ids)
+    }
+
     fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
         self.recent_commit_messages_impl(limit)
     }
@@ -536,8 +540,13 @@ impl GitRepository for GixRepo {
         self.cherry_pick_impl(id)
     }
 
-    fn cherry_pick_with_output(&self, id: &CommitId, commit: bool) -> Result<CommandOutput> {
-        self.cherry_pick_with_output_impl(id, commit)
+    fn cherry_pick_with_output(
+        &self,
+        id: &CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        self.cherry_pick_with_output_impl(id, commit, mainline)
     }
 
     fn revert(&self, id: &CommitId) -> Result<()> {

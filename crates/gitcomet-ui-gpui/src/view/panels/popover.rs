@@ -154,6 +154,10 @@ pub(in super::super) struct PopoverHost {
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
+    /// Explicit 1-based mainline selected for the currently open single
+    /// merge-commit cherry-pick confirmation. Reset every time that dialog
+    /// opens; drafts are intentionally session-local.
+    cherry_pick_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
@@ -1206,6 +1210,7 @@ impl PopoverHost {
             details_pane,
             popover: None,
             popover_anchor: None,
+            cherry_pick_mainline: None,
             context_menu_focus_handle,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
@@ -2109,6 +2114,9 @@ impl PopoverHost {
     ) {
         self.clear_truncated_tooltip(cx);
         self.request_lazy_popover_repo_data(&kind);
+        if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
+            self.cherry_pick_mainline = None;
+        }
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
             || matches!(

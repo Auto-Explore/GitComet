@@ -1275,6 +1275,7 @@ fn summarize_command(
             commit_id,
             commit,
             summary,
+            ..
         } => {
             if output
                 .stdout
@@ -2317,6 +2318,7 @@ mod tests {
             &RepoCommandKind::CherryPick {
                 commit_id: commit_id.clone(),
                 commit: true,
+                mainline: None,
                 summary: "fix parser\n\nbody".into(),
             },
             &command_output("git cherry-pick abcdef1", "", ""),
@@ -2329,6 +2331,7 @@ mod tests {
             &RepoCommandKind::CherryPick {
                 commit_id: commit_id.clone(),
                 commit: false,
+                mainline: None,
                 summary: "fix parser".into(),
             },
             &command_output("git cherry-pick --no-commit abcdef1", "", ""),
@@ -2344,6 +2347,7 @@ mod tests {
             &RepoCommandKind::CherryPick {
                 commit_id,
                 commit: true,
+                mainline: None,
                 summary: "fix parser".into(),
             },
             &command_output(

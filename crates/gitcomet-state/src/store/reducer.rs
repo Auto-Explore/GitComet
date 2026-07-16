@@ -401,6 +401,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
+            mainline,
             summary,
         } => {
             if commit {
@@ -412,6 +413,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
                     repo_id,
                     commit_id,
                     commit,
+                    mainline,
                     summary,
                 }
             }
@@ -1042,10 +1044,11 @@ fn reduce_inner(
             repo_id,
             commit_id,
             commit,
+            mainline,
             summary,
         } => {
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, summary)
+            actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, mainline, summary)
         }
         Msg::RevertCommit { repo_id, commit_id } => {
             begin_head_changing_local_action(state, repo_id);

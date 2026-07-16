@@ -373,6 +373,7 @@ pub enum Msg {
         repo_id: RepoId,
         commit_id: CommitId,
         commit: bool,
+        mainline: Option<usize>,
         summary: String,
     },
     RevertCommit {
@@ -843,10 +844,9 @@ pub enum InternalMsg {
         base: String,
         result: Result<Vec<InteractiveRebaseEntry>, Error>,
     },
-    /// Full `%B` message per selected source commit id for the open
-    /// interactive cherry-pick setup. `requested_ids` identifies the setup
-    /// that launched the detached load so a late response cannot alter a
-    /// newer selection.
+    /// Repository-ordered selected commit ids with their full `%B` messages.
+    /// `requested_ids` identifies the setup that launched the detached load
+    /// so a late response cannot alter a newer selection.
     InteractiveCherryPickMessagesLoaded {
         repo_id: RepoId,
         requested_ids: Vec<String>,

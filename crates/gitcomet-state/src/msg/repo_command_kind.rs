@@ -75,6 +75,8 @@ pub enum RepoCommandKind {
     CherryPick {
         commit_id: CommitId,
         commit: bool,
+        /// Git's 1-based mainline parent for a single merge commit.
+        mainline: Option<usize>,
         summary: String,
     },
     MergeAbort,

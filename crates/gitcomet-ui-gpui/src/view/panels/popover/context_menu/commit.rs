@@ -1,48 +1,6 @@
 use super::*;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 
-/// Stable topological order of `commits` (already oldest-first by page
-/// position) using only parent edges within the set: every commit sorts
-/// after its selected ancestors, and unrelated commits keep their input
-/// order. The history is a DAG, so the scan always makes progress; the
-/// defensive fallback appends any remainder rather than dropping commits.
-fn topo_order_oldest_first(
-    commits: Vec<(usize, &gitcomet_core::domain::Commit)>,
-) -> Vec<(usize, &gitcomet_core::domain::Commit)> {
-    let index_of: std::collections::HashMap<&str, usize> = commits
-        .iter()
-        .enumerate()
-        .map(|(ix, (_, commit))| (commit.id.as_ref(), ix))
-        .collect();
-    let mut pending_parents = vec![0usize; commits.len()];
-    let mut children: Vec<Vec<usize>> = vec![Vec::new(); commits.len()];
-    for (ix, (_, commit)) in commits.iter().enumerate() {
-        for parent in &commit.parent_ids {
-            if let Some(&parent_ix) = index_of.get(parent.as_ref()) {
-                children[parent_ix].push(ix);
-                pending_parents[ix] += 1;
-            }
-        }
-    }
-
-    let mut ordered = Vec::with_capacity(commits.len());
-    let mut emitted = vec![false; commits.len()];
-    while let Some(next) = (0..commits.len()).find(|&ix| !emitted[ix] && pending_parents[ix] == 0)
-    {
-        emitted[next] = true;
-        ordered.push(commits[next]);
-        for &child in &children[next] {
-            pending_parents[child] -= 1;
-        }
-    }
-    for (ix, item) in commits.iter().enumerate() {
-        if !emitted[ix] {
-            ordered.push(*item);
-        }
-    }
-    ordered
-}
-
 fn multi_cherry_pick_plan(
     this: &PopoverHost,
     repo_id: RepoId,
@@ -91,14 +49,11 @@ fn multi_cherry_pick_plan(
     if selected.len() < 2 {
         return None;
     }
-    // The page is sorted newest-first by commit time, which under clock skew
-    // can place a parent above its child; merely reversing it would then
-    // schedule the child before its parent and replay the picks reversed (or
-    // hit an avoidable conflict). Reverse for the oldest-first baseline, then
-    // topologically order by parent links so a parent always precedes its
-    // child, keeping the page order as the tie-break.
+    // Use reversed page order as the stable oldest-first baseline. Before the
+    // editor becomes available, the repository-backed setup load follows the
+    // complete graph through unselected commits and corrects any ancestry
+    // inversions caused by clock skew.
     selected.reverse();
-    let selected = topo_order_oldest_first(selected);
 
     let mut entries = Vec::with_capacity(selected.len());
     let mut source_colors = Vec::with_capacity(selected.len());
@@ -410,52 +365,4 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     }
 
     ContextMenuModel::new(items)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::topo_order_oldest_first;
-    use gitcomet_core::domain::{Commit, CommitId};
-
-    fn commit(id: &str, parents: &[&str]) -> Commit {
-        Commit {
-            id: CommitId(id.into()),
-            parent_ids: parents.iter().map(|p| CommitId((*p).into())).collect(),
-            summary: id.into(),
-            author: "author".into(),
-            time: std::time::SystemTime::UNIX_EPOCH,
-        }
-    }
-
-    #[test]
-    fn topo_order_puts_parents_before_children_and_keeps_stable_order() {
-        // Clock skew placed child `b` before its parent `a` in the input;
-        // unrelated `x` must keep its position between them.
-        let b = commit("b", &["a"]);
-        let x = commit("x", &["outside"]);
-        let a = commit("a", &["outside"]);
-        let input = vec![(2, &b), (1, &x), (0, &a)];
-
-        let ordered = topo_order_oldest_first(input)
-            .into_iter()
-            .map(|(_, commit)| commit.id.as_ref().to_string())
-            .collect::<Vec<_>>();
-
-        assert_eq!(ordered, ["x", "a", "b"]);
-    }
-
-    #[test]
-    fn topo_order_keeps_already_valid_order() {
-        let a = commit("a", &["outside"]);
-        let b = commit("b", &["a"]);
-        let c = commit("c", &["b"]);
-        let input = vec![(2, &a), (1, &b), (0, &c)];
-
-        let ordered = topo_order_oldest_first(input)
-            .into_iter()
-            .map(|(_, commit)| commit.id.as_ref().to_string())
-            .collect::<Vec<_>>();
-
-        assert_eq!(ordered, ["a", "b", "c"]);
-    }
 }

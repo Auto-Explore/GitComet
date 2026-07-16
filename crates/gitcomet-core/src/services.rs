@@ -364,6 +364,14 @@ pub trait GitRepository: Send + Sync {
             .map(|id| self.commit_details(id).map(|details| details.message))
             .collect()
     }
+    /// Stable topological ordering of an arbitrary set of commits. Selected
+    /// ancestors precede selected descendants even when unselected commits
+    /// lie between them; unrelated commits retain their input order.
+    fn topologically_order_commits(&self, _ids: &[CommitId]) -> Result<Vec<CommitId>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "topological commit ordering is not implemented for this backend",
+        )))
+    }
     fn recent_commit_messages(&self, _limit: usize) -> Result<Vec<RecentCommitMessage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "recent commit messages are not implemented for this backend",
@@ -580,7 +588,14 @@ pub trait GitRepository: Send + Sync {
     }
     fn checkout_commit(&self, id: &CommitId) -> Result<()>;
     fn cherry_pick(&self, id: &CommitId) -> Result<()>;
-    fn cherry_pick_with_output(&self, _id: &CommitId, _commit: bool) -> Result<CommandOutput> {
+    /// Runs a single cherry-pick. `mainline` is Git's 1-based parent number
+    /// for a merge commit and must be `None` for non-merge commits.
+    fn cherry_pick_with_output(
+        &self,
+        _id: &CommitId,
+        _commit: bool,
+        _mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git cherry-pick is not implemented for this backend",
         )))

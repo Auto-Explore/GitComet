@@ -50,12 +50,14 @@ pub(super) fn cherry_pick_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
     commit: bool,
+    mainline: Option<usize>,
     summary: String,
 ) -> Vec<Effect> {
     vec![Effect::CherryPickCommit {
         repo_id,
         commit_id,
         commit,
+        mainline,
         summary,
     }]
 }

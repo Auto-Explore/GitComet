@@ -29,6 +29,8 @@ const MAX_SQUASH_CHAIN: usize = 10_000;
 const PERSISTED_REWORD_DIR: &str = "gitcomet-reword";
 const PERSISTED_REWORD_STAGING_DIR: &str = "gitcomet-reword.staging";
 const PERSISTED_PLAN_NAME: &str = "planned-todo";
+const PERSISTED_CHERRY_PICK_MAINLINE: &str = "gitcomet-cherry-pick-mainline";
+const PERSISTED_CHERRY_PICK_MAINLINE_STAGING: &str = "gitcomet-cherry-pick-mainline.staging";
 
 // A POSIX sh script on every platform: Git for Windows also runs editors
 // through its bundled `sh`, and a shebang script survives a script path
@@ -288,11 +290,60 @@ impl GixRepo {
         &self,
         id: &CommitId,
         commit: bool,
+        mainline: Option<usize>,
     ) -> Result<CommandOutput> {
         validate_hex_commit_id(id)?;
 
+        // Validate mainline selection before invoking git so a stale or
+        // malformed UI request cannot leave cherry-pick state behind.
+        let repo = self._repo.to_thread_local();
+        let parent_ids = peel_commit(&repo, id.as_ref())?
+            .parent_ids()
+            .map(|parent| parent.detach().to_string())
+            .collect::<Vec<_>>();
+        let parent_count = parent_ids.len();
+        let short = id.as_ref().get(..8).unwrap_or(id.as_ref());
+        match (parent_count > 1, mainline) {
+            (true, None) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "cherry-pick: {short} is a merge commit with {parent_count} parents; choose a \
+                     mainline parent"
+                ))));
+            }
+            (true, Some(parent)) if parent == 0 || parent > parent_count => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "cherry-pick: mainline parent {parent} is invalid for merge commit {short}; \
+                     choose a parent from 1 to {parent_count}"
+                ))));
+            }
+            (false, Some(_)) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "cherry-pick: {short} is not a merge commit; a mainline parent cannot be \
+                     selected"
+                ))));
+            }
+            _ => {}
+        }
+
+        // A single merge pick has no sequencer todo from which continue-time
+        // code can recover `-m`. Keep the exact source/parent pair beside
+        // Git's state so an empty resolution can still be classified against
+        // the selected mainline. Never overwrite metadata belonging to an
+        // operation that was already in progress; the command below will
+        // report that collision itself.
+        let started_with_sequencer = self.rebase_in_progress_impl()?;
+        if !started_with_sequencer {
+            self.clear_persisted_cherry_pick_mainline();
+            if let Some(parent) = mainline.and_then(|number| parent_ids.get(number - 1)) {
+                self.persist_cherry_pick_mainline(id.as_ref(), parent)?;
+            }
+        }
+
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("cherry-pick");
+        if let Some(parent) = mainline {
+            cmd.arg("-m").arg(parent.to_string());
+        }
         if commit {
             // A source commit that was created empty on purpose stops the
             // pick with the same "now empty" status as an already-applied
@@ -303,15 +354,22 @@ impl GixRepo {
             cmd.arg("--no-commit");
         }
         cmd.arg("--").arg(id.as_ref());
+        let mainline_label = mainline.map_or_else(String::new, |parent| format!(" -m {parent}"));
         let label = if commit {
-            format!("git cherry-pick {}", id.as_ref())
+            format!("git cherry-pick{mainline_label} {}", id.as_ref())
         } else {
-            format!("git cherry-pick --no-commit {}", id.as_ref())
+            format!(
+                "git cherry-pick{mainline_label} --no-commit {}",
+                id.as_ref()
+            )
         };
 
         let output = run_git_raw_output(cmd, &label)
             .map_err(|e| Error::new(ErrorKind::Backend(format!("failed to run {label}: {e}"))))?;
         if output.status.success() {
+            if !started_with_sequencer {
+                self.clear_persisted_cherry_pick_mainline();
+            }
             return Ok(CommandOutput {
                 command: label,
                 stdout: bytes_to_text_preserving_utf8(&output.stdout),
@@ -326,6 +384,9 @@ impl GixRepo {
                 abort.arg("cherry-pick").arg("--abort");
                 run_git_with_output(abort, "git cherry-pick --abort")?;
             }
+            if !started_with_sequencer {
+                self.clear_persisted_cherry_pick_mainline();
+            }
             return Ok(CommandOutput {
                 command: label,
                 stdout: CHERRY_PICK_ALREADY_APPLIED_SENTINEL.to_string(),
@@ -334,6 +395,9 @@ impl GixRepo {
             });
         }
 
+        if !started_with_sequencer && !self.cherry_pick_in_progress_impl()? {
+            self.clear_persisted_cherry_pick_mainline();
+        }
         Err(git_command_failed_error(&label, output))
     }
 
@@ -457,10 +521,14 @@ impl GixRepo {
     fn run_cherry_pick_step_output(&self, cmd: Command, label: &str) -> Result<CommandOutput> {
         let marker_before = self.cherry_pick_progress_marker();
         let (output, last) = self.run_cherry_pick_auto_skip(cmd, label)?;
+        let still_in_progress = self.cherry_pick_in_progress_impl()?;
+        if !still_in_progress {
+            self.clear_persisted_cherry_pick_mainline();
+        }
         if last.status.success() {
             return Ok(output);
         }
-        let paused_after_progress = self.cherry_pick_in_progress_impl()?
+        let paused_after_progress = still_in_progress
             && match (marker_before, self.cherry_pick_progress_marker()) {
                 // The command started a cherry-pick and paused at a conflict.
                 (None, Some(_)) => self.index_has_conflicts(),
@@ -532,14 +600,37 @@ impl GixRepo {
             return Ok(false);
         };
 
-        // `diff-tree --root` exits 0 when the source commit itself is empty
-        // and 1 when it changes its parent (or the empty tree for a root).
-        // Only the latter can have *become* empty while being replayed.
-        let source_label = format!("git diff-tree --quiet --root {stopped_on}");
+        // Compare against an explicit parent. Without one, `diff-tree` emits
+        // no merge diff and incorrectly classifies every merge as empty.
+        // GitComet persists the chosen parent for merge picks it starts; an
+        // external merge pick without that metadata is deliberately not
+        // auto-skipped because guessing the mainline could hide a real
+        // signing/hook failure.
+        let repo = self._repo.to_thread_local();
+        let parents = peel_commit(&repo, &stopped_on)?
+            .parent_ids()
+            .map(|parent| parent.detach().to_string())
+            .collect::<Vec<_>>();
+        let source_parent = match parents.as_slice() {
+            [] => None,
+            [parent] => Some(parent.clone()),
+            _ => match self.persisted_cherry_pick_mainline_parent(&stopped_on) {
+                Some(parent) if parents.contains(&parent) => Some(parent),
+                _ => return Ok(false),
+            },
+        };
+        let source_label = source_parent.as_ref().map_or_else(
+            || format!("git diff-tree --quiet --root {stopped_on}"),
+            |parent| format!("git diff-tree --quiet {parent} {stopped_on}"),
+        );
         let mut source_diff = self.git_workdir_cmd();
-        source_diff
-            .args(["diff-tree", "--quiet", "--root"])
-            .arg(&stopped_on);
+        source_diff.args(["diff-tree", "--quiet"]);
+        if let Some(parent) = source_parent {
+            source_diff.arg(parent);
+        } else {
+            source_diff.arg("--root");
+        }
+        source_diff.arg(&stopped_on);
         let source_output = run_git_raw_output(source_diff, &source_label)?;
         match source_output.status.code() {
             Some(0) => return Ok(false),
@@ -557,6 +648,50 @@ impl GixRepo {
                 "git diff --cached --quiet",
                 output,
             )),
+        }
+    }
+
+    fn persist_cherry_pick_mainline(&self, source: &str, parent: &str) -> Result<()> {
+        let repo = self._repo.to_thread_local();
+        let path = repo.path().join(PERSISTED_CHERRY_PICK_MAINLINE);
+        let staging = repo.path().join(PERSISTED_CHERRY_PICK_MAINLINE_STAGING);
+        fs::write(&staging, format!("{source}\n{parent}\n"))
+            .and_then(|()| {
+                if path.exists() {
+                    fs::remove_file(&path)?;
+                }
+                fs::rename(&staging, &path)
+            })
+            .map_err(|e| Error::new(ErrorKind::Io(e.kind())))
+    }
+
+    fn persisted_cherry_pick_mainline_parent(&self, source: &str) -> Option<String> {
+        let repo = self._repo.to_thread_local();
+        let contents = fs::read_to_string(repo.path().join(PERSISTED_CHERRY_PICK_MAINLINE)).ok()?;
+        let mut lines = contents.lines();
+        let persisted_source = lines.next()?;
+        let parent = lines.next()?;
+        if persisted_source.eq_ignore_ascii_case(source)
+            && !parent.is_empty()
+            && lines.next().is_none()
+        {
+            Some(parent.to_ascii_lowercase())
+        } else {
+            None
+        }
+    }
+
+    fn clear_persisted_cherry_pick_mainline(&self) {
+        let repo = self._repo.to_thread_local();
+        for name in [
+            PERSISTED_CHERRY_PICK_MAINLINE,
+            PERSISTED_CHERRY_PICK_MAINLINE_STAGING,
+        ] {
+            match fs::remove_file(repo.path().join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => {}
+            }
         }
     }
 
@@ -616,12 +751,18 @@ impl GixRepo {
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("rebase").arg("--abort");
         match run_git_with_output(cmd, "git rebase --abort") {
-            Ok(output) => Ok(output),
+            Ok(output) => {
+                self.clear_persisted_cherry_pick_mainline();
+                Ok(output)
+            }
             Err(rebase_error) => {
                 let mut cherry_pick_cmd = self.git_workdir_cmd();
                 cherry_pick_cmd.arg("cherry-pick").arg("--abort");
                 match run_git_with_output(cherry_pick_cmd, "git cherry-pick --abort") {
-                    Ok(output) => return Ok(output),
+                    Ok(output) => {
+                        self.clear_persisted_cherry_pick_mainline();
+                        return Ok(output);
+                    }
                     // When cherry-pick state remains on disk, this is the
                     // operation the user actually tried to abort. Preserve
                     // its actionable error instead of replacing it with the
@@ -653,7 +794,7 @@ impl GixRepo {
 
     pub(super) fn sequencer_state_impl(&self) -> Result<SequencerState> {
         let repo = self._repo.to_thread_local();
-        Ok(match repo.state() {
+        let state = match repo.state() {
             Some(
                 gix::state::InProgress::Rebase
                 | gix::state::InProgress::RebaseInteractive
@@ -664,7 +805,11 @@ impl GixRepo {
                 gix::state::InProgress::CherryPick | gix::state::InProgress::CherryPickSequence,
             ) => SequencerState::CherryPick,
             _ => SequencerState::None,
-        })
+        };
+        if state != SequencerState::CherryPick {
+            self.clear_persisted_cherry_pick_mainline();
+        }
+        Ok(state)
     }
 
     pub(super) fn rebase_in_progress_impl(&self) -> Result<bool> {
@@ -771,7 +916,22 @@ impl GixRepo {
             cmd.env("GITCOMET_GIT_DIR", repo.path());
         }
         cmd.env("GITCOMET_TODO_FILE", &scripts.todo_path);
-        cmd.args(["rebase", "-i", "--empty=drop"]);
+        let empty_policy = if entries.iter().any(|entry| {
+            matches!(
+                entry.action,
+                InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
+            )
+        }) {
+            // Dropping a newly-empty fold anchor makes Git attach the
+            // following squash/fixup to the commit that preceded the plan —
+            // potentially rewriting an unrelated target commit. Keeping all
+            // newly-empty picks in a fold-containing plan is the safe,
+            // deterministic policy.
+            "--empty=keep"
+        } else {
+            "--empty=drop"
+        };
+        cmd.args(["rebase", "-i", empty_policy]);
         cmd.arg("--").arg(upstream);
 
         let mut result = self.run_rebase_step_output(cmd, label);
@@ -825,8 +985,9 @@ impl GixRepo {
             if commit.parent_ids().count() > 1 {
                 let short = entry.commit_id.get(..8).unwrap_or(&entry.commit_id);
                 return Err(Error::new(ErrorKind::Backend(format!(
-                    "cherry-pick: {short} is a merge commit; cherry-picking merge commits is \
-                     not supported — deselect it and try again"
+                    "cherry-pick: {short} is a merge commit; multi-commit cherry-pick does not \
+                     support merge commits — cherry-pick it individually and choose a mainline \
+                     parent"
                 ))));
             }
         }

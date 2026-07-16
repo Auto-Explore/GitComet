@@ -2018,6 +2018,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id,
             commit_id: CommitId("deadbeef".into()),
             commit: true,
+            mainline: Some(2),
             summary: "pick me".into(),
         },
     );
@@ -2026,6 +2027,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         [Effect::CherryPickCommit {
             repo_id: RepoId(1),
             commit: true,
+            mainline: Some(2),
             summary,
             ..
         }] if summary == "pick me"
@@ -3646,6 +3648,7 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
             repo_id,
             commit_id: CommitId("3333333333333333333333333333333333333333".into()),
             commit: true,
+            mainline: None,
             summary: "pick me".into(),
         },
     );
@@ -4191,6 +4194,70 @@ fn cherry_pick_setup_loads_full_messages_and_patches_entries() {
         .expect("setup stays open");
     assert_eq!(setup.entries[0].message, "subject\n\nfull body");
     assert_eq!(setup.entries[0].summary, "subject");
+    assert!(matches!(setup.full_messages, Loadable::Ready(())));
+}
+
+#[test]
+fn cherry_pick_setup_applies_repository_topological_order() {
+    const DESCENDANT: &str = "3333333333333333333333333333333333333333";
+    const ANCESTOR: &str = "1111111111111111111111111111111111111111";
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let entry = |commit_id: &str, summary: &str| gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: commit_id.to_string(),
+        summary: summary.to_string(),
+        message: summary.to_string(),
+        new_message: None,
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInteractiveCherryPickSetup {
+            repo_id: RepoId(1),
+            entries: vec![entry(DESCENDANT, "descendant"), entry(ANCESTOR, "ancestor")],
+            source_colors: vec![],
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id: RepoId(1),
+                requested_ids: vec![DESCENDANT.to_string(), ANCESTOR.to_string()],
+                result: Ok(vec![
+                    (ANCESTOR.to_string(), "ancestor full".to_string()),
+                    (DESCENDANT.to_string(), "descendant full".to_string()),
+                ]),
+            },
+        ),
+    );
+
+    let setup = state.repos[0]
+        .interactive_cherry_pick_setup
+        .as_ref()
+        .expect("setup stays open");
+    assert_eq!(
+        setup
+            .entries
+            .iter()
+            .map(|entry| entry.commit_id.as_str())
+            .collect::<Vec<_>>(),
+        [ANCESTOR, DESCENDANT]
+    );
+    assert_eq!(setup.entries[0].message, "ancestor full");
+    assert_eq!(setup.entries[1].message, "descendant full");
     assert!(matches!(setup.full_messages, Loadable::Ready(())));
 }
 

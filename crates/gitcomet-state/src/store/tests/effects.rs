@@ -4917,6 +4917,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 commit_id: commit_id.clone(),
                 commit: true,
+                mainline: None,
                 summary: "pick me".into(),
             },
             1,

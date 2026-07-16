@@ -1636,8 +1636,16 @@ pub(super) fn schedule_load_interactive_cherry_pick_messages(
                 .map(|id| gitcomet_core::domain::CommitId(id.clone().into()))
                 .collect::<Vec<_>>();
             let result = repo
-                .commit_messages(&commit_ids)
-                .map(|messages| ids.iter().cloned().zip(messages).collect());
+                .topologically_order_commits(&commit_ids)
+                .and_then(|ordered_ids| {
+                    repo.commit_messages(&ordered_ids).map(|messages| {
+                        ordered_ids
+                            .into_iter()
+                            .map(|id| id.as_ref().to_string())
+                            .zip(messages)
+                            .collect()
+                    })
+                });
             send_or_log(
                 &msg_tx,
                 Msg::Internal(

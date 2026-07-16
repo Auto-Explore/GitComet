@@ -628,6 +628,7 @@ fn send_unavailable_git_effect_result(
             repo_id,
             commit_id,
             commit,
+            mainline,
             summary,
         } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
@@ -635,6 +636,7 @@ fn send_unavailable_git_effect_result(
                 command: RepoCommandKind::CherryPick {
                     commit_id,
                     commit,
+                    mainline,
                     summary,
                 },
                 result: Err(git_unavailable_error(runtime)),
@@ -1899,10 +1901,11 @@ pub(super) fn schedule_effect(
             repo_id,
             commit_id,
             commit,
+            mainline,
             summary,
         } => {
             repo_commands::schedule_cherry_pick_commit(
-                executor, repos, msg_tx, repo_id, commit_id, commit, summary,
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
             );
         }
         Effect::RevertCommit { repo_id, commit_id } => {

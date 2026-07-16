@@ -980,6 +980,7 @@ pub(super) fn schedule_cherry_pick_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
     commit: bool,
+    mainline: Option<usize>,
     summary: String,
 ) {
     let command_commit_id = commit_id.clone();
@@ -991,9 +992,10 @@ pub(super) fn schedule_cherry_pick_commit(
         RepoCommandKind::CherryPick {
             commit_id: command_commit_id,
             commit,
+            mainline,
             summary,
         },
-        move |repo| repo.cherry_pick_with_output(&commit_id, commit),
+        move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
     );
 }
 

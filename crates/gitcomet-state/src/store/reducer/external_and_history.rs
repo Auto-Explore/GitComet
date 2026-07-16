@@ -357,23 +357,45 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
 
         match result {
             Ok(messages) => {
-                let mut loaded_messages = Vec::with_capacity(setup.entries.len());
-                for entry in &setup.entries {
-                    let Some((_, message)) = messages
+                let returned_ids = messages
+                    .iter()
+                    .map(|(id, _)| id.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                if messages.len() != setup.entries.len()
+                    || returned_ids.len() != messages.len()
+                    || !setup
+                        .entries
                         .iter()
-                        .find(|(id, _)| id.as_str() == entry.commit_id)
-                    else {
+                        .all(|entry| returned_ids.contains(entry.commit_id.as_str()))
+                {
+                    setup.full_messages = Loadable::Error(
+                        "Repository returned an invalid ordered cherry-pick selection".to_string(),
+                    );
+                    return vec![];
+                }
+                let mut entries_by_id = setup
+                    .entries
+                    .drain(..)
+                    .map(|entry| (entry.commit_id.clone(), entry))
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mut ordered_entries = Vec::with_capacity(messages.len());
+                for (id, message) in messages {
+                    let Some(mut entry) = entries_by_id.remove(&id) else {
                         setup.full_messages = Loadable::Error(format!(
-                            "Failed to load the full message for commit {}",
-                            entry.commit_id
+                            "Commit ordering returned an unexpected commit {id}"
                         ));
                         return vec![];
                     };
-                    loaded_messages.push(message.clone());
-                }
-                for (entry, message) in setup.entries.iter_mut().zip(loaded_messages) {
                     entry.message = message;
+                    ordered_entries.push(entry);
                 }
+                if let Some((missing, _)) = entries_by_id.into_iter().next() {
+                    setup.full_messages = Loadable::Error(format!(
+                        "Failed to load and order selected commit {missing}"
+                    ));
+                    return vec![];
+                }
+                setup.entries = ordered_entries;
                 setup.full_messages = Loadable::Ready(());
             }
             Err(error) => setup.full_messages = Loadable::Error(error.to_string()),
