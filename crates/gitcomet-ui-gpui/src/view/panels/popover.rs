@@ -223,6 +223,7 @@ pub(in super::super) struct PopoverHost {
     stash_picker_prompt_selected_index: Option<usize>,
     stash_picker_search_input: Option<Entity<components::TextInput>>,
     _stash_picker_search_input_subscription: Option<gpui::Subscription>,
+    commit_prompt_message_drafts: HashMap<RepoId, SharedString>,
     commit_prompt_message_input: Entity<components::TextInput>,
     commit_prompt_message_scroll: ScrollHandle,
     commit_prompt_focus: DialogFocus,
@@ -921,6 +922,8 @@ impl PopoverHost {
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             this.state = Arc::clone(&model.read(cx).state);
+            this.commit_prompt_message_drafts
+                .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
 
             // Prefill the squash prompt from the message preview when it lands,
             // rather than in the render path, so the generated message never
@@ -1082,7 +1085,6 @@ impl PopoverHost {
             )
         });
 
-
         // The subject input re-renders the host on every keystroke so the
         // Squash button's disabled state (driven by whether the message is
         // empty) stays current, and submits on Enter.
@@ -1217,8 +1219,15 @@ impl PopoverHost {
             )
         });
 
-
         let mut prompt_input_subscriptions = Vec::new();
+        prompt_input_subscriptions.push(cx.observe(
+            &commit_prompt_message_input,
+            |this, _input, cx| {
+                if matches!(this.popover, Some(PopoverKind::CommitPrompt { .. })) {
+                    cx.notify();
+                }
+            },
+        ));
         for input in [&clone_repo_url_input, &clone_repo_parent_dir_input] {
             prompt_input_subscriptions.push(Self::prompt_enter_subscription(
                 input,
@@ -1468,6 +1477,7 @@ impl PopoverHost {
             stash_focus,
             stash_picker_prompt_selected_index: None,
             stash_picker_search_input: None,
+            commit_prompt_message_drafts: HashMap::default(),
             commit_prompt_message_input,
             commit_prompt_message_scroll,
             commit_prompt_focus,
@@ -1583,6 +1593,7 @@ impl PopoverHost {
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
@@ -1880,6 +1891,7 @@ impl PopoverHost {
     }
 
     fn dismiss_inline_popover(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         self.popover = None;
         self.popover_anchor = None;
@@ -2194,6 +2206,9 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.can_submit_commit_prompt(cx) {
+            return;
+        }
         let Some(PopoverKind::CommitPrompt { repo_id }) = self.popover.clone() else {
             return;
         };
@@ -2208,14 +2223,39 @@ impl PopoverHost {
             message,
             push_after_commit: false,
         });
+        self.commit_prompt_message_drafts.remove(&repo_id);
+        self.commit_prompt_message_input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.commit_prompt_message_scroll
+            .set_offset(point(px(0.0), px(0.0)));
         self.dismiss_inline_popover(window, cx);
     }
 
+    fn save_commit_prompt_draft(&mut self, cx: &gpui::Context<Self>) {
+        let Some(PopoverKind::CommitPrompt { repo_id }) = self.popover else {
+            return;
+        };
+        let draft: SharedString = self
+            .commit_prompt_message_input
+            .read(cx)
+            .text()
+            .to_string()
+            .into();
+        if draft.is_empty() {
+            self.commit_prompt_message_drafts.remove(&repo_id);
+        } else {
+            self.commit_prompt_message_drafts.insert(repo_id, draft);
+        }
+    }
+
     pub(super) fn can_submit_commit_prompt(&self, cx: &mut gpui::Context<Self>) -> bool {
-        self.active_repo_id().is_some()
-            && self
-                .commit_prompt_message_input
-                .read_with(cx, |input, _| !input.text().trim().is_empty())
+        self.active_repo().is_some_and(|repo| {
+            repo.staged_status_entries()
+                .is_some_and(|entries| !entries.is_empty())
+                || matches!(repo.merge_commit_message, Loadable::Ready(Some(_)))
+        }) && self
+            .commit_prompt_message_input
+            .read_with(cx, |input, _| !input.text().trim().is_empty())
     }
 
     fn submit_stash(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -2521,6 +2561,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         // The anchor stays hovered behind the opened surface; keep its
         // tooltip from re-showing on top of the popover.
@@ -2623,14 +2664,21 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
-                PopoverKind::CommitPrompt { .. } => {
+                PopoverKind::CommitPrompt { repo_id } => {
                     let theme = self.theme;
+                    let draft = self
+                        .commit_prompt_message_drafts
+                        .get(repo_id)
+                        .cloned()
+                        .unwrap_or_default();
                     self.commit_prompt_message_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
-                        input.set_text("", cx);
+                        input.set_text(draft.to_string(), cx);
                         cx.notify();
                     });
+                    self.commit_prompt_message_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
                     let focus = self
                         .commit_prompt_message_input
                         .read_with(cx, |i, _| i.focus_handle());

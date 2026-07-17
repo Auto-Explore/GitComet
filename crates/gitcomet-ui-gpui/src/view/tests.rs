@@ -262,6 +262,38 @@ fn command_palette_reopens_after_tab_switch_and_close_cycles(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(Arc::clone(&backend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    install_app_shortcuts_for_test(cx, Arc::clone(&backend));
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].staged_status = Loadable::Ready(Arc::new(Vec::new()));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.simulate_keystrokes("secondary-p");
+    test_support::redraw(cx);
+    cx.simulate_keystrokes("enter");
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert!(
+            matches!(
+                test_support::popover_kind(view.read(app), app),
+                Some(PopoverKind::CommitPrompt { repo_id: RepoId(1) })
+            ),
+            "expected Commit Changes to remain selectable for a clean repo"
+        );
+    });
+}
+
+#[gpui::test]
 fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx: &mut gpui::TestAppContext,
 ) {

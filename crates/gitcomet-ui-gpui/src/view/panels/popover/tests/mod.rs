@@ -50,6 +50,7 @@ impl GitBackend for TestBackend {
 mod branch;
 mod browse_history;
 mod clone;
+mod commit;
 mod context_shortcuts;
 mod dialog;
 mod file_actions;

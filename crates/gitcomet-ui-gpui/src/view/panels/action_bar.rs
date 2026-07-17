@@ -397,7 +397,7 @@ impl Render for ActionBarView {
         });
 
         // Global back/forward navigation, mirroring the mouse side-buttons and
-        // Alt+Left / Alt+Right. Sits at the very start of the action bar.
+        // Alt+Left / Alt+Right (Option on macOS). Sits at the very start of the action bar.
         let (nav_can_back, nav_can_forward) = self
             .active_repo()
             .map(|repo| (repo.nav_history.can_back(), repo.nav_history.can_forward()))
@@ -418,7 +418,14 @@ impl Render for ActionBarView {
                     this.store.dispatch(Msg::GlobalNavBack { repo_id });
                 }
             })
-            .gitcomet_tooltip(theme, "Navigate Back (Alt+Left)".into());
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Navigate Back ({})",
+                    crate::view::shortcut_labels::alt_shortcut("Left")
+                )
+                .into(),
+            );
         let nav_forward = components::Button::new("global_nav_forward", "")
             .start_slot(icon(
                 "icons/arrow_right.svg",
@@ -435,7 +442,14 @@ impl Render for ActionBarView {
                     this.store.dispatch(Msg::GlobalNavForward { repo_id });
                 }
             })
-            .gitcomet_tooltip(theme, "Navigate Forward (Alt+Right)".into());
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Navigate Forward ({})",
+                    crate::view::shortcut_labels::alt_shortcut("Right")
+                )
+                .into(),
+            );
         let global_nav = div()
             .id("global_nav")
             .flex()

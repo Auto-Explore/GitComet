@@ -112,7 +112,10 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "open-recent",
         label: "Open Recent Repository",
-        shortcut: Shortcut::Secondary("Shift+O"),
+        shortcut: Shortcut::Platform {
+            macos: "Option+Cmd+O",
+            other: "Ctrl+Shift+O",
+        },
         category: "Repository",
         requires_repo: false,
     },
@@ -189,14 +192,20 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "previous-repo-tab",
         label: "Previous Repository Tab",
-        shortcut: Shortcut::Fixed("Ctrl+Shift+Tab"),
+        shortcut: Shortcut::Platform {
+            macos: "Cmd+Shift+[",
+            other: "Ctrl+Shift+Tab",
+        },
         category: "Navigation",
         requires_repo: true,
     },
     CommandEntry {
         id: "next-repo-tab",
         label: "Next Repository Tab",
-        shortcut: Shortcut::Fixed("Ctrl+Tab"),
+        shortcut: Shortcut::Platform {
+            macos: "Cmd+Shift+]",
+            other: "Ctrl+Tab",
+        },
         category: "Navigation",
         requires_repo: true,
     },
@@ -238,7 +247,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "minimize-window",
         label: "Minimize Window",
-        shortcut: Shortcut::None,
+        shortcut: Shortcut::MacOs("Cmd+M"),
         category: "Window",
         requires_repo: false,
     },
@@ -252,7 +261,10 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "toggle-fullscreen",
         label: "Toggle Full Screen",
-        shortcut: Shortcut::Fixed("F11"),
+        shortcut: Shortcut::Platform {
+            macos: "Ctrl+Cmd+F",
+            other: "F11",
+        },
         category: "Window",
         requires_repo: false,
     },
@@ -315,21 +327,21 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     CommandEntry {
         id: "blame",
         label: "Blame / Annotate",
-        shortcut: Shortcut::Fixed("Alt+B"),
+        shortcut: Shortcut::Alt("B"),
         category: "History",
         requires_repo: true,
     },
     CommandEntry {
         id: "back",
         label: "Navigate Back",
-        shortcut: Shortcut::Fixed("Alt+Left"),
+        shortcut: Shortcut::Alt("Left"),
         category: "Navigation",
         requires_repo: true,
     },
     CommandEntry {
         id: "forward",
         label: "Navigate Forward",
-        shortcut: Shortcut::Fixed("Alt+Right"),
+        shortcut: Shortcut::Alt("Right"),
         category: "Navigation",
         requires_repo: true,
     },
