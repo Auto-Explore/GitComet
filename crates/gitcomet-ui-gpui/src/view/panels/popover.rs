@@ -253,6 +253,7 @@ pub(in super::super) struct PopoverHost {
     submodule_force_enabled: bool,
     rebase_reword_input: Entity<components::TextInput>,
     rebase_reword_description_input: Entity<components::TextInput>,
+    rebase_reword_description_scroll: ScrollHandle,
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {
@@ -1219,6 +1220,33 @@ impl PopoverHost {
             )
         });
 
+        let rebase_reword_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Commit subject".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let rebase_reword_description_scroll = ScrollHandle::new();
+        let rebase_reword_description_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Description (optional)".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 4,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(rebase_reword_description_scroll.clone()));
+            input
+        });
+
         let mut prompt_input_subscriptions = Vec::new();
         prompt_input_subscriptions.push(cx.observe(
             &commit_prompt_message_input,
@@ -1505,29 +1533,9 @@ impl PopoverHost {
             submodule_name_input,
             submodule_add_advanced_expanded: false,
             submodule_force_enabled: false,
-            rebase_reword_input: cx.new(|cx| {
-                components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Commit subject".into(),
-                        ..Default::default()
-                    },
-                    window,
-                    cx,
-                )
-            }),
-            rebase_reword_description_input: cx.new(|cx| {
-                components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Description (optional)".into(),
-                        multiline: true,
-                        soft_wrap: true,
-                        min_lines: 4,
-                        ..Default::default()
-                    },
-                    window,
-                    cx,
-                )
-            }),
+            rebase_reword_input,
+            rebase_reword_description_input,
+            rebase_reword_description_scroll,
         }
     }
 
@@ -2950,6 +2958,8 @@ impl PopoverHost {
                             input.set_text(body, cx);
                             cx.notify();
                         });
+                    self.rebase_reword_description_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
                     let focus = self
                         .rebase_reword_input
                         .read_with(cx, |i, _| i.focus_handle());
@@ -3739,10 +3749,14 @@ impl PopoverHost {
                                     .child("Description"),
                             )
                             .child(
-                                div()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .child(self.rebase_reword_description_input.clone()),
+                                components::ScrollContainer::vertical(
+                                    "rebase_reword_description_scroll_surface",
+                                    "rebase_reword_description_scrollbar",
+                                    self.rebase_reword_description_scroll.clone(),
+                                    scaled_px(180.0),
+                                )
+                                .debug_selector("rebase_reword_description_scroll_surface")
+                                .render(theme, self.rebase_reword_description_input.clone()),
                             ),
                     )
                     .child(
