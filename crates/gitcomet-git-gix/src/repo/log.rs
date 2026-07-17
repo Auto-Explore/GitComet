@@ -15,6 +15,7 @@ use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
 use rustc_hash::FxHashSet as HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1287,6 +1288,121 @@ impl GixRepo {
             parent_ids,
             files,
         })
+    }
+
+    pub(super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        let repo = self._repo.to_thread_local();
+        ids.iter()
+            .map(|id| {
+                let spec = id.as_ref();
+                let commit = repo
+                    .rev_parse_single(spec)
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}")))
+                    })?
+                    .object()
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
+                    })?
+                    .peel_to_commit()
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
+                    })?;
+                Ok(
+                    bytes_to_text_preserving_utf8(commit.message_raw_sloppy().as_ref())
+                        .trim_end()
+                        .to_string(),
+                )
+            })
+            .collect()
+    }
+
+    pub(super) fn topologically_order_commits_impl(
+        &self,
+        ids: &[CommitId],
+    ) -> Result<Vec<CommitId>> {
+        let repo = self._repo.to_thread_local();
+        let mut object_ids = Vec::with_capacity(ids.len());
+        let mut selected = HashMap::with_capacity(ids.len());
+        for (ix, id) in ids.iter().enumerate() {
+            let spec = id.as_ref();
+            let object_id = repo
+                .rev_parse_single(spec)
+                .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev-parse {spec}: {e}"))))?
+                .object()
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix commit object {spec}: {e}")))
+                })?
+                .peel_to_commit()
+                .map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!("gix peel commit {spec}: {e}")))
+                })?
+                .id()
+                .detach();
+            if selected.insert(object_id, ix).is_some() {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "duplicate commit in replay order: {spec}"
+                ))));
+            }
+            object_ids.push(object_id);
+        }
+
+        // Discover the nearest selected ancestors of every selected commit.
+        // Traversal stops at a selected node: that node's own edges carry the
+        // remaining transitive dependency, avoiding unnecessary history walks.
+        let mut children = vec![Vec::<usize>::new(); ids.len()];
+        let mut pending_parents = vec![0usize; ids.len()];
+        for (descendant_ix, &descendant) in object_ids.iter().enumerate() {
+            let commit = repo.find_commit(descendant).map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix find commit {}: {e}",
+                    ids[descendant_ix]
+                )))
+            })?;
+            let mut stack = commit
+                .parent_ids()
+                .map(|parent| parent.detach())
+                .collect::<Vec<_>>();
+            let mut visited = HashSet::default();
+            let mut direct_selected_ancestors = HashSet::default();
+            while let Some(candidate) = stack.pop() {
+                if !visited.insert(candidate) {
+                    continue;
+                }
+                if let Some(&ancestor_ix) = selected.get(&candidate) {
+                    if ancestor_ix != descendant_ix && direct_selected_ancestors.insert(ancestor_ix)
+                    {
+                        children[ancestor_ix].push(descendant_ix);
+                        pending_parents[descendant_ix] += 1;
+                    }
+                    continue;
+                }
+                let ancestor = repo.find_commit(candidate).map_err(|e| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "gix traverse ancestors of {}: {e}",
+                        ids[descendant_ix]
+                    )))
+                })?;
+                stack.extend(ancestor.parent_ids().map(|parent| parent.detach()));
+            }
+        }
+
+        // Kahn's algorithm with input position as the ready-queue tie-break.
+        let mut emitted = vec![false; ids.len()];
+        let mut ordered = Vec::with_capacity(ids.len());
+        while let Some(next) = (0..ids.len()).find(|&ix| !emitted[ix] && pending_parents[ix] == 0) {
+            emitted[next] = true;
+            ordered.push(ids[next].clone());
+            for &child in &children[next] {
+                pending_parents[child] -= 1;
+            }
+        }
+        if ordered.len() != ids.len() {
+            return Err(Error::new(ErrorKind::Backend(
+                "commit graph contains a cycle while ordering replay commits".to_string(),
+            )));
+        }
+        Ok(ordered)
     }
 
     pub(super) fn recent_commit_messages_impl(

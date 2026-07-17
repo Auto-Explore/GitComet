@@ -14,7 +14,7 @@ use crate::model::{AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, R
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
-use gitcomet_core::services::InteractiveRebaseEntry;
+use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
 use std::sync::Arc;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
@@ -77,6 +77,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_stashes(Loadable::NotLoaded);
     repo_state.reflog = Loadable::NotLoaded;
     repo_state.set_rebase_in_progress(Loadable::Loading);
+    repo_state.set_sequencer_state(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);
     repo_state.history_state.file_history_path = None;
     repo_state.history_state.file_history = Loadable::NotLoaded;
@@ -277,18 +278,23 @@ pub(super) fn load_more_history(
 pub(super) fn rebase_state_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
-    result: std::result::Result<bool, Error>,
+    result: std::result::Result<SequencerState, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let value = match result {
-            Ok(v) => Loadable::Ready(v),
+        let (sequencer_value, rebase_value) = match result {
+            Ok(v) => (
+                Loadable::Ready(v),
+                Loadable::Ready(v != SequencerState::None),
+            ),
             Err(e) => {
-                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                let error = e.to_string();
+                push_diagnostic(repo_state, DiagnosticKind::Error, error.clone());
+                (Loadable::Error(error.clone()), Loadable::Error(error))
             }
         };
-        repo_state.set_rebase_in_progress(value);
+        repo_state.set_sequencer_state(sequencer_value);
+        repo_state.set_rebase_in_progress(rebase_value);
         if repo_state
             .loads_in_flight
             .finish(RepoLoadsInFlight::REBASE_STATE)
@@ -322,6 +328,77 @@ pub(super) fn interactive_rebase_setup_loaded(
                 }
             };
             repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup { base, entries });
+        }
+    }
+    vec![]
+}
+
+/// Makes an interactive cherry-pick setup editable only after every selected
+/// commit's full `%B` message has loaded. The setup opens with subject-only
+/// seeds, so exposing it earlier would let a reword silently drop the body.
+/// A response for a selection that has since been replaced is ignored.
+pub(super) fn interactive_cherry_pick_messages_loaded(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    requested_ids: Vec<String>,
+    result: std::result::Result<Vec<(String, String)>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        && let Some(setup) = repo_state.interactive_cherry_pick_setup.as_mut()
+    {
+        let current_ids: Vec<&str> = setup
+            .entries
+            .iter()
+            .map(|entry| entry.commit_id.as_str())
+            .collect();
+        if current_ids != requested_ids.iter().map(String::as_str).collect::<Vec<_>>() {
+            return vec![];
+        }
+
+        match result {
+            Ok(messages) => {
+                let returned_ids = messages
+                    .iter()
+                    .map(|(id, _)| id.as_str())
+                    .collect::<std::collections::HashSet<_>>();
+                if messages.len() != setup.entries.len()
+                    || returned_ids.len() != messages.len()
+                    || !setup
+                        .entries
+                        .iter()
+                        .all(|entry| returned_ids.contains(entry.commit_id.as_str()))
+                {
+                    setup.full_messages = Loadable::Error(
+                        "Repository returned an invalid ordered cherry-pick selection".to_string(),
+                    );
+                    return vec![];
+                }
+                let mut entries_by_id = setup
+                    .entries
+                    .drain(..)
+                    .map(|entry| (entry.commit_id.clone(), entry))
+                    .collect::<std::collections::HashMap<_, _>>();
+                let mut ordered_entries = Vec::with_capacity(messages.len());
+                for (id, message) in messages {
+                    let Some(mut entry) = entries_by_id.remove(&id) else {
+                        setup.full_messages = Loadable::Error(format!(
+                            "Commit ordering returned an unexpected commit {id}"
+                        ));
+                        return vec![];
+                    };
+                    entry.message = message;
+                    ordered_entries.push(entry);
+                }
+                if let Some((missing, _)) = entries_by_id.into_iter().next() {
+                    setup.full_messages = Loadable::Error(format!(
+                        "Failed to load and order selected commit {missing}"
+                    ));
+                    return vec![];
+                }
+                setup.entries = ordered_entries;
+                setup.full_messages = Loadable::Ready(());
+            }
+            Err(error) => setup.full_messages = Loadable::Error(error.to_string()),
         }
     }
     vec![]

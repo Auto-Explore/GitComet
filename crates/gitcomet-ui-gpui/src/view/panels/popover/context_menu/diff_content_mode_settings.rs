@@ -9,6 +9,9 @@ fn model_for_mode(mode: DiffContentMode) -> ContextMenuModel {
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Diff mode".into()),
+        ContextMenuItem::Description(
+            "Collapsed hides unchanged sections. Full shows the entire file.".into(),
+        ),
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: DiffContentMode::Collapsed.label().into(),
@@ -28,10 +31,6 @@ fn model_for_mode(mode: DiffContentMode) -> ContextMenuModel {
                 mode: DiffContentMode::Full,
             }),
         },
-        ContextMenuItem::Separator,
-        ContextMenuItem::Label(
-            "Collapsed hides unchanged sections. Full shows the entire file.".into(),
-        ),
     ])
 }
 

@@ -9,7 +9,7 @@ use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
     CommandOutput, CommitOperationOutcome, ConflictSide, ForcePushLease, InteractiveRebaseEntry,
     PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -372,6 +372,9 @@ pub enum Msg {
     CherryPickCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -606,12 +609,24 @@ pub enum Msg {
         repo_id: RepoId,
         base: String,
     },
+    OpenInteractiveCherryPickSetup {
+        repo_id: RepoId,
+        entries: Vec<InteractiveRebaseEntry>,
+        source_colors: Vec<(String, u8)>,
+    },
     InteractiveRebase {
         repo_id: RepoId,
         base: String,
         entries: Vec<InteractiveRebaseEntry>,
     },
+    InteractiveCherryPick {
+        repo_id: RepoId,
+        entries: Vec<InteractiveRebaseEntry>,
+    },
     CancelInteractiveRebaseSetup {
+        repo_id: RepoId,
+    },
+    CancelInteractiveCherryPickSetup {
         repo_id: RepoId,
     },
     MergeAbort {
@@ -822,12 +837,20 @@ pub enum InternalMsg {
     },
     RebaseStateLoaded {
         repo_id: RepoId,
-        result: Result<bool, Error>,
+        result: Result<SequencerState, Error>,
     },
     InteractiveRebaseSetupLoaded {
         repo_id: RepoId,
         base: String,
         result: Result<Vec<InteractiveRebaseEntry>, Error>,
+    },
+    /// Repository-ordered selected commit ids with their full `%B` messages.
+    /// `requested_ids` identifies the setup that launched the detached load
+    /// so a late response cannot alter a newer selection.
+    InteractiveCherryPickMessagesLoaded {
+        repo_id: RepoId,
+        requested_ids: Vec<String>,
+        result: Result<Vec<(String, String)>, Error>,
     },
     MergeCommitMessageLoaded {
         repo_id: RepoId,

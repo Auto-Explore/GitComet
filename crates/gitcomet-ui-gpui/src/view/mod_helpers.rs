@@ -2559,6 +2559,10 @@ pub(super) enum PopoverKind {
     ForcePushConfirm {
         repo_id: RepoId,
     },
+    CherryPickCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     MergeAbortConfirm {
         repo_id: RepoId,
     },
@@ -2702,9 +2706,8 @@ pub(super) enum PopoverKind {
     },
     InteractiveRebaseActionMenu {
         ix: usize,
-        is_bottom: bool,
-        can_drop: bool,
         can_squash: bool,
+        can_drop: bool,
     },
     InteractiveRebaseAutosquashMenu,
 }

@@ -974,6 +974,29 @@ pub(super) fn conflict_autosolve_telemetry_summary(
     )
 }
 
+/// A sequencer command (rebase / cherry-pick / continue) that reported Ok
+/// with a non-zero exit paused at a conflict — the backend maps only
+/// genuine pauses to Ok — so its summary must not read as completed.
+fn sequencer_paused(output: &CommandOutput) -> bool {
+    output.exit_code.is_some_and(|code| code != 0)
+}
+
+/// Continue/abort share one UI action and backend entry point for rebases,
+/// `git am`, and cherry-picks. Use the command that actually ran so native
+/// cherry-picks are not recorded as rebases in action history.
+fn sequencer_operation_label(output: &CommandOutput, error: Option<&Error>) -> &'static str {
+    let is_cherry_pick = |command: &str| command.trim_start().starts_with("git cherry-pick");
+    if is_cherry_pick(&output.command) {
+        return "Cherry-pick";
+    }
+    if let Some((command, _)) = error.and_then(try_format_git_backend_error)
+        && is_cherry_pick(&command)
+    {
+        return "Cherry-pick";
+    }
+    "Rebase"
+}
+
 fn summarize_command(
     command: &RepoCommandKind,
     output: &CommandOutput,
@@ -1004,8 +1027,9 @@ fn summarize_command(
             RepoCommandKind::Reset { .. } => "Reset",
             RepoCommandKind::SquashCommits { .. } => "Squash",
             RepoCommandKind::Rebase { .. } => "Rebase",
-            RepoCommandKind::RebaseContinue => "Rebase",
-            RepoCommandKind::RebaseAbort => "Rebase",
+            RepoCommandKind::RebaseContinue | RepoCommandKind::RebaseAbort => {
+                sequencer_operation_label(output, error)
+            }
             RepoCommandKind::InteractiveRebase { interactive, .. } => {
                 if *interactive {
                     "Interactive rebase"
@@ -1013,6 +1037,8 @@ fn summarize_command(
                     "Rebase"
                 }
             }
+            RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
+            RepoCommandKind::CherryPick { .. } => "Cherry-pick",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1214,13 +1240,58 @@ fn summarize_command(
             format!("Squash {count} commits: Completed")
         }
         RepoCommandKind::Rebase { onto } => format!("Rebase onto {onto}: Completed"),
-        RepoCommandKind::RebaseContinue => "Rebase: Continued".to_string(),
-        RepoCommandKind::RebaseAbort => "Rebase: Aborted".to_string(),
-        RepoCommandKind::InteractiveRebase { base, interactive } => {
-            if *interactive {
-                format!("Interactive rebase onto {base}: Completed")
+        RepoCommandKind::RebaseContinue => {
+            let operation = sequencer_operation_label(output, None);
+            if sequencer_paused(output) {
+                format!("{operation}: Paused at the next conflict")
             } else {
-                format!("Rebase onto {base}: Completed")
+                format!("{operation}: Continued")
+            }
+        }
+        RepoCommandKind::RebaseAbort => {
+            format!("{}: Aborted", sequencer_operation_label(output, None))
+        }
+        RepoCommandKind::InteractiveRebase { base, interactive } => {
+            let state = if sequencer_paused(output) {
+                "Paused at a conflict"
+            } else {
+                "Completed"
+            };
+            if *interactive {
+                format!("Interactive rebase onto {base}: {state}")
+            } else {
+                format!("Rebase onto {base}: {state}")
+            }
+        }
+        RepoCommandKind::InteractiveCherryPick { entries } => {
+            let state = if sequencer_paused(output) {
+                "Paused at a conflict"
+            } else {
+                "Completed"
+            };
+            format!("Cherry-pick {} commits: {state}", entries.len())
+        }
+        RepoCommandKind::CherryPick {
+            commit_id,
+            commit,
+            summary,
+            ..
+        } => {
+            if output
+                .stdout
+                .contains("GITCOMET_CHERRY_PICK_ALREADY_APPLIED")
+            {
+                "Current branch already has all the changes from the cherry-picked commit."
+                    .to_string()
+            } else {
+                let sha = commit_id.as_ref();
+                let short = sha.get(0..7).unwrap_or(sha);
+                let summary = summary.lines().next().unwrap_or("").trim();
+                if *commit {
+                    format!("Cherry-picked {short}: {summary}")
+                } else {
+                    format!("Cherry-picked {short} without committing: {summary}")
+                }
             }
         }
         RepoCommandKind::MergeAbort => "Merge: Aborted".to_string(),
@@ -2187,6 +2258,35 @@ mod tests {
         );
         assert_eq!(rebase_abort_summary, "Rebase: Aborted");
 
+        let (_, cherry_pick_continue_summary) = summarize_command(
+            &RepoCommandKind::RebaseContinue,
+            &command_output("git cherry-pick --continue", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(cherry_pick_continue_summary, "Cherry-pick: Continued");
+
+        let (_, cherry_pick_abort_summary) = summarize_command(
+            &RepoCommandKind::RebaseAbort,
+            &command_output("git cherry-pick --abort", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(cherry_pick_abort_summary, "Cherry-pick: Aborted");
+
+        let mut paused_cherry_pick = command_output("git cherry-pick --continue", "", "");
+        paused_cherry_pick.exit_code = Some(1);
+        let (_, cherry_pick_pause_summary) = summarize_command(
+            &RepoCommandKind::RebaseContinue,
+            &paused_cherry_pick,
+            true,
+            None,
+        );
+        assert_eq!(
+            cherry_pick_pause_summary,
+            "Cherry-pick: Paused at the next conflict"
+        );
+
         let (_, interactive_rebase_summary) = summarize_command(
             &RepoCommandKind::InteractiveRebase {
                 base: "HEAD~3".into(),
@@ -2212,6 +2312,56 @@ mod tests {
             None,
         );
         assert_eq!(squash_rebase_summary, "Rebase onto HEAD~3: Completed");
+
+        let commit_id = CommitId("abcdef1234567890".into());
+        let (_, cherry_pick_summary) = summarize_command(
+            &RepoCommandKind::CherryPick {
+                commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "fix parser\n\nbody".into(),
+            },
+            &command_output("git cherry-pick abcdef1", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(cherry_pick_summary, "Cherry-picked abcdef1: fix parser");
+
+        let (_, cherry_pick_no_commit_summary) = summarize_command(
+            &RepoCommandKind::CherryPick {
+                commit_id: commit_id.clone(),
+                commit: false,
+                mainline: None,
+                summary: "fix parser".into(),
+            },
+            &command_output("git cherry-pick --no-commit abcdef1", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            cherry_pick_no_commit_summary,
+            "Cherry-picked abcdef1 without committing: fix parser"
+        );
+
+        let (_, cherry_pick_already_applied_summary) = summarize_command(
+            &RepoCommandKind::CherryPick {
+                commit_id,
+                commit: true,
+                mainline: None,
+                summary: "fix parser".into(),
+            },
+            &command_output(
+                "git cherry-pick abcdef1",
+                "GITCOMET_CHERRY_PICK_ALREADY_APPLIED",
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            cherry_pick_already_applied_summary,
+            "Current branch already has all the changes from the cherry-picked commit."
+        );
 
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,

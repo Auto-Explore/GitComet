@@ -995,7 +995,7 @@ pub(super) fn schedule_load_rebase_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress_cancellable(&cancellation),
+                    result: repo.sequencer_state_cancellable(&cancellation),
                 }),
             );
         },
@@ -1029,7 +1029,7 @@ pub(super) fn schedule_load_rebase_and_merge_state(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
                     repo_id,
-                    result: repo.rebase_in_progress_cancellable(&cancellation),
+                    result: repo.sequencer_state_cancellable(&cancellation),
                 }),
             );
             send_or_log(
@@ -1611,6 +1611,68 @@ pub(super) fn schedule_load_selected_diff(
             },
         );
     }
+}
+
+/// Loads the full `%B` message of every selected cherry-pick source commit.
+/// Rewording stays unavailable if any lookup fails: falling back to the
+/// subject-only seed would make saving the dialog destructive.
+pub(super) fn schedule_load_interactive_cherry_pick_messages(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    ids: Vec<String>,
+) {
+    let fallback_ids = ids.clone();
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-interactive-cherry-pick-messages",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let commit_ids = ids
+                .iter()
+                .map(|id| gitcomet_core::domain::CommitId(id.clone().into()))
+                .collect::<Vec<_>>();
+            let result = repo
+                .topologically_order_commits(&commit_ids)
+                .and_then(|ordered_ids| {
+                    repo.commit_messages(&ordered_ids).map(|messages| {
+                        ordered_ids
+                            .into_iter()
+                            .map(|id| id.as_ref().to_string())
+                            .zip(messages)
+                            .collect()
+                    })
+                });
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(
+                    crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                        repo_id,
+                        requested_ids: ids,
+                        result,
+                    },
+                ),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(
+                    crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                        repo_id,
+                        requested_ids: fallback_ids,
+                        result: Err(Error::new(ErrorKind::Backend(
+                            "repository unavailable while loading cherry-pick commit messages"
+                                .to_string(),
+                        ))),
+                    },
+                ),
+            );
+        },
+    );
 }
 
 pub(super) fn schedule_load_interactive_rebase_setup(

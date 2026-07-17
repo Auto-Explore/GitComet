@@ -12,7 +12,7 @@ use gitcomet_core::services::{
     BlameLine, CancellationToken, CommandOutput, CommitOperationOutcome, ConflictFileStages,
     ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, MergetoolResult, PullMode,
     RemoteUrlKind, ResetMode, Result, SafePushAfterCommitContext, SafePushAfterCommitDecision,
-    SafePushAfterCommitTarget, SubmoduleTrustDecision, SubmoduleTrustTarget,
+    SafePushAfterCommitTarget, SequencerState, SubmoduleTrustDecision, SubmoduleTrustTarget,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -304,6 +304,14 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        self.commit_messages_impl(ids)
+    }
+
+    fn topologically_order_commits(&self, ids: &[CommitId]) -> Result<Vec<CommitId>> {
+        self.topologically_order_commits_impl(ids)
+    }
+
     fn recent_commit_messages(&self, limit: usize) -> Result<Vec<RecentCommitMessage>> {
         self.recent_commit_messages_impl(limit)
     }
@@ -532,6 +540,15 @@ impl GitRepository for GixRepo {
         self.cherry_pick_impl(id)
     }
 
+    fn cherry_pick_with_output(
+        &self,
+        id: &CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        self.cherry_pick_with_output_impl(id, commit, mainline)
+    }
+
     fn revert(&self, id: &CommitId) -> Result<()> {
         self.revert_impl(id)
     }
@@ -675,6 +692,13 @@ impl GitRepository for GixRepo {
         self.interactive_rebase_with_output_impl(base, entries)
     }
 
+    fn interactive_cherry_pick_with_output(
+        &self,
+        entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        self.interactive_cherry_pick_with_output_impl(entries)
+    }
+
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {
         self.merge_abort_with_output_impl()
     }
@@ -688,6 +712,20 @@ impl GitRepository for GixRepo {
         let in_progress = self.rebase_in_progress_impl()?;
         cancellation.check_cancelled()?;
         Ok(in_progress)
+    }
+
+    fn sequencer_state(&self) -> Result<SequencerState> {
+        self.sequencer_state_impl()
+    }
+
+    fn sequencer_state_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<SequencerState> {
+        cancellation.check_cancelled()?;
+        let state = self.sequencer_state_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(state)
     }
 
     fn merge_commit_message(&self) -> Result<Option<String>> {

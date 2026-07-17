@@ -624,9 +624,24 @@ fn send_unavailable_git_effect_result(
         Effect::CheckoutCommit { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::CheckoutCommit, runtime, &send)
         }
-        Effect::CherryPickCommit { repo_id, .. } => {
-            send_repo_action_unavailable(repo_id, RepoActionKind::CherryPickCommit, runtime, &send)
-        }
+        Effect::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::CherryPick {
+                    commit_id,
+                    commit,
+                    mainline,
+                    summary,
+                },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::RevertCommit { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::RevertCommit, runtime, &send)
         }
@@ -1021,7 +1036,7 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::RebaseContinue { repo_id } => send(Msg::Internal(
+        Effect::RebaseContinue { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::RebaseContinue,
@@ -1042,6 +1057,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadInteractiveCherryPickMessages { repo_id, ids } => send(Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id,
+                requested_ids: ids,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::InteractiveRebase {
             repo_id,
             base,
@@ -1051,6 +1073,13 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::InteractiveRebase { base, interactive },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::InteractiveCherryPick { repo_id, entries } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::InteractiveCherryPick { entries },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -1868,8 +1897,16 @@ pub(super) fn schedule_effect(
         Effect::CheckoutCommit { repo_id, commit_id } => {
             repo_actions::schedule_checkout_commit(executor, repos, msg_tx, repo_id, commit_id);
         }
-        Effect::CherryPickCommit { repo_id, commit_id } => {
-            repo_actions::schedule_cherry_pick_commit(executor, repos, msg_tx, repo_id, commit_id);
+        Effect::CherryPickCommit {
+            repo_id,
+            commit_id,
+            commit,
+            mainline,
+            summary,
+        } => {
+            repo_commands::schedule_cherry_pick_commit(
+                executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
+            );
         }
         Effect::RevertCommit { repo_id, commit_id } => {
             repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
@@ -2176,8 +2213,8 @@ pub(super) fn schedule_effect(
         Effect::Rebase { repo_id, onto } => {
             repo_commands::schedule_rebase(executor, repos, msg_tx, repo_id, onto)
         }
-        Effect::RebaseContinue { repo_id } => {
-            repo_commands::schedule_rebase_continue(executor, repos, msg_tx, repo_id);
+        Effect::RebaseContinue { repo_id, auth } => {
+            repo_commands::schedule_rebase_continue(executor, repos, msg_tx, repo_id, auth);
         }
         Effect::RebaseAbort { repo_id } => {
             repo_commands::schedule_rebase_abort(executor, repos, msg_tx, repo_id)
@@ -2185,6 +2222,11 @@ pub(super) fn schedule_effect(
         Effect::LoadInteractiveRebaseSetup { repo_id, base } => {
             repo_load::schedule_load_interactive_rebase_setup(
                 executor, repos, msg_tx, repo_id, base,
+            );
+        }
+        Effect::LoadInteractiveCherryPickMessages { repo_id, ids } => {
+            repo_load::schedule_load_interactive_cherry_pick_messages(
+                executor, repos, msg_tx, repo_id, ids,
             );
         }
         Effect::InteractiveRebase {
@@ -2201,6 +2243,11 @@ pub(super) fn schedule_effect(
             entries,
             interactive,
         ),
+        Effect::InteractiveCherryPick { repo_id, entries } => {
+            repo_commands::schedule_interactive_cherry_pick(
+                executor, repos, msg_tx, repo_id, entries,
+            )
+        }
         Effect::MergeAbort { repo_id } => {
             repo_commands::schedule_merge_abort(executor, repos, msg_tx, repo_id)
         }

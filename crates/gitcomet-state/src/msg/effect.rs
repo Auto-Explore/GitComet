@@ -222,6 +222,9 @@ pub enum Effect {
     CherryPickCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+        commit: bool,
+        mainline: Option<usize>,
+        summary: String,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -460,6 +463,10 @@ pub enum Effect {
     },
     RebaseContinue {
         repo_id: RepoId,
+        /// Signing auth (e.g. an ssh/gpg key passphrase) staged for the
+        /// replayed commit when the continue retries a sequencer step that
+        /// previously failed on a passphrase prompt.
+        auth: Option<StagedGitAuth>,
     },
     RebaseAbort {
         repo_id: RepoId,
@@ -476,6 +483,17 @@ pub enum Effect {
         /// rebases (e.g. squashing history without HEAD).
         interactive: bool,
     }, // entries held here so the effect dispatcher can pass them to the scheduler
+    InteractiveCherryPick {
+        repo_id: RepoId,
+        entries: Vec<InteractiveRebaseEntry>,
+    },
+    /// Load the full `%B` messages of the commits selected for an
+    /// interactive cherry-pick: the log page only carries subjects, and a
+    /// reword edited from a subject-only seed would silently drop the body.
+    LoadInteractiveCherryPickMessages {
+        repo_id: RepoId,
+        ids: Vec<String>,
+    },
     MergeAbort {
         repo_id: RepoId,
     },

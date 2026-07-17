@@ -1,5 +1,5 @@
 use super::super::super::*;
-use super::helpers::{IRebaseDragState, IRebaseViewState};
+use super::helpers::{ICommitEditorMode, IRebaseDragState, IRebaseViewState};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 use std::{cell::RefCell, rc::Rc};
 
@@ -296,6 +296,44 @@ fn non_drop_count(entries: &[InteractiveRebaseEntry]) -> usize {
 #[derive(Clone, Copy, Debug)]
 struct IRebaseDragValue {
     ix: usize,
+}
+
+fn data_ix_for_display(st: &IRebaseViewState, display_pos: usize) -> usize {
+    match st.mode {
+        ICommitEditorMode::Rebase => st.entries.len() - 1 - display_pos,
+        ICommitEditorMode::CherryPick => st.entries.len() - 1 - display_pos,
+    }
+}
+
+fn display_pos_for_data_ix(st: &IRebaseViewState, ix: usize) -> usize {
+    match st.mode {
+        ICommitEditorMode::Rebase => st.entries.len() - 1 - ix,
+        ICommitEditorMode::CherryPick => st.entries.len() - 1 - ix,
+    }
+}
+
+fn insertion_data_ix_for_display(
+    st: &IRebaseViewState,
+    from_ix: usize,
+    display_pos: usize,
+) -> usize {
+    let source_dp = display_pos_for_data_ix(st, from_ix);
+    match st.mode {
+        ICommitEditorMode::Rebase => {
+            if display_pos <= source_dp {
+                st.entries.len() - 1 - display_pos
+            } else {
+                st.entries.len() - display_pos
+            }
+        }
+        ICommitEditorMode::CherryPick => {
+            if display_pos <= source_dp {
+                st.entries.len() - 1 - display_pos
+            } else {
+                st.entries.len() - display_pos
+            }
+        }
+    }
 }
 
 /// Content signature of the rebase list: changes whenever a row's height
@@ -611,12 +649,7 @@ impl MainPaneView {
             }
         }
 
-        let source_dp = (entry_count - 1).saturating_sub(from_ix);
-        let to_ix = if display_pos <= source_dp {
-            entry_count - 1 - display_pos
-        } else {
-            entry_count - display_pos
-        };
+        let to_ix = insertion_data_ix_for_display(st, from_ix, display_pos);
         let already = st
             .drag_state
             .is_some_and(|s| s.from_ix == from_ix && s.display_pos == display_pos);
@@ -651,7 +684,7 @@ impl MainPaneView {
         if display_pos >= entry_count {
             return div().into_any_element();
         }
-        let ix = entry_count - 1 - display_pos;
+        let ix = data_ix_for_display(st, display_pos);
         let reorder_anim = st.reorder_anim;
         let drag_state = st.drag_state;
         let drag_from_ix = drag_state.map(|s| s.from_ix).unwrap_or(usize::MAX);
@@ -678,6 +711,14 @@ impl MainPaneView {
             .map(|m| gitcomet_core::squash::split_subject_body(m).0)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| st.entries[ix].summary.clone());
+        let source_color = (st.mode == ICommitEditorMode::CherryPick)
+            .then(|| {
+                st.source_colors
+                    .get(&st.entries[ix].commit_id)
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .map(|color_ix| crate::view::history_graph::lane_color(theme, color_ix));
         let is_selected = selected_commit_id
             .as_deref()
             .is_some_and(|s| s == st.entries[ix].commit_id);
@@ -686,27 +727,37 @@ impl MainPaneView {
             InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
         );
         let is_dropped = action == InteractiveRebaseAction::Drop;
-        let autosquash_active = st.autosquash_mode.is_some();
-        let is_autosquash_eligible = !autosquash_active && {
-            let key = autosquash_group_key(st.entries[ix].summary.as_str());
-            !key.trim().is_empty()
-                && st
-                    .entries
-                    .iter()
-                    .filter(|e| autosquash_group_key(e.summary.as_str()) == key)
-                    .count()
-                    > 1
+        let row_text_color = if is_dropped {
+            theme.colors.text_muted
+        } else {
+            theme.colors.text
         };
-        let folded_shas: Vec<String> = st
-            .folded
-            .get(&st.entries[ix].commit_id)
-            .map(|folds| {
-                folds
-                    .iter()
-                    .map(|f| f.commit_id.get(..8).unwrap_or(&f.commit_id).to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let autosquash_active =
+            st.mode == ICommitEditorMode::Rebase && st.autosquash_mode.is_some();
+        let is_autosquash_eligible =
+            st.mode == ICommitEditorMode::Rebase && !autosquash_active && {
+                let key = autosquash_group_key(st.entries[ix].summary.as_str());
+                !key.trim().is_empty()
+                    && st
+                        .entries
+                        .iter()
+                        .filter(|e| autosquash_group_key(e.summary.as_str()) == key)
+                        .count()
+                        > 1
+            };
+        let folded_shas: Vec<String> = if st.mode == ICommitEditorMode::Rebase {
+            st.folded
+                .get(&st.entries[ix].commit_id)
+                .map(|folds| {
+                    folds
+                        .iter()
+                        .map(|f| f.commit_id.get(..8).unwrap_or(&f.commit_id).to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         let btn_bounds: Rc<RefCell<Option<gpui::Bounds<gpui::Pixels>>>> =
             Rc::new(RefCell::new(None));
@@ -739,9 +790,8 @@ impl MainPaneView {
                             root.open_popover_for_bounds(
                                 PopoverKind::InteractiveRebaseActionMenu {
                                     ix,
-                                    is_bottom,
-                                    can_drop,
                                     can_squash,
+                                    can_drop,
                                 },
                                 bounds,
                                 window,
@@ -770,10 +820,9 @@ impl MainPaneView {
                 let Some(st) = this.interactive_rebase_states.get_mut(&repo_id) else {
                     return;
                 };
-                let len = st.entries.len();
-                let entry_display_pos = len - 1 - ix;
+                let entry_display_pos = display_pos_for_data_ix(st, ix);
                 if entry_display_pos > 0 {
-                    let swap_ix = len - 1 - (entry_display_pos - 1);
+                    let swap_ix = data_ix_for_display(st, entry_display_pos - 1);
                     let edit_signatures = reword_edit_signatures(&st.entries);
                     st.entries.swap(ix, swap_ix);
                     clear_stale_reword_edits(&edit_signatures, &mut st.entries);
@@ -794,9 +843,9 @@ impl MainPaneView {
                     return;
                 };
                 let len = st.entries.len();
-                let entry_display_pos = len - 1 - ix;
+                let entry_display_pos = display_pos_for_data_ix(st, ix);
                 if entry_display_pos + 1 < len {
-                    let swap_ix = len - 1 - (entry_display_pos + 1);
+                    let swap_ix = data_ix_for_display(st, entry_display_pos + 1);
                     let edit_signatures = reword_edit_signatures(&st.entries);
                     st.entries.swap(ix, swap_ix);
                     clear_stale_reword_edits(&edit_signatures, &mut st.entries);
@@ -816,7 +865,11 @@ impl MainPaneView {
             .id(("gripper", ix))
             .cursor(gpui::CursorStyle::PointingHand)
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(if is_dropped {
+                with_alpha(theme.colors.text_muted, 0.7)
+            } else {
+                theme.colors.text_muted
+            })
             .child("⠿")
             .on_drag(drag_val, move |_drag, _offset, _window, cx| {
                 cx.new(|_cx| IRebaseDragPreview {
@@ -903,11 +956,25 @@ impl MainPaneView {
                         ))
                     })
                     .child(action_btn)
+                    .when_some(source_color, |d, color| {
+                        d.child(
+                            div()
+                                .flex_shrink_0()
+                                .w(px(4.0))
+                                .h(px(22.0))
+                                .rounded(px(2.0))
+                                .bg(color),
+                        )
+                    })
                     .child(
                         div()
                             .flex_shrink_0()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(if is_dropped {
+                                with_alpha(theme.colors.text_muted, 0.7)
+                            } else {
+                                theme.colors.text_muted
+                            })
                             .font_family("monospace")
                             .child(sha.clone()),
                     )
@@ -915,7 +982,7 @@ impl MainPaneView {
                         div()
                             .flex_1()
                             .text_sm()
-                            .text_color(theme.colors.text)
+                            .text_color(row_text_color)
                             .when(is_autosquash_eligible, |d| {
                                 d.text_color(theme.colors.accent)
                             })
@@ -963,9 +1030,8 @@ impl MainPaneView {
                                 root.open_popover_at(
                                     PopoverKind::InteractiveRebaseActionMenu {
                                         ix,
-                                        is_bottom,
-                                        can_drop,
                                         can_squash,
+                                        can_drop,
                                     },
                                     pos,
                                     window,
@@ -1010,6 +1076,7 @@ impl MainPaneView {
     ) -> gpui::Div {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
+        self.sync_interactive_commit_editor_states();
 
         // Sync the variable-height virtualized list state before borrowing the
         // repo below (this needs `&mut self`; the match on `repo` holds `self`
@@ -1045,31 +1112,57 @@ impl MainPaneView {
         let Some(repo) = self.active_repo() else {
             return div().child("No active repo");
         };
-        let Some(setup) = repo.interactive_rebase_setup.as_ref() else {
-            return div().child("No interactive rebase setup");
-        };
         let repo_id = repo.id;
-        let base = setup.base.clone();
-        // Only abbreviate full 40-char SHAs; leave branch names intact.
-        let base_short: SharedString =
-            if base.len() > 16 && base.chars().all(|c| c.is_ascii_hexdigit()) {
-                base.get(..8).unwrap_or(&base).to_string().into()
+        // Setups can outlive the state they were opened under (a merge or
+        // pick started from another surface, or externally in a terminal);
+        // git would refuse the start, so hold the button until it can work.
+        let history_rewrite_busy = repo.history_rewrite_busy();
+        let (editor_mode, base, header_title, header_detail, loading_state) =
+            if let Some(setup) = repo.interactive_rebase_setup.as_ref() {
+                let base = setup.base.clone();
+                // Only abbreviate full 40-char SHAs; leave branch names intact.
+                let base_short: SharedString =
+                    if base.len() > 16 && base.chars().all(|c| c.is_ascii_hexdigit()) {
+                        base.get(..8).unwrap_or(&base).to_string().into()
+                    } else {
+                        base.clone().into()
+                    };
+                // Prefer a branch name that points at the base commit; fall back to the
+                // abbreviated sha.
+                let base_display: SharedString = match &repo.branches {
+                    Loadable::Ready(branches) => branches
+                        .iter()
+                        .find(|b| b.target.as_ref() == base.as_str())
+                        .map(|b| SharedString::from(b.name.clone()))
+                        .unwrap_or_else(|| base_short.clone()),
+                    _ => base_short.clone(),
+                };
+                (
+                    ICommitEditorMode::Rebase,
+                    Some(base),
+                    SharedString::from("Interactive Rebase"),
+                    SharedString::from(format!("onto {base_display}")),
+                    setup.entries.clone(),
+                )
+            } else if let Some(setup) = repo.interactive_cherry_pick_setup.as_ref() {
+                let count = setup.entries.len();
+                let entries = match &setup.full_messages {
+                    Loadable::NotLoaded => Loadable::NotLoaded,
+                    Loadable::Loading => Loadable::Loading,
+                    Loadable::Ready(()) => Loadable::Ready(setup.entries.clone()),
+                    Loadable::Error(error) => Loadable::Error(error.clone()),
+                };
+                (
+                    ICommitEditorMode::CherryPick,
+                    None,
+                    SharedString::from("Cherry-pick"),
+                    SharedString::from(format!("{count} commits")),
+                    entries,
+                )
             } else {
-                base.clone().into()
+                return div().child("No interactive commit setup");
             };
-        // Prefer a branch name that points at the base commit; fall back to the
-        // abbreviated sha.
-        let base_display: SharedString = match &repo.branches {
-            Loadable::Ready(branches) => branches
-                .iter()
-                .find(|b| b.target.as_ref() == base.as_str())
-                .map(|b| SharedString::from(b.name.clone()))
-                .unwrap_or_else(|| base_short.clone()),
-            _ => base_short.clone(),
-        };
-
-        let loading_state = &setup.entries;
-        let entry_content: gpui::AnyElement = match loading_state {
+        let entry_content: gpui::AnyElement = match &loading_state {
             Loadable::NotLoaded => div()
                 .px_2()
                 .py_2()
@@ -1111,7 +1204,10 @@ impl MainPaneView {
                     .py_2()
                     .text_sm()
                     .text_color(theme.colors.text_muted)
-                    .child(format!("No commits to rebase onto {base_display}."))
+                    .child(match editor_mode {
+                        ICommitEditorMode::Rebase => "No commits to rebase.".to_string(),
+                        ICommitEditorMode::CherryPick => "No commits to cherry-pick.".to_string(),
+                    })
                     .into_any_element()
             }
             Loadable::Ready(_) if self.interactive_rebase_states.contains_key(&repo_id) => {
@@ -1219,13 +1315,13 @@ impl MainPaneView {
                         div()
                             .text_sm()
                             .font_weight(FontWeight::BOLD)
-                            .child("Interactive Rebase"),
+                            .child(header_title),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme.colors.text_muted)
-                            .child(format!("onto {base_display}")),
+                            .child(header_detail),
                     ),
             )
             .child(div().border_t_1().border_color(theme.colors.border))
@@ -1238,24 +1334,30 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .when(!entries_empty, |footer| footer.child(
+                    .child(
                         div()
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child("Auto Squash"),
-                            )
-                            .child(
-                                components::Button::new("irebase_autosquash", "Auto Squash ▾")
-                                    .style(components::ButtonStyle::Outlined)
-                                .on_click_with_bounds(
-                                    theme,
-                                    cx,
-                                    move |this, _e, bounds, window, cx| {
+                            .when(
+                                !entries_empty && editor_mode == ICommitEditorMode::Rebase,
+                                |left| {
+                                    left.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.text_muted)
+                                            .child("Auto Squash"),
+                                    )
+                                    .child(
+                                        components::Button::new(
+                                            "irebase_autosquash",
+                                            "Auto Squash ▾",
+                                        )
+                                        .style(components::ButtonStyle::Outlined)
+                                        .on_click_with_bounds(
+                                            theme,
+                                            cx,
+                                            move |this, _e, bounds, window, cx| {
                                         let wh = window.window_handle();
                                         let root = this.root_view.clone();
                                         cx.defer(move |cx| {
@@ -1270,10 +1372,12 @@ impl MainPaneView {
                                                 });
                                             });
                                         });
-                                    },
-                                ),
+                                                },
+                                            ),
+                                    )
+                                },
                             ),
-                    ))
+                    )
                     .child(
                         div()
                             .flex()
@@ -1306,16 +1410,31 @@ impl MainPaneView {
                                             this.store.dispatch(
                                                 Msg::CancelInteractiveRebaseSetup { repo_id },
                                             );
+                                            if editor_mode == ICommitEditorMode::CherryPick {
+                                                this.store.dispatch(
+                                                    Msg::CancelInteractiveCherryPickSetup {
+                                                        repo_id,
+                                                    },
+                                                );
+                                            }
+                                            this.interactive_rebase_states.remove(&repo_id);
                                             cx.notify();
                                         },
                                     )),
                             )
                             .when(!entries_empty, |row| row.child(
-                                components::Button::new("irebase_start", "Start Rebase")
+                                components::Button::new(
+                                    "irebase_start",
+                                    match editor_mode {
+                                        ICommitEditorMode::Rebase => "Start Rebase",
+                                        ICommitEditorMode::CherryPick => "Start Cherry-pick",
+                                    },
+                                )
                                     .style(components::ButtonStyle::Filled)
                                     .disabled(
                                         entries_empty
-                                            || !matches!(loading_state, Loadable::Ready(_)),
+                                            || !matches!(loading_state, Loadable::Ready(_))
+                                            || history_rewrite_busy,
                                     )
                                     .render(theme, ui_scale_percent)
                                     .on_click(cx.listener(
@@ -1328,15 +1447,45 @@ impl MainPaneView {
                                             if st.entries.is_empty() {
                                                 return;
                                             }
-                                            let entries = expand_folded(&st.entries, &st.folded);
-                                            this.store.dispatch(Msg::InteractiveRebase {
-                                                repo_id,
-                                                base: base.clone(),
-                                                entries,
-                                            });
-                                            this.store.dispatch(
-                                                Msg::CancelInteractiveRebaseSetup { repo_id },
-                                            );
+                                            let entries = if editor_mode
+                                                == ICommitEditorMode::Rebase
+                                            {
+                                                expand_folded(&st.entries, &st.folded)
+                                            } else {
+                                                st.entries.clone()
+                                            };
+                                            match editor_mode {
+                                                ICommitEditorMode::Rebase => {
+                                                    if let Some(base) = base.clone() {
+                                                        this.store.dispatch(
+                                                            Msg::InteractiveRebase {
+                                                                repo_id,
+                                                                base,
+                                                                entries,
+                                                            },
+                                                        );
+                                                        this.store.dispatch(
+                                                            Msg::CancelInteractiveRebaseSetup {
+                                                                repo_id,
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                                ICommitEditorMode::CherryPick => {
+                                                    this.store.dispatch(
+                                                        Msg::InteractiveCherryPick {
+                                                            repo_id,
+                                                            entries,
+                                                        },
+                                                    );
+                                                    this.store.dispatch(
+                                                        Msg::CancelInteractiveCherryPickSetup {
+                                                            repo_id,
+                                                        },
+                                                    );
+                                                    this.interactive_rebase_states.remove(&repo_id);
+                                                }
+                                            }
                                             cx.notify();
                                         },
                                     )),

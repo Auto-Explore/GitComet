@@ -210,6 +210,11 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         base: String,
     },
+    OpenInteractiveCherryPickSetup {
+        repo_id: RepoId,
+        entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+        source_colors: Vec<(String, u8)>,
+    },
     SetInteractiveRebaseAction {
         ix: usize,
         action: InteractiveRebaseAction,
@@ -284,6 +289,8 @@ pub(in crate::view) enum ContextMenuAction {
 enum ContextMenuItem {
     Separator,
     Header(components::ContextMenuText),
+    /// Muted helper text placed directly under the menu's header.
+    Description(components::ContextMenuText),
     Label(components::ContextMenuText),
     Entry {
         label: SharedString,

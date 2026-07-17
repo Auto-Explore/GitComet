@@ -902,6 +902,7 @@ pub(super) fn schedule_rebase_continue(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -909,7 +910,7 @@ pub(super) fn schedule_rebase_continue(
         msg_tx,
         repo_id,
         RepoCommandKind::RebaseContinue,
-        |repo| repo.rebase_continue_with_output(),
+        move |repo| run_with_git_auth(auth, || repo.rebase_continue_with_output()),
     );
 }
 
@@ -949,6 +950,52 @@ pub(super) fn schedule_interactive_rebase(
             interactive,
         },
         move |repo| repo.interactive_rebase_with_output(&base, &entries),
+    );
+}
+
+pub(super) fn schedule_interactive_cherry_pick(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    entries: Vec<InteractiveRebaseEntry>,
+) {
+    let command_entries = entries.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::InteractiveCherryPick {
+            entries: command_entries,
+        },
+        move |repo| repo.interactive_cherry_pick_with_output(&entries),
+    );
+}
+
+pub(super) fn schedule_cherry_pick_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
+) {
+    let command_commit_id = commit_id.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CherryPick {
+            commit_id: command_commit_id,
+            commit,
+            mainline,
+            summary,
+        },
+        move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
     );
 }
 

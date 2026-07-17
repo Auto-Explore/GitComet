@@ -116,11 +116,42 @@ pub fn context_menu_header<V: 'static>(
         .py(scaled_px(4.0))
         .text_xs()
         .line_height(scaled_px(14.0))
-        .text_color(theme.colors.text_muted)
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.colors.text)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
         .child(context_menu_text_content(
             title,
+            tooltip_host,
+            cx,
+            max_lines,
+            theme.colors.text,
+        ))
+}
+
+/// Muted helper text under a menu header — explains what the options do,
+/// visually subordinate to both the header and the entries.
+pub fn context_menu_description<V: 'static>(
+    theme: AppTheme,
+    ui_scale: impl Into<UiScale>,
+    text: impl Into<ContextMenuText>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    cx: &gpui::Context<V>,
+) -> Div {
+    let ui_scale = ui_scale.into();
+    let scaled_px = |value| ui_scale.px(value);
+    let text = text.into();
+    let max_lines = text.resolved_max_lines(3);
+    div()
+        .px(scaled_px(8.0))
+        .pb(scaled_px(4.0))
+        .text_xs()
+        .line_height(scaled_px(14.0))
+        .text_color(theme.colors.text_muted)
+        .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
+        .when(max_lines > 1, |s| s.line_clamp(max_lines))
+        .child(context_menu_text_content(
+            text,
             tooltip_host,
             cx,
             max_lines,

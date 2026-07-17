@@ -4,6 +4,7 @@ use gitcomet_core::services::InteractiveRebaseAction;
 mod app_menu;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
+mod cherry_pick_commit_confirm;
 mod clone_repo;
 mod commit_prompt;
 mod conflict_save_stage_confirm;
@@ -153,6 +154,10 @@ pub(in super::super) struct PopoverHost {
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
+    /// Explicit 1-based mainline selected for the currently open single
+    /// merge-commit cherry-pick confirmation. Reset every time that dialog
+    /// opens; drafts are intentionally session-local.
+    cherry_pick_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
@@ -363,6 +368,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
         kind,
         PopoverKind::StashDropConfirm { .. }
             | PopoverKind::ForcePushConfirm { .. }
+            | PopoverKind::CherryPickCommitConfirm { .. }
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
@@ -458,6 +464,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         }
         | PopoverKind::PushSetUpstreamPrompt { .. }
         | PopoverKind::ForcePushConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
@@ -511,9 +518,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::PushSetUpstreamPrompt { .. } => Some(DIALOG_320_WIDTH),
-        PopoverKind::ResetPrompt { .. } | PopoverKind::RebaseOntoConfirm { .. } => {
-            Some(DIALOG_380_WIDTH)
-        }
+        PopoverKind::ResetPrompt { .. }
+        | PopoverKind::RebaseOntoConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } | PopoverKind::ConflictSaveStageConfirm { .. } => {
             Some(DIALOG_360_WIDTH)
         }
@@ -1203,6 +1210,7 @@ impl PopoverHost {
             details_pane,
             popover: None,
             popover_anchor: None,
+            cherry_pick_mainline: None,
             context_menu_focus_handle,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
@@ -2106,6 +2114,9 @@ impl PopoverHost {
     ) {
         self.clear_truncated_tooltip(cx);
         self.request_lazy_popover_repo_data(&kind);
+        if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
+            self.cherry_pick_mainline = None;
+        }
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
             || matches!(
@@ -2936,6 +2947,9 @@ impl PopoverHost {
             }
             PopoverKind::ForcePushConfirm { repo_id } => {
                 force_push_confirm::panel(self, repo_id, cx)
+            }
+            PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
+                cherry_pick_commit_confirm::panel(self, repo_id, commit_id, cx)
             }
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)

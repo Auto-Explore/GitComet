@@ -176,6 +176,14 @@ impl InteractiveRebaseAction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SequencerState {
+    #[default]
+    None,
+    RebaseOrApply,
+    CherryPick,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InteractiveRebaseEntry {
     pub action: InteractiveRebaseAction,
@@ -347,6 +355,23 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Full `%B` messages of the given commits, in input order. Message-only
+    /// on purpose: callers like the cherry-pick editor need nothing else, and
+    /// implementations should skip the per-commit tree diff `commit_details`
+    /// pays for.
+    fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
+        ids.iter()
+            .map(|id| self.commit_details(id).map(|details| details.message))
+            .collect()
+    }
+    /// Stable topological ordering of an arbitrary set of commits. Selected
+    /// ancestors precede selected descendants even when unselected commits
+    /// lie between them; unrelated commits retain their input order.
+    fn topologically_order_commits(&self, _ids: &[CommitId]) -> Result<Vec<CommitId>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "topological commit ordering is not implemented for this backend",
+        )))
+    }
     fn recent_commit_messages(&self, _limit: usize) -> Result<Vec<RecentCommitMessage>> {
         Err(Error::new(ErrorKind::Unsupported(
             "recent commit messages are not implemented for this backend",
@@ -563,6 +588,18 @@ pub trait GitRepository: Send + Sync {
     }
     fn checkout_commit(&self, id: &CommitId) -> Result<()>;
     fn cherry_pick(&self, id: &CommitId) -> Result<()>;
+    /// Runs a single cherry-pick. `mainline` is Git's 1-based parent number
+    /// for a merge commit and must be `None` for non-merge commits.
+    fn cherry_pick_with_output(
+        &self,
+        _id: &CommitId,
+        _commit: bool,
+        _mainline: Option<usize>,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git cherry-pick is not implemented for this backend",
+        )))
+    }
     fn revert(&self, id: &CommitId) -> Result<()>;
 
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
@@ -625,6 +662,14 @@ pub trait GitRepository: Send + Sync {
             "git rebase -i is not implemented for this backend",
         )))
     }
+    fn interactive_cherry_pick_with_output(
+        &self,
+        _entries: &[InteractiveRebaseEntry],
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "interactive cherry-pick is not implemented for this backend",
+        )))
+    }
     fn merge_abort_with_output(&self) -> Result<CommandOutput> {
         Err(Error::new(ErrorKind::Unsupported(
             "git merge --abort is not implemented for this backend",
@@ -638,6 +683,22 @@ pub trait GitRepository: Send + Sync {
         let in_progress = self.rebase_in_progress()?;
         cancellation.check_cancelled()?;
         Ok(in_progress)
+    }
+    fn sequencer_state(&self) -> Result<SequencerState> {
+        Ok(if self.rebase_in_progress()? {
+            SequencerState::RebaseOrApply
+        } else {
+            SequencerState::None
+        })
+    }
+    fn sequencer_state_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<SequencerState> {
+        cancellation.check_cancelled()?;
+        let state = self.sequencer_state()?;
+        cancellation.check_cancelled()?;
+        Ok(state)
     }
 
     fn merge_commit_message(&self) -> Result<Option<String>> {

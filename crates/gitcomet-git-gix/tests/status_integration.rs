@@ -4,8 +4,8 @@ use gitcomet_core::domain::{
     FileDiffText, FileDiffTextSource, FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
-use gitcomet_core::services::ConflictSide;
 use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
 use std::io::Write;
@@ -6056,6 +6056,70 @@ fn cherry_pick_applies_commit_onto_current_branch() {
     let status = opened.status().unwrap();
     assert!(status.staged.is_empty());
     assert!(status.unstaged.is_empty());
+}
+
+#[test]
+fn interactive_cherry_pick_applies_multiple_commits_in_order() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "base.txt", "base\n");
+    run_git(repo, &["add", "base.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "one.txt", "one\n");
+    run_git(repo, &["add", "one.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature one"],
+    );
+    let one_sha = run_git_output(repo, &["rev-parse", "HEAD"]);
+    write(repo, "two.txt", "two\n");
+    run_git(repo, &["add", "two.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "feature two"],
+    );
+    let two_sha = run_git_output(repo, &["rev-parse", "HEAD"]);
+    run_git(repo, &["checkout", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .interactive_cherry_pick_with_output(&[
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: one_sha,
+                summary: "feature one".to_string(),
+                message: "feature one".to_string(),
+                new_message: None,
+            },
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: two_sha,
+                summary: "feature two".to_string(),
+                message: "feature two".to_string(),
+                new_message: None,
+            },
+        ])
+        .unwrap();
+
+    assert_eq!(fs::read_to_string(repo.join("one.txt")).unwrap(), "one\n");
+    assert_eq!(fs::read_to_string(repo.join("two.txt")).unwrap(), "two\n");
+    let subjects = run_git_output(repo, &["log", "--format=%s", "-2"]);
+    assert_eq!(subjects, "feature two\nfeature one");
 }
 
 #[test]

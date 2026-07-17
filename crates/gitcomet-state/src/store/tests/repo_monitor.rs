@@ -357,7 +357,7 @@ fn repo_monitor_stop_send_failures_are_recorded() {
     monitor_impl::record_stop_send_failure(RepoId(77), "repo monitor test stop send");
 
     let after = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Stop);
-    assert!(after >= before + 1);
+    assert!(after > before);
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn repo_monitor_join_failures_are_recorded() {
     monitor_impl::join_monitor_or_log(join, RepoId(88), "repo monitor test join");
 
     let after = monitor_impl::monitor_failure_count(monitor_impl::MonitorFailureKind::Join);
-    assert!(after >= before + 1);
+    assert!(after > before);
 }
 
 #[test]

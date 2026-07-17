@@ -11,16 +11,17 @@ pub(super) fn panel(
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     // Name the branch being moved rather than the opaque "HEAD".
-    let current_branch = this
-        .state
-        .repos
-        .iter()
-        .find(|r| r.id == repo_id)
+    let repo = this.state.repos.iter().find(|r| r.id == repo_id);
+    let current_branch = repo
         .and_then(|r| match &r.head_branch {
             Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => Some(head.clone()),
             _ => None,
         })
         .unwrap_or_else(|| "HEAD".to_string());
+    // The menu entry that opens this popover is gated the same way, but the
+    // popover can outlive that check (an operation may start while it is
+    // open); git would refuse the rebase, so hold the button too.
+    let history_rewrite_busy = repo.is_some_and(|r| r.history_rewrite_busy());
 
     div()
         .flex()
@@ -69,6 +70,7 @@ pub(super) fn panel(
                 )
                 .child(
                     components::Button::new("rebase_onto_go", "Rebase")
+                        .disabled(history_rewrite_busy)
                         .focus_handle(this.rebase_onto_submit_focus_handle.clone())
                         .separated_end_slot(super::hotkey_hint(
                             theme,

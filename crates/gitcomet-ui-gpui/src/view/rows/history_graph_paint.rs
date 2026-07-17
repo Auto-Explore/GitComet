@@ -128,24 +128,38 @@ pub(super) fn paint_history_graph(
         .map(|l| history_graph::lane_color(theme, l.color_ix))
         .unwrap_or(theme.colors.text_muted);
 
-    if is_stash_node {
-        paint_stash_node(
-            bounds.left() + node_x,
-            y_center,
-            theme.colors.window_bg,
-            node_color,
-            window,
-        );
-    } else {
-        paint_commit_node(
-            bounds.left() + node_x,
-            y_center,
-            node_radius,
-            node_corner_radius,
-            node_color,
-            window,
-        );
-    }
+    // Within one paint layer gpui draws all quads before any path, so the
+    // node (a quad) would sit under the lane lines no matter the call
+    // order. A nested layer gives the node a strictly higher draw order;
+    // its bounds are generous enough for the stash node's handle.
+    let node_layer_half = scaled_px(10.0);
+    let node_layer_bounds = Bounds::new(
+        point(
+            bounds.left() + node_x - node_layer_half,
+            y_center - node_layer_half,
+        ),
+        size(node_layer_half * 2.0, node_layer_half * 2.0),
+    );
+    window.paint_layer(node_layer_bounds, |window| {
+        if is_stash_node {
+            paint_stash_node(
+                bounds.left() + node_x,
+                y_center,
+                theme.colors.window_bg,
+                node_color,
+                window,
+            );
+        } else {
+            paint_commit_node(
+                bounds.left() + node_x,
+                y_center,
+                node_radius,
+                node_corner_radius,
+                node_color,
+                window,
+            );
+        }
+    });
 }
 
 fn paint_commit_node(

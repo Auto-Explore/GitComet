@@ -497,6 +497,40 @@ fn interactive_rebase_setup_survives_separator_bytes_in_messages() {
 }
 
 #[test]
+fn interactive_rebase_drops_picks_that_become_empty() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    commit_file(&repo, "file.txt", "orig\n", "Root commit");
+    let root = rev_parse(&repo, "HEAD");
+    commit_file(&repo, "file.txt", "x\n", "Commit X");
+    commit_file(&repo, "file.txt", "orig\n", "Back to orig");
+    commit_file(&repo, "file.txt", "x\n", "Commit X again");
+
+    let backend = open_backend(&repo);
+    let entries = backend
+        .list_commits_for_interactive_rebase(&root)
+        .expect("list commits for interactive rebase");
+    // Replaying "Commit X again" directly after "Commit X" makes it empty;
+    // the rebase must drop it and continue instead of stopping on a step
+    // the UI has no skip control for.
+    let reordered = vec![entries[0].clone(), entries[2].clone(), entries[1].clone()];
+
+    let output = backend
+        .interactive_rebase_with_output(&root, &reordered)
+        .expect("become-empty pick should be dropped, not strand the rebase");
+
+    assert_eq!(output.exit_code, Some(0));
+    assert!(!backend.rebase_in_progress().expect("read rebase state"));
+    assert_eq!(git_stdout(&repo, &["rev-list", "--count", "HEAD"]), "3");
+    assert_eq!(
+        git_stdout(&repo, &["log", "-2", "--format=%s"]),
+        "Back to orig\nCommit X"
+    );
+    assert_eq!(fs::read_to_string(repo.join("file.txt")).unwrap(), "orig\n");
+}
+
+#[test]
 fn interactive_rebase_aborts_when_branch_changes_after_setup() {
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("repo");
