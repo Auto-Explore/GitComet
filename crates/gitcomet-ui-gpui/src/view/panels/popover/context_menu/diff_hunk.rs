@@ -1,12 +1,24 @@
 use super::*;
 
+use crate::view::shortcut_labels::secondary_shortcut;
+
 fn diff_hunk_primary_metadata(
     diff_target: Option<&DiffTarget>,
-) -> (bool, &'static str, &'static str, Option<&'static str>) {
+) -> (bool, &'static str, &'static str, Option<String>) {
     match diff_target {
         Some(DiffTarget::WorkingTree { area, .. }) => match area {
-            DiffArea::Unstaged => (false, "Stage hunk", "icons/plus.svg", Some("Ctrl+S")),
-            DiffArea::Staged => (false, "Unstage hunk", "icons/minus.svg", Some("Ctrl+U")),
+            DiffArea::Unstaged => (
+                false,
+                "Stage hunk",
+                "icons/plus.svg",
+                Some(secondary_shortcut("S")),
+            ),
+            DiffArea::Staged => (
+                false,
+                "Unstage hunk",
+                "icons/minus.svg",
+                Some(secondary_shortcut("U")),
+            ),
         },
         _ => (true, "Stage/Unstage hunk", "icons/plus.svg", None),
     }
@@ -66,7 +78,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
     items.push(ContextMenuItem::Entry {
         label: "Discard hunk".into(),
         icon: Some("icons/refresh.svg".into()),
-        shortcut: Some("Ctrl+D".into()),
+        shortcut: Some(secondary_shortcut("D").into()),
         disabled: !is_unstaged || patch.is_none(),
         action: Box::new(ContextMenuAction::ApplyWorktreePatch {
             repo_id,
@@ -93,7 +105,7 @@ mod tests {
         assert!(!disabled);
         assert_eq!(label, "Stage hunk");
         assert_eq!(icon, "icons/plus.svg");
-        assert_eq!(shortcut, Some("Ctrl+S"));
+        assert_eq!(shortcut, Some(secondary_shortcut("S")));
         assert!(matches!(
             diff_hunk_primary_action(RepoId(9), 4, Some(&target)),
             ContextMenuAction::StageHunk {
@@ -114,7 +126,7 @@ mod tests {
         assert!(!disabled);
         assert_eq!(label, "Unstage hunk");
         assert_eq!(icon, "icons/minus.svg");
-        assert_eq!(shortcut, Some("Ctrl+U"));
+        assert_eq!(shortcut, Some(secondary_shortcut("U")));
         assert!(matches!(
             diff_hunk_primary_action(RepoId(10), 5, Some(&target)),
             ContextMenuAction::UnstageHunk {

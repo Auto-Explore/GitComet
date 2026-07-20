@@ -21,8 +21,11 @@ fn declared_shortcuts(model: &ContextMenuModel) -> Vec<String> {
         .collect()
 }
 
-fn assert_declared_shortcuts(model: &ContextMenuModel, expected: &[&str]) {
-    let expected = expected.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+fn assert_declared_shortcuts(model: &ContextMenuModel, expected: &[impl AsRef<str>]) {
+    let expected = expected
+        .iter()
+        .map(|s| s.as_ref().to_string())
+        .collect::<Vec<_>>();
     assert_eq!(declared_shortcuts(model), expected);
 }
 
@@ -52,6 +55,12 @@ fn context_menu_entry_disabled_by_label_prefix(model: &ContextMenuModel, prefix:
             _ => None,
         })
         .unwrap_or_else(|| panic!("expected entry starting with `{prefix}` to exist"))
+}
+
+/// Platform-aware label for `secondary`-modifier shortcuts, matching what the
+/// context menus declare.
+fn sec(suffix: &str) -> String {
+    crate::view::shortcut_labels::secondary_shortcut(suffix)
 }
 
 fn shortcut_entry<'a>(
@@ -1356,7 +1365,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &unstaged_status_model,
-        &["Ctrl+H", "Ctrl+S", "Ctrl+D", "Ctrl+Shift+C"],
+        &[&sec("H"), &sec("S"), &sec("D"), &sec("Shift+C")],
     );
     assert_shortcut_action!(
         unstaged_status_model,
@@ -1368,14 +1377,14 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "Ctrl+H",
+        &sec("H"),
         ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory { repo_id: rid, path }
         } if *rid == repo_id && path == &unstaged_path
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "Ctrl+S",
+        &sec("S"),
         ContextMenuAction::StageSelectionOrPath {
             repo_id: rid,
             area,
@@ -1384,7 +1393,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "Ctrl+D",
+        &sec("D"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1393,7 +1402,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         unstaged_status_model,
-        "Ctrl+Shift+C",
+        &sec("Shift+C"),
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &unstaged_path)
     );
 
@@ -1410,7 +1419,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     });
     assert_declared_shortcuts(
         &staged_status_model,
-        &["Ctrl+H", "Ctrl+U", "Ctrl+D", "Ctrl+Shift+C"],
+        &[&sec("H"), &sec("U"), &sec("D"), &sec("Shift+C")],
     );
     assert_shortcut_action!(
         staged_status_model,
@@ -1422,14 +1431,14 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         staged_status_model,
-        "Ctrl+H",
+        &sec("H"),
         ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory { repo_id: rid, path }
         } if *rid == repo_id && path == &staged_path
     );
     assert_shortcut_action!(
         staged_status_model,
-        "Ctrl+U",
+        &sec("U"),
         ContextMenuAction::UnstageSelectionOrPath {
             repo_id: rid,
             area,
@@ -1438,7 +1447,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         staged_status_model,
-        "Ctrl+D",
+        &sec("D"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1447,7 +1456,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         staged_status_model,
-        "Ctrl+Shift+C",
+        &sec("Shift+C"),
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &staged_path)
     );
 
@@ -1465,12 +1474,12 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_declared_shortcuts(
         &conflicted_status_model,
         &[
-            "Ctrl+H",
-            "Ctrl+O",
-            "Ctrl+T",
-            "Ctrl+M",
-            "Ctrl+D",
-            "Ctrl+Shift+C",
+            &sec("H"),
+            &sec("O"),
+            &sec("T"),
+            &sec("M"),
+            &sec("D"),
+            &sec("Shift+C"),
         ],
     );
     assert_shortcut_action!(
@@ -1483,14 +1492,14 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "Ctrl+H",
+        &sec("H"),
         ContextMenuAction::OpenPopover {
             kind: PopoverKind::FileHistory { repo_id: rid, path }
         } if *rid == repo_id && path == &conflicted_path
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "Ctrl+O",
+        &sec("O"),
         ContextMenuAction::CheckoutConflictSideSelectionOrPath {
             repo_id: rid,
             area,
@@ -1503,7 +1512,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "Ctrl+T",
+        &sec("T"),
         ContextMenuAction::CheckoutConflictSideSelectionOrPath {
             repo_id: rid,
             area,
@@ -1516,7 +1525,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "Ctrl+M",
+        &sec("M"),
         ContextMenuAction::SelectConflictDiff {
             repo_id: rid,
             path
@@ -1524,7 +1533,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "Ctrl+D",
+        &sec("D"),
         ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
             repo_id: rid,
             area,
@@ -1533,7 +1542,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         conflicted_status_model,
-        "Ctrl+Shift+C",
+        &sec("Shift+C"),
         ContextMenuAction::CopyText { text } if copied_path_ends_with(text, &conflicted_path)
     );
 
@@ -1617,10 +1626,10 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     let diff_hunk_unstaged_model = cx.update(|_window, app| {
         context_menu_model_for(&view, app, PopoverKind::DiffHunkMenu { repo_id, src_ix: 3 })
     });
-    assert_declared_shortcuts(&diff_hunk_unstaged_model, &["Ctrl+S", "Ctrl+D"]);
+    assert_declared_shortcuts(&diff_hunk_unstaged_model, &[&sec("S"), &sec("D")]);
     assert_shortcut_action!(
         diff_hunk_unstaged_model,
-        "Ctrl+S",
+        &sec("S"),
         ContextMenuAction::StageHunk {
             repo_id: rid,
             src_ix
@@ -1628,7 +1637,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     );
     assert_shortcut_action!(
         diff_hunk_unstaged_model,
-        "Ctrl+D",
+        &sec("D"),
         ContextMenuAction::ApplyWorktreePatch {
             repo_id: rid,
             patch,
@@ -1650,20 +1659,20 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&conflict_output_model, &["Ctrl+C", "Ctrl+X", "Ctrl+V"]);
+    assert_declared_shortcuts(&conflict_output_model, &[&sec("C"), &sec("X"), &sec("V")]);
     assert_shortcut_action!(
         conflict_output_model,
-        "Ctrl+C",
+        &sec("C"),
         ContextMenuAction::CopyText { text } if text == "chosen text"
     );
     assert_shortcut_action!(
         conflict_output_model,
-        "Ctrl+X",
+        &sec("X"),
         ContextMenuAction::ConflictResolverOutputCut { text } if text == "chosen text"
     );
     assert_shortcut_action!(
         conflict_output_model,
-        "Ctrl+V",
+        &sec("V"),
         ContextMenuAction::ConflictResolverOutputPaste
     );
 }

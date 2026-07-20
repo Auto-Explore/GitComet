@@ -23,14 +23,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex_col()
         .min_w(width.min_px(ui_scale))
         .max_w(width.max_px(ui_scale))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        )
+        .child(popover_title(title))
         .child(div().border_t_1().border_color(theme.colors.border));
 
     if let Some(repo) = this.active_repo() {

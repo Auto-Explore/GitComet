@@ -902,7 +902,14 @@ impl MainPaneView {
                 format!("Blame failed: {message}\nToggle off and on to retry").into(),
                 true,
             ),
-            _ => ("Toggle blame annotations (Alt+B)".into(), false),
+            _ => (
+                format!(
+                    "Toggle blame annotations ({})",
+                    crate::view::shortcut_labels::alt_shortcut("B")
+                )
+                .into(),
+                false,
+            ),
         };
         let selected_bg = if errored {
             with_alpha(theme.colors.danger, if theme.is_dark { 0.30 } else { 0.20 })
@@ -1938,7 +1945,11 @@ impl MainPaneView {
                             })
                             .gitcomet_tooltip(
                                 theme,
-                                "Previous conflict (F2 / Shift+F7 / Alt+Up)".into(),
+                                format!(
+                                    "Previous conflict (F2 / Shift+F7 / {})",
+                                    crate::view::shortcut_labels::alt_shortcut("Up")
+                                )
+                                .into(),
                             ),
                     )
                     .child(
@@ -1954,7 +1965,14 @@ impl MainPaneView {
                                 this.conflict_jump_next(cx);
                                 cx.notify();
                             })
-                            .gitcomet_tooltip(theme, "Next conflict (F3 / F7 / Alt+Down)".into()),
+                            .gitcomet_tooltip(
+                                theme,
+                                format!(
+                                    "Next conflict (F3 / F7 / {})",
+                                    crate::view::shortcut_labels::alt_shortcut("Down")
+                                )
+                                .into(),
+                            ),
                     )
                 })
                 .when_some(next_file_btn, |d, btn| d.child(btn));
@@ -2139,7 +2157,14 @@ impl MainPaneView {
                         this.diff_jump_prev();
                         cx.notify();
                     })
-                    .gitcomet_tooltip(theme, "Previous change (F2 / Shift+F7 / Alt+Up)".into());
+                    .gitcomet_tooltip(
+                        theme,
+                        format!(
+                            "Previous change (F2 / Shift+F7 / {})",
+                            crate::view::shortcut_labels::alt_shortcut("Up")
+                        )
+                        .into(),
+                    );
 
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
                     .start_slot(svg_icon(
@@ -2153,7 +2178,14 @@ impl MainPaneView {
                         this.diff_jump_next();
                         cx.notify();
                     })
-                    .gitcomet_tooltip(theme, "Next change (F3 / F7 / Alt+Down)".into());
+                    .gitcomet_tooltip(
+                        theme,
+                        format!(
+                            "Next change (F3 / F7 / {})",
+                            crate::view::shortcut_labels::alt_shortcut("Down")
+                        )
+                        .into(),
+                    );
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
                     .borderless()
@@ -2178,7 +2210,14 @@ impl MainPaneView {
                         cx.notify();
                     })
                     .debug_selector(|| "diff_inline".to_string())
-                    .gitcomet_tooltip(theme, "Inline diff view (Alt+I)".into());
+                    .gitcomet_tooltip(
+                        theme,
+                        format!(
+                            "Inline diff view ({})",
+                            crate::view::shortcut_labels::alt_shortcut("I")
+                        )
+                        .into(),
+                    );
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
                     .borderless()
@@ -2203,7 +2242,14 @@ impl MainPaneView {
                         cx.notify();
                     })
                     .debug_selector(|| "diff_split".to_string())
-                    .gitcomet_tooltip(theme, "Split diff view (Alt+S)".into());
+                    .gitcomet_tooltip(
+                        theme,
+                        format!(
+                            "Split diff view ({})",
+                            crate::view::shortcut_labels::alt_shortcut("S")
+                        )
+                        .into(),
+                    );
 
                 let diff_annotate_btn =
                     self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);

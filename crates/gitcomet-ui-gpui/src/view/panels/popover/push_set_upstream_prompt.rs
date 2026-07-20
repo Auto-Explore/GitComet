@@ -2,27 +2,19 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     remote: String,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let remote_for_action = remote.clone();
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let can_submit = this.can_submit_push_set_upstream(cx);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
         .flex_col()
         .w(scaled_px(320.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Set upstream and push"),
-        )
+        .child(popover_title("Set upstream and push"))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -48,32 +40,24 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("push_upstream_cancel", "Cancel")
-                        .focus_handle(this.push_upstream_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("push_upstream_cancel", "push_upstream_cancel_hint", theme)
+                        .focus_handle(this.push_upstream_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("push_upstream_go", "Push")
-                        .focus_handle(this.push_upstream_submit_focus_handle.clone())
+                        .focus_handle(this.push_upstream_focus.submit.clone())
+                        .disabled(!can_submit)
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "push_upstream_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let branch = this
-                                .push_upstream_branch_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if branch.is_empty() {
-                                return;
-                            }
-                            this.store.dispatch(Msg::PushSetUpstream {
-                                repo_id,
-                                remote: remote_for_action.clone(),
-                                branch,
-                            });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_push_set_upstream(cx);
                         }),
                 ),
         )

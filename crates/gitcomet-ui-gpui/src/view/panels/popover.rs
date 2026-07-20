@@ -115,6 +115,21 @@ const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(250.0);
 
+/// Cancel/submit focus-handle pair shared by every prompt dialog.
+pub(super) struct DialogFocus {
+    pub(super) cancel: FocusHandle,
+    pub(super) submit: FocusHandle,
+}
+
+impl DialogFocus {
+    fn new(cx: &mut gpui::Context<PopoverHost>) -> Self {
+        Self {
+            cancel: cx.focus_handle().tab_index(0).tab_stop(true),
+            submit: cx.focus_handle().tab_index(0).tab_stop(true),
+        }
+    }
+}
+
 pub(in super::super) struct PopoverHost {
     store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -132,20 +147,15 @@ pub(in super::super) struct PopoverHost {
     diff_word_wrap: bool,
     diff_show_line_numbers: bool,
     _ui_model_subscription: gpui::Subscription,
-    _clone_repo_url_input_subscription: gpui::Subscription,
-    _clone_repo_parent_dir_input_subscription: gpui::Subscription,
-    _create_tag_input_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _recent_repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
-    _create_branch_input_subscription: gpui::Subscription,
-    _stash_message_input_subscription: gpui::Subscription,
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
-    _submodule_ref_input_subscription: gpui::Subscription,
+    _prompt_input_subscriptions: Vec<gpui::Subscription>,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
     tooltip_host: WeakEntity<TooltipHost>,
@@ -204,43 +214,33 @@ pub(in super::super) struct PopoverHost {
     create_branch_source_target: String,
     worktree_ref_source_target: String,
     create_branch_from_ref_checkout_focus_handle: FocusHandle,
-    create_branch_from_ref_cancel_focus_handle: FocusHandle,
-    create_branch_from_ref_submit_focus_handle: FocusHandle,
+    create_branch_from_ref_focus: DialogFocus,
     create_tag_annotated: bool,
     create_tag_annotated_focus_handle: FocusHandle,
-    checkout_remote_branch_cancel_focus_handle: FocusHandle,
-    checkout_remote_branch_submit_focus_handle: FocusHandle,
+    checkout_remote_branch_focus: DialogFocus,
     stash_message_input: Entity<components::TextInput>,
-    stash_cancel_focus_handle: FocusHandle,
-    stash_submit_focus_handle: FocusHandle,
+    stash_focus: DialogFocus,
     stash_picker_prompt_selected_index: Option<usize>,
     stash_picker_search_input: Option<Entity<components::TextInput>>,
     _stash_picker_search_input_subscription: Option<gpui::Subscription>,
+    commit_prompt_message_drafts: HashMap<RepoId, SharedString>,
     commit_prompt_message_input: Entity<components::TextInput>,
     commit_prompt_message_scroll: ScrollHandle,
-    commit_prompt_cancel_focus_handle: FocusHandle,
-    commit_prompt_submit_focus_handle: FocusHandle,
+    commit_prompt_focus: DialogFocus,
     clone_repo_browse_focus_handle: FocusHandle,
-    clone_repo_cancel_focus_handle: FocusHandle,
-    clone_repo_submit_focus_handle: FocusHandle,
-    create_tag_cancel_focus_handle: FocusHandle,
-    create_tag_submit_focus_handle: FocusHandle,
     squash_cancel_focus_handle: FocusHandle,
     squash_submit_focus_handle: FocusHandle,
-    remote_add_cancel_focus_handle: FocusHandle,
-    remote_add_submit_focus_handle: FocusHandle,
-    remote_edit_cancel_focus_handle: FocusHandle,
-    remote_edit_submit_focus_handle: FocusHandle,
-    push_upstream_cancel_focus_handle: FocusHandle,
-    push_upstream_submit_focus_handle: FocusHandle,
     rebase_onto_submit_focus_handle: FocusHandle,
+    clone_repo_focus: DialogFocus,
+    create_tag_focus: DialogFocus,
+    remote_add_focus: DialogFocus,
+    remote_edit_focus: DialogFocus,
+    push_upstream_focus: DialogFocus,
     worktree_browse_focus_handle: FocusHandle,
-    worktree_cancel_focus_handle: FocusHandle,
-    worktree_submit_focus_handle: FocusHandle,
+    worktree_focus: DialogFocus,
     submodule_advanced_focus_handle: FocusHandle,
     submodule_force_focus_handle: FocusHandle,
-    submodule_cancel_focus_handle: FocusHandle,
-    submodule_submit_focus_handle: FocusHandle,
+    submodule_focus: DialogFocus,
     push_upstream_branch_input: Entity<components::TextInput>,
     worktree_path_input: Entity<components::TextInput>,
     worktree_ref_input: Entity<components::TextInput>,
@@ -253,6 +253,7 @@ pub(in super::super) struct PopoverHost {
     submodule_force_enabled: bool,
     rebase_reword_input: Entity<components::TextInput>,
     rebase_reword_description_input: Entity<components::TextInput>,
+    rebase_reword_description_scroll: ScrollHandle,
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {
@@ -275,6 +276,16 @@ pub(in super::super) fn popover_scaled_px_from_percent(
     ui_scale_percent: u32,
 ) -> Pixels {
     popover_scaled_px(value, ui_scale_percent)
+}
+
+/// One-line replacement for the per-panel `ui_scale_percent` + closure
+/// preamble: returns a copyable `f32 -> Pixels` scaler for the current
+/// UI scale.
+pub(super) fn popover_scaled_px_fn(
+    cx: &mut gpui::Context<PopoverHost>,
+) -> impl Fn(f32) -> Pixels + Copy + use<> {
+    let ui_scale = popover_ui_scale(cx);
+    move |value: f32| ui_scale.px(value)
 }
 
 pub(in super::super) fn focusable_toggle_row<V: 'static>(
@@ -376,6 +387,9 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
+            | PopoverKind::ResetPrompt { .. }
+            | PopoverKind::PullReconcilePrompt { .. }
+            | PopoverKind::TerminalShutdownConfirm(_)
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::RemoveConfirm { .. }),
                 ..
@@ -398,27 +412,191 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
 pub(super) fn hotkey_hint(
     theme: AppTheme,
     debug_selector: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
 ) -> gpui::Div {
     div()
         .debug_selector(move || debug_selector.to_string())
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
         .text_color(theme.colors.text_muted)
-        .child(label)
+        .child(label.into())
 }
 
 /// Shared Cancel button for confirm dialogs and prompt popovers: consistent
 /// label, outlined style, and "Esc" hint. Attach the dismiss handler with
 /// `.on_click(...)` at the call site.
+pub(super) fn cancel_button_labeled(
+    id: &'static str,
+    hint_debug_selector: &'static str,
+    label: impl Into<SharedString>,
+    theme: AppTheme,
+) -> components::Button {
+    components::Button::new(id, label)
+        .separated_end_slot(hotkey_hint(theme, hint_debug_selector, "Esc"))
+        .style(components::ButtonStyle::Outlined)
+}
+
 pub(super) fn cancel_button(
     id: &'static str,
     hint_debug_selector: &'static str,
     theme: AppTheme,
 ) -> components::Button {
-    components::Button::new(id, "Cancel")
-        .separated_end_slot(hotkey_hint(theme, hint_debug_selector, "Esc"))
-        .style(components::ButtonStyle::Outlined)
+    cancel_button_labeled(id, hint_debug_selector, "Cancel", theme)
+}
+
+/// Cancel button whose click simply closes the popover.
+pub(super) fn dialog_cancel_button(
+    id: &'static str,
+    hint_debug_selector: &'static str,
+    theme: AppTheme,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> gpui::Stateful<gpui::Div> {
+    cancel_button(id, hint_debug_selector, theme).on_click(theme, cx, |this, _e, _w, cx| {
+        this.close_popover(cx);
+    })
+}
+
+pub(super) fn dialog_divider(theme: AppTheme) -> gpui::Div {
+    div().border_t_1().border_color(theme.colors.border)
+}
+
+/// Shared scaffolding for confirm-style dialogs: title, divider, body
+/// sections, divider, then a footer with a cancel button on the left and the
+/// action button(s) on the right. Width comes from the same `PopoverWidthSpec`
+/// constants used by `popover_width_spec`, so the two can't drift apart.
+pub(super) struct ConfirmDialog {
+    title: SharedString,
+    width: PopoverWidthSpec,
+    sections: Vec<AnyElement>,
+}
+
+impl ConfirmDialog {
+    pub(super) fn new(title: impl Into<SharedString>, width: PopoverWidthSpec) -> Self {
+        Self {
+            title: title.into(),
+            width,
+            sections: Vec::new(),
+        }
+    }
+
+    /// Muted body paragraph.
+    pub(super) fn text(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .py_1()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child(text.into())
+                .into_any_element(),
+        );
+        self
+    }
+
+    /// Smaller muted footnote.
+    pub(super) fn note(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .pb_1()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(text.into())
+                .into_any_element(),
+        );
+        self
+    }
+
+    /// Monospace value line (branch name, path, stash ref…).
+    pub(super) fn mono_value(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .py_1()
+                .text_sm()
+                .child(
+                    div()
+                        .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                        .text_color(theme.colors.text_muted)
+                        .child(text.into()),
+                )
+                .into_any_element(),
+        );
+        self
+    }
+
+    /// Monospace git command preview.
+    pub(super) fn command(mut self, theme: AppTheme, text: impl Into<SharedString>) -> Self {
+        self.sections.push(
+            div()
+                .px_2()
+                .pb_1()
+                .text_xs()
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_color(theme.colors.text_muted)
+                .child(text.into())
+                .into_any_element(),
+        );
+        self
+    }
+
+    pub(super) fn divider(mut self, theme: AppTheme) -> Self {
+        self.sections.push(dialog_divider(theme).into_any_element());
+        self
+    }
+
+    /// Escape hatch for dialog-specific body content.
+    pub(super) fn section(mut self, section: impl IntoElement) -> Self {
+        self.sections.push(section.into_any_element());
+        self
+    }
+
+    pub(super) fn render(
+        self,
+        theme: AppTheme,
+        cancel: impl IntoElement,
+        actions: impl IntoElement,
+        cx: &mut gpui::Context<PopoverHost>,
+    ) -> gpui::Div {
+        let ui_scale = popover_ui_scale(cx);
+        div()
+            .flex()
+            .flex_col()
+            .min_w(self.width.preferred_px(ui_scale))
+            .child(popover_title(self.title))
+            .child(dialog_divider(theme))
+            .children(self.sections)
+            .child(dialog_divider(theme))
+            .child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(cancel)
+                    .child(actions),
+            )
+    }
+}
+
+pub(super) fn popover_title(title: impl Into<SharedString>) -> gpui::Div {
+    let title: SharedString = title.into();
+    div()
+        .px_2()
+        .py_1()
+        .text_sm()
+        .font_weight(FontWeight::BOLD)
+        .child(title)
+}
+
+pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
+    div()
+        .px_2()
+        .py_1()
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .child(label)
 }
 
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
@@ -692,6 +870,33 @@ impl PopoverHost {
             .unwrap_or(false)
     }
 
+    /// Subscription that submits a prompt when Enter is pressed in one of its
+    /// inputs. Escape is consumed here; prompt dismissal is handled by the
+    /// PopoverPrompt key context.
+    fn prompt_enter_subscription(
+        input: &Entity<components::TextInput>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+        is_active: fn(&Self) -> bool,
+        submit: fn(&mut Self, &mut Window, &mut gpui::Context<Self>),
+    ) -> gpui::Subscription {
+        cx.observe_in(input, window, move |this, input, window, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let _ = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !is_active(this) {
+                return;
+            }
+
+            if enter_pressed {
+                submit(this, window, cx);
+                return;
+            }
+
+            cx.notify();
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in super::super) fn new(
         store: Arc<AppStore>,
@@ -718,6 +923,8 @@ impl PopoverHost {
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
             this.state = Arc::clone(&model.read(cx).state);
+            this.commit_prompt_message_drafts
+                .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
 
             // Prefill the squash prompt from the message preview when it lands,
             // rather than in the render path, so the generated message never
@@ -756,40 +963,6 @@ impl PopoverHost {
                 cx,
             )
         });
-
-        let clone_repo_url_input_subscription =
-            cx.observe(&clone_repo_url_input, |this, input, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let _ = input.update(cx, |input, _| input.take_escape_pressed());
-
-                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
-                    return;
-                }
-
-                if enter_pressed {
-                    this.submit_clone_repo(cx);
-                    return;
-                }
-
-                cx.notify();
-            });
-
-        let clone_repo_parent_dir_input_subscription =
-            cx.observe(&clone_repo_parent_dir_input, |this, input, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let _ = input.update(cx, |input, _| input.take_escape_pressed());
-
-                if !matches!(this.popover, Some(PopoverKind::CloneRepo)) {
-                    return;
-                }
-
-                if enter_pressed {
-                    this.submit_clone_repo(cx);
-                    return;
-                }
-
-                cx.notify();
-            });
 
         let rebase_onto_input = cx.new(|cx| {
             components::TextInput::new(
@@ -912,60 +1085,6 @@ impl PopoverHost {
                 cx,
             )
         });
-
-        let create_tag_input_subscription = cx.observe(&create_tag_input, |this, input, cx| {
-            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-            let _ = input.update(cx, |input, _| input.take_escape_pressed());
-
-            if !matches!(this.popover, Some(PopoverKind::CreateTagPrompt { .. })) {
-                return;
-            }
-
-            if enter_pressed {
-                this.submit_create_tag(cx);
-                return;
-            }
-
-            cx.notify();
-        });
-
-        let create_branch_input_subscription =
-            cx.observe_in(&create_branch_input, window, |this, input, window, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let _ = input.update(cx, |input, _| input.take_escape_pressed());
-                let is_create_branch_prompt = matches!(
-                    this.popover,
-                    Some(PopoverKind::CreateBranchFromRefPrompt { .. })
-                );
-
-                if !is_create_branch_prompt {
-                    return;
-                }
-
-                if enter_pressed {
-                    this.submit_create_branch(window, cx);
-                    return;
-                }
-
-                cx.notify();
-            });
-
-        let stash_message_input_subscription =
-            cx.observe_in(&stash_message_input, window, |this, input, window, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let _ = input.update(cx, |input, _| input.take_escape_pressed());
-
-                if !matches!(this.popover, Some(PopoverKind::StashPrompt)) {
-                    return;
-                }
-
-                if enter_pressed {
-                    this.submit_stash(window, cx);
-                    return;
-                }
-
-                cx.notify();
-            });
 
         // The subject input re-renders the host on every keystroke so the
         // Squash button's disabled state (driven by whether the message is
@@ -1101,14 +1220,93 @@ impl PopoverHost {
             )
         });
 
-        let submodule_ref_input_subscription = cx.observe_in(
+        let rebase_reword_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Commit subject".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+        let rebase_reword_description_scroll = ScrollHandle::new();
+        let rebase_reword_description_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Description (optional)".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 4,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(rebase_reword_description_scroll.clone()));
+            input
+        });
+
+        let mut prompt_input_subscriptions = Vec::new();
+        prompt_input_subscriptions.push(cx.observe(
+            &commit_prompt_message_input,
+            |this, _input, cx| {
+                if matches!(this.popover, Some(PopoverKind::CommitPrompt { .. })) {
+                    cx.notify();
+                }
+            },
+        ));
+        for input in [&clone_repo_url_input, &clone_repo_parent_dir_input] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| matches!(this.popover, Some(PopoverKind::CloneRepo)),
+                |this, _window, cx| this.submit_clone_repo(cx),
+            ));
+        }
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &create_tag_input,
+            window,
+            cx,
+            |this| matches!(this.popover, Some(PopoverKind::CreateTagPrompt { .. })),
+            |this, _window, cx| this.submit_create_tag(cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &create_branch_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                        | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
+                )
+            },
+            |this, window, cx| {
+                if matches!(
+                    this.popover,
+                    Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                ) {
+                    this.submit_create_branch(window, cx);
+                } else {
+                    this.submit_checkout_remote_branch(cx);
+                }
+            },
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &stash_message_input,
+            window,
+            cx,
+            |this| matches!(this.popover, Some(PopoverKind::StashPrompt)),
+            |this, window, cx| this.submit_stash(window, cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
             &submodule_ref_input,
             window,
-            move |this, input, window, cx| {
-                let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
-
-                if !matches!(
+            cx,
+            |this| {
+                matches!(
                     this.popover,
                     Some(PopoverKind::Repo {
                         kind: RepoPopoverKind::Submodule(
@@ -1116,63 +1314,116 @@ impl PopoverHost {
                         ),
                         ..
                     })
-                ) {
-                    return;
-                }
-
-                if escape_pressed {
-                    this.dismiss_inline_popover(window, cx);
-                    return;
-                }
-
-                if enter_pressed {
-                    this.submit_submodule_change_pointer(window, cx);
-                    return;
-                }
-
-                cx.notify();
+                )
             },
-        );
+            |this, window, cx| this.submit_submodule_change_pointer(window, cx),
+        ));
+        for input in [&remote_name_input, &remote_url_input] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| {
+                    matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                            ..
+                        })
+                    )
+                },
+                |this, _window, cx| this.submit_remote_add(cx),
+            ));
+        }
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &remote_url_edit_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
+                        ..
+                    })
+                )
+            },
+            |this, _window, cx| this.submit_remote_edit_url(cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &push_upstream_branch_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::PushSetUpstreamPrompt { .. })
+                )
+            },
+            |this, _window, cx| this.submit_push_set_upstream(cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &worktree_path_input,
+            window,
+            cx,
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                        ..
+                    })
+                )
+            },
+            |this, _window, cx| this.submit_worktree_add(cx),
+        ));
+        for input in [
+            &submodule_url_input,
+            &submodule_path_input,
+            &submodule_branch_input,
+            &submodule_name_input,
+        ] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| {
+                    matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+                            ..
+                        })
+                    )
+                },
+                |this, _window, cx| this.submit_submodule_add(cx),
+            ));
+        }
 
         let context_menu_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let prompt_tab_group_focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
         let prompt_tab_wrap_end_focus_handle = cx.focus_handle().tab_index(1).tab_stop(false);
         let create_branch_from_ref_checkout_focus_handle =
             cx.focus_handle().tab_index(0).tab_stop(true);
-        let create_branch_from_ref_cancel_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
-        let create_branch_from_ref_submit_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
-        let checkout_remote_branch_cancel_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
-        let checkout_remote_branch_submit_focus_handle =
-            cx.focus_handle().tab_index(0).tab_stop(true);
-        let stash_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let stash_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let commit_prompt_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let commit_prompt_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let create_branch_from_ref_focus = DialogFocus::new(cx);
+        let checkout_remote_branch_focus = DialogFocus::new(cx);
+        let stash_focus = DialogFocus::new(cx);
+        let commit_prompt_focus = DialogFocus::new(cx);
         let clone_repo_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let clone_repo_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let clone_repo_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let create_tag_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let create_tag_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let squash_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let squash_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let remote_add_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let remote_add_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let remote_edit_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let remote_edit_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let push_upstream_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let push_upstream_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let rebase_onto_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let clone_repo_focus = DialogFocus::new(cx);
+        let create_tag_focus = DialogFocus::new(cx);
+        let create_tag_annotated_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let remote_add_focus = DialogFocus::new(cx);
+        let remote_edit_focus = DialogFocus::new(cx);
+        let push_upstream_focus = DialogFocus::new(cx);
         let worktree_browse_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let worktree_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let worktree_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let worktree_focus = DialogFocus::new(cx);
         let submodule_advanced_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
         let submodule_force_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let submodule_cancel_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
-        let submodule_submit_focus_handle = cx.focus_handle().tab_index(0).tab_stop(true);
+        let submodule_focus = DialogFocus::new(cx);
 
         Self {
             store,
@@ -1191,9 +1442,6 @@ impl PopoverHost {
             diff_word_wrap,
             diff_show_line_numbers,
             _ui_model_subscription: subscription,
-            _clone_repo_url_input_subscription: clone_repo_url_input_subscription,
-            _clone_repo_parent_dir_input_subscription: clone_repo_parent_dir_input_subscription,
-            _create_tag_input_subscription: create_tag_input_subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
             _recent_repo_picker_search_input_subscription: None,
@@ -1201,11 +1449,9 @@ impl PopoverHost {
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
             _stash_picker_search_input_subscription: None,
-            _create_branch_input_subscription: create_branch_input_subscription,
-            _stash_message_input_subscription: stash_message_input_subscription,
             _squash_message_input_subscription: squash_message_input_subscription,
             _squash_description_input_subscription: squash_description_input_subscription,
-            _submodule_ref_input_subscription: submodule_ref_input_subscription,
+            _prompt_input_subscriptions: prompt_input_subscriptions,
             notify_fingerprint: 0,
             root_view,
             tooltip_host,
@@ -1251,42 +1497,32 @@ impl PopoverHost {
             create_branch_source_target: String::new(),
             worktree_ref_source_target: String::new(),
             create_branch_from_ref_checkout_focus_handle,
-            create_branch_from_ref_cancel_focus_handle,
-            create_branch_from_ref_submit_focus_handle,
+            create_branch_from_ref_focus,
             create_tag_annotated: false,
             create_tag_annotated_focus_handle,
-            checkout_remote_branch_cancel_focus_handle,
-            checkout_remote_branch_submit_focus_handle,
+            checkout_remote_branch_focus,
             stash_message_input,
-            stash_cancel_focus_handle,
-            stash_submit_focus_handle,
+            stash_focus,
             stash_picker_prompt_selected_index: None,
             stash_picker_search_input: None,
+            commit_prompt_message_drafts: HashMap::default(),
             commit_prompt_message_input,
             commit_prompt_message_scroll,
-            commit_prompt_cancel_focus_handle,
-            commit_prompt_submit_focus_handle,
+            commit_prompt_focus,
             clone_repo_browse_focus_handle,
-            clone_repo_cancel_focus_handle,
-            clone_repo_submit_focus_handle,
-            create_tag_cancel_focus_handle,
-            create_tag_submit_focus_handle,
             squash_cancel_focus_handle,
             squash_submit_focus_handle,
-            remote_add_cancel_focus_handle,
-            remote_add_submit_focus_handle,
-            remote_edit_cancel_focus_handle,
-            remote_edit_submit_focus_handle,
-            push_upstream_cancel_focus_handle,
-            push_upstream_submit_focus_handle,
             rebase_onto_submit_focus_handle,
+            clone_repo_focus,
+            create_tag_focus,
+            remote_add_focus,
+            remote_edit_focus,
+            push_upstream_focus,
             worktree_browse_focus_handle,
-            worktree_cancel_focus_handle,
-            worktree_submit_focus_handle,
+            worktree_focus,
             submodule_advanced_focus_handle,
             submodule_force_focus_handle,
-            submodule_cancel_focus_handle,
-            submodule_submit_focus_handle,
+            submodule_focus,
             push_upstream_branch_input,
             worktree_path_input,
             worktree_ref_input,
@@ -1297,93 +1533,62 @@ impl PopoverHost {
             submodule_name_input,
             submodule_add_advanced_expanded: false,
             submodule_force_enabled: false,
-            rebase_reword_input: cx.new(|cx| {
-                components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Commit subject".into(),
-                        ..Default::default()
-                    },
-                    window,
-                    cx,
-                )
-            }),
-            rebase_reword_description_input: cx.new(|cx| {
-                components::TextInput::new(
-                    components::TextInputOptions {
-                        placeholder: "Description (optional)".into(),
-                        multiline: true,
-                        soft_wrap: true,
-                        min_lines: 4,
-                        ..Default::default()
-                    },
-                    window,
-                    cx,
-                )
-            }),
+            rebase_reword_input,
+            rebase_reword_description_input,
+            rebase_reword_description_scroll,
         }
+    }
+
+    /// Every text input owned by the host, including the lazily created
+    /// picker search inputs that currently exist.
+    fn all_text_inputs(&self) -> impl Iterator<Item = &Entity<components::TextInput>> {
+        [
+            &self.clone_repo_url_input,
+            &self.clone_repo_parent_dir_input,
+            &self.rebase_onto_input,
+            &self.create_tag_input,
+            &self.create_tag_message_input,
+            &self.squash_message_input,
+            &self.squash_description_input,
+            &self.remote_name_input,
+            &self.remote_url_input,
+            &self.remote_url_edit_input,
+            &self.create_branch_input,
+            &self.stash_message_input,
+            &self.commit_prompt_message_input,
+            &self.push_upstream_branch_input,
+            &self.worktree_path_input,
+            &self.worktree_ref_input,
+            &self.submodule_url_input,
+            &self.submodule_path_input,
+            &self.submodule_ref_input,
+            &self.submodule_branch_input,
+            &self.submodule_name_input,
+            &self.rebase_reword_input,
+            &self.rebase_reword_description_input,
+        ]
+        .into_iter()
+        .chain(
+            [
+                &self.repo_picker_search_input,
+                &self.recent_repo_picker_search_input,
+                &self.branch_picker_search_input,
+                &self.remote_picker_search_input,
+                &self.file_history_search_input,
+                &self.worktree_picker_search_input,
+                &self.submodule_picker_search_input,
+                &self.stash_picker_search_input,
+            ]
+            .into_iter()
+            .flatten(),
+        )
     }
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
 
-        self.clone_repo_url_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.clone_repo_parent_dir_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.rebase_onto_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.create_tag_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.squash_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.squash_description_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.remote_name_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.remote_url_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.remote_url_edit_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.create_branch_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.stash_message_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.push_upstream_branch_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.worktree_path_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.worktree_ref_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_url_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_path_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_ref_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_branch_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-        self.submodule_name_input
-            .update(cx, |input, cx| input.set_theme(theme, cx));
-
-        if let Some(input) = &self.repo_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.recent_repo_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.branch_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.remote_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.file_history_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.worktree_picker_search_input {
-            input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
-        if let Some(input) = &self.submodule_picker_search_input {
+        let inputs: Vec<_> = self.all_text_inputs().cloned().collect();
+        for input in inputs {
             input.update(cx, |input, cx| input.set_theme(theme, cx));
         }
 
@@ -1396,6 +1601,7 @@ impl PopoverHost {
     }
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
@@ -1570,6 +1776,12 @@ impl PopoverHost {
                     kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
                     ..
                 })
+                | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Submodule(
+                        SubmodulePopoverKind::ChangePointerPrompt { .. }
+                    ),
+                    ..
+                })
         ) || self.popover.as_ref().is_some_and(popover_is_confirm_dialog)
     }
 
@@ -1641,9 +1853,11 @@ impl PopoverHost {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
             | Some(PopoverKind::StashPrompt)
             | Some(PopoverKind::CommitPrompt { .. })
-            | Some(PopoverKind::StashPickerPrompt { .. }) => {
-                self.dismiss_inline_popover(window, cx)
-            }
+            | Some(PopoverKind::StashPickerPrompt { .. })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
+                ..
+            }) => self.dismiss_inline_popover(window, cx),
             Some(PopoverKind::CloneRepo)
             | Some(PopoverKind::RecentRepositoryPicker)
             | Some(PopoverKind::CreateTagPrompt { .. })
@@ -1685,6 +1899,7 @@ impl PopoverHost {
     }
 
     fn dismiss_inline_popover(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         self.popover = None;
         self.popover_anchor = None;
@@ -1999,6 +2214,9 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if !self.can_submit_commit_prompt(cx) {
+            return;
+        }
         let Some(PopoverKind::CommitPrompt { repo_id }) = self.popover.clone() else {
             return;
         };
@@ -2013,14 +2231,39 @@ impl PopoverHost {
             message,
             push_after_commit: false,
         });
+        self.commit_prompt_message_drafts.remove(&repo_id);
+        self.commit_prompt_message_input
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.commit_prompt_message_scroll
+            .set_offset(point(px(0.0), px(0.0)));
         self.dismiss_inline_popover(window, cx);
     }
 
+    fn save_commit_prompt_draft(&mut self, cx: &gpui::Context<Self>) {
+        let Some(PopoverKind::CommitPrompt { repo_id }) = self.popover else {
+            return;
+        };
+        let draft: SharedString = self
+            .commit_prompt_message_input
+            .read(cx)
+            .text()
+            .to_string()
+            .into();
+        if draft.is_empty() {
+            self.commit_prompt_message_drafts.remove(&repo_id);
+        } else {
+            self.commit_prompt_message_drafts.insert(repo_id, draft);
+        }
+    }
+
     pub(super) fn can_submit_commit_prompt(&self, cx: &mut gpui::Context<Self>) -> bool {
-        self.active_repo_id().is_some()
-            && self
-                .commit_prompt_message_input
-                .read_with(cx, |input, _| !input.text().trim().is_empty())
+        self.active_repo().is_some_and(|repo| {
+            repo.staged_status_entries()
+                .is_some_and(|entries| !entries.is_empty())
+                || matches!(repo.merge_commit_message, Loadable::Ready(Some(_)))
+        }) && self
+            .commit_prompt_message_input
+            .read_with(cx, |input, _| !input.text().trim().is_empty())
     }
 
     fn submit_stash(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
@@ -2040,6 +2283,216 @@ impl PopoverHost {
             include_untracked: true,
         });
         self.dismiss_inline_popover(window, cx);
+    }
+
+    pub(super) fn can_submit_remote_add(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.remote_name_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+            && self
+                .remote_url_input
+                .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn submit_remote_add(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_remote_add(cx) {
+            return;
+        }
+        let name = self
+            .remote_name_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let url = self
+            .remote_url_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        self.store.dispatch(Msg::AddRemote { repo_id, name, url });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_remote_edit_url(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.remote_url_edit_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn submit_remote_edit_url(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { name, kind }),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_remote_edit_url(cx) {
+            return;
+        }
+        let url = self
+            .remote_url_edit_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        self.store.dispatch(Msg::SetRemoteUrl {
+            repo_id,
+            name,
+            url,
+            kind,
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_push_set_upstream(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.push_upstream_branch_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn submit_push_set_upstream(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::PushSetUpstreamPrompt { repo_id, remote }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_push_set_upstream(cx) {
+            return;
+        }
+        let branch = self
+            .push_upstream_branch_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        self.store.dispatch(Msg::PushSetUpstream {
+            repo_id,
+            remote,
+            branch,
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_checkout_remote_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.create_branch_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn submit_checkout_remote_branch(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::CheckoutRemoteBranchPrompt {
+            repo_id,
+            remote,
+            branch,
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_checkout_remote_branch(cx) {
+            return;
+        }
+        let local_branch = self
+            .create_branch_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+
+        let local_branch_exists = self
+            .state
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .and_then(|repo| match &repo.branches {
+                Loadable::Ready(branches) => {
+                    Some(branches.iter().any(|b| b.name == local_branch.as_str()))
+                }
+                _ => None,
+            })
+            .unwrap_or(false);
+        if local_branch_exists {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Branch already exists: {local_branch}"),
+                cx,
+            );
+            return;
+        }
+
+        self.store.dispatch(Msg::CheckoutRemoteBranch {
+            repo_id,
+            remote,
+            branch,
+            local_branch,
+        });
+        self.main_pane.update(cx, |pane, cx| {
+            pane.rebuild_diff_cache(cx);
+            cx.notify();
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_worktree_add(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.worktree_path_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn submit_worktree_add(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_worktree_add(cx) {
+            return;
+        }
+        let folder = self
+            .worktree_path_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let reference = self.worktree_ref_source_target.trim().to_string();
+        let reference = (!reference.is_empty()).then_some(reference);
+        self.store.dispatch(Msg::AddWorktree {
+            repo_id,
+            path: std::path::PathBuf::from(folder),
+            reference,
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn can_submit_submodule_add(&self, cx: &mut gpui::Context<Self>) -> bool {
+        self.submodule_url_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty())
+            && self
+                .submodule_path_input
+                .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn submit_submodule_add(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_submodule_add(cx) {
+            return;
+        }
+        let url = self
+            .submodule_url_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let path_text = self
+            .submodule_path_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let branch = self.submodule_branch_input.read_with(cx, |i, _| {
+            let text = i.text().trim().to_string();
+            if text.is_empty() { None } else { Some(text) }
+        });
+        let name = self.submodule_name_input.read_with(cx, |i, _| {
+            let text = i.text().trim().to_string();
+            if text.is_empty() { None } else { Some(text) }
+        });
+        let force = self.submodule_force_enabled;
+        self.store.dispatch(Msg::AddSubmodule {
+            repo_id,
+            url,
+            path: std::path::PathBuf::from(path_text),
+            branch,
+            name,
+            force,
+        });
+        self.close_popover(cx);
     }
 
     pub(in super::super) fn open_popover_at(
@@ -2116,6 +2569,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         // The anchor stays hovered behind the opened surface; keep its
         // tooltip from re-showing on top of the popover.
@@ -2218,14 +2672,21 @@ impl PopoverHost {
                         .read_with(cx, |i, _| i.focus_handle());
                     window.focus(&focus, cx);
                 }
-                PopoverKind::CommitPrompt { .. } => {
+                PopoverKind::CommitPrompt { repo_id } => {
                     let theme = self.theme;
+                    let draft = self
+                        .commit_prompt_message_drafts
+                        .get(repo_id)
+                        .cloned()
+                        .unwrap_or_default();
                     self.commit_prompt_message_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
-                        input.set_text("", cx);
+                        input.set_text(draft.to_string(), cx);
                         cx.notify();
                     });
+                    self.commit_prompt_message_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
                     let focus = self
                         .commit_prompt_message_input
                         .read_with(cx, |i, _| i.focus_handle());
@@ -2497,6 +2958,8 @@ impl PopoverHost {
                             input.set_text(body, cx);
                             cx.notify();
                         });
+                    self.rebase_reword_description_scroll
+                        .set_offset(point(px(0.0), px(0.0)));
                     let focus = self
                         .rebase_reword_input
                         .read_with(cx, |i, _| i.focus_handle());
@@ -3286,10 +3749,14 @@ impl PopoverHost {
                                     .child("Description"),
                             )
                             .child(
-                                div()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .child(self.rebase_reword_description_input.clone()),
+                                components::ScrollContainer::vertical(
+                                    "rebase_reword_description_scroll_surface",
+                                    "rebase_reword_description_scrollbar",
+                                    self.rebase_reword_description_scroll.clone(),
+                                    scaled_px(180.0),
+                                )
+                                .debug_selector("rebase_reword_description_scroll_surface")
+                                .render(theme, self.rebase_reword_description_input.clone()),
                             ),
                     )
                     .child(

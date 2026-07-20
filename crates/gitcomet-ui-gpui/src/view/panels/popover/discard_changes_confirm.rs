@@ -61,69 +61,27 @@ pub(super) fn panel(
             }
         }
     };
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
-    div()
-        .flex()
-        .flex_col()
-        .min_w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Discard changes"),
+    ConfirmDialog::new("Discard changes", DIALOG_420_WIDTH)
+        .text(
+            theme,
+            format!("This will discard working tree changes for {detail}."),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.text_muted)
-                .child(format!(
-                    "This will discard working tree changes for {detail}."
-                )),
-        )
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    components::Button::new("discard_changes_cancel", "Cancel")
-                        .separated_end_slot(super::hotkey_hint(
-                            theme,
-                            "discard_changes_cancel_hint",
-                            "Esc",
-                        ))
-                        .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
-                )
-                .child(
-                    components::Button::new("discard_changes_go", "Discard")
-                        .style(components::ButtonStyle::Danger)
-                        .disabled(!can_discard)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            this.discard_worktree_changes_confirmed(
-                                repo_id,
-                                area,
-                                path.clone(),
-                                cx,
-                            );
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
-                ),
+        .render(
+            theme,
+            dialog_cancel_button(
+                "discard_changes_cancel",
+                "discard_changes_cancel_hint",
+                theme,
+                cx,
+            ),
+            components::Button::new("discard_changes_go", "Discard")
+                .style(components::ButtonStyle::Danger)
+                .disabled(!can_discard)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    this.discard_worktree_changes_confirmed(repo_id, area, path.clone(), cx);
+                    this.close_popover(cx);
+                }),
+            cx,
         )
 }

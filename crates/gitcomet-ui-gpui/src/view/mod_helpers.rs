@@ -3518,6 +3518,7 @@ pub struct GitCometView {
     pub(super) _terminal_keystroke_interceptor: gpui::Subscription,
     pub(super) _auth_prompt_username_input_subscription: gpui::Subscription,
     pub(super) _auth_prompt_secret_input_subscription: gpui::Subscription,
+    pub(super) _open_repo_input_subscription: gpui::Subscription,
     pub(super) view_mode: GitCometViewMode,
     pub(super) theme_mode: ThemeMode,
     pub(super) theme: AppTheme,

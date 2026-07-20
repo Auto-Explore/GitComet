@@ -225,8 +225,8 @@ impl Render for ActionBarView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
-        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.07 });
+        let hover_bg = theme.hover_overlay();
+        let active_bg = theme.active_overlay();
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
@@ -397,7 +397,7 @@ impl Render for ActionBarView {
         });
 
         // Global back/forward navigation, mirroring the mouse side-buttons and
-        // Alt+Left / Alt+Right. Sits at the very start of the action bar.
+        // Alt+Left / Alt+Right (Option on macOS). Sits at the very start of the action bar.
         let (nav_can_back, nav_can_forward) = self
             .active_repo()
             .map(|repo| (repo.nav_history.can_back(), repo.nav_history.can_forward()))
@@ -418,7 +418,14 @@ impl Render for ActionBarView {
                     this.store.dispatch(Msg::GlobalNavBack { repo_id });
                 }
             })
-            .gitcomet_tooltip(theme, "Navigate Back (Alt+Left)".into());
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Navigate Back ({})",
+                    crate::view::shortcut_labels::alt_shortcut("Left")
+                )
+                .into(),
+            );
         let nav_forward = components::Button::new("global_nav_forward", "")
             .start_slot(icon(
                 "icons/arrow_right.svg",
@@ -435,7 +442,14 @@ impl Render for ActionBarView {
                     this.store.dispatch(Msg::GlobalNavForward { repo_id });
                 }
             })
-            .gitcomet_tooltip(theme, "Navigate Forward (Alt+Right)".into());
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Navigate Forward ({})",
+                    crate::view::shortcut_labels::alt_shortcut("Right")
+                )
+                .into(),
+            );
         let global_nav = div()
             .id("global_nav")
             .flex()

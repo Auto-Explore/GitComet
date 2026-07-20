@@ -1,7 +1,7 @@
 use crate::theme::AppTheme;
 use crate::ui_scale;
 use gpui::prelude::*;
-use gpui::{Div, FontWeight, SharedString, div, px};
+use gpui::{AnyElement, Div, ElementId, FontWeight, Pixels, ScrollHandle, SharedString, div, px};
 
 #[cfg(test)]
 use super::CONTROL_HEIGHT_MD_PX;
@@ -115,6 +115,76 @@ pub fn empty_state(
                 .text_color(theme.colors.text_muted)
                 .child(message.into()),
         )
+}
+
+/// A vertically scrolling area paired with its overlay scrollbar: the wheel is
+/// restricted to the vertical axis, the content gets a visible scrollbar
+/// gutter, and the scrollbar is anchored to the returned container.
+pub struct ScrollContainer {
+    surface_id: ElementId,
+    scrollbar_id: ElementId,
+    container_id: Option<ElementId>,
+    debug_selector: Option<&'static str>,
+    scroll: ScrollHandle,
+    max_height: Pixels,
+}
+
+impl ScrollContainer {
+    pub fn vertical(
+        surface_id: impl Into<ElementId>,
+        scrollbar_id: impl Into<ElementId>,
+        scroll: ScrollHandle,
+        max_height: Pixels,
+    ) -> Self {
+        Self {
+            surface_id: surface_id.into(),
+            scrollbar_id: scrollbar_id.into(),
+            container_id: None,
+            debug_selector: None,
+            scroll,
+            max_height,
+        }
+    }
+
+    pub fn container_id(mut self, id: impl Into<ElementId>) -> Self {
+        self.container_id = Some(id.into());
+        self
+    }
+
+    pub fn debug_selector(mut self, selector: &'static str) -> Self {
+        self.debug_selector = Some(selector);
+        self
+    }
+
+    pub fn render(self, theme: AppTheme, child: impl IntoElement) -> AnyElement {
+        let mut surface = div()
+            .id(self.surface_id)
+            .relative()
+            .w_full()
+            .min_w(px(0.0))
+            .max_h(self.max_height)
+            .pr(super::Scrollbar::visible_gutter(
+                self.scroll.clone(),
+                super::ScrollbarAxis::Vertical,
+            ))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll);
+        if let Some(selector) = self.debug_selector {
+            surface = surface.debug_selector(move || selector.to_string());
+        }
+
+        let container = div()
+            .relative()
+            .w_full()
+            .min_w(px(0.0))
+            .child(crate::view::restrict_scroll_to_vertical_axis(surface).child(child))
+            .child(super::Scrollbar::new(self.scrollbar_id, self.scroll).render(theme));
+
+        match self.container_id {
+            Some(id) => container.id(id).into_any_element(),
+            None => container.into_any_element(),
+        }
+    }
 }
 
 pub fn split_columns_header(

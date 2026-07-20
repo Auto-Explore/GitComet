@@ -2,34 +2,20 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let can_submit = this.can_submit_remote_add(cx);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Add remote"),
-        )
+        .child(popover_title("Add remote"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Name"),
-        )
+        .child(input_label(theme, "Name"))
         .child(
             div()
                 .px_2()
@@ -38,14 +24,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.remote_name_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("URL"),
-        )
+        .child(input_label(theme, "URL"))
         .child(
             div()
                 .px_2()
@@ -63,36 +42,24 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("add_remote_cancel", "Cancel")
-                        .focus_handle(this.remote_add_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("add_remote_cancel", "add_remote_cancel_hint", theme)
+                        .focus_handle(this.remote_add_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("add_remote_go", "Add")
-                        .focus_handle(this.remote_add_submit_focus_handle.clone())
+                        .focus_handle(this.remote_add_focus.submit.clone())
+                        .disabled(!can_submit)
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "add_remote_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let name = this
-                                .remote_name_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let url = this
-                                .remote_url_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if name.is_empty() || url.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Remote: name and URL are required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            this.store.dispatch(Msg::AddRemote { repo_id, name, url });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_remote_add(cx);
                         }),
                 ),
         )

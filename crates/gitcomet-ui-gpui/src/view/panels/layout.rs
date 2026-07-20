@@ -981,6 +981,20 @@ impl DetailsPaneView {
             .into_any_element()
     }
 
+    /// Commit message shown in the details pane: a scrollable block whose
+    /// summary line is emphasized and whose SHA references are linkified.
+    fn commit_details_message_view(&self, theme: AppTheme, repo_id: RepoId) -> AnyElement {
+        components::ScrollContainer::vertical(
+            ("commit_details_message_scroll_surface", repo_id.0),
+            ("commit_details_message_scrollbar", repo_id.0),
+            self.commit_scroll.clone(),
+            px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX),
+        )
+        .container_id(("commit_details_message_container", repo_id.0))
+        .debug_selector("commit_details_message_scroll_surface")
+        .render(theme, self.commit_details_message_sha_menu.clone())
+    }
+
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -1158,36 +1172,7 @@ impl DetailsPaneView {
                                 cx,
                             );
 
-                            let message = div()
-                                .id(("commit_details_message_container", repo_id.0))
-                                .relative()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .child(restrict_scroll_to_vertical_axis(
-                                    div()
-                                        .id(("commit_details_message_scroll_surface", repo_id.0))
-                                        .debug_selector(|| {
-                                            "commit_details_message_scroll_surface".to_string()
-                                        })
-                                        .relative()
-                                        .w_full()
-                                        .min_w(px(0.0))
-                                        .max_h(px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX))
-                                        .pr(components::Scrollbar::visible_gutter(
-                                            self.commit_scroll.clone(),
-                                            components::ScrollbarAxis::Vertical,
-                                        ))
-                                        .overflow_y_scroll()
-                                        .track_scroll(&self.commit_scroll)
-                                        .child(self.commit_details_message_sha_menu.clone()),
-                                ))
-                                .child(
-                                    components::Scrollbar::new(
-                                        ("commit_details_message_scrollbar", repo_id.0),
-                                        self.commit_scroll.clone(),
-                                    )
-                                    .render(theme),
-                                );
+                            let message = self.commit_details_message_view(theme, repo_id);
 
                             div()
                                 .flex()
@@ -1343,36 +1328,7 @@ impl DetailsPaneView {
                             cx,
                         );
 
-                        let message = div()
-                            .id(("commit_details_message_container", repo_id.0))
-                            .relative()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .child(restrict_scroll_to_vertical_axis(
-                                div()
-                                    .id(("commit_details_message_scroll_surface", repo_id.0))
-                                    .debug_selector(|| {
-                                        "commit_details_message_scroll_surface".to_string()
-                                    })
-                                    .relative()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .max_h(px(COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX))
-                                    .pr(components::Scrollbar::visible_gutter(
-                                        self.commit_scroll.clone(),
-                                        components::ScrollbarAxis::Vertical,
-                                    ))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.commit_scroll)
-                                    .child(self.commit_details_message_sha_menu.clone()),
-                            ))
-                            .child(
-                                components::Scrollbar::new(
-                                    ("commit_details_message_scrollbar", repo_id.0),
-                                    self.commit_scroll.clone(),
-                                )
-                                .render(theme),
-                            );
+                        let message = self.commit_details_message_view(theme, repo_id);
 
                         div()
                             .flex()
@@ -2509,35 +2465,14 @@ impl DetailsPaneView {
         } else {
             theme.colors.text_muted
         };
-        let commit_message = div()
-            .id(("commit_message_container", repo_key))
-            .relative()
-            .w_full()
-            .min_w(px(0.0))
-            .child(
-                restrict_scroll_to_vertical_axis(
-                    div()
-                        .id(("commit_message_scroll_surface", repo_key))
-                        .relative()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .max_h(px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX))
-                        .pr(components::Scrollbar::visible_gutter(
-                            self.commit_message_scroll.clone(),
-                            components::ScrollbarAxis::Vertical,
-                        ))
-                        .overflow_y_scroll()
-                        .track_scroll(&self.commit_message_scroll),
-                )
-                .child(self.commit_message_input.clone()),
-            )
-            .child(
-                components::Scrollbar::new(
-                    ("commit_message_scrollbar", repo_key),
-                    self.commit_message_scroll.clone(),
-                )
-                .render(theme),
-            );
+        let commit_message = components::ScrollContainer::vertical(
+            ("commit_message_scroll_surface", repo_key),
+            ("commit_message_scrollbar", repo_key),
+            self.commit_message_scroll.clone(),
+            px(COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX),
+        )
+        .container_id(("commit_message_container", repo_key))
+        .render(theme, self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
             .borderless()
             .start_slot(if commit_in_flight {

@@ -1767,8 +1767,8 @@ impl SettingsWindowView {
             theme.colors.text_muted
         };
         let selected_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 });
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
-        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.12 } else { 0.08 });
+        let hover_bg = theme.hover_overlay();
+        let active_bg = theme.active_overlay();
 
         div()
             .id(id)
@@ -1858,8 +1858,8 @@ impl SettingsWindowView {
             theme.colors.text_muted
         };
         let selected_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 });
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
-        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.12 } else { 0.08 });
+        let hover_bg = theme.hover_overlay();
+        let active_bg = theme.active_overlay();
 
         div()
             .id(id)

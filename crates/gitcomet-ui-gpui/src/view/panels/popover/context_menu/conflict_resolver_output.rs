@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::view::shortcut_labels::secondary_shortcut;
+
 pub(super) fn model(
     _cursor_line: usize,
     selected_text: &Option<String>,
@@ -16,21 +18,21 @@ pub(super) fn model(
         ContextMenuItem::Entry {
             label: "Copy".into(),
             icon: None,
-            shortcut: Some("Ctrl+C".into()),
+            shortcut: Some(secondary_shortcut("C").into()),
             disabled: !has_selection,
             action: Box::new(ContextMenuAction::CopyText { text: copy_text }),
         },
         ContextMenuItem::Entry {
             label: "Cut".into(),
             icon: None,
-            shortcut: Some("Ctrl+X".into()),
+            shortcut: Some(secondary_shortcut("X").into()),
             disabled: !has_selection,
             action: Box::new(ContextMenuAction::ConflictResolverOutputCut { text: cut_text }),
         },
         ContextMenuItem::Entry {
             label: "Paste".into(),
             icon: None,
-            shortcut: Some("Ctrl+V".into()),
+            shortcut: Some(secondary_shortcut("V").into()),
             disabled: false,
             action: Box::new(ContextMenuAction::ConflictResolverOutputPaste),
         },

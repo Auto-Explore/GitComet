@@ -149,6 +149,7 @@ mod poller;
 mod repo_open;
 pub(crate) mod rows;
 mod settings_window;
+pub(crate) mod shortcut_labels;
 mod sidebar_presentation;
 mod splash;
 mod state_apply;
@@ -864,8 +865,7 @@ impl GitCometView {
             let cmd_id: SharedString = cmd.id.into();
             let cmd_id_for_click = cmd_id.clone();
 
-            let label_row = if !cmd.shortcut.is_empty() {
-                let shortcut_text = cmd.shortcut.to_string();
+            let label_row = if let Some(shortcut_text) = cmd.shortcut.label() {
                 label_row
                     .child(
                         div()
@@ -1900,6 +1900,26 @@ impl GitCometView {
             input
         });
 
+        let open_repo_input_subscription = cx.observe(&open_repo_input, |this, input, cx| {
+            let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
+            let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
+
+            if !this.open_repo_panel {
+                return;
+            }
+
+            if escape_pressed {
+                this.open_repo_panel = false;
+                cx.notify();
+                return;
+            }
+            if enter_pressed {
+                this.submit_open_repo_panel(cx);
+                return;
+            }
+            cx.notify();
+        });
+
         let auth_prompt_username_input_subscription =
             cx.observe(&auth_prompt_username_input, |this, input, cx| {
                 let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
@@ -1959,6 +1979,7 @@ impl GitCometView {
             _appearance_subscription: appearance_subscription,
             _terminal_keystroke_interceptor: terminal_keystroke_interceptor,
             _auth_prompt_username_input_subscription: auth_prompt_username_input_subscription,
+            _open_repo_input_subscription: open_repo_input_subscription,
             _auth_prompt_secret_input_subscription: auth_prompt_secret_input_subscription,
             view_mode,
             theme_mode,

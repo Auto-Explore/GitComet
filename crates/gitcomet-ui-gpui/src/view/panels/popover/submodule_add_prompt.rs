@@ -57,36 +57,22 @@ fn force_toggle(
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
     let advanced_expanded = this.submodule_add_advanced_expanded;
     let force_enabled = this.submodule_force_enabled;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let can_submit = this.can_submit_submodule_add(cx);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     div()
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Add submodule"),
-        )
+        .child(popover_title("Add submodule"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("URL"),
-        )
+        .child(input_label(theme, "URL"))
         .child(
             div()
                 .px_2()
@@ -95,14 +81,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.submodule_url_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Path (relative)"),
-        )
+        .child(input_label(theme, "Path (relative)"))
         .child(
             div()
                 .px_2()
@@ -111,14 +90,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.submodule_path_input.clone()),
         )
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Branch (optional)"),
-        )
+        .child(input_label(theme, "Branch (optional)"))
         .child(
             div()
                 .px_2()
@@ -141,14 +113,7 @@ pub(super) fn panel(
         )
         .when(advanced_expanded, |this_panel| {
             this_panel
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .text_xs()
-                        .text_color(theme.colors.text_muted)
-                        .child("Logical name (optional)"),
-                )
+                .child(input_label(theme, "Logical name (optional)"))
                 .child(
                     div()
                         .px_2()
@@ -189,52 +154,24 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("submodule_add_cancel", "Cancel")
-                        .focus_handle(this.submodule_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("submodule_add_cancel", "submodule_add_cancel_hint", theme)
+                        .focus_handle(this.submodule_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("submodule_add_go", "Add")
-                        .focus_handle(this.submodule_submit_focus_handle.clone())
+                        .focus_handle(this.submodule_focus.submit.clone())
+                        .disabled(!can_submit)
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "submodule_add_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let url = this
-                                .submodule_url_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let path_text = this
-                                .submodule_path_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            let branch = this.submodule_branch_input.read_with(cx, |i, _| {
-                                let text = i.text().trim().to_string();
-                                if text.is_empty() { None } else { Some(text) }
-                            });
-                            let name = this.submodule_name_input.read_with(cx, |i, _| {
-                                let text = i.text().trim().to_string();
-                                if text.is_empty() { None } else { Some(text) }
-                            });
-                            let force = this.submodule_force_enabled;
-                            if url.is_empty() || path_text.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Submodule URL and path are required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            this.store.dispatch(Msg::AddSubmodule {
-                                repo_id,
-                                url,
-                                path: std::path::PathBuf::from(path_text),
-                                branch,
-                                name,
-                                force,
-                            });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_submodule_add(cx);
                         }),
                 ),
         )

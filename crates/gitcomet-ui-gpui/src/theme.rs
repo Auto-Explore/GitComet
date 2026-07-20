@@ -231,6 +231,26 @@ fn default_radius_window() -> f32 {
 }
 
 impl AppTheme {
+    /// Translucent text-tinted background for hovered standard controls.
+    pub fn hover_overlay(&self) -> Rgba {
+        with_alpha(self.colors.text, if self.is_dark { 0.07 } else { 0.05 })
+    }
+
+    /// Translucent text-tinted background for pressed standard controls.
+    pub fn active_overlay(&self) -> Rgba {
+        with_alpha(self.colors.text, if self.is_dark { 0.11 } else { 0.08 })
+    }
+
+    /// Stronger hover overlay used by title-bar controls.
+    pub fn titlebar_hover_overlay(&self) -> Rgba {
+        with_alpha(self.colors.text, if self.is_dark { 0.10 } else { 0.08 })
+    }
+
+    /// Stronger pressed overlay used by title-bar controls.
+    pub fn titlebar_active_overlay(&self) -> Rgba {
+        with_alpha(self.colors.text, if self.is_dark { 0.16 } else { 0.12 })
+    }
+
     #[cfg(test)]
     pub(crate) fn from_json_str(json: &str) -> Result<Self, ThemeParseError> {
         let mut bundle = parse_theme_bundle(json)?;

@@ -41,80 +41,54 @@ pub(super) fn panel(
             TerminalShutdownAction::CloseWindow | TerminalShutdownAction::QuitApp
         );
 
-    div()
-        .flex()
-        .flex_col()
-        .min_w(px(440.0))
-        .child(
+    let mut dialog = ConfirmDialog::new(title, DIALOG_440_WIDTH).text(
+        theme,
+        format!("{detail} Cancel to keep the terminal open, or terminate it to continue."),
+    );
+    if show_repo_list {
+        dialog = dialog.section(
             div()
                 .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        )
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
+                .pb_1()
                 .text_sm()
                 .text_color(theme.colors.text_muted)
-                .child(format!(
-                    "{detail} Cancel to keep the terminal open, or terminate it to continue."
-                )),
-        )
-        .when(show_repo_list, |d| {
-            d.child(
-                div()
-                    .px_2()
-                    .pb_1()
-                    .text_sm()
-                    .text_color(theme.colors.text_muted)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .children(repo_names.iter().map(|name| {
-                                div()
-                                    .font_family(
-                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                    )
-                                    .ml_2()
-                                    .child(name.clone())
-                            })),
-                    ),
-            )
-        })
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
                 .child(
-                    components::Button::new("terminal_shutdown_cancel", "Cancel")
-                        .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _window, cx| {
-                            let root_view = this.root_view.clone();
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.clear_pending_terminal_shutdown_prompt(cx);
-                            });
-                            this.close_popover(cx);
-                        }),
-                )
-                .child(
-                    components::Button::new("terminal_shutdown_confirm", confirm_label)
-                        .style(components::ButtonStyle::Danger)
-                        .on_click(theme, cx, move |this, _e, window, cx| {
-                            let root_view = this.root_view.clone();
-                            let _ = root_view.update(cx, |root, cx| {
-                                root.confirm_terminal_shutdown(prompt.clone(), window, cx);
-                            });
-                            this.close_popover(cx);
-                        }),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .children(repo_names.iter().map(|name| {
+                            div()
+                                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                                .ml_2()
+                                .child(name.clone())
+                        })),
                 ),
+        );
+    }
+
+    dialog.render(
+        theme,
+        cancel_button(
+            "terminal_shutdown_cancel",
+            "terminal_shutdown_cancel_hint",
+            theme,
         )
+        .on_click(theme, cx, |this, _e, _window, cx| {
+            let root_view = this.root_view.clone();
+            let _ = root_view.update(cx, |root, cx| {
+                root.clear_pending_terminal_shutdown_prompt(cx);
+            });
+            this.close_popover(cx);
+        }),
+        components::Button::new("terminal_shutdown_confirm", confirm_label)
+            .style(components::ButtonStyle::Danger)
+            .on_click(theme, cx, move |this, _e, window, cx| {
+                let root_view = this.root_view.clone();
+                let _ = root_view.update(cx, |root, cx| {
+                    root.confirm_terminal_shutdown(prompt.clone(), window, cx);
+                });
+                this.close_popover(cx);
+            }),
+        cx,
+    )
 }

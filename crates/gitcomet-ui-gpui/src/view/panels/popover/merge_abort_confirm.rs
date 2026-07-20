@@ -58,80 +58,25 @@ pub(super) fn panel(
             "Abort cherry-pick",
         ),
     };
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
-    div()
-        .flex()
-        .flex_col()
-        .min_w(scaled_px(360.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(title),
-        )
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.text_muted)
-                .child(body),
-        )
-        .child(
-            div()
-                .px_2()
-                .pb_1()
-                .text_xs()
-                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                .text_color(theme.colors.text_muted)
-                .child(command),
-        )
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    components::Button::new("merge_abort_cancel", "Cancel")
-                        .separated_end_slot(super::hotkey_hint(
-                            theme,
-                            "merge_abort_cancel_hint",
-                            "Esc",
-                        ))
-                        .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, |this, _e, _w, cx| {
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
-                )
-                .child(
-                    components::Button::new(button_id, button_label)
-                        .style(components::ButtonStyle::Danger)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            match mode {
-                                AbortMode::Merge => {
-                                    this.store.dispatch(Msg::MergeAbort { repo_id })
-                                }
-                                AbortMode::RebaseOrApply => {
-                                    this.store.dispatch(Msg::RebaseAbort { repo_id })
-                                }
-                                AbortMode::CherryPick => {
-                                    this.store.dispatch(Msg::RebaseAbort { repo_id })
-                                }
-                            }
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
-                        }),
-                ),
+    ConfirmDialog::new(title, DIALOG_360_WIDTH)
+        .text(theme, body)
+        .command(theme, command)
+        .render(
+            theme,
+            dialog_cancel_button("merge_abort_cancel", "merge_abort_cancel_hint", theme, cx),
+            components::Button::new(button_id, button_label)
+                .style(components::ButtonStyle::Danger)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    match mode {
+                        AbortMode::Merge => this.store.dispatch(Msg::MergeAbort { repo_id }),
+                        AbortMode::RebaseOrApply => {
+                            this.store.dispatch(Msg::RebaseAbort { repo_id })
+                        }
+                        AbortMode::CherryPick => this.store.dispatch(Msg::RebaseAbort { repo_id }),
+                    }
+                    this.close_popover(cx);
+                }),
+            cx,
         )
 }

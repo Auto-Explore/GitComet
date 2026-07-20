@@ -35,6 +35,22 @@ fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::T
         );
     });
 
+    // Fill the required fields so the Add button is enabled and participates
+    // in the tab order.
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.submodule_url_input.update(cx, |input, cx| {
+                    input.set_text("https://example.com/org/repo.git", cx);
+                });
+                host.submodule_path_input.update(cx, |input, cx| {
+                    input.set_text("vendor/repo", cx);
+                });
+            });
+        });
+        let _ = window.draw(app);
+    });
+
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
     cx.update(|window, app| {
@@ -122,7 +138,7 @@ fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::T
         assert_window_focus(
             window,
             app,
-            host.submodule_cancel_focus_handle.clone(),
+            host.submodule_focus.cancel.clone(),
             "expected Tab to move from Force reuse to Cancel",
         );
     });
@@ -134,7 +150,7 @@ fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::T
         assert_window_focus(
             window,
             app,
-            host.submodule_submit_focus_handle.clone(),
+            host.submodule_focus.submit.clone(),
             "expected Tab to move from Cancel to Add",
         );
     });
@@ -158,7 +174,7 @@ fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::T
         assert_window_focus(
             window,
             app,
-            host.submodule_submit_focus_handle.clone(),
+            host.submodule_focus.submit.clone(),
             "expected Shift-Tab to wrap from URL back to Add",
         );
     });

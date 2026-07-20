@@ -2,11 +2,12 @@ use super::*;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
-    repo_id: RepoId,
+    _repo_id: RepoId,
     window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
+    let can_submit = this.can_submit_worktree_add(cx);
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
@@ -74,23 +75,9 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(640.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Add worktree"),
-        )
+        .child(popover_title("Add worktree"))
         .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Worktree folder"),
-        )
+        .child(input_label(theme, "Worktree folder"))
         .child(
             div()
                 .px_2()
@@ -160,39 +147,24 @@ pub(super) fn panel(
                 .items_center()
                 .justify_between()
                 .child(
-                    components::Button::new("worktree_add_cancel", "Cancel")
-                        .focus_handle(this.worktree_cancel_focus_handle.clone())
-                        .style(components::ButtonStyle::Outlined)
+                    cancel_button("worktree_add_cancel", "worktree_add_cancel_hint", theme)
+                        .focus_handle(this.worktree_focus.cancel.clone())
                         .on_click(theme, cx, |this, _e, window, cx| {
                             this.dismiss_prompt_popover(window, cx);
                         }),
                 )
                 .child(
                     components::Button::new("worktree_add_go", "Add")
-                        .focus_handle(this.worktree_submit_focus_handle.clone())
+                        .focus_handle(this.worktree_focus.submit.clone())
+                        .disabled(!can_submit)
+                        .separated_end_slot(super::hotkey_hint(
+                            theme,
+                            "worktree_add_go_hint",
+                            "Enter",
+                        ))
                         .style(components::ButtonStyle::Filled)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            let folder = this
-                                .worktree_path_input
-                                .read_with(cx, |i, _| i.text().trim().to_string());
-                            if folder.is_empty() {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    "Worktree folder is required".to_string(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            let reference = this.worktree_ref_source_target.trim().to_string();
-                            let reference = (!reference.is_empty()).then_some(reference);
-                            this.store.dispatch(Msg::AddWorktree {
-                                repo_id,
-                                path: std::path::PathBuf::from(folder),
-                                reference,
-                            });
-                            this.popover = None;
-                            this.popover_anchor = None;
-                            cx.notify();
+                        .on_click(theme, cx, |this, _e, _w, cx| {
+                            this.submit_worktree_add(cx);
                         }),
                 ),
         )

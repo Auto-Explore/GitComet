@@ -26,27 +26,29 @@ impl GitCometView {
             .child(div().flex_1().child(self.open_repo_input.clone()))
             .child(
                 components::Button::new("open_repo_go", "Open")
+                    .separated_end_slot(popover::hotkey_hint(theme, "open_repo_go_hint", "Enter"))
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, |this, _e, _w, cx| {
-                        let path = this
-                            .open_repo_input
-                            .read_with(cx, |input, _| input.text().trim().to_string());
-                        if !path.is_empty() {
-                            this.store.dispatch(Msg::OpenRepo(path.into()));
-                            this.open_repo_panel = false;
-                        }
-                        cx.notify();
+                        this.submit_open_repo_panel(cx);
                     }),
             )
             .child(
-                components::Button::new("open_repo_cancel", "Cancel").on_click(
-                    theme,
-                    cx,
-                    |this, _e, _w, cx| {
+                popover::cancel_button("open_repo_cancel", "open_repo_cancel_hint", theme)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
                         this.open_repo_panel = false;
                         cx.notify();
-                    },
-                ),
+                    }),
             )
+    }
+
+    pub(in super::super) fn submit_open_repo_panel(&mut self, cx: &mut gpui::Context<Self>) {
+        let path = self
+            .open_repo_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if !path.is_empty() {
+            self.store.dispatch(Msg::OpenRepo(path.into()));
+            self.open_repo_panel = false;
+        }
+        cx.notify();
     }
 }
