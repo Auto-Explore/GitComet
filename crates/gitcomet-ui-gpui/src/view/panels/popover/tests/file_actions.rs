@@ -417,12 +417,18 @@ fn unopened_submodule_menus_disable_open_in_code_editor(cx: &mut gpui::TestAppCo
                 gitcomet_core::domain::CommitDetails {
                     id: commit_id.clone(),
                     message: "Submodule update".into(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: String::new(),
+                    committed_at_unix: 0,
                     parent_ids: Vec::new(),
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Modified,
                         is_submodule: true,
+                        additions: None,
+                        deletions: None,
                     }],
                 }
                 .into(),

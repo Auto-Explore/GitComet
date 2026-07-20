@@ -1,5 +1,7 @@
 use super::*;
-use crate::model::{GitLogSettings, GitLogTagFetchMode, RepoLoadsInFlight, SidebarDataRequest};
+use crate::model::{
+    GitLogSettings, GitLogTagFetchMode, RepoLoadsInFlight, SidebarDataRequest, SidebarMode,
+};
 
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
     repo.branches = Loadable::Ready(Arc::new(Vec::new()));
@@ -4596,5 +4598,175 @@ fn session_persist_failed_msg_reports_notification_and_repo_diagnostic() {
             .diagnostics
             .iter()
             .any(|d| d.message.contains("disk full"))
+    );
+}
+
+#[test]
+fn set_active_repo_loads_file_browser_when_files_mode_is_active() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    mark_repo_open_ready(&mut repos, &mut state, repo1);
+    mark_repo_open_ready(&mut repos, &mut state, repo2);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetSidebarMode {
+            mode: SidebarMode::Files,
+        },
+    );
+
+    // Activating a repo whose listing never loaded must kick the file
+    // browser while the Files sidebar is showing, or the tree is stuck on
+    // "Loading files..." until the user toggles the sidebar tabs.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo2 },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadFileBrowser { repo_id, .. } if *repo_id == repo2
+        )),
+        "expected activation to load the file browser, got {effects:?}"
+    );
+
+    // An already-loaded listing must not reload on every activation.
+    state
+        .repos
+        .iter_mut()
+        .find(|r| r.id == repo1)
+        .expect("repo1 exists")
+        .file_browser
+        .entries = Loadable::Ready(Arc::new(Vec::new()));
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadFileBrowser { .. })),
+        "expected no file browser reload for a loaded listing, got {effects:?}"
+    );
+}
+
+#[test]
+fn set_active_repo_skips_file_browser_load_in_branches_mode() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo2")),
+    );
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    mark_repo_open_ready(&mut repos, &mut state, repo1);
+    mark_repo_open_ready(&mut repos, &mut state, repo2);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo2 },
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadFileBrowser { .. })),
+        "expected no file browser load while the Branches sidebar is showing"
+    );
+}
+
+#[test]
+fn repo_opened_ok_loads_file_browser_for_active_repo_in_files_mode() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo1")),
+    );
+    let repo1 = RepoId(1);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetSidebarMode {
+            mode: SidebarMode::Files,
+        },
+    );
+
+    // The repo was activated before its open completed; the open completing
+    // must kick the file browser listing for the Files sidebar.
+    let spec = state.repos[0].spec.clone();
+    let workdir = spec.workdir.to_string_lossy().into_owned();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: repo1,
+            spec,
+            repo: Arc::new(DummyRepo::new(&workdir)),
+        }),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadFileBrowser { repo_id, .. } if *repo_id == repo1
+        )),
+        "expected RepoOpenedOk to load the file browser, got {effects:?}"
     );
 }

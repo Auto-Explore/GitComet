@@ -86,8 +86,6 @@ mod tests {
         );
 
         for icon in &registered {
-            // The file_icons subdirectory is a directory, not a loadable leaf;
-            // its contents are verified below.
             if icon == "icons/file_icons" {
                 continue;
             }
@@ -97,8 +95,6 @@ mod tests {
             );
         }
 
-        // Every file-browser icon under icons/file_icons/ must be registered and
-        // loadable (these are embedded by build.rs).
         let file_icons_dir = icons_dir.join("file_icons");
         let file_icons_on_disk: BTreeSet<String> = std::fs::read_dir(&file_icons_dir)
             .expect("expected file_icons asset directory")

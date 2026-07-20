@@ -29,6 +29,31 @@ fn shape_truncated_line_cached(
     color: gpui::Rgba,
     font_family: Option<&'static str>,
 ) -> gpui::ShapedLine {
+    shape_truncated_line_cached_from(
+        window,
+        base_style,
+        font_size,
+        text,
+        text_hash,
+        max_width,
+        color,
+        font_family,
+        TruncateFrom::End,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shape_truncated_line_cached_from(
+    window: &mut Window,
+    base_style: &gpui::TextStyle,
+    font_size: Pixels,
+    text: &SharedString,
+    text_hash: u64,
+    max_width: Pixels,
+    color: gpui::Rgba,
+    font_family: Option<&'static str>,
+    truncate_from: TruncateFrom,
+) -> gpui::ShapedLine {
     use std::hash::{Hash, Hasher};
 
     let key = {
@@ -44,6 +69,7 @@ fn shape_truncated_line_cached(
         color.g.to_bits().hash(&mut hasher);
         color.b.to_bits().hash(&mut hasher);
         color.a.to_bits().hash(&mut hasher);
+        matches!(truncate_from, TruncateFrom::Start).hash(&mut hasher);
         hasher.finish()
     };
 
@@ -65,7 +91,7 @@ fn shape_truncated_line_cached(
         max_width.max(px(0.0)),
         "…",
         &runs,
-        TruncateFrom::End,
+        truncate_from,
     );
     let shaped = window
         .text_system()
@@ -78,83 +104,108 @@ fn shape_truncated_line_cached(
     shaped
 }
 
-fn shape_truncated_line_with_highlights(
+/// Which visual family a ref chip belongs to. Tags stay accent-tinted pills,
+/// the HEAD chip is a solid accent pill, plain branches are neutral so a busy
+/// ref column doesn't shout.
+#[derive(Clone, Copy)]
+enum HistoryChipStyleKind {
+    Tag,
+    Head,
+    Branch { selected: bool },
+}
+
+struct HistoryChipVisual {
+    border: gpui::Rgba,
+    bg: gpui::Rgba,
+    text: gpui::Rgba,
+}
+
+fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryChipVisual {
+    match kind {
+        HistoryChipStyleKind::Tag => HistoryChipVisual {
+            border: with_alpha(theme.colors.accent, 0.35),
+            bg: with_alpha(theme.colors.accent, 0.12),
+            text: theme.colors.accent,
+        },
+        HistoryChipStyleKind::Head => HistoryChipVisual {
+            border: with_alpha(theme.colors.accent, 0.90),
+            bg: with_alpha(theme.colors.accent, 0.90),
+            text: theme.colors.accent_text,
+        },
+        HistoryChipStyleKind::Branch { selected } => HistoryChipVisual {
+            border: if selected {
+                with_alpha(theme.colors.accent, 0.45)
+            } else {
+                with_alpha(theme.colors.border, 0.90)
+            },
+            bg: theme.colors.surface_bg_elevated,
+            text: if selected {
+                selected_branch_label_color(theme)
+            } else {
+                theme.colors.text_muted
+            },
+        },
+    }
+}
+
+fn history_chip_style_kind(
+    kind: &HistoryRefListItemKind,
+    selected_branch_entry_text: Option<&SharedString>,
+    item_text: &str,
+) -> HistoryChipStyleKind {
+    match kind {
+        HistoryRefListItemKind::Tag { .. } => HistoryChipStyleKind::Tag,
+        HistoryRefListItemKind::AttachedHead { .. } | HistoryRefListItemKind::DetachedHead => {
+            HistoryChipStyleKind::Head
+        }
+        HistoryRefListItemKind::LocalBranch { .. }
+        | HistoryRefListItemKind::RemoteBranch { .. } => HistoryChipStyleKind::Branch {
+            selected: selected_branch_entry_text
+                .is_some_and(|selected| selected.as_ref() == item_text),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_history_chip(
     window: &mut Window,
-    base_style: &gpui::TextStyle,
-    font_size: Pixels,
-    text: &SharedString,
-    max_width: Pixels,
-    color: gpui::Rgba,
-    highlights: &[(Range<usize>, gpui::HighlightStyle)],
-    font_family: Option<&'static str>,
-) -> gpui::ShapedLine {
-    let mut style = base_style.clone();
-    style.color = color.into();
-    if let Some(family) = font_family {
-        style.font_family = family.into();
-    }
-
-    let runs = compute_highlight_runs(text.as_ref(), &style, highlights);
-    let mut wrapper = window.text_system().line_wrapper(style.font(), font_size);
-    let (truncated, runs) = wrapper.truncate_line(
-        text.clone(),
-        max_width.max(px(0.0)),
-        "…",
-        &runs,
-        TruncateFrom::End,
+    cx: &mut gpui::App,
+    chip_bounds: Bounds<Pixels>,
+    visual: &HistoryChipVisual,
+    shaped: &gpui::ShapedLine,
+    radius: Pixels,
+    border_w: Pixels,
+    pad_x: Pixels,
+    line_height: Pixels,
+) {
+    window.paint_quad(fill(chip_bounds, visual.border).corner_radii(radius));
+    let inner = Bounds::new(
+        point(chip_bounds.left() + border_w, chip_bounds.top() + border_w),
+        size(
+            (chip_bounds.size.width - border_w * 2.0).max(px(0.0)),
+            (chip_bounds.size.height - border_w * 2.0).max(px(0.0)),
+        ),
     );
-    window
-        .text_system()
-        .shape_line(truncated, font_size, runs.as_ref(), None)
+    window.paint_quad(fill(inner, visual.bg).corner_radii((radius - border_w).max(px(0.0))));
+
+    // Center the line box on the chip even when it is taller than the chip
+    // (clamping the offset to zero pushed the glyphs visibly below center).
+    let text_y = chip_bounds.top() + (chip_bounds.size.height - line_height) * 0.5;
+    let _ = shaped.paint(
+        point(chip_bounds.left() + pad_x, text_y),
+        line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
-fn compute_highlight_runs(
-    text: &str,
-    default_style: &gpui::TextStyle,
-    highlights: &[(Range<usize>, gpui::HighlightStyle)],
-) -> Vec<TextRun> {
-    let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
-    let mut ix = 0usize;
-    for (range, highlight) in highlights {
-        if ix < range.start {
-            runs.push(default_style.clone().to_run(range.start - ix));
-        }
-        runs.push(
-            default_style
-                .clone()
-                .highlight(*highlight)
-                .to_run(range.len()),
-        );
-        ix = range.end;
-    }
-    if ix < text.len() {
-        runs.push(default_style.clone().to_run(text.len() - ix));
-    }
-    runs
-}
-
-fn layout_chip_bounds(
-    branch_bounds: Bounds<Pixels>,
-    row_bounds: Bounds<Pixels>,
-    chip_height: Pixels,
-    gap: Pixels,
-    chip_widths: &[Pixels],
-) -> SmallVec<[Bounds<Pixels>; 4]> {
-    let y = row_bounds.top() + (row_bounds.size.height - chip_height).max(px(0.0)) * 0.5;
-    let mut x = branch_bounds.left();
-    let mut out = SmallVec::with_capacity(chip_widths.len());
-    for w in chip_widths {
-        let w = (*w).max(px(0.0));
-        if x + w > branch_bounds.right() {
-            break;
-        }
-        out.push(Bounds::new(point(x, y), size(w, chip_height)));
-        x += w + gap;
-        if x >= branch_bounds.right() {
-            break;
-        }
-    }
-    out
+fn fx_hash_str(text: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = FxHasher::default();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn hit_test_index(bounds: &[Bounds<Pixels>], p: gpui::Point<Pixels>) -> Option<usize> {
@@ -183,9 +234,8 @@ pub(super) fn history_commit_row_canvas(
     graph_rows: Arc<[history_graph::GraphRow]>,
     graph_row_ix: usize,
     tag_names: Arc<[HistoryTextVm]>,
-    branches_text: HistoryTextVm,
     ref_items: Arc<[HistoryRefListItem]>,
-    branch_highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+    selected_branch_entry_text: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
@@ -228,6 +278,12 @@ pub(super) fn history_commit_row_canvas(
             let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
             let scaled_px = |value| px(value * design_scale_factor);
             let base_style = window.text_style();
+            // Avatar initials are semibold, matching `components::author_avatar`.
+            let initials_style = {
+                let mut style = base_style.clone();
+                style.font_weight = gpui::FontWeight::SEMIBOLD;
+                style
+            };
             let sm_font = base_style.font_size.to_pixels(window.rem_size());
             let sm_line_height = base_style
                 .line_height
@@ -340,126 +396,194 @@ pub(super) fn history_commit_row_canvas(
 
             let mut tag_chip_bounds: SmallVec<[Bounds<Pixels>; 4]> =
                 SmallVec::with_capacity(tag_names.len());
-            if !tag_names.is_empty() || !branches_text.as_ref().trim().is_empty() {
+            let branch_ref_count = ref_items
+                .iter()
+                .filter(|item| !matches!(item.kind, HistoryRefListItemKind::Tag { .. }))
+                .count();
+            if !tag_names.is_empty() || branch_ref_count > 0 {
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: branch_content_bounds,
                     }),
                     |window| {
-                        let mut x = branch_content_bounds.left();
-                        let mut chip_widths: SmallVec<[Pixels; 4]> =
-                            SmallVec::with_capacity(tag_names.len());
-                        let mut chip_texts: SmallVec<[gpui::ShapedLine; 4]> =
-                            SmallVec::with_capacity(tag_names.len());
+                        // paint_quad has no layout-level radius clamping, so a
+                        // pill radius (999) must be capped to half the height.
+                        let chip_radius = px(theme.radii.pill).min(chip_height * 0.5);
+                        let chip_border_w = scaled_px(1.0);
+                        let chip_y =
+                            bounds.top() + (bounds.size.height - chip_height).max(px(0.0)) * 0.5;
+                        let min_text_w = scaled_px(12.0);
+                        let total_chips = tag_names.len() + branch_ref_count;
 
-                        for name in tag_names.iter() {
-                            let remaining = (branch_content_bounds.right() - x).max(px(0.0));
-                            if remaining <= chip_pad_x * 2.0 {
-                                break;
-                            }
-
+                        // Reserved width for a trailing "+N" chip; sized for the
+                        // worst-case count so mid-loop reservations never come up short.
+                        let overflow_reserve = if total_chips > 1 {
+                            let probe: SharedString = format!("+{}", total_chips - 1).into();
                             let shaped = shape_truncated_line_cached(
                                 window,
                                 &base_style,
-                                xs_font,
-                                name.shared(),
-                                name.text_hash(),
-                                (remaining - chip_pad_x * 2.0).max(px(0.0)),
-                                theme.colors.accent,
+                                xxs_font,
+                                &probe,
+                                fx_hash_str(probe.as_ref()),
+                                branch_content_bounds.size.width,
+                                theme.colors.text_muted,
                                 None,
                             );
-
-                            let chip_w = (shaped.width + chip_pad_x * 2.0).min(remaining);
-                            chip_widths.push(chip_w);
-                            chip_texts.push(shaped);
-
-                            x += chip_w + chip_gap;
-                            if x >= branch_content_bounds.right() {
-                                break;
-                            }
-                        }
-
-                        tag_chip_bounds = layout_chip_bounds(
-                            branch_content_bounds,
-                            bounds,
-                            chip_height,
-                            chip_gap,
-                            &chip_widths,
-                        );
-
-                        for (shaped, chip_bounds) in chip_texts.iter().zip(tag_chip_bounds.iter()) {
-                            let border = with_alpha(theme.colors.accent, 0.35);
-                            let bg = with_alpha(theme.colors.accent, 0.12);
-                            let radius = px(theme.radii.pill);
-
-                            window.paint_quad(fill(*chip_bounds, border).corner_radii(radius));
-                            let inner = Bounds::new(
-                                point(
-                                    chip_bounds.left() + scaled_px(1.0),
-                                    chip_bounds.top() + scaled_px(1.0),
-                                ),
-                                size(
-                                    (chip_bounds.size.width - scaled_px(2.0)).max(px(0.0)),
-                                    (chip_bounds.size.height - scaled_px(2.0)).max(px(0.0)),
-                                ),
-                            );
-                            window.paint_quad(
-                                fill(inner, bg)
-                                    .corner_radii((radius - scaled_px(1.0)).max(px(0.0))),
-                            );
-
-                            let text_y = chip_bounds.top()
-                                + (chip_bounds.size.height - xs_line_height).max(px(0.0)) * 0.5;
-                            let _ = shaped.paint(
-                                point(chip_bounds.left() + chip_pad_x, text_y),
-                                xs_line_height,
-                                gpui::TextAlign::Left,
-                                None,
-                                window,
-                                cx,
-                            );
-                        }
-
-                        let x = if let Some(last) = tag_chip_bounds.last() {
-                            (last.right() + chip_gap).min(branch_content_bounds.right())
+                            shaped.width + chip_pad_x * 2.0 + chip_gap
                         } else {
-                            branch_content_bounds.left()
+                            px(0.0)
                         };
 
-                        if !branches_text.as_ref().trim().is_empty()
-                            && x < branch_content_bounds.right()
-                        {
-                            let remaining = (branch_content_bounds.right() - x).max(px(0.0));
-                            let shaped = if branch_highlights.is_empty() {
-                                shape_truncated_line_cached(
-                                    window,
-                                    &base_style,
-                                    xs_font,
-                                    branches_text.shared(),
-                                    branches_text.text_hash(),
-                                    remaining,
-                                    theme.colors.text_muted,
-                                    None,
+                        let mut x = branch_content_bounds.left();
+                        let mut shown = 0usize;
+
+                        enum ChipEntry<'a> {
+                            Tag(&'a HistoryTextVm),
+                            Ref(&'a HistoryRefListItem),
+                        }
+                        // HEAD first (the strongest signal), then tags, then
+                        // plain branches; overflow beyond the column collapses
+                        // into a "+N" chip resolved by the refs hover menu.
+                        let head_entries = ref_items
+                            .iter()
+                            .filter(|item| {
+                                matches!(
+                                    item.kind,
+                                    HistoryRefListItemKind::AttachedHead { .. }
+                                        | HistoryRefListItemKind::DetachedHead
                                 )
+                            })
+                            .map(ChipEntry::Ref);
+                        let branch_entries = ref_items
+                            .iter()
+                            .filter(|item| {
+                                matches!(
+                                    item.kind,
+                                    HistoryRefListItemKind::LocalBranch { .. }
+                                        | HistoryRefListItemKind::RemoteBranch { .. }
+                                )
+                            })
+                            .map(ChipEntry::Ref);
+                        let entries = head_entries
+                            .chain(tag_names.iter().map(ChipEntry::Tag))
+                            .chain(branch_entries);
+
+                        for entry in entries {
+                            let pending_after = total_chips - shown - 1;
+                            let reserve = if pending_after > 0 {
+                                overflow_reserve
                             } else {
-                                shape_truncated_line_with_highlights(
-                                    window,
-                                    &base_style,
-                                    xs_font,
-                                    branches_text.shared(),
-                                    remaining,
-                                    theme.colors.text_muted,
-                                    branch_highlights.as_ref(),
-                                    None,
-                                )
+                                px(0.0)
                             };
-                            let _ = shaped.paint(
-                                point(x, center_y(xs_line_height)),
-                                xs_line_height,
-                                gpui::TextAlign::Left,
-                                None,
+                            let max_text_w =
+                                branch_content_bounds.right() - x - reserve - chip_pad_x * 2.0;
+                            // Later chips need enough room to be legible;
+                            // otherwise fold the remainder into the "+N" chip
+                            // instead of painting an "…x" stub.
+                            let needed_text_w = if shown == 0 {
+                                min_text_w
+                            } else {
+                                scaled_px(28.0)
+                            };
+                            if max_text_w < needed_text_w {
+                                break;
+                            }
+
+                            let (shaped, style_kind, is_tag) = match &entry {
+                                ChipEntry::Tag(name) => (
+                                    shape_truncated_line_cached(
+                                        window,
+                                        &base_style,
+                                        xxs_font,
+                                        name.shared(),
+                                        name.text_hash(),
+                                        max_text_w,
+                                        history_chip_visual(theme, HistoryChipStyleKind::Tag).text,
+                                        None,
+                                    ),
+                                    HistoryChipStyleKind::Tag,
+                                    true,
+                                ),
+                                ChipEntry::Ref(item) => {
+                                    let style_kind = history_chip_style_kind(
+                                        &item.kind,
+                                        selected_branch_entry_text.as_ref(),
+                                        item.text.as_ref(),
+                                    );
+                                    (
+                                        // Truncate from the start so the leaf
+                                        // segment ("…/feature_name") stays visible.
+                                        shape_truncated_line_cached_from(
+                                            window,
+                                            &base_style,
+                                            xxs_font,
+                                            item.text.shared(),
+                                            item.text.text_hash(),
+                                            max_text_w,
+                                            history_chip_visual(theme, style_kind).text,
+                                            None,
+                                            TruncateFrom::Start,
+                                        ),
+                                        style_kind,
+                                        false,
+                                    )
+                                }
+                            };
+
+                            let chip_w = shaped.width + chip_pad_x * 2.0;
+                            let chip_bounds =
+                                Bounds::new(point(x, chip_y), size(chip_w, chip_height));
+                            let visual = history_chip_visual(theme, style_kind);
+                            paint_history_chip(
                                 window,
                                 cx,
+                                chip_bounds,
+                                &visual,
+                                &shaped,
+                                chip_radius,
+                                chip_border_w,
+                                chip_pad_x,
+                                xxs_line_height,
+                            );
+                            if is_tag {
+                                tag_chip_bounds.push(chip_bounds);
+                            }
+
+                            shown += 1;
+                            x += chip_w + chip_gap;
+                        }
+
+                        let hidden = total_chips - shown;
+                        if hidden > 0 {
+                            let label: SharedString = format!("+{hidden}").into();
+                            let shaped = shape_truncated_line_cached(
+                                window,
+                                &base_style,
+                                xxs_font,
+                                &label,
+                                fx_hash_str(label.as_ref()),
+                                (branch_content_bounds.right() - x - chip_pad_x * 2.0).max(px(0.0)),
+                                theme.colors.text_muted,
+                                None,
+                            );
+                            let chip_bounds = Bounds::new(
+                                point(x, chip_y),
+                                size(shaped.width + chip_pad_x * 2.0, chip_height),
+                            );
+                            let visual = history_chip_visual(
+                                theme,
+                                HistoryChipStyleKind::Branch { selected: false },
+                            );
+                            paint_history_chip(
+                                window,
+                                cx,
+                                chip_bounds,
+                                &visual,
+                                &shaped,
+                                chip_radius,
+                                chip_border_w,
+                                chip_pad_x,
+                                xxs_line_height,
                             );
                         }
                     },
@@ -472,23 +596,27 @@ pub(super) fn history_commit_row_canvas(
                 .map(|lane| history_graph::lane_color(theme, lane.color_ix))
                 .unwrap_or(theme.colors.text_muted);
 
+            let mut summary_text_left = summary_bounds.left() + cell_pad_x;
             if show_graph_color_marker {
-                let marker_w = scaled_px(2.0);
-                let marker_h = scaled_px(12.0);
+                // A rounded lane-color pill with clear air before the text so it
+                // reads as a deliberate marker, not a stray glyph.
+                let marker_w = scaled_px(3.0);
+                let marker_h = scaled_px(14.0);
                 let y = bounds.top() + (bounds.size.height - marker_h) * 0.5;
                 window.paint_quad(
                     fill(
                         Bounds::new(point(summary_bounds.left(), y), size(marker_w, marker_h)),
                         node_color,
                     )
-                    .corner_radii(scaled_px(2.0)),
+                    .corner_radii(marker_w * 0.5),
                 );
+                summary_text_left = summary_bounds.left() + marker_w + scaled_px(6.0);
             }
 
             let summary_text_bounds = Bounds::new(
-                point(summary_bounds.left() + cell_pad_x, bounds.top()),
+                point(summary_text_left, bounds.top()),
                 size(
-                    (summary_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                    (summary_bounds.right() - cell_pad_x - summary_text_left).max(px(0.0)),
                     bounds.size.height,
                 ),
             );
@@ -521,10 +649,71 @@ pub(super) fn history_commit_row_canvas(
             }
 
             if show_author && !author.is_empty() {
+                let avatar_d = scaled_px(components::AVATAR_DIAMETER_PX);
+                let avatar_gap = scaled_px(6.0);
+                // Matches the header's extra left inset that clears the
+                // column resize handle.
+                let avatar_left = author_bounds.left() + cell_pad_x * 2.0;
+                let identity_color = components::author_color(theme, author.as_ref());
+                if author_bounds.size.width >= avatar_d + cell_pad_x * 2.0 {
+                    let avatar_top = author_bounds.top()
+                        + (author_bounds.size.height - avatar_d).max(px(0.0)) * 0.5;
+                    window.paint_quad(
+                        fill(
+                            Bounds::new(point(avatar_left, avatar_top), size(avatar_d, avatar_d)),
+                            with_alpha(identity_color, 0.22),
+                        )
+                        .corner_radii(avatar_d * 0.5),
+                    );
+
+                    let initials: SharedString =
+                        components::author_initials(author.as_ref()).into();
+                    let initials_font = scaled_px(components::AVATAR_FONT_PX);
+                    let initials_line_height = initials_style
+                        .line_height
+                        .to_pixels(initials_font.into(), window.rem_size());
+                    let initials_shaped = shape_truncated_line_cached(
+                        window,
+                        &initials_style,
+                        initials_font,
+                        &initials,
+                        fx_hash_str(initials.as_ref()),
+                        avatar_d,
+                        identity_color,
+                        None,
+                    );
+                    let initials_cap_height = initials_shaped
+                        .runs
+                        .first()
+                        .map(|run| window.text_system().cap_height(run.font_id, initials_font))
+                        .unwrap_or(initials_font * 0.7);
+                    let _ = initials_shaped.paint(
+                        point(
+                            avatar_left + (avatar_d - initials_shaped.width).max(px(0.0)) * 0.5,
+                            components::initials_paint_origin_y(
+                                avatar_top,
+                                avatar_d,
+                                initials_line_height,
+                                initials_shaped.ascent,
+                                initials_shaped.descent,
+                                initials_cap_height,
+                            ),
+                        ),
+                        initials_line_height,
+                        gpui::TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                }
+
                 let author_text_bounds = Bounds::new(
-                    point(author_bounds.left() + cell_pad_x, author_bounds.top()),
+                    point(avatar_left + avatar_d + avatar_gap, author_bounds.top()),
                     size(
-                        (author_bounds.size.width - cell_pad_x * 2.0).max(px(0.0)),
+                        (author_bounds.right()
+                            - cell_pad_x
+                            - (avatar_left + avatar_d + avatar_gap))
+                            .max(px(0.0)),
                         author_bounds.size.height,
                     ),
                 );
@@ -538,15 +727,13 @@ pub(super) fn history_commit_row_canvas(
                     theme.colors.text_muted,
                     None,
                 );
-                let origin_x =
-                    (author_text_bounds.right() - shaped.width).max(author_text_bounds.left());
                 window.with_content_mask(
                     Some(ContentMask {
                         bounds: author_text_bounds,
                     }),
                     |window| {
                         let _ = shaped.paint(
-                            point(origin_x, center_y(xs_line_height)),
+                            point(author_text_bounds.left(), center_y(xs_line_height)),
                             xs_line_height,
                             gpui::TextAlign::Left,
                             None,
@@ -716,21 +903,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn layout_chip_bounds_never_overflows_branch_column() {
-        let row = Bounds::new(point(px(0.0), px(0.0)), size(px(200.0), px(24.0)));
-        let branch = Bounds::new(point(px(10.0), px(0.0)), size(px(100.0), px(24.0)));
-        let chip_height = px(18.0);
-        let gap = px(4.0);
-        let chip_widths = vec![px(40.0), px(40.0), px(40.0)];
+    fn history_chip_style_kind_marks_selected_branch() {
+        let selected: SharedString = "feat/new_gui".into();
+        let kind = HistoryRefListItemKind::LocalBranch {
+            name: "feat/new_gui".to_string(),
+        };
+        assert!(matches!(
+            history_chip_style_kind(&kind, Some(&selected), "feat/new_gui"),
+            HistoryChipStyleKind::Branch { selected: true }
+        ));
+        assert!(matches!(
+            history_chip_style_kind(&kind, Some(&selected), "feat/other"),
+            HistoryChipStyleKind::Branch { selected: false }
+        ));
+        assert!(matches!(
+            history_chip_style_kind(&kind, None, "feat/new_gui"),
+            HistoryChipStyleKind::Branch { selected: false }
+        ));
+    }
 
-        let chips = layout_chip_bounds(branch, row, chip_height, gap, &chip_widths);
-        assert!(!chips.is_empty());
-        for b in chips {
-            assert!(b.left() >= branch.left());
-            assert!(b.right() <= branch.right());
-            assert!(b.top() >= row.top());
-            assert!(b.bottom() <= row.bottom());
-        }
+    #[test]
+    fn history_chip_style_kind_maps_head_and_tags() {
+        assert!(matches!(
+            history_chip_style_kind(
+                &HistoryRefListItemKind::AttachedHead {
+                    branch: "main".to_string()
+                },
+                None,
+                "HEAD → main"
+            ),
+            HistoryChipStyleKind::Head
+        ));
+        assert!(matches!(
+            history_chip_style_kind(&HistoryRefListItemKind::DetachedHead, None, "HEAD"),
+            HistoryChipStyleKind::Head
+        ));
+        assert!(matches!(
+            history_chip_style_kind(
+                &HistoryRefListItemKind::Tag {
+                    name: "v1.0".to_string()
+                },
+                None,
+                "v1.0"
+            ),
+            HistoryChipStyleKind::Tag
+        ));
     }
 
     #[test]

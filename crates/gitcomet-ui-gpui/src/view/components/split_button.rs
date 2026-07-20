@@ -52,7 +52,7 @@ impl SplitButton {
             .items_center()
             .h_full()
             .w_full()
-            .rounded(px(theme.radii.row))
+            .rounded(px(theme.radii.control))
             .bg(bg)
             .overflow_hidden()
             .p(px(1.0))
@@ -71,13 +71,10 @@ impl SplitButton {
             .flex()
             .items_center()
             .h(control_height(ui_scale))
-            .rounded(px(theme.radii.row))
+            .rounded(px(theme.radii.control))
             .bg(gpui::rgba(0x00000000))
             .border_1()
             .border_color(border_color)
-            .when(self.style == SplitButtonStyle::Filled, |this| {
-                this.shadow_sm()
-            })
             .hover(move |s| s.bg(hover_bg).border_color(hover_border))
             .child(inner)
     }

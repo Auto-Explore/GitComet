@@ -487,6 +487,7 @@ impl TextInput {
         let key = ShapedRowCacheKey {
             line_ix: line.line_ix,
             wrap_width_key: i32::MIN,
+            font_size_key: f32::from(shape_style.font_size).round() as i32,
         };
         if let Some(cached) = self.layout.plain_line_cache.get(&key) {
             return cached.clone();
@@ -526,6 +527,7 @@ impl TextInput {
         let key = ShapedRowCacheKey {
             line_ix: line.line_ix,
             wrap_width_key: wrap_width_cache_key(wrap_width),
+            font_size_key: f32::from(shape_style.font_size).round() as i32,
         };
         let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let owned_runs;
@@ -2309,7 +2311,7 @@ impl TextInput {
             .bg(with_alpha(self.style.background, 0.98))
             .border_1()
             .border_color(self.style.hover_border)
-            .rounded(px(2.0))
+            .rounded(px(10.0))
             .shadow_lg()
             .on_mouse_down(
                 MouseButton::Left,

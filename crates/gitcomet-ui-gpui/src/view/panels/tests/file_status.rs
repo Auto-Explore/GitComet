@@ -640,12 +640,18 @@ fn committed_deleted_file_preview_uses_preview_text_file_without_patch_fallback(
                 gitcomet_core::domain::CommitDetails {
                     id: commit_id.clone(),
                     message: "remove report".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-04-07T12:00:00Z".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![gitcomet_core::domain::CommitFileChange {
                         path: file_rel.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Deleted,
                         is_submodule: false,
+                        additions: None,
+                        deletions: None,
                     }],
                 },
             ));
@@ -1501,7 +1507,11 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
                     message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: commit_date.clone(),
+                    committed_at_unix: 0,
                     parent_ids: vec![gitcomet_core::domain::CommitId(parent_sha.clone().into())],
                     files: vec![],
                 },
@@ -1621,7 +1631,11 @@ fn commit_details_message_sha_hover_menu_navigate_reveals_referenced_commit(
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     message: format!("{target_sha_upper} fixes the regression"),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![],
                 },
@@ -1721,7 +1735,11 @@ fn commit_details_message_sha_hover_menu_closes_after_leaving_trigger_and_menu(
                 Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     message: format!("{target_sha} fixes the regression"),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![],
                 }));
@@ -1831,7 +1849,11 @@ fn commit_details_message_sha_retained_details_are_inert_after_selection_changes
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(retained_sha.into()),
                     message: format!("{target_sha} should not reveal from retained details"),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![],
                 },
@@ -1918,7 +1940,11 @@ fn commit_details_message_sha_left_click_only_places_caret_without_revealing(
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     message: format!("{target_sha} fixes the regression"),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![],
                 },
@@ -2003,7 +2029,11 @@ fn commit_details_message_sha_keeps_hover_menu_open_while_link_is_focused(
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     message: format!("{target_sha} fixes the regression"),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![],
                 },
@@ -2095,7 +2125,11 @@ fn commit_details_parent_sha_hover_menu_navigate_reveals_referenced_commit(
                 Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     message: "subject".into(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![gitcomet_core::domain::CommitId(parent_sha.into())],
                     files: vec![],
                 }));
@@ -2176,7 +2210,11 @@ fn commit_details_parent_sha_dash_has_no_hover_menu(cx: &mut gpui::TestAppContex
                 Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(current_sha.into()),
                     message: "subject".into(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![],
                 }));
@@ -2241,7 +2279,11 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
                     message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![gitcomet_core::domain::CommitId(
                         "89abcdef0123456789abcdef0123456789abcdef".into(),
                     )],
@@ -2249,6 +2291,8 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
                         path: added_path.clone(),
                         kind: gitcomet_core::domain::FileStatusKind::Added,
                         is_submodule: false,
+                        additions: None,
+                        deletions: None,
                     }],
                 },
             ));
@@ -2356,7 +2400,11 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
                     message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![gitcomet_core::domain::CommitId(
                         "89abcdef0123456789abcdef0123456789abcdef".into(),
                     )],
@@ -2366,6 +2414,8 @@ fn commit_details_file_right_click_only_opens_menu_for_added_modified_and_delete
                             path: path.clone(),
                             kind: *kind,
                             is_submodule: false,
+                            additions: None,
+                            deletions: None,
                         })
                         .collect(),
                 },
@@ -2451,6 +2501,8 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
             path: std::path::PathBuf::from(format!("src/commit_details/dir_{ix}/file_{ix}.rs")),
             kind: gitcomet_core::domain::FileStatusKind::Modified,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         })
         .collect::<Vec<_>>();
 
@@ -2463,7 +2515,11 @@ fn commit_details_file_list_keeps_visible_viewport_when_overflowing(cx: &mut gpu
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
                     message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![gitcomet_core::domain::CommitId(
                         "89abcdef0123456789abcdef0123456789abcdef".into(),
                     )],
@@ -2539,6 +2595,8 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
             path: std::path::PathBuf::from(format!("src/commit_zoom/dir_{ix}/file_{ix}.rs")),
             kind: gitcomet_core::domain::FileStatusKind::Modified,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         })
         .collect::<Vec<_>>();
 
@@ -2551,7 +2609,11 @@ fn ui_scale_commit_details_file_list_content_height_scales(cx: &mut gpui::TestAp
                 gitcomet_core::domain::CommitDetails {
                     id: gitcomet_core::domain::CommitId(commit_sha.clone().into()),
                     message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![gitcomet_core::domain::CommitId(
                         "89abcdef0123456789abcdef0123456789abcdef".into(),
                     )],
@@ -2665,7 +2727,11 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                 gitcomet_core::domain::CommitDetails {
                     id: commit_id.clone(),
                     message: "subject".to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
                     committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+                    committed_at_unix: 0,
                     parent_ids: vec![],
                     files: vec![
                         gitcomet_core::domain::CommitFileChange {
@@ -2674,6 +2740,8 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                             ),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             is_submodule: false,
+                            additions: None,
+                            deletions: None,
                         },
                         gitcomet_core::domain::CommitFileChange {
                             path: std::path::PathBuf::from(
@@ -2681,6 +2749,8 @@ fn details_row_renderers_begin_separate_alignment_groups_for_status_and_commit_f
                             ),
                             kind: gitcomet_core::domain::FileStatusKind::Modified,
                             is_submodule: false,
+                            additions: None,
+                            deletions: None,
                         },
                     ],
                 },

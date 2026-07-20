@@ -87,6 +87,13 @@ pub(super) fn model(
             },
         }),
     });
+    items.push(ContextMenuItem::Entry {
+        label: "Copy branch name".into(),
+        icon: Some("icons/copy.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::CopyText { text: name.clone() }),
+    });
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Separator);
         if !is_current_branch {

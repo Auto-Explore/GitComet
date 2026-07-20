@@ -450,6 +450,71 @@ pub fn chevron_icon(expanded: bool) -> &'static str {
     }
 }
 
+/// Characteristic tint for a resolved file-icon path, keyed on well-known
+/// technology brand colors so file types read at a glance in the tree.
+/// Types without a strong identity return `None` and keep the caller's
+/// neutral tint. Each entry carries a (dark-theme, light-theme) pair: bright
+/// pastels for dark surfaces, deeper shades for light ones.
+pub fn file_icon_color(icon_path: &str, is_dark: bool) -> Option<gpui::Rgba> {
+    let key = icon_path
+        .strip_prefix("icons/file_icons/")?
+        .strip_suffix(".svg")?;
+    let (dark, light): (u32, u32) = match key {
+        "rust" => (0xF2A374, 0xCE422B),
+        "javascript" => (0xF0DB4F, 0xA38F00),
+        "typescript" => (0x6CB6F5, 0x3178C6),
+        "react" => (0x61DAFB, 0x0E7490),
+        "python" | "jupyter" | "notebook" => (0x6CA9E8, 0x3776AB),
+        "go" => (0x53C6E8, 0x00758F),
+        "c" => (0x7CA8DC, 0x03599C),
+        "cpp" => (0x6AA1D8, 0x00599C),
+        "java" => (0xF0A05A, 0xC25E00),
+        "ruby" => (0xF08A84, 0xB32821),
+        "php" => (0xA2A6DC, 0x6A6EA8),
+        "phoenix" => (0xF09B6C, 0xC75A22),
+        "html" => (0xF0824F, 0xD04A22),
+        "css" => (0x6BB4F0, 0x1572B6),
+        "sass" => (0xE689B8, 0xBF5590),
+        "vue" => (0x6BD3A0, 0x2F9668),
+        "astro" => (0xF09668, 0xC6551A),
+        "yaml" => (0xB8A2D8, 0x7A5C9E),
+        "toml" => (0xC79378, 0x9C5B3C),
+        "git" => (0xF0825E, 0xD14425),
+        "gitlab" => (0xFC8E55, 0xD9591C),
+        "docker" => (0x5FB2F5, 0x1D7DC4),
+        "database" | "surrealql" => (0x7EB8D8, 0x3A7A9C),
+        "elixir" => (0xB491C9, 0x6E4A7E),
+        "erlang" => (0xE06D8A, 0xA90533),
+        "haskell" => (0x9E8FD0, 0x5E5086),
+        "kotlin" => (0xA98BFF, 0x6B45D6),
+        "swift" => (0xF58469, 0xD6432C),
+        "dart" => (0x55B0EE, 0x0175C2),
+        "scala" => (0xED7A72, 0xC42B24),
+        "lua" | "luau" => (0x8298E8, 0x3A50B4),
+        "zig" => (0xF7B953, 0xC77F0A),
+        "nix" => (0x82A4E8, 0x4468AE),
+        "gleam" => (0xFFAFF3, 0xC875BC),
+        "julia" => (0xBC8AD8, 0x8450A0),
+        "r" => (0x6FA3E8, 0x276DC3),
+        "ocaml" => (0xF59A55, 0xC9560D),
+        "elm" => (0x7FD0E5, 0x3E93AA),
+        "terraform" => (0xA97FE0, 0x6B38A6),
+        "graphql" => (0xF063C0, 0xC00080),
+        "eslint" => (0x8973E0, 0x4B32C3),
+        "fsharp" => (0x6FB4DC, 0x2F7AA4),
+        "coffeescript" => (0xA87E60, 0x6F4E37),
+        "heroku" => (0x9B72D8, 0x5A2CA0),
+        "image" | "camera" => (0x8FCE8A, 0x3F8C3A),
+        "audio" => (0xCE9AE0, 0x8E4AA8),
+        "video" => (0xE09AB8, 0xB04A78),
+        "lock" => (0xD8C078, 0xA08830),
+        "archive" => (0xD0B080, 0x8C6E3C),
+        _ => return None,
+    };
+    let rgb = if is_dark { dark } else { light };
+    Some(gpui::rgba((rgb << 8) | 0xFF))
+}
+
 /// Port of Zed's `PathExt::extension_or_hidden_file_name`.
 fn extension_or_hidden_file_name(path: &Path) -> Option<&str> {
     let file_name = path.file_name()?.to_str()?;

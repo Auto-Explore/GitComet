@@ -56,6 +56,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         .iter()
                         .map(|name| name.clone().into())
                         .collect::<Vec<SharedString>>();
+                    let checked_out_index = head_branch
+                        .and_then(|head| branch_names.iter().position(|name| name == head));
 
                     menu = menu.child(
                         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
@@ -64,6 +66,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .empty_text("No branches")
                             .max_height(scaled_px(240.0))
                             .selected_index(this.branch_picker_selected_index)
+                            .marked_index(checked_out_index)
                             .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                                 if let Some(name) = branch_names.get(ix).cloned() {
                                     this.handle_inline_branch_picker_select(name, repo_id, cx);

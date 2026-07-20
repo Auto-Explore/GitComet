@@ -65,6 +65,17 @@ pub struct Colors {
     pub input_placeholder: Rgba,
     pub accent_text: Rgba,
     pub emphasis_text: Rgba,
+    /// Softer separator border for inner dividers (between rows, list/header
+    /// edges). Reads quieter than `border`, which stays for outer panel edges.
+    pub border_variant: Rgba,
+    /// Base color for elevation shadows. Helpers ([`shadow_surface`],
+    /// [`shadow_popover`], [`shadow_modal`]) layer alpha on top of this.
+    pub shadow: Rgba,
+    /// Background of the chrome band (sidebar, action bar, bottom bar,
+    /// active tab, and the gutter around the content card). Lighter than the
+    /// `window_bg` canvas so content reads as the recessed dark area.
+    /// Defaults to the midpoint of `surface_bg` and `surface_bg_elevated`.
+    pub sidebar_bg: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +207,27 @@ pub struct Radii {
     pub panel: f32,
     pub pill: f32,
     pub row: f32,
+    /// Corner radius for compact controls (buttons, inputs, tabs).
+    #[serde(default = "default_radius_control")]
+    pub control: f32,
+    /// Corner radius for floating surfaces (menus, popovers, dialogs).
+    #[serde(default = "default_radius_popover")]
+    pub popover: f32,
+    /// Corner radius for the outer window frame (client-side decorations).
+    #[serde(default = "default_radius_window")]
+    pub window: f32,
+}
+
+fn default_radius_control() -> f32 {
+    8.0
+}
+
+fn default_radius_popover() -> f32 {
+    10.0
+}
+
+fn default_radius_window() -> f32 {
+    12.0
 }
 
 impl AppTheme {
@@ -456,6 +488,12 @@ struct ThemeFileColors {
     #[serde(default)]
     emphasis_text: Option<ThemeColor>,
     #[serde(default)]
+    border_variant: Option<ThemeColor>,
+    #[serde(default)]
+    shadow: Option<ThemeColor>,
+    #[serde(default)]
+    sidebar_bg: Option<ThemeColor>,
+    #[serde(default)]
     graph_lane_palette: Option<Vec<ThemeColor>>,
     #[serde(default)]
     graph_lane_hues: Option<Vec<f32>>,
@@ -604,16 +642,22 @@ impl From<ThemeFile> for AppTheme {
             input_placeholder,
             accent_text,
             emphasis_text,
+            border_variant,
+            shadow,
+            sidebar_bg,
             graph_lane_palette,
             graph_lane_hues,
         } = colors;
         let graph_lane_palette =
             GraphLanePalette::from_theme_colors(is_dark, graph_lane_palette, graph_lane_hues);
 
+        let resolved_window_bg = window_bg.into_rgba();
+        let resolved_surface_bg = surface_bg.into_rgba();
+        let resolved_surface_bg_elevated = surface_bg_elevated.into_rgba();
         let colors = Colors {
-            window_bg: window_bg.into_rgba(),
-            surface_bg: surface_bg.into_rgba(),
-            surface_bg_elevated: surface_bg_elevated.into_rgba(),
+            window_bg: resolved_window_bg,
+            surface_bg: resolved_surface_bg,
+            surface_bg_elevated: resolved_surface_bg_elevated,
             active_section: active_section.into_rgba(),
             border: border.into_rgba(),
             tooltip_bg: tooltip_bg.into_rgba(),
@@ -652,6 +696,15 @@ impl From<ThemeFile> for AppTheme {
             emphasis_text: emphasis_text
                 .map(ThemeColor::into_rgba)
                 .unwrap_or_else(|| default_emphasis_text(is_dark)),
+            border_variant: border_variant
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_border_variant(is_dark)),
+            shadow: shadow
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_shadow_color(is_dark)),
+            sidebar_bg: sidebar_bg.map(ThemeColor::into_rgba).unwrap_or_else(|| {
+                mix_colors(resolved_surface_bg, resolved_surface_bg_elevated, 0.5)
+            }),
         };
         let syntax = resolve_syntax_colors(is_dark, &colors, syntax.as_ref());
 
@@ -853,6 +906,62 @@ fn default_emphasis_text(is_dark: bool) -> Rgba {
     } else {
         gpui::rgba(0x000000ff)
     }
+}
+
+fn default_border_variant(is_dark: bool) -> Rgba {
+    // A soft, low-contrast separator. Quieter than the main `border` so inner
+    // dividers don't compete with panel edges.
+    if is_dark {
+        gpui::rgba(0xffffff14)
+    } else {
+        gpui::rgba(0x0b122014)
+    }
+}
+
+fn default_shadow_color(is_dark: bool) -> Rgba {
+    // Cool near-black base; alpha is applied per shadow layer by the helpers.
+    if is_dark {
+        gpui::rgb(0x000000)
+    } else {
+        gpui::rgb(0x0b1220)
+    }
+}
+
+fn shadow_layer(base: Rgba, alpha: f32, y: f32, blur: f32) -> gpui::BoxShadow {
+    gpui::BoxShadow {
+        color: with_alpha(base, alpha).into(),
+        offset: gpui::point(gpui::px(0.0), gpui::px(y)),
+        blur_radius: gpui::px(blur),
+        spread_radius: gpui::px(0.0),
+        inset: false,
+    }
+}
+
+// Design-system stance: modern developer tools lean on borders, not shadows,
+// for separation. Inline surfaces stay flat (no shadow); only elements that
+// genuinely float off the canvas (menus, dialogs) get a single, restrained lift.
+
+/// Resting "elevation" for inline cards/panels — intentionally flat. Separation
+/// comes from `border` / `border_variant`, not shadow.
+pub(crate) fn shadow_surface(_theme: AppTheme) -> Vec<gpui::BoxShadow> {
+    Vec::new()
+}
+
+/// A single, restrained lift for dropdowns, context menus and hover panels.
+pub(crate) fn shadow_popover(theme: AppTheme) -> Vec<gpui::BoxShadow> {
+    let base = theme.colors.shadow;
+    let m = if theme.is_dark { 1.0 } else { 0.5 };
+    vec![shadow_layer(base, 0.22 * m, 4.0, 12.0)]
+}
+
+/// Slightly stronger (still understated) lift for modal dialogs.
+pub(crate) fn shadow_modal(theme: AppTheme) -> Vec<gpui::BoxShadow> {
+    let base = theme.colors.shadow;
+    let m = if theme.is_dark { 1.0 } else { 0.6 };
+    vec![
+        shadow_layer(base, 0.24 * m, 2.0, 8.0),
+        shadow_layer(base, 0.18 * m, 10.0, 28.0),
+    ]
 }
 
 fn embedded_theme_cache() -> &'static HashMap<String, RuntimeThemeSpec> {
@@ -1621,12 +1730,12 @@ mod tests {
         assert!(!light.is_dark);
         assert_eq!(
             dark.colors.focus_ring,
-            with_alpha(gpui::rgba(0x5ac1feff), 0.60)
+            with_alpha(gpui::rgba(0x4f8ef7ff), 0.55)
         );
-        assert_eq!(light.colors.window_bg, gpui::rgba(0xffffffff));
-        assert_eq!(light.colors.surface_bg, gpui::rgba(0xe7ebf1ff));
-        assert_eq!(light.colors.surface_bg_elevated, gpui::rgba(0xf0f3f8ff));
-        assert_eq!(light.colors.border, gpui::rgba(0xc7ced8ff));
+        assert_eq!(light.colors.window_bg, gpui::rgba(0xe9ebf0ff));
+        assert_eq!(light.colors.surface_bg, gpui::rgba(0xf5f6f9ff));
+        assert_eq!(light.colors.surface_bg_elevated, gpui::rgba(0xffffffff));
+        assert_eq!(light.colors.border, gpui::rgba(0xdadfe8ff));
         assert_eq!(light.colors.text, gpui::rgba(0x1d2330ff));
         assert_eq!(light.colors.text_muted, gpui::rgba(0x4c5567ff));
         assert_eq!(light.colors.accent, gpui::rgba(0x4f72ddff));
@@ -1634,9 +1743,9 @@ mod tests {
             light.colors.scrollbar_thumb_hover,
             with_alpha(gpui::rgba(0x4c5567ff), 0.42)
         );
-        assert_eq!(dark.colors.diff_add_bg, gpui::rgba(0x0b2e1cff));
+        assert_eq!(dark.colors.diff_add_bg, gpui::rgba(0x102a1cff));
         assert_eq!(light.colors.diff_remove_text, gpui::rgba(0xb92533ff));
-        assert_eq!(dark.colors.input_placeholder, gpui::rgba(0xffffff59));
+        assert_eq!(dark.colors.input_placeholder, gpui::rgba(0x6f7683ff));
         assert_eq!(light.colors.accent_text, gpui::rgba(0xffffffff));
         assert_eq!(dark.colors.emphasis_text, gpui::rgba(0xffffffff));
         assert_eq!(light.colors.emphasis_text, gpui::rgba(0x000000ff));
@@ -1713,7 +1822,7 @@ mod tests {
         let theme = AppTheme::from_key("sunset_veil").expect("Sunset Veil theme should load");
 
         assert!(!theme.is_dark);
-        assert_eq!(theme.colors.window_bg, gpui::rgba(0xfcf6f0ff));
+        assert_eq!(theme.colors.window_bg, gpui::rgba(0xf1e8ddff));
         assert_eq!(theme.colors.accent, gpui::rgba(0xa6632cff));
         assert_eq!(theme.colors.diff_add_text, gpui::rgba(0x2e7638ff));
         assert_eq!(theme.syntax.keyword, gpui::rgba(0x2f7b93ff));

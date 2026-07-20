@@ -5,6 +5,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
+    // Text-alpha overlays: the canvas-tuned hover token has no contrast on
+    // the elevated popover surface.
+    let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
+    let active_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
 
     let active_repo_id = this.active_repo().map(|r| r.id);
     let active_repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
@@ -45,8 +49,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .line_height(scaled_px(18.0))
                 .when(!disabled, |d| {
                     d.cursor(CursorStyle::PointingHand)
-                        .hover(move |s| s.bg(theme.colors.hover))
-                        .active(move |s| s.bg(theme.colors.active))
+                        .hover(move |s| s.bg(hover_overlay))
+                        .active(move |s| s.bg(active_overlay))
                 })
                 .when(disabled, |d| {
                     d.text_color(theme.colors.text_muted)
@@ -85,8 +89,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         }));
         install_desktop = install_desktop
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active));
+            .hover(move |s| s.bg(hover_overlay))
+            .active(move |s| s.bg(active_overlay));
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
@@ -200,8 +204,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .items_center()
                 .text_sm()
                 .line_height(scaled_px(18.0))
-                .hover(move |s| s.bg(theme.colors.hover))
-                .active(move |s| s.bg(theme.colors.active))
+                .hover(move |s| s.bg(hover_overlay))
+                .active(move |s| s.bg(active_overlay))
                 .child("Quit")
                 .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
                     crate::app::quit_app_or_warn(cx);
@@ -218,8 +222,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .items_center()
                 .text_sm()
                 .line_height(scaled_px(18.0))
-                .hover(move |s| s.bg(theme.colors.hover))
-                .active(move |s| s.bg(theme.colors.active))
+                .hover(move |s| s.bg(hover_overlay))
+                .active(move |s| s.bg(active_overlay))
                 .child("Close")
                 .on_click(close),
         )

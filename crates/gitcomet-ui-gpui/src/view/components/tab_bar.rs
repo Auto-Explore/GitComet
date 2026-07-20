@@ -2,12 +2,10 @@ use crate::theme::AppTheme;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
 
-use super::Tab;
-
 pub struct TabBar {
     id: ElementId,
     tabs: Vec<AnyElement>,
-    end: Vec<AnyElement>,
+    filler: Option<AnyElement>,
 }
 
 impl TabBar {
@@ -15,7 +13,7 @@ impl TabBar {
         Self {
             id: id.into(),
             tabs: Vec::new(),
-            end: Vec::new(),
+            filler: None,
         }
     }
 
@@ -24,20 +22,34 @@ impl TabBar {
         self
     }
 
-    pub fn end_child(mut self, child: impl IntoElement) -> Self {
-        self.end.push(child.into_any_element());
+    /// Element stretched into the empty space after the tabs (e.g. a window
+    /// drag surface). It collapses to zero width once tabs fill the bar.
+    pub fn filler(mut self, filler: impl IntoElement) -> Self {
+        self.filler = Some(filler.into_any_element());
         self
     }
 
-    pub fn render(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
+    pub fn render(self, _theme: AppTheme, _ui_scale_percent: u32) -> Stateful<Div> {
+        // The width-constrained inner row is what lets tabs flex-shrink down
+        // to their minimum before the strip overflows into scrolling; children
+        // measured directly by the scroll container never feel width pressure.
         let tabs = div()
             .id((self.id.clone(), "tabs"))
-            .flex()
-            .items_center()
             .h_full()
             .overflow_x_scroll()
             .scrollbar_width(px(0.0))
-            .children(self.tabs);
+            .child(
+                div()
+                    .flex()
+                    .items_end()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .h_full()
+                    .children(self.tabs)
+                    .when_some(self.filler, |this, filler| {
+                        this.child(div().flex_1().min_w(px(0.0)).h_full().child(filler))
+                    }),
+            );
 
         div()
             .id(self.id)
@@ -46,37 +58,14 @@ impl TabBar {
             .flex_none()
             .items_center()
             .w_full()
-            .h(Tab::container_height(ui_scale_percent))
-            .bg(theme.colors.surface_bg)
+            .h_full()
             .child(
                 div()
                     .relative()
                     .flex_1()
                     .h_full()
                     .overflow_x_hidden()
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .size_full()
-                            .border_b_1()
-                            .border_color(theme.colors.border),
-                    )
                     .child(tabs),
             )
-            .when(!self.end.is_empty(), |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(0.0))
-                        .h_full()
-                        .border_b_1()
-                        .border_l_1()
-                        .border_color(theme.colors.border)
-                        .children(self.end),
-                )
-            })
     }
 }

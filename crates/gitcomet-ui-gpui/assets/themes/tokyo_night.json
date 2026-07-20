@@ -9,8 +9,10 @@
         "window_bg": "#1a1b26ff",
         "surface_bg": "#1f2335ff",
         "surface_bg_elevated": "#24283bff",
-        "active_section": "#292e42ff",
-        "border": "#414868ff",
+        "active_section": "#2a3050ff",
+        "border": "#2b3047ff",
+        "border_variant": "#ffffff10",
+        "shadow": "#000000ff",
         "tooltip_bg": "#16161eff",
         "tooltip_text": "#c0caf5ff",
         "text": "#c0caf5ff",
@@ -85,9 +87,12 @@
         "lifetime": "#bb9af7ff"
       },
       "radii": {
-        "panel": 2.0,
-        "pill": 2.0,
-        "row": 2.0
+        "panel": 12.0,
+        "pill": 999.0,
+        "row": 8.0,
+        "control": 8.0,
+        "popover": 10.0,
+        "window": 12.0
       }
     }
   ]

@@ -17,9 +17,14 @@ use std::sync::Arc;
 
 use crate::kit::TextInput;
 use crate::kit::TextInputOptions;
+use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
-type FileBrowserRowsCache =
-    std::cell::RefCell<Option<((RepoId, u64), Rc<[FileBrowserVisibleRow]>)>>;
+type FileBrowserRowsCache = std::cell::RefCell<
+    Option<(
+        (RepoId, u64, DiffSearchOptions),
+        Rc<[FileBrowserVisibleRow]>,
+    )>,
+>;
 
 #[derive(Clone, Debug)]
 struct FileBrowserVisibleRow {
@@ -47,6 +52,7 @@ pub(in super::super) struct SidebarPaneView {
     sidebar_request_fingerprint: SidebarRequestFingerprint,
     pub(in super::super) active_context_menu_invoker: Option<SharedString>,
     selected_branch: Option<SelectedBranch>,
+    file_search_options: DiffSearchOptions,
     file_browser_rows_cache: FileBrowserRowsCache,
 }
 
@@ -126,6 +132,7 @@ impl SidebarPaneView {
                 TextInputOptions {
                     placeholder: "Search files...".into(),
                     chromeless: true,
+                    multiline: true,
                     ..Default::default()
                 },
                 cx,
@@ -169,6 +176,7 @@ impl SidebarPaneView {
             sidebar_request_fingerprint: SidebarRequestFingerprint::default(),
             active_context_menu_invoker: None,
             selected_branch: None,
+            file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
@@ -179,6 +187,15 @@ impl SidebarPaneView {
 
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        cx.notify();
+    }
+
+    fn toggle_file_search_option(
+        &mut self,
+        toggle: impl FnOnce(&mut DiffSearchOptions),
+        cx: &mut gpui::Context<Self>,
+    ) {
+        toggle(&mut self.file_search_options);
         cx.notify();
     }
 
@@ -365,20 +382,24 @@ impl SidebarPaneView {
     }
 
     fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
-        let border_color = theme.colors.border;
-        let bg = theme.colors.surface_bg;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let bg = theme.colors.sidebar_bg;
         let mode = self.state.sidebar_mode;
 
         let store_branches = Arc::clone(&self.store);
         let store_files = Arc::clone(&self.store);
+        // `theme.colors.hover` is nearly identical to the sidebar chrome bg,
+        // so use a text-tinted overlay that actually reads on hover.
+        let tab_hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
 
         let branches_tab = div()
             .flex()
             .flex_row()
             .items_center()
-            .px(px(8.0))
-            .py(px(2.0))
-            .h(px(28.0))
+            .px(scaled_px(8.0))
+            .h(scaled_px(22.0))
+            .rounded(px(theme.radii.control))
             .when(mode == SidebarMode::Branches, |d| {
                 d.bg(theme.colors.active_section)
                     .text_color(theme.colors.text)
@@ -387,14 +408,15 @@ impl SidebarPaneView {
                 d.bg(gpui::transparent_black())
                     .text_color(theme.colors.text_muted)
             })
-            .hover(|d| {
+            .hover(move |d| {
                 if mode != SidebarMode::Branches {
-                    d.bg(theme.colors.hover)
+                    d.bg(tab_hover_bg)
                 } else {
                     d
                 }
             })
-            .text_size(px(12.0))
+            .cursor(CursorStyle::PointingHand)
+            .text_size(scaled_px(12.0))
             .child("Branches")
             .on_mouse_down(
                 MouseButton::Left,
@@ -409,9 +431,9 @@ impl SidebarPaneView {
             .flex()
             .flex_row()
             .items_center()
-            .px(px(8.0))
-            .py(px(2.0))
-            .h(px(28.0))
+            .px(scaled_px(8.0))
+            .h(scaled_px(22.0))
+            .rounded(px(theme.radii.control))
             .when(mode == SidebarMode::Files, |d| {
                 d.bg(theme.colors.active_section)
                     .text_color(theme.colors.text)
@@ -420,14 +442,15 @@ impl SidebarPaneView {
                 d.bg(gpui::transparent_black())
                     .text_color(theme.colors.text_muted)
             })
-            .hover(|d| {
+            .hover(move |d| {
                 if mode != SidebarMode::Files {
-                    d.bg(theme.colors.hover)
+                    d.bg(tab_hover_bg)
                 } else {
                     d
                 }
             })
-            .text_size(px(12.0))
+            .cursor(CursorStyle::PointingHand)
+            .text_size(scaled_px(12.0))
             .child("Files")
             .on_mouse_down(
                 MouseButton::Left,
@@ -441,10 +464,11 @@ impl SidebarPaneView {
         div()
             .flex()
             .flex_row()
+            .items_center()
+            .gap(scaled_px(2.0))
             .w_full()
-            .h(px(28.0))
-            .border_b_1()
-            .border_color(border_color)
+            .h(scaled_px(28.0))
+            .px(scaled_px(4.0))
             .bg(bg)
             .child(branches_tab)
             .child(files_tab)
@@ -481,16 +505,14 @@ impl SidebarPaneView {
         .min_h(px(0.0))
         .track_scroll(&self.branches_scroll);
         let list = restrict_scroll_to_vertical_axis(list);
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            self.branches_scroll.clone(),
-            components::ScrollbarAxis::Vertical,
-        );
+        // Rows use the full pane width; the scrollbar overlays them (its track
+        // is transparent, only the thumb paints while scrolling/hovering).
         let list = div()
             .flex_1()
             .min_h(px(0.0))
             .pt(px(SIDEBAR_TOP_INSET_PX))
-            .pl(px(2.0))
-            .pr(px(2.0) + scrollbar_gutter)
+            .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
             .child(list);
         let panel_body: AnyElement = div()
             .id("branch_sidebar_scroll_container")
@@ -505,6 +527,7 @@ impl SidebarPaneView {
                     "branch_sidebar_scrollbar",
                     self.branches_scroll.clone(),
                 )
+                .auto_hide()
                 .render(theme),
             )
             .into_any_element();
@@ -523,42 +546,104 @@ impl SidebarPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let search_options = self.file_search_options;
+        let search_query = self
+            .active_repo()
+            .map(|repo| repo.file_browser.search_query.clone())
+            .unwrap_or_default();
+        let search_error = file_search_matchers(&search_query, search_options)
+            .iter()
+            .any(|matcher| matcher.regex_error().is_some());
+        let option_selected_bg =
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
         let search_bar = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(px(4.0))
-            .py(px(2.0))
-            .border_b_1()
-            .border_color(theme.colors.border)
-            .child(self.file_browser_search_input.clone());
-
-        let source_text =
-            self.active_repo()
-                .map_or("".to_string(), |repo| match &repo.file_browser.source {
-                    gitcomet_core::domain::FileSource::WorkingDirectory => "HEAD".to_string(),
-                    gitcomet_core::domain::FileSource::Commit(commit_id) => {
-                        let hex = commit_id.as_ref();
-                        if hex.len() > 7 {
-                            format!("commit {}", &hex[..7])
-                        } else {
-                            format!("commit {hex}")
-                        }
-                    }
-                    gitcomet_core::domain::FileSource::Branch(name) => {
-                        format!("branch {name}")
-                    }
-                });
-
-        let source_label = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .px(px(8.0))
-            .py(px(2.0))
-            .text_size(px(10.0))
-            .text_color(theme.colors.text_muted)
-            .child(source_text);
+            .px(scaled_px(8.0))
+            .pt(scaled_px(8.0))
+            .pb(scaled_px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .min_h(scaled_px(28.0))
+                    .pl(scaled_px(8.0))
+                    .pr(scaled_px(2.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(if search_error {
+                        theme.colors.danger
+                    } else {
+                        theme.colors.border
+                    })
+                    .bg(theme.colors.surface_bg_elevated)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .py(scaled_px(4.0))
+                            .child(self.file_browser_search_input.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .h(scaled_px(28.0))
+                            .flex()
+                            .items_center()
+                            .child(
+                                components::Button::new("file_search_match_case", "Aa")
+                                    .borderless()
+                                    .style(components::ButtonStyle::Subtle)
+                                    .selected(search_options.match_case)
+                                    .selected_bg(option_selected_bg)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.toggle_file_search_option(
+                                            |options| options.match_case = !options.match_case,
+                                            cx,
+                                        );
+                                    })
+                                    .w(scaled_px(24.0))
+                                    .h(scaled_px(24.0))
+                                    .gitcomet_tooltip(theme, "Match case".into())
+                                    .debug_selector(|| "file_search_match_case".to_string()),
+                            )
+                            .child(
+                                components::Button::new("file_search_whole_word", "W")
+                                    .borderless()
+                                    .style(components::ButtonStyle::Subtle)
+                                    .selected(search_options.whole_word)
+                                    .selected_bg(option_selected_bg)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.toggle_file_search_option(
+                                            |options| options.whole_word = !options.whole_word,
+                                            cx,
+                                        );
+                                    })
+                                    .w(scaled_px(24.0))
+                                    .h(scaled_px(24.0))
+                                    .gitcomet_tooltip(theme, "Match whole word".into())
+                                    .debug_selector(|| "file_search_whole_word".to_string()),
+                            )
+                            .child(
+                                components::Button::new("file_search_regex", ".*")
+                                    .borderless()
+                                    .style(components::ButtonStyle::Subtle)
+                                    .selected(search_options.regex)
+                                    .selected_bg(option_selected_bg)
+                                    .on_click(theme, cx, |this, _e, _w, cx| {
+                                        this.toggle_file_search_option(
+                                            |options| options.regex = !options.regex,
+                                            cx,
+                                        );
+                                    })
+                                    .w(scaled_px(24.0))
+                                    .h(scaled_px(24.0))
+                                    .gitcomet_tooltip(theme, "Use regular expression".into())
+                                    .debug_selector(|| "file_search_regex".to_string()),
+                            ),
+                    ),
+            );
 
         let visible_rows = self.file_browser_visible_rows();
 
@@ -586,16 +671,13 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .track_scroll(&self.file_browser_scroll);
             let list = restrict_scroll_to_vertical_axis(list);
-            let scrollbar_gutter = components::Scrollbar::visible_gutter(
-                self.file_browser_scroll.clone(),
-                components::ScrollbarAxis::Vertical,
-            );
+            // Same overlay-scrollbar treatment as the branches list above.
             let list = div()
                 .flex_1()
                 .min_h(px(0.0))
                 .pt(px(2.0))
-                .pl(px(2.0))
-                .pr(px(2.0) + scrollbar_gutter)
+                .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
                 .child(list);
             div()
                 .id("file_browser_scroll_container")
@@ -610,6 +692,7 @@ impl SidebarPaneView {
                         "file_browser_scrollbar",
                         self.file_browser_scroll.clone(),
                     )
+                    .auto_hide()
                     .render(theme),
                 )
                 .into_any_element()
@@ -626,7 +709,6 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .when(browsing_commit, |d| d.border_2().border_color(purple))
             .child(search_bar)
-            .child(source_label)
             .child(body)
             .into_any()
     }
@@ -639,7 +721,11 @@ impl SidebarPaneView {
         // Key on the repo id too: file_browser_rev is a per-repo counter, so two
         // repos can share a value and collide otherwise (stale rows for the wrong
         // tree after switching repos).
-        let cache_key = (repo.id, repo.file_browser.file_browser_rev);
+        let cache_key = (
+            repo.id,
+            repo.file_browser.file_browser_rev,
+            self.file_search_options,
+        );
         let mut cache = self.file_browser_rows_cache.borrow_mut();
         if let Some((cached_key, cached_rows)) = cache.as_ref()
             && *cached_key == cache_key
@@ -657,8 +743,9 @@ impl SidebarPaneView {
             return Vec::new();
         };
 
-        let has_search = !repo.file_browser.search_query.is_empty();
-        let search_query = repo.file_browser.search_query.to_lowercase();
+        let matchers =
+            file_search_matchers(&repo.file_browser.search_query, self.file_search_options);
+        let has_search = !matchers.is_empty();
 
         if has_search {
             let mut matching_entry_indices: std::collections::HashSet<usize> =
@@ -667,8 +754,8 @@ impl SidebarPaneView {
                 std::collections::HashSet::new();
 
             for (i, entry) in entries.iter().enumerate() {
-                let path_str = entry.path.to_string_lossy().to_lowercase();
-                if path_str.contains(&search_query) {
+                let path_str = entry.path.to_string_lossy();
+                if file_search_matches(&matchers, path_str.as_ref()) {
                     matching_entry_indices.insert(i);
                     let mut parent = entry.path.parent();
                     while let Some(p) = parent {
@@ -759,8 +846,8 @@ impl SidebarPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        const INDENT_STEP_PX: f32 = 12.0;
-        const CHEVRON_SLOT_PX: f32 = 14.0;
+        const INDENT_STEP_PX: f32 = 8.0;
+        const CHEVRON_SLOT_PX: f32 = 12.0;
         const ICON_SLOT_PX: f32 = 16.0;
         const ROW_HEIGHT_PX: f32 = 22.0;
 
@@ -780,6 +867,12 @@ impl SidebarPaneView {
         let icon_color = theme.colors.text_muted;
         let text_color = theme.colors.text;
         let store = Arc::clone(&this.store);
+        let search_matchers = this
+            .active_repo()
+            .map(|repo| {
+                file_search_matchers(&repo.file_browser.search_query, this.file_search_options)
+            })
+            .unwrap_or_default();
 
         let visible_rows = this.file_browser_visible_rows();
         let repo = this.active_repo();
@@ -816,13 +909,14 @@ impl SidebarPaneView {
         };
 
         let icon_slot = |path: &'static str| {
+            let tint = file_icons::file_icon_color(path, theme.is_dark).unwrap_or(icon_color);
             div()
                 .w(scaled_px(ICON_SLOT_PX))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(svg_icon(path, icon_color, 12.0))
+                .child(svg_icon(path, tint, 12.0))
         };
 
         range
@@ -832,7 +926,7 @@ impl SidebarPaneView {
                     .and_then(|row| entries.get(row.entry_index).map(|e| (ix, row, e)))
             })
             .map(|(ix, row, entry)| {
-                let left_pad = scaled_px(INDENT_STEP_PX * row.depth as f32);
+                let left_pad = scaled_px(6.0 + INDENT_STEP_PX * row.depth as f32);
                 let store = Arc::clone(&store);
 
                 let mut row_div = div()
@@ -843,6 +937,8 @@ impl SidebarPaneView {
                     .h(scaled_px(ROW_HEIGHT_PX))
                     .w_full()
                     .pl(left_pad)
+                    .pr_2()
+                    .gap(scaled_px(4.0))
                     .cursor_pointer()
                     .rounded(px(theme.radii.row))
                     .hover(|d| d.bg(theme.colors.hover));
@@ -895,17 +991,25 @@ impl SidebarPaneView {
                 row_div
                     .child(chevron_slot(row.is_directory, row.is_expanded))
                     .child(icon_slot(file_or_folder_icon_path(entry, row.is_expanded)))
-                    .child(
-                        div()
-                            .flex_1()
+                    .child({
+                        let highlight_ranges =
+                            file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
+                        let mut label = components::TruncatedText::new(entry.name.to_string())
+                            .profile(components::TextTruncationProfile::End)
                             .text_color(text_color)
-                            .text_size(scaled_px(11.5))
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .ml(scaled_px(4.0))
-                            .child(entry.name.clone()),
-                    )
+                            .text_sm();
+                        if !highlight_ranges.is_empty() {
+                            let style = gpui::HighlightStyle {
+                                color: Some(theme.colors.accent.into()),
+                                font_weight: Some(FontWeight::BOLD),
+                                ..gpui::HighlightStyle::default()
+                            };
+                            label = label.highlights(
+                                highlight_ranges.into_iter().map(|range| (range, style)),
+                            );
+                        }
+                        div().flex_1().min_w(px(0.0)).child(label.render(cx))
+                    })
                     .into_any_element()
             })
             .collect()
@@ -1019,6 +1123,115 @@ fn active_workspace_badges_fingerprint(state: &AppState) -> (usize, u64) {
     }
 
     (badges.len(), hasher.finish())
+}
+
+/// One matcher per non-empty query line: lines are OR-alternatives, so a
+/// multiline query (via the newline button / Shift+Enter) filters by any of
+/// several patterns at once.
+fn file_search_matchers(query: &str, options: DiffSearchOptions) -> Vec<DiffSearchMatcher> {
+    query
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| DiffSearchMatcher::new(line, options))
+        .collect()
+}
+
+fn file_search_matches(matchers: &[DiffSearchMatcher], haystack: &str) -> bool {
+    matchers.iter().any(|matcher| matcher.is_match(haystack))
+}
+
+/// Sorted, de-overlapped match ranges across all query lines, for label
+/// highlighting in the results.
+fn file_search_highlight_ranges(
+    matchers: &[DiffSearchMatcher],
+    name: &str,
+) -> Vec<std::ops::Range<usize>> {
+    const MAX_NAME_HIGHLIGHTS: usize = 16;
+    let mut ranges = Vec::new();
+    let mut buf = Vec::new();
+    for matcher in matchers {
+        matcher.find_ranges_into(name, &mut buf, MAX_NAME_HIGHLIGHTS);
+        ranges.extend(buf.iter().cloned());
+    }
+    ranges.sort_by_key(|range| (range.start, range.end));
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(last) = merged.last_mut()
+            && range.start <= last.end
+        {
+            last.end = last.end.max(range.end);
+        } else {
+            merged.push(range);
+        }
+    }
+    merged
+}
+
+#[cfg(test)]
+mod file_search_tests {
+    use super::*;
+
+    fn options(match_case: bool, whole_word: bool, regex: bool) -> DiffSearchOptions {
+        DiffSearchOptions {
+            match_case,
+            whole_word,
+            regex,
+        }
+    }
+
+    #[test]
+    fn default_search_is_case_insensitive_substring() {
+        let matchers = file_search_matchers("Read", options(false, false, false));
+        assert!(file_search_matches(&matchers, "src/reader.rs"));
+        assert!(file_search_matches(&matchers, "README.md"));
+        assert!(!file_search_matches(&matchers, "src/writer.rs"));
+    }
+
+    #[test]
+    fn match_case_narrows_matches() {
+        let matchers = file_search_matchers("READ", options(true, false, false));
+        assert!(file_search_matches(&matchers, "README.md"));
+        assert!(!file_search_matches(&matchers, "src/reader.rs"));
+    }
+
+    #[test]
+    fn whole_word_requires_boundaries() {
+        let matchers = file_search_matchers("read", options(false, true, false));
+        assert!(file_search_matches(&matchers, "src/read.rs"));
+        assert!(!file_search_matches(&matchers, "src/reader.rs"));
+    }
+
+    #[test]
+    fn regex_mode_matches_patterns_and_reports_errors() {
+        let matchers = file_search_matchers(r"re.d\.rs$", options(false, false, true));
+        assert!(file_search_matches(&matchers, "src/read.rs"));
+        assert!(!file_search_matches(&matchers, "src/read.rs.bak"));
+
+        let broken = file_search_matchers("re(", options(false, false, true));
+        assert!(broken[0].regex_error().is_some());
+        assert!(!file_search_matches(&broken, "src/re(.rs"));
+    }
+
+    #[test]
+    fn each_query_line_is_an_alternative() {
+        let matchers = file_search_matchers("reader\nwriter\n\n", options(false, false, false));
+        assert_eq!(matchers.len(), 2);
+        assert!(file_search_matches(&matchers, "src/reader.rs"));
+        assert!(file_search_matches(&matchers, "src/writer.rs"));
+        assert!(!file_search_matches(&matchers, "src/printer.rs"));
+    }
+
+    #[test]
+    fn highlight_ranges_are_sorted_and_merged() {
+        let matchers = file_search_matchers("read\neader", options(false, false, false));
+        let ranges = file_search_highlight_ranges(&matchers, "reader.rs");
+        assert_eq!(ranges, vec![0..6]);
+
+        let matchers = file_search_matchers("r", options(false, false, false));
+        let ranges = file_search_highlight_ranges(&matchers, "reader.rs");
+        assert_eq!(ranges, vec![0..1, 5..6, 7..8]);
+    }
 }
 
 #[cfg(test)]

@@ -1,11 +1,17 @@
 use super::*;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
 
+type InteractiveRebaseSourceColor = (String, u8);
+type MultiCherryPickPlan = (
+    Vec<InteractiveRebaseEntry>,
+    Vec<InteractiveRebaseSourceColor>,
+);
+
 fn multi_cherry_pick_plan(
     this: &PopoverHost,
     repo_id: RepoId,
     commit_id: &CommitId,
-) -> Option<(Vec<InteractiveRebaseEntry>, Vec<(String, u8)>)> {
+) -> Option<MultiCherryPickPlan> {
     let repo = this.active_repo().filter(|repo| repo.id == repo_id)?;
     let selection = &repo.history_state.multi_selection;
     if !(selection.is_multi() && selection.contains(commit_id)) {

@@ -2012,11 +2012,16 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         .filter(|c| !c.is_whitespace())
         .collect();
 
+    // The repo tabs bar lives inside the title bar since the browser-style
+    // chrome merge, so its cache boundary is the title bar mount in mod.rs.
+    let root_source = include_str!("mod.rs");
+    let normalized_root: String = root_source.chars().filter(|c| !c.is_whitespace()).collect();
+
     assert!(
-        normalized.contains(
-            "stable_cached_fixed_height_view(self.repo_tabs_bar.clone(),components::Tab::container_height("
+        normalized_root.contains(
+            "stable_cached_fixed_height_view(self.title_bar.clone(),chrome::title_bar_height("
         ),
-        "expected repo tabs bar to stay behind the stable cache boundary"
+        "expected the title bar (hosting the repo tabs bar) to stay behind the stable cache boundary"
     );
     assert!(
         normalized.contains(

@@ -84,7 +84,6 @@ impl DiffSearchMatcher {
         !self.options.regex && !self.query.contains('\n')
     }
 
-    #[cfg(test)]
     pub(in crate::view) fn is_match(&self, haystack: &str) -> bool {
         self.find_range_at_or_after(haystack, 0).is_some()
     }

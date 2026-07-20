@@ -341,7 +341,11 @@ pub(crate) fn build_repo_switch_repo_state(
                 "Synthetic selected commit for {}",
                 repo.spec.workdir.display()
             ),
+            author_name: String::new(),
+            author_email: String::new(),
+            authored_at_unix: 0,
             committed_at: "2023-11-14 22:13".to_string(),
+            committed_at_unix: 0,
             parent_ids: selected_commit.parent_ids.to_vec(),
             files: (0..48)
                 .map(|ix| CommitFileChange {
@@ -352,6 +356,8 @@ pub(crate) fn build_repo_switch_repo_state(
                         FileStatusKind::Modified
                     },
                     is_submodule: false,
+                    additions: None,
+                    deletions: None,
                 })
                 .collect(),
         }));
@@ -810,13 +816,19 @@ pub(crate) fn build_synthetic_commit_details_with_message(
             path,
             kind,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         });
     }
 
     CommitDetails {
         id,
         message,
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
         committed_at: "2024-01-01T00:00:00Z".to_string(),
+        committed_at_unix: 0,
         parent_ids: vec![CommitId("c".repeat(40).into())],
         files: out,
     }
@@ -864,12 +876,18 @@ pub(crate) fn build_synthetic_commit_details_unique_paths(
             path,
             kind,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         });
     }
     CommitDetails {
         id,
         message: "Synthetic commit details with unique paths for cache churn benchmark".to_string(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
         committed_at: "2024-01-01T00:00:00Z".to_string(),
+        committed_at_unix: 0,
         parent_ids: vec![CommitId("d".repeat(40).into())],
         files: out,
     }

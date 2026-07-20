@@ -41,30 +41,32 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 
 # External crates
 alacritty_terminal = "0.26"
-clap = { version = "4.6.1", features = ["derive"] }
+clap = { version = "4.6.2", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
-futures = "0.3.32"
+futures = "0.3.33"
 gix = { version = "0.85.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "b7a78f8541c04528bb6c2db68174e3a128716dba" }
-gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "b7a78f8541c04528bb6c2db68174e3a128716dba", features = ["font-kit"] }
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "e76c07448f035933b580046a022f9903bac24fa1" }
+gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "e76c07448f035933b580046a022f9903bac24fa1", features = ["font-kit"] }
 image = "0.25.10"
+# Already in the tree via gix-date; used directly for system-timezone lookups.
+jiff = "0.2"
 libc = "0.2"
 lru = "0.18"
-memchr = "2.8.2"
+memchr = "2.8.3"
 mimalloc = "0.1.52"
 parking_lot = "0.12"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
-regex = "1.12.4"
+regex = "1.13.1"
 resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
-rustc-hash = "2.1.2"
+rustc-hash = "2.1.3"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
 semver = "1.0.28"
 schemars = "1.2.1"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 smallvec = "1.15.2"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
@@ -72,7 +74,7 @@ strsim = "0.11.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.10"
+tree-sitter = "0.26.11"
 tree-sitter-bash = "0.25.1"
 tree-sitter-bicep = "1.1.0"
 tree-sitter-c = "0.24.2"
@@ -81,7 +83,7 @@ tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev 
 tree-sitter-css = "0.25.0"
 tree-sitter-dart = "0.2.0"
 tree-sitter-diff = "0.1.0"
-tree-sitter-fsharp = "0.3.0"
+tree-sitter-fsharp = "0.3.1"
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-go = "0.25.0"
 tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a", package = "tree-sitter-gomod" }

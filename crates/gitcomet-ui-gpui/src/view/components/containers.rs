@@ -71,6 +71,24 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .child(label.into())
 }
 
+/// Empty placeholder for a section whose header already names it — just the
+/// centered muted message, no duplicated title.
+pub fn empty_state_message(theme: AppTheme, message: impl Into<SharedString>) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .px_2()
+        .py_4()
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child(message.into()),
+        )
+}
+
 pub fn empty_state(
     theme: AppTheme,
     title: impl Into<SharedString>,
@@ -114,10 +132,6 @@ pub fn split_columns_header(
         .items_center()
         .text_xs()
         .text_color(theme.colors.text_muted)
-        .bg(theme.colors.surface_bg_elevated)
-        .border_b_1()
-        .border_color(theme.colors.border)
         .child(div().flex_1().min_w(px(0.0)).px_2().child(left.into()))
-        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
         .child(div().flex_1().min_w(px(0.0)).px_2().child(right.into()))
 }

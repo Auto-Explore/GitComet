@@ -16,6 +16,72 @@ fn commit_allowed(is_merge_active: bool, staged_count: usize) -> bool {
     staged_count > 0 || is_merge_active
 }
 
+/// Author identity block: avatar + name + muted email, with the authored date
+/// as a relative label (absolute date lives in the "Commit date" row below).
+fn commit_details_author_row(
+    theme: AppTheme,
+    ui_scale: crate::ui_scale::UiScale,
+    details: &gitcomet_core::domain::CommitDetails,
+) -> Option<Div> {
+    if details.author_name.is_empty() && details.author_email.is_empty() {
+        return None;
+    }
+    let display_name = if details.author_name.is_empty() {
+        details.author_email.clone()
+    } else {
+        details.author_name.clone()
+    };
+    let authored_relative = (details.authored_at_unix != 0).then(|| {
+        crate::view::date_time::format_relative_time(
+            details.authored_at_unix,
+            std::time::SystemTime::now(),
+        )
+    });
+
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .min_w(px(0.0))
+            .child(components::author_avatar(theme, ui_scale, &display_name))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(display_name),
+                    )
+                    .when(!details.author_email.is_empty(), |column| {
+                        column.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .child(details.author_email.clone()),
+                        )
+                    }),
+            )
+            .when_some(authored_relative, |row, relative| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .child(relative),
+                )
+            }),
+    )
+}
+
 const MULTI_COMMIT_ROW_HEIGHT_PX: f32 = 44.0;
 
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
@@ -41,6 +107,41 @@ fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
         .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
         .child(value)
         .into_any_element()
+}
+
+/// Emphasis for the commit message's summary line (everything before the first
+/// newline), skipping stretches already claimed by SHA-link highlights so the
+/// resulting highlight set stays sorted and non-overlapping.
+fn commit_message_summary_highlights(
+    message: &str,
+    theme: AppTheme,
+    sha_highlights: &[TextHighlight],
+) -> TextHighlights {
+    let summary_end = message.find('\n').unwrap_or(message.len());
+    if summary_end == 0 {
+        return Vec::new();
+    }
+    let style = gpui::HighlightStyle {
+        color: Some(theme.colors.emphasis_text.into()),
+        font_weight: Some(FontWeight::SEMIBOLD),
+        ..gpui::HighlightStyle::default()
+    };
+
+    let mut out = Vec::new();
+    let mut cursor = 0usize;
+    for (range, _) in sha_highlights
+        .iter()
+        .filter(|(range, _)| range.start < summary_end)
+    {
+        if range.start > cursor {
+            out.push((cursor..range.start.min(summary_end), style));
+        }
+        cursor = cursor.max(range.end);
+    }
+    if cursor < summary_end {
+        out.push((cursor..summary_end, style));
+    }
+    out
 }
 
 fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
@@ -72,36 +173,6 @@ fn commit_message_sha_highlights(message: &str, theme: AppTheme) -> CommitMessag
         .collect::<Vec<_>>();
 
     (highlights, Arc::from(links))
-}
-
-/// Bold highlights for the message's summary line, so it reads as a title
-/// over the description below. SHA-link ranges keep their own style: the
-/// summary is bolded around them, since the run builder expects
-/// non-overlapping highlight ranges.
-fn commit_message_summary_highlights(
-    message: &str,
-    occupied: &[(Range<usize>, gpui::HighlightStyle)],
-) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let summary_end = message.find('\n').unwrap_or(message.len());
-    let bold = gpui::HighlightStyle {
-        font_weight: Some(gpui::FontWeight::BOLD),
-        ..gpui::HighlightStyle::default()
-    };
-    let mut highlights = Vec::new();
-    let mut cursor = 0usize;
-    for (range, _) in occupied {
-        if range.start >= summary_end {
-            break;
-        }
-        if range.start > cursor {
-            highlights.push((cursor..range.start, bold));
-        }
-        cursor = cursor.max(range.end);
-    }
-    if cursor < summary_end {
-        highlights.push((cursor..summary_end, bold));
-    }
-    highlights
 }
 
 fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
@@ -587,12 +658,14 @@ impl DetailsPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let (mut highlights, links) = commit_message_sha_highlights(message, theme);
-        highlights.extend(commit_message_summary_highlights(message, &highlights));
+        let mut merged = commit_message_summary_highlights(message, theme, &highlights);
+        merged.append(&mut highlights);
+        merged.sort_by_key(|(range, _)| range.start);
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
-            input.set_highlights(highlights, cx);
+            input.set_highlights(merged, cx);
         });
         self.commit_details_message_sha_menu.update(cx, |menu, cx| {
             menu.sync(
@@ -678,11 +751,12 @@ impl DetailsPaneView {
         message: &str,
         cx: &mut gpui::Context<Self>,
     ) {
+        let theme = self.theme;
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
-            input.set_highlights(commit_message_summary_highlights(message, &[]), cx);
+            input.set_highlights(commit_message_summary_highlights(message, theme, &[]), cx);
         });
         self.commit_details_message_sha_menu.update(cx, |menu, cx| {
             menu.sync(
@@ -943,9 +1017,6 @@ impl DetailsPaneView {
                 .justify_between()
                 .h(components::control_height_md(ui_scale))
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_b_1()
-                .border_color(theme.colors.border)
                 .child(
                     div()
                         .flex_1()
@@ -1076,7 +1147,7 @@ impl DetailsPaneView {
                             );
                             Self::sync_commit_details_input_value(
                                 &self.commit_details_date_input,
-                                details.committed_at.as_str(),
+                                self.commit_details_date_display(details).as_str(),
                                 cx,
                             );
                             self.sync_commit_details_parent_input(
@@ -1133,6 +1204,9 @@ impl DetailsPaneView {
                                         .w_full()
                                         .min_w(px(0.0))
                                         .child(message)
+                                        .children(commit_details_author_row(
+                                            theme, ui_scale, details,
+                                        ))
                                         .child(commit_details_selectable_row(
                                             theme,
                                             "Commit SHA",
@@ -1163,11 +1237,17 @@ impl DetailsPaneView {
                                         .flex_1()
                                         .h_full()
                                         .min_h(commit_files_section_min_height)
+                                        .border_t_1()
+                                        .border_color(theme.colors.border_variant)
+                                        .pt_2()
                                         .child(
                                             div()
                                                 .text_sm()
                                                 .text_color(theme.colors.text_muted)
-                                                .child("Committed files"),
+                                                .child(format!(
+                                                    "Committed files ({})",
+                                                    details.files.len()
+                                                )),
                                         )
                                         .child(files),
                                 )
@@ -1245,7 +1325,7 @@ impl DetailsPaneView {
                         );
                         Self::sync_commit_details_input_value(
                             &self.commit_details_date_input,
-                            details.committed_at.as_str(),
+                            self.commit_details_date_display(details).as_str(),
                             cx,
                         );
                         self.sync_commit_details_sha_menu(
@@ -1309,6 +1389,7 @@ impl DetailsPaneView {
                                     .w_full()
                                     .min_w(px(0.0))
                                     .child(message)
+                                    .children(commit_details_author_row(theme, ui_scale, details))
                                     .child(commit_details_selectable_row(
                                         theme,
                                         "Commit SHA",
@@ -1341,11 +1422,13 @@ impl DetailsPaneView {
                                     .flex_1()
                                     .h_full()
                                     .min_h(commit_files_section_min_height)
+                                    .border_t_1()
+                                    .border_color(theme.colors.border_variant)
+                                    .pt_2()
                                     .child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(theme.colors.text_muted)
-                                            .child("Committed files"),
+                                        div().text_sm().text_color(theme.colors.text_muted).child(
+                                            format!("Committed files ({})", details.files.len()),
+                                        ),
                                     )
                                     .child(files),
                             )
@@ -1718,9 +1801,6 @@ impl DetailsPaneView {
                 .justify_between()
                 .h(components::control_height_md(ui_scale_percent))
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_b_1()
-                .border_color(theme.colors.border)
                 .child(title)
                 .when(show_action, |d| d.child(action))
                 .into_any_element()
@@ -1810,33 +1890,33 @@ impl DetailsPaneView {
         };
 
         let unstaged_body = if unstaged_loading {
-            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if unstaged_count == 0 {
-            components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
+            components::empty_state_message(theme, "No unstaged changes.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::CombinedUnstaged, unstaged_count)
         };
 
         let untracked_body = if untracked_loading {
-            components::empty_state(theme, "Untracked", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if untracked_count == 0 {
-            components::empty_state(theme, "Untracked", "No untracked files.").into_any_element()
+            components::empty_state_message(theme, "No untracked files.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Untracked, untracked_count)
         };
 
         let split_unstaged_body = if split_unstaged_loading {
-            components::empty_state(theme, "Unstaged", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if split_unstaged_count == 0 {
-            components::empty_state(theme, "Unstaged", "Clean.").into_any_element()
+            components::empty_state_message(theme, "No unstaged changes.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Unstaged, split_unstaged_count)
         };
 
         let staged_list = if staged_loading {
-            components::empty_state(theme, "Staged", "Loading").into_any_element()
+            components::empty_state_message(theme, "Loading…").into_any_element()
         } else if staged_count == 0 {
-            components::empty_state(theme, "Staged", "No staged changes.").into_any_element()
+            components::empty_state_message(theme, "Nothing staged yet.").into_any_element()
         } else {
             self.status_list(cx, StatusSection::Staged, staged_count)
         };
@@ -1903,20 +1983,25 @@ impl DetailsPaneView {
             )
         };
 
+        let active_status_resize = self.status_section_resize;
         let build_status_resize_handle = |id: &'static str, handle: StatusSectionResizeHandle| {
+            let dragging = active_status_resize.is_some_and(|state| state.handle == handle);
             div()
                 .id(id)
                 .debug_selector(move || id.to_string())
+                .group(id)
                 .w_full()
                 .h(resize_handle_h)
                 .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
                 .cursor(CursorStyle::ResizeUpDown)
-                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
-                .active(move |s| s.bg(theme.colors.active))
-                .child(div().h(px(1.0)).w_full().bg(theme.colors.border))
+                .child(components::resize_grip(
+                    theme,
+                    ui_scale,
+                    id,
+                    components::ResizeGripAxis::Horizontal,
+                    dragging,
+                    Some(theme.colors.border),
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -2206,15 +2291,7 @@ impl DetailsPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .child(status_sections)
-                    .child(
-                        div()
-                            .border_t_1()
-                            .border_color(theme.colors.border)
-                            .bg(theme.colors.surface_bg)
-                            .px_2()
-                            .py_2()
-                            .child(self.commit_box(cx)),
-                    )
+                    .child(div().px_2().py_2().child(self.commit_box(cx)))
                     .into_any_element()
             } else {
                 components::empty_state(theme, "Changes", "No repository selected.")
@@ -2231,7 +2308,8 @@ impl DetailsPaneView {
     ) -> AnyElement {
         let theme = self.theme;
         if count == 0 {
-            return components::empty_state(theme, "Status", "Clean.").into_any_element();
+            return components::empty_state_message(theme, "Working tree clean.")
+                .into_any_element();
         }
         match section {
             StatusSection::CombinedUnstaged => {

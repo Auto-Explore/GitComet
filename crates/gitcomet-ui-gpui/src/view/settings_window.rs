@@ -6,7 +6,10 @@ use gitcomet_core::process::{
 };
 use gitcomet_state::model::{DefaultTagType, GitLogTagFetchMode};
 use gitcomet_state::session::ExternalCodeEditorSetting;
-use gpui::{Stateful, TitlebarOptions, WindowBounds, WindowDecorations, WindowOptions};
+use gpui::{
+    Stateful, TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
+    WindowOptions,
+};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -286,6 +289,7 @@ pub(crate) struct SettingsWindowView {
     history_show_author: bool,
     history_show_date: bool,
     history_show_sha: bool,
+    history_relative_dates: bool,
     history_show_tags: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
@@ -386,6 +390,13 @@ fn settings_window_options_for_scale(
         titlebar: Some(settings_window_titlebar_options_for_scale(ui_scale_percent)),
         app_id: Some("gitcomet-settings".into()),
         window_decorations: Some(WindowDecorations::Client),
+        // Match the main window: the area outside the rounded client frame
+        // must be see-through.
+        window_background: if cfg!(target_os = "macos") {
+            WindowBackgroundAppearance::Opaque
+        } else {
+            WindowBackgroundAppearance::Transparent
+        },
         is_movable: true,
         is_resizable: true,
         ..Default::default()
@@ -653,6 +664,7 @@ impl SettingsWindowView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
+        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
@@ -851,6 +863,7 @@ impl SettingsWindowView {
             history_show_author,
             history_show_date,
             history_show_sha,
+            history_relative_dates,
             history_show_tags,
             history_tag_fetch_mode,
             default_history_mode,
@@ -932,6 +945,7 @@ impl SettingsWindowView {
             history_show_author: Some(self.history_show_author),
             history_show_date: Some(self.history_show_date),
             history_show_sha: Some(self.history_show_sha),
+            history_relative_dates: Some(self.history_relative_dates),
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
@@ -1664,6 +1678,19 @@ impl SettingsWindowView {
         cx.notify();
     }
 
+    fn set_history_relative_dates(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.history_relative_dates == enabled {
+            return;
+        }
+
+        self.history_relative_dates = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_relative_dates(enabled, cx);
+        });
+        cx.notify();
+    }
+
     fn set_history_show_tags(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
         if self.history_show_tags == enabled {
             return;
@@ -1776,14 +1803,16 @@ impl SettingsWindowView {
             .child(
                 div()
                     .w(px(16.0))
-                    .text_sm()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(if selected {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .child(if selected { ">" } else { " " }),
+                    // Match the label's line box so the check mark centers on
+                    // the first text line instead of hugging the row's top.
+                    .h(px(20.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(selected, |d| {
+                        d.child(svg_icon("icons/check.svg", theme.colors.accent, px(12.0)))
+                    }),
             )
             .child(
                 div()
@@ -1792,7 +1821,13 @@ impl SettingsWindowView {
                     .flex()
                     .flex_col()
                     .gap_0p5()
-                    .child(div().text_sm().text_color(text_color).child(label.into()))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(px(20.0))
+                            .text_color(text_color)
+                            .child(label.into()),
+                    )
                     .when_some(detail, |this, detail| {
                         this.child(
                             div()
@@ -1860,14 +1895,12 @@ impl SettingsWindowView {
             .child(
                 div()
                     .w(px(16.0))
-                    .text_sm()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(if selected {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.text_muted
-                    })
-                    .child(if selected { ">" } else { " " }),
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(selected, |d| {
+                        d.child(svg_icon("icons/check.svg", theme.colors.accent, px(12.0)))
+                    }),
             )
             .child(
                 div()
@@ -2039,12 +2072,15 @@ impl SettingsWindowView {
                             .overflow_hidden()
                             .child(value),
                     )
-                    .child(
-                        div()
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .flex_shrink_0()
-                            .child(if expanded { "^" } else { "v" }),
-                    ),
+                    .child(div().flex_shrink_0().child(svg_icon(
+                        if expanded {
+                            "icons/chevron_down.svg"
+                        } else {
+                            "icons/arrow_right.svg"
+                        },
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))),
             )
     }
 
@@ -2089,24 +2125,32 @@ impl SettingsWindowView {
             .child(
                 div()
                     .debug_selector(move || value_debug_id.clone())
-                    .min_w(px(0.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .justify_end()
-                    .overflow_hidden()
                     .child(
+                        // Toggle-switch visual; the whole row stays the click
+                        // target, so this carries no handlers of its own.
                         div()
-                            .min_w(px(0.0))
-                            .text_sm()
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_color(if enabled {
-                                theme.colors.success
-                            } else {
-                                theme.colors.text_muted
+                            .w(px(28.0))
+                            .h(px(16.0))
+                            .rounded(px(theme.radii.pill))
+                            .flex()
+                            .items_center()
+                            .p(px(2.0))
+                            .when(enabled, |track| track.justify_end().bg(theme.colors.accent))
+                            .when(!enabled, |track| {
+                                track.justify_start().bg(with_alpha(
+                                    theme.colors.text_muted,
+                                    if theme.is_dark { 0.35 } else { 0.30 },
+                                ))
                             })
-                            .child(if enabled { "On" } else { "Off" }),
+                            .child(
+                                div()
+                                    .size(px(12.0))
+                                    .rounded(px(theme.radii.pill))
+                                    .bg(gpui::rgba(0xFFFFFFF2)),
+                            ),
                     ),
             )
     }
@@ -2225,12 +2269,11 @@ impl SettingsWindowView {
                             .overflow_hidden()
                             .child(value),
                     )
-                    .child(
-                        div()
-                            .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .flex_shrink_0()
-                            .child("->"),
-                    ),
+                    .child(svg_icon(
+                        "icons/open_external.svg",
+                        theme.colors.accent,
+                        px(13.0),
+                    )),
             )
     }
 
@@ -2751,7 +2794,7 @@ impl SettingsWindowView {
             .rounded(px(theme.radii.panel))
             .border_1()
             .border_color(theme.colors.border)
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface_bg)
             .p_2()
             .gap_1()
             .child(
@@ -2874,14 +2917,12 @@ impl Render for SettingsWindowView {
                     .child(SETTINGS_WINDOW_TITLE),
             );
 
-        let min_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
-        let min_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let min = chrome::titlebar_control_button(
-            theme,
+            self.ui_scale_percent,
             "settings_window_min_btn",
-            chrome::titlebar_control_icon("icons/generic_minimize.svg", theme.colors.accent),
-            min_hover,
-            min_active,
+            "icons/generic_minimize.svg",
+            theme.colors.text_muted,
+            theme.colors.text,
         )
         .id("settings_window_min")
         .debug_selector(|| "settings_window_min".to_string())
@@ -2896,14 +2937,12 @@ impl Render for SettingsWindowView {
         } else {
             "icons/generic_maximize.svg"
         };
-        let max_hover = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.08 });
-        let max_active = with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.12 });
         let max = chrome::titlebar_control_button(
-            theme,
+            self.ui_scale_percent,
             "settings_window_max_btn",
-            chrome::titlebar_control_icon(max_icon, theme.colors.accent),
-            max_hover,
-            max_active,
+            max_icon,
+            theme.colors.text_muted,
+            theme.colors.text,
         )
         .id("settings_window_max")
         .debug_selector(|| "settings_window_max".to_string())
@@ -2914,14 +2953,12 @@ impl Render for SettingsWindowView {
             cx.notify();
         }));
 
-        let close_hover = with_alpha(theme.colors.danger, if theme.is_dark { 0.45 } else { 0.28 });
-        let close_active = with_alpha(theme.colors.danger, if theme.is_dark { 0.60 } else { 0.40 });
         let close = chrome::titlebar_control_button(
-            theme,
+            self.ui_scale_percent,
             "settings_window_close_btn",
-            chrome::titlebar_control_icon("icons/generic_close.svg", theme.colors.danger),
-            close_hover,
-            close_active,
+            "icons/generic_close.svg",
+            theme.colors.text_muted,
+            theme.colors.danger,
         )
         .id("settings_window_close_btn")
         .debug_selector(|| "settings_window_close".to_string())
@@ -2931,6 +2968,7 @@ impl Render for SettingsWindowView {
             window.remove_window();
         }));
 
+        let frame_rounding = chrome::client_frame_corner_rounding(theme, window);
         let header = div()
             .id("settings_window_header")
             .h(chrome::title_bar_height(self.ui_scale_percent))
@@ -2940,6 +2978,13 @@ impl Render for SettingsWindowView {
             .border_b_1()
             .border_color(header_border)
             .bg(header_bg)
+            .when_some(
+                chrome::client_frame_corner_rounding(theme, window),
+                |d, rounding| {
+                    d.when(rounding.top_left, |d| d.rounded_tl(rounding.radius))
+                        .when(rounding.top_right, |d| d.rounded_tr(rounding.radius))
+                },
+            )
             .child(drag_region)
             .when(!is_macos, |this| {
                 this.child(
@@ -3221,6 +3266,17 @@ impl Render for SettingsWindowView {
                         )
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::GitLogColumns, cx);
+                        }));
+
+    let relative_dates_row = self
+                        .toggle_row(
+                            "settings_window_git_log_relative_dates",
+                            "Relative dates in history view",
+                            self.history_relative_dates,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_history_relative_dates(!this.history_relative_dates, cx);
                         }));
 
                     let show_history_tags_row = self
@@ -4201,6 +4257,7 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    git_log_card = git_log_card.child(relative_dates_row);
                     git_log_card = git_log_card.child(show_history_tags_row);
                     if self.history_show_tags {
                         git_log_card = git_log_card.child(auto_fetch_tags_row);
@@ -4458,7 +4515,7 @@ impl Render for SettingsWindowView {
                             self.link_row(
                                 "settings_window_links_theme_guide",
                                 "Theme guide",
-                                THEMES_GUIDE_URL.into(),
+                                "docs/themes.md".into(),
                                 theme,
                             )
                             .on_click(|_, _, cx| {
@@ -4469,7 +4526,7 @@ impl Render for SettingsWindowView {
                             self.link_row(
                                 "settings_window_github",
                                 "GitHub",
-                                GITHUB_URL.into(),
+                                "Auto-Explore/GitComet".into(),
                                 theme,
                             )
                             .on_click(|_, _, cx| {
@@ -4491,7 +4548,7 @@ impl Render for SettingsWindowView {
                             self.link_row(
                                 "settings_window_professional_edition_waitlist",
                                 "Professional Edition waitlist",
-                                EDITIONS_URL.into(),
+                                "gitcomet.dev".into(),
                                 theme,
                             )
                             .on_click(|_, _, cx| {
@@ -4731,6 +4788,10 @@ impl Render for SettingsWindowView {
             .flex()
             .flex_col()
             .bg(theme.colors.window_bg)
+            .when_some(frame_rounding, |d, rounding| {
+                d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
+                    .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
+            })
             .font(gpui::Font {
                 family: crate::font_preferences::applied_ui_font_family(&self.ui_font_family)
                     .into(),
@@ -4751,7 +4812,11 @@ impl Render for SettingsWindowView {
             .size_full()
             .cursor(cursor)
             .text_color(theme.colors.text)
-            .relative();
+            .relative()
+            // Any click anywhere hides visible tooltips.
+            .capture_any_mouse_down(cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
+                crate::view::tooltip::dismiss_tooltips_on_mouse_down(cx);
+            }));
 
         root = root.on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
             let Decorations::Client { tiling } = window.window_decorations() else {
@@ -4821,13 +4886,24 @@ impl SettingsRuntimeInfo {
             git: git_runtime_info_from_state(runtime),
             app_version_display: format!("GitComet v{}", env!("CARGO_PKG_VERSION")).into(),
             operating_system: format!(
-                "{} ({}, {})",
-                std::env::consts::OS,
-                std::env::consts::FAMILY,
+                "{} ({})",
+                os_display_name(std::env::consts::OS),
                 std::env::consts::ARCH
             )
             .into(),
         }
+    }
+}
+
+/// Human-readable OS name for the Environment card ("windows" reads like a
+/// debug dump; "Windows" reads like a product).
+fn os_display_name(os: &str) -> &str {
+    match os {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        "freebsd" => "FreeBSD",
+        other => other,
     }
 }
 

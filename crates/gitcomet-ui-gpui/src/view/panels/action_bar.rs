@@ -4,7 +4,7 @@ use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 8.0;
+const ACTION_BAR_HEIGHT_PX: f32 = components::CONTROL_HEIGHT_PX + 12.0;
 
 pub(in super::super) fn action_bar_height<C>(cx: &mut C) -> Pixels
 where
@@ -245,6 +245,19 @@ impl Render for ActionBarView {
             .active_repo()
             .map(|r| path_display::path_display_shared(&r.spec.workdir))
             .unwrap_or_else(|| "No repository".into());
+        // The toolbar shows just the directory name; the full path lives in the
+        // tooltip so it doesn't compete with the controls around it.
+        let repo_name: SharedString = self
+            .active_repo()
+            .map(|r| {
+                r.spec
+                    .workdir
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path_display::path_display_shared(&r.spec.workdir).into())
+            })
+            .unwrap_or_else(|| "No repository".to_string())
+            .into();
 
         let branch: SharedString = self
             .active_repo()
@@ -437,80 +450,75 @@ impl Render for ActionBarView {
             .debug_selector(|| "repo_picker".to_string())
             .flex()
             .items_center()
-            .gap_2()
+            .gap_1()
             .px_2()
             .py_1()
+            .max_w(scaled_px(280.0))
             .rounded(px(theme.radii.row))
+            .cursor_pointer()
             .hover(move |s| s.bg(hover_bg))
             .active(move |s| s.bg(active_bg))
+            .child(icon("icons/folder.svg", icon_muted))
             .child(
                 div()
+                    .min_w(px(0.0))
                     .text_sm()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Repository"),
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .child(repo_name),
             )
             .child(
                 div()
+                    .w(px(14.0))
+                    .h(px(14.0))
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .min_w(px(0.0))
-                    .child(
-                        div()
-                            .w(px(14.0))
-                            .h(px(14.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(if repo_busy {
-                                spinner(
-                                    ("repo_busy_spinner", active_repo_key),
-                                    with_alpha(
-                                        theme.colors.text,
-                                        if theme.is_dark { 0.72 } else { 0.62 },
-                                    ),
-                                )
-                                .into_any_element()
-                            } else {
-                                div().into_any_element()
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .text_sm()
-                            .text_color(theme.colors.text_muted)
-                            .child(components::TruncatedText::path(repo_title).render(cx)),
-                    ),
+                    .justify_center()
+                    .child(if repo_busy {
+                        spinner(
+                            ("repo_busy_spinner", active_repo_key),
+                            with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 }),
+                        )
+                        .into_any_element()
+                    } else {
+                        svg_icon("icons/chevron_down.svg", icon_muted, scaled_px(12.0))
+                            .into_any_element()
+                    }),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);
             }))
-            .gitcomet_tooltip(theme, "Select repository".into());
+            .gitcomet_tooltip(theme, format!("{repo_title}\nSwitch repository").into());
 
         let branch_picker = div()
             .id("branch_picker")
             .flex()
             .items_center()
-            .gap_2()
+            .gap_1()
             .px_2()
             .py_1()
+            .max_w(scaled_px(260.0))
             .rounded(px(theme.radii.row))
+            .cursor_pointer()
             .hover(move |s| s.bg(hover_bg))
             .active(move |s| s.bg(active_bg))
+            .child(icon("icons/git_branch.svg", icon_muted))
             .child(
                 div()
+                    .min_w(px(0.0))
                     .text_sm()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Branch"),
-            )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
                     .child(branch),
             )
+            .child(svg_icon(
+                "icons/chevron_down.svg",
+                icon_muted,
+                scaled_px(12.0),
+            ))
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 this.open_popover_at(
                     PopoverKind::BranchPicker {
@@ -521,7 +529,7 @@ impl Render for ActionBarView {
                     cx,
                 );
             }))
-            .gitcomet_tooltip(theme, "Select branch".into());
+            .gitcomet_tooltip(theme, "Switch branch".into());
 
         let pull_color = if pull_count > 0 {
             theme.colors.warning
@@ -616,7 +624,7 @@ impl Render for ActionBarView {
         };
         let terminal = components::Button::new("terminal", "Terminal")
             .start_slot(icon("icons/terminal.svg", icon_primary))
-            .style(components::ButtonStyle::Outlined)
+            .style(components::ButtonStyle::Subtle)
             .selected(terminal_is_open)
             .selected_bg(menu_selected_bg)
             .disabled(self.active_repo_id().is_none())
@@ -745,7 +753,7 @@ impl Render for ActionBarView {
             .is_some_and(|id| id.as_ref() == stash_prompt_invoker.as_ref());
         let stash = components::Button::new("stash", "Stash")
             .start_slot(icon(crate::view::icons::STASH_ICON_PATH, icon_primary))
-            .style(components::ButtonStyle::Outlined)
+            .style(components::ButtonStyle::Subtle)
             .selected(stash_prompt_active)
             .selected_bg(menu_selected_bg)
             .disabled(!can_stash)
@@ -769,7 +777,7 @@ impl Render for ActionBarView {
             .is_some_and(|id| id.as_ref() == create_branch_invoker.as_ref());
         let create_branch = components::Button::new("create_branch", "Branch")
             .start_slot(icon("icons/git_branch.svg", icon_primary))
-            .style(components::ButtonStyle::Outlined)
+            .style(components::ButtonStyle::Subtle)
             .selected(create_branch_active)
             .selected_bg(menu_selected_bg)
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
@@ -807,10 +815,7 @@ impl Render for ActionBarView {
             .items_center()
             .justify_between()
             .px_2()
-            .py_1()
-            .bg(theme.colors.active_section)
-            .border_b_1()
-            .border_color(theme.colors.border)
+            .bg(theme.colors.sidebar_bg)
             .child(
                 div()
                     .flex()

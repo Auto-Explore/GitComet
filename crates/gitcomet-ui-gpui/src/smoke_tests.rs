@@ -59,12 +59,16 @@ fn builds_pure_components_without_panics() {
             let _ = components::empty_state(theme, "Title", "Message");
         });
 
+        assert_no_panic("components::empty_state_message", || {
+            let _ = components::empty_state_message(theme, "Message");
+        });
+
         assert_no_panic("components::panel", || {
             let _ = components::panel(theme, "Panel", None, div().child("body"));
         });
 
         assert_no_panic("components::diff_stat", || {
-            let _ = components::diff_stat(theme, 12, 4);
+            let _ = components::diff_stat(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT, 12, 4);
         });
 
         assert_no_panic("components::toast", || {
@@ -3219,7 +3223,7 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::TestAppContext) {
+fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
     if cfg!(target_os = "macos") {
         return;
     }
@@ -3239,31 +3243,6 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-    });
-
-    let brand_bounds = cx
-        .debug_bounds("titlebar_brand")
-        .expect("expected titlebar brand bounds");
-    cx.simulate_mouse_move(brand_bounds.center(), None, Modifiers::default());
-    cx.simulate_mouse_down(
-        brand_bounds.center(),
-        MouseButton::Left,
-        Modifiers::default(),
-    );
-    cx.simulate_mouse_up(
-        brand_bounds.center(),
-        MouseButton::Left,
-        Modifiers::default(),
-    );
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-    cx.update(|_window, app| {
-        assert!(
-            !crate::view::test_support::popover_is_open(view.read(app), app),
-            "expected titlebar brand pill click to leave the app menu closed"
-        );
     });
 
     let menu_bounds = cx
@@ -3288,6 +3267,55 @@ fn titlebar_hamburger_opens_app_menu_but_brand_pill_does_not(cx: &mut gpui::Test
         assert!(
             crate::view::test_support::popover_is_open(view.read(app), app),
             "expected hamburger click to open the app menu"
+        );
+    });
+}
+
+#[gpui::test]
+fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
+    });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-add-repo-menu-test"),
+    );
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let plus_bounds = cx
+        .debug_bounds("add_repo_menu")
+        .expect("expected + button bounds after the repo tabs");
+    cx.simulate_mouse_move(plus_bounds.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(
+        plus_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        plus_bounds.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        assert!(
+            crate::view::test_support::add_repo_menu_is_open(view.read(app), app),
+            "expected the + button to open the add-repository menu"
         );
     });
 }

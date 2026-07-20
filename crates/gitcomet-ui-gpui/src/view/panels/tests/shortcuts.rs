@@ -1890,6 +1890,8 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
             path: std::path::PathBuf::from(format!("src/commit_nav/file_{ix:02}.rs")),
             kind: FileStatusKind::Modified,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         })
         .collect::<Vec<_>>();
     let start_ix = 40usize;
@@ -1898,7 +1900,11 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
         id: commit_id.clone(),
         message: "subject".into(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
         committed_at: "2026-04-14 12:00:00 +0300".into(),
+        committed_at_unix: 0,
         parent_ids: vec![],
         files: files.clone(),
     }));
@@ -1963,11 +1969,15 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
             path: std::path::PathBuf::from("src/commit_details/first.rs"),
             kind: FileStatusKind::Modified,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         },
         CommitFileChange {
             path: std::path::PathBuf::from("src/commit_details/second.rs"),
             kind: FileStatusKind::Modified,
             is_submodule: false,
+            additions: None,
+            deletions: None,
         },
     ];
 
@@ -1976,7 +1986,11 @@ fn commit_details_text_input_f4_navigates_files_without_stealing_focus(
     repo.history_state.commit_details = Loadable::Ready(Arc::new(CommitDetails {
         id: commit_id.clone(),
         message: "subject".into(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
         committed_at: "2026-04-14 12:00:00 +0300".into(),
+        committed_at_unix: 0,
         parent_ids: vec![],
         files: files.clone(),
     }));

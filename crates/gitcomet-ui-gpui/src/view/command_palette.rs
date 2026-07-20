@@ -357,32 +357,142 @@ pub(crate) struct CommandPaletteState {
     pub(crate) previous_query: SharedString,
 }
 
+/// A palette entry that survived filtering, plus the label byte positions the
+/// query matched (for highlighting). Derefs to the entry so callers keep using
+/// `cmd.label` / `cmd.id` / `cmd.category` directly.
+pub(crate) struct CommandMatch {
+    pub(crate) entry: &'static CommandEntry,
+    pub(crate) positions: Vec<usize>,
+}
+
+impl std::ops::Deref for CommandMatch {
+    type Target = CommandEntry;
+
+    fn deref(&self) -> &CommandEntry {
+        self.entry
+    }
+}
+
 impl CommandPaletteState {
     pub(crate) fn filtered_commands(
         &self,
         has_active_repo: bool,
         query: &str,
-    ) -> Vec<&'static CommandEntry> {
-        let available: Vec<(usize, &CommandEntry)> = COMMANDS
+    ) -> Vec<CommandMatch> {
+        let available = COMMANDS
             .iter()
-            .enumerate()
-            .filter(|(_, cmd)| !cmd.requires_repo || has_active_repo)
-            .collect();
+            .filter(|cmd| !cmd.requires_repo || has_active_repo);
 
         if query.is_empty() {
-            return available.into_iter().map(|(_, cmd)| cmd).collect();
+            return available
+                .map(|entry| CommandMatch {
+                    entry,
+                    positions: Vec::new(),
+                })
+                .collect();
         }
 
-        let query_lower = query.to_ascii_lowercase();
-        let mut out: Vec<(usize, usize, &CommandEntry)> = available
-            .into_iter()
-            .filter_map(|(ix, cmd)| {
-                let label_lower = cmd.label.to_ascii_lowercase();
-                label_lower.find(&query_lower).map(|pos| (pos, ix, cmd))
+        let mut out: Vec<(i32, usize, CommandMatch)> = available
+            .enumerate()
+            .filter_map(|(order, entry)| {
+                fuzzy_subsequence_match(entry.label, query)
+                    .map(|(score, positions)| (score, order, CommandMatch { entry, positions }))
             })
             .collect();
 
-        out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-        out.into_iter().map(|(_, _, cmd)| cmd).collect()
+        out.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.2.label.len().cmp(&b.2.label.len()))
+                .then_with(|| a.1.cmp(&b.1))
+        });
+        out.into_iter().map(|(_, _, m)| m).collect()
+    }
+}
+
+/// Case-insensitive subsequence match of `query` inside `label` (both ASCII).
+/// Returns `(score, matched byte positions)`; lower scores are better.
+/// Contiguous matches beat gapped ones, word-boundary hits beat mid-word hits,
+/// and earlier matches beat later ones — so "push" ranks "Push" over
+/// "Force Push", and "cb" still finds "Create Branch".
+fn fuzzy_subsequence_match(label: &str, query: &str) -> Option<(i32, Vec<usize>)> {
+    let label_bytes = label.as_bytes();
+    let mut positions = Vec::with_capacity(query.len());
+    let mut gaps: i32 = 0;
+    let mut boundary_hits: i32 = 0;
+    let mut search_from = 0usize;
+
+    for query_byte in query.bytes() {
+        let target = query_byte.to_ascii_lowercase();
+        let found = label_bytes
+            .iter()
+            .enumerate()
+            .skip(search_from)
+            .find(|(_, label_byte)| label_byte.to_ascii_lowercase() == target)
+            .map(|(ix, _)| ix)?;
+
+        if positions.last().is_some_and(|&prev| found > prev + 1) {
+            gaps += 1;
+        }
+        if found == 0 || !label_bytes[found - 1].is_ascii_alphanumeric() {
+            boundary_hits += 1;
+        }
+        positions.push(found);
+        search_from = found + 1;
+    }
+
+    let first = positions.first().copied().unwrap_or(0) as i32;
+    Some((gaps * 100 - boundary_hits * 20 + first, positions))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state() -> CommandPaletteState {
+        CommandPaletteState {
+            query_input: None,
+            restore_focus: None,
+            scroll_handle: ScrollHandle::new(),
+            selected_index: None,
+            previous_query: SharedString::default(),
+        }
+    }
+
+    #[test]
+    fn fuzzy_match_finds_subsequences_across_words() {
+        let (_, positions) = fuzzy_subsequence_match("Create Branch", "cb").expect("match");
+        assert_eq!(positions, vec![0, 7]);
+        assert!(fuzzy_subsequence_match("Create Branch", "xq").is_none());
+    }
+
+    #[test]
+    fn contiguous_matches_rank_above_gapped_ones() {
+        let (push_score, _) = fuzzy_subsequence_match("Push", "push").expect("match");
+        let (pull_stash_score, _) = fuzzy_subsequence_match("Pull Stash", "push").expect("match");
+        assert!(
+            push_score < pull_stash_score,
+            "exact word must outrank scattered letters ({push_score} vs {pull_stash_score})"
+        );
+    }
+
+    #[test]
+    fn filtered_commands_ranks_prefix_hits_first_and_keeps_positions() {
+        let matches = state().filtered_commands(true, "push");
+        let first = matches.first().expect("at least one match");
+        assert_eq!(first.label, "Push");
+        assert_eq!(first.positions, vec![0, 1, 2, 3]);
+        assert!(
+            matches.iter().any(|m| m.label == "Force Push"),
+            "substring hits elsewhere in the label must still be included"
+        );
+    }
+
+    #[test]
+    fn filtered_commands_without_query_lists_everything_available() {
+        let with_repo = state().filtered_commands(true, "");
+        let without_repo = state().filtered_commands(false, "");
+        assert_eq!(with_repo.len(), COMMANDS.len());
+        assert!(without_repo.len() < with_repo.len());
+        assert!(with_repo.iter().all(|m| m.positions.is_empty()));
     }
 }

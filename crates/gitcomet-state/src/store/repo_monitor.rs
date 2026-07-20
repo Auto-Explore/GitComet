@@ -710,6 +710,7 @@ fn build_workdir_watcher(
 /// (fully watched, or the root watch failed and the watcher is being discarded).
 fn watch_degraded_reason(outcome: WatchSetupOutcome) -> Option<RepoWatchDegradedReason> {
     match outcome {
+        #[cfg(any(target_os = "linux", test))]
         WatchSetupOutcome::WorktreeSubdirsSkipped { dir_count } => {
             Some(RepoWatchDegradedReason::TooManyFolders { dir_count })
         }
@@ -770,6 +771,7 @@ fn recovery_recheck_due(last_attempt: Option<Instant>, now: Instant, interval: D
 /// is now within budget, rebuilds the watcher so live watching resumes (repopulating `watched_dirs`).
 /// Returns the rebuilt watcher + outcome on recovery, or `None` if still over budget / not currently
 /// skipped. No-op off Linux, where the recursive watcher has no per-directory budget.
+#[cfg(target_os = "linux")]
 fn attempt_degraded_watch_recovery(
     watch_outcome: WatchSetupOutcome,
     repo_id: RepoId,
@@ -786,47 +788,45 @@ fn attempt_degraded_watch_recovery(
     ) {
         return None;
     }
-    #[cfg(any(target_os = "linux", test))]
-    {
-        // Reload first: we could not observe the (subdirectory) ignore edit that may have shrunk the
-        // tree, so the current rules are potentially stale. The capped walk then bounds the cost of
-        // re-checking while still over budget.
-        *gitignore = GitignoreRules::load(workdir);
-        let subdir_count = collect_watchable_dirs_capped(
-            workdir,
-            workdir,
-            git_dir,
-            gitignore,
-            MAX_WORKTREE_WATCH_DIRS,
-        )
-        .len()
-        .saturating_sub(1);
-        if subdir_count > MAX_WORKTREE_WATCH_DIRS {
-            return None;
-        }
-        build_workdir_watcher(
-            repo_id,
-            workdir,
-            git_dir,
-            gitignore,
-            watched_dirs,
-            monitor_tx,
-            monitor_enabled,
-        )
+    // Reload first: we could not observe the (subdirectory) ignore edit that may have shrunk the
+    // tree, so the current rules are potentially stale. The capped walk then bounds the cost of
+    // re-checking while still over budget.
+    *gitignore = GitignoreRules::load(workdir);
+    let subdir_count = collect_watchable_dirs_capped(
+        workdir,
+        workdir,
+        git_dir,
+        gitignore,
+        MAX_WORKTREE_WATCH_DIRS,
+    )
+    .len()
+    .saturating_sub(1);
+    if subdir_count > MAX_WORKTREE_WATCH_DIRS {
+        return None;
     }
-    #[cfg(not(any(target_os = "linux", test)))]
-    {
-        let _ = (
-            repo_id,
-            workdir,
-            git_dir,
-            gitignore,
-            watched_dirs,
-            monitor_tx,
-            monitor_enabled,
-        );
-        None
-    }
+    build_workdir_watcher(
+        repo_id,
+        workdir,
+        git_dir,
+        gitignore,
+        watched_dirs,
+        monitor_tx,
+        monitor_enabled,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn attempt_degraded_watch_recovery(
+    _watch_outcome: WatchSetupOutcome,
+    _repo_id: RepoId,
+    _workdir: &Path,
+    _git_dir: Option<&Path>,
+    _gitignore: &mut GitignoreRules,
+    _watched_dirs: &mut HashSet<PathBuf>,
+    _monitor_tx: &mpsc::Sender<MonitorMsg>,
+    _monitor_enabled: &Arc<AtomicBool>,
+) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
+    None
 }
 
 fn repo_monitor_thread(
@@ -1192,6 +1192,7 @@ enum WatchSetupOutcome {
     /// Too many non-ignored worktree directories: no source folders are watched (only the workdir
     /// root); the source tree is left to the `.git` watch + focus-triggered full refresh. Carries
     /// the subdirectory count for the user-facing warning.
+    #[cfg(any(target_os = "linux", test))]
     WorktreeSubdirsSkipped { dir_count: usize },
     /// The workdir root watch failed; the watcher is unusable.
     RootWatchFailed,
@@ -1233,7 +1234,7 @@ fn setup_workdir_watch(
 /// Implementation of the Linux worktree watch setup, with the directory budget injected so tests can
 /// exercise the "too many folders" path without creating thousands of directories. `watched_dirs` is
 /// cleared and repopulated with the worktree subdirectories that were successfully watched.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(target_os = "linux")]
 fn setup_workdir_watch_with_limit(
     watcher: &mut RecommendedWatcher,
     watched_dirs: &mut HashSet<PathBuf>,

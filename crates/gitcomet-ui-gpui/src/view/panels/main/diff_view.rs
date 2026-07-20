@@ -149,6 +149,25 @@ impl Focusable for MainPaneView {
 }
 
 impl MainPaneView {
+    /// Labels for the split-diff column headers, matched to what is actually
+    /// being compared — conflict views keep their own local/remote wording.
+    pub(in crate::view) fn split_diff_pane_labels(&self) -> (&'static str, &'static str) {
+        let repo = self.active_repo();
+        let target = repo.and_then(|repo| match &repo.diff_state.diff {
+            Loadable::Ready(diff) => Some(&diff.target),
+            _ => repo.diff_state.diff_target.as_ref(),
+        });
+        match target {
+            Some(DiffTarget::Commit { .. }) => ("Parent", "This commit"),
+            Some(DiffTarget::CommitRange { .. }) => ("From commit", "To commit"),
+            Some(DiffTarget::WorkingTree {
+                area: DiffArea::Staged,
+                ..
+            }) => ("HEAD", "Staged"),
+            Some(DiffTarget::WorkingTree { .. }) | None => ("Index", "Working tree"),
+        }
+    }
+
     /// A thin vertical drag handle at the annotation column's right edge that
     /// resizes the column. Positioned absolutely; the caller's container must
     /// be `relative()`.
@@ -162,13 +181,21 @@ impl MainPaneView {
         let handle_w = px(7.0);
         div()
             .id("annotate_resize_handle")
+            .group("annotate_resize_handle")
             .absolute()
             .left((annot_w - handle_w / 2.0).max(px(0.0)))
             .top(px(0.0))
             .h_full()
             .w(handle_w)
             .cursor(CursorStyle::ResizeLeftRight)
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.6)))
+            .child(components::resize_grip(
+                theme,
+                ui_scale_percent,
+                "annotate_resize_handle",
+                components::ResizeGripAxis::Vertical,
+                self.annotate_resize.is_some(),
+                None,
+            ))
             .on_drag(AnnotateResizeHandle::Divider, |_h, _o, _w, cx| {
                 cx.new(|_cx| AnnotateResizeDragGhost)
             })
@@ -965,11 +992,11 @@ impl MainPaneView {
             .gap(px(2.0))
             .px(px(4.0))
             .py(px(2.0))
-            .rounded(px(theme.radii.row))
+            .rounded(px(theme.radii.control))
             .border_1()
             .border_color(theme.colors.border)
             .bg(theme.colors.surface_bg_elevated)
-            .shadow_sm()
+            .shadow(crate::theme::shadow_surface(theme))
             .child(
                 div()
                     .relative()
@@ -2323,7 +2350,19 @@ impl MainPaneView {
                     .child(div().min_w(px(0.0)).overflow_hidden().child(title))
                     .when_some(viewer_nav, |d, cluster| d.child(cluster)),
             )
-            .child(controls);
+            .child(
+                // Right-anchor the controls and clip from the leading edge so a
+                // narrow pane hides lower-priority buttons instead of pushing
+                // the action menu / close button past the pane clip, where they
+                // still paint but can no longer be clicked.
+                div()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .overflow_hidden()
+                    .child(controls),
+            );
 
         let body: AnyElement = if has_submodule_summary && !inline_submodule_diff_active {
             self.render_submodule_summary(theme, cx)
@@ -2906,19 +2945,25 @@ impl MainPaneView {
                                 self.conflict_diff_split_col_widths = [left_w, right_w];
                             }
 
+                            let active_hsplit_resize = self.conflict_hsplit_resize;
                             let conflict_hsplit_resize_handle =
                                 |id: &'static str, which: ConflictHSplitResizeHandle| {
+                                    let dragging = active_hsplit_resize
+                                        .is_some_and(|state| state.handle == which);
                                     div()
                                         .id(id)
+                                        .group(id)
                                         .w(handle_w)
                                         .h_full()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
                                         .cursor(CursorStyle::ResizeLeftRight)
-                                        .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
-                                        .active(move |s| s.bg(theme.colors.active))
-                                        .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                        .child(components::resize_grip(
+                                            theme,
+                                            ui_scale_percent,
+                                            id,
+                                            components::ResizeGripAxis::Vertical,
+                                            dragging,
+                                            Some(theme.colors.border),
+                                        ))
                                         .on_drag(which, |_handle, _offset, _window, cx| {
                                             cx.new(|_cx| ConflictHSplitResizeDragGhost)
                                         })
@@ -3098,22 +3143,18 @@ impl MainPaneView {
                                     .child(
                                         div()
                                             .id("conflict_diff_split_resize_handle")
+                                            .group("conflict_diff_split_resize_handle")
                                             .w(handle_w)
                                             .h_full()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
                                             .cursor(CursorStyle::ResizeLeftRight)
-                                            .hover(move |s| {
-                                                s.bg(with_alpha(theme.colors.hover, 0.65))
-                                            })
-                                            .active(move |s| s.bg(theme.colors.active))
-                                            .child(
-                                                div()
-                                                    .w(px(1.0))
-                                                    .h_full()
-                                                    .bg(theme.colors.border),
-                                            )
+                                            .child(components::resize_grip(
+                                                theme,
+                                                ui_scale_percent,
+                                                "conflict_diff_split_resize_handle",
+                                                components::ResizeGripAxis::Vertical,
+                                                self.conflict_diff_split_resize.is_some(),
+                                                Some(theme.colors.border),
+                                            ))
                                             .on_drag(
                                                 ConflictDiffSplitResizeHandle::Divider,
                                                 |_, _, _, cx| {
@@ -3647,15 +3688,18 @@ impl MainPaneView {
 
                             let vsplit_handle = div()
                                 .id("conflict_resolver_vsplit_handle")
+                                .group("conflict_resolver_vsplit_handle")
                                 .w_full()
                                 .h(handle_h)
-                                .flex()
-                                .items_center()
-                                .justify_center()
                                 .cursor(CursorStyle::ResizeUpDown)
-                                .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.65)))
-                                .active(move |s| s.bg(theme.colors.active))
-                                .child(div().h(px(1.0)).w_full().bg(theme.colors.border))
+                                .child(components::resize_grip(
+                                    theme,
+                                    ui_scale_percent,
+                                    "conflict_resolver_vsplit_handle",
+                                    components::ResizeGripAxis::Horizontal,
+                                    self.conflict_resolver_vsplit_resize.is_some(),
+                                    Some(theme.colors.border),
+                                ))
                                 .on_drag(
                                     ConflictVSplitResizeHandle::Divider,
                                     |_handle, _offset, _window, cx| {
@@ -4207,38 +4251,37 @@ impl MainPaneView {
                                                 .is_collapsed_diff_projection_active()
                                                 .then(|| self.collapsed_diff_total_file_stat())
                                                 .flatten();
+                                            let (left_label, right_label) =
+                                                self.split_diff_pane_labels();
                                             let left_header = Self::split_column_header_label(
-                                                "A (local / before)",
+                                                left_label,
                                                 collapsed_file_stat.map(|(_, removed)| removed),
                                                 '-',
                                                 theme.colors.diff_remove_text,
                                             );
                                             let right_header = Self::split_column_header_label(
-                                                "B (remote / after)",
+                                                right_label,
                                                 collapsed_file_stat.map(|(added, _)| added),
                                                 '+',
                                                 theme.colors.diff_add_text,
                                             );
 
+                                            let split_dragging = self.diff_split_resize.is_some();
                                             let resize_handle = |id: &'static str| {
                                                 div()
                                                     .id(id)
+                                                    .group(id)
                                                     .w(handle_w)
                                                     .h_full()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
                                                     .cursor(CursorStyle::ResizeLeftRight)
-                                                    .hover(move |s| {
-                                                        s.bg(with_alpha(theme.colors.hover, 0.65))
-                                                    })
-                                                    .active(move |s| s.bg(theme.colors.active))
-                                                    .child(
-                                                        div()
-                                                            .w(px(1.0))
-                                                            .h_full()
-                                                            .bg(theme.colors.border),
-                                                    )
+                                                    .child(components::resize_grip(
+                                                        theme,
+                                                        ui_scale_percent,
+                                                        id,
+                                                        components::ResizeGripAxis::Vertical,
+                                                        split_dragging,
+                                                        Some(theme.colors.border),
+                                                    ))
                                                     .on_drag(
                                                         DiffSplitResizeHandle::Divider,
                                                         |_handle, _offset, _window, cx| {

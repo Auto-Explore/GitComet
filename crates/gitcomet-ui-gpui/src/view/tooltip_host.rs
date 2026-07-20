@@ -246,7 +246,7 @@ impl Render for TooltipHost {
                             .py_1()
                             .bg(tooltip_bg)
                             .rounded(px(theme.radii.row))
-                            .shadow_sm()
+                            .shadow(crate::theme::shadow_popover(theme))
                             .text_xs()
                             .text_color(tooltip_text_color)
                             .child(text),

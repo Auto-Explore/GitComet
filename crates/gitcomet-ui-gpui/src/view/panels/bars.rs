@@ -17,7 +17,6 @@ impl GitCometView {
             .border_1()
             .border_color(theme.colors.border)
             .rounded(px(theme.radii.panel))
-            .shadow_sm()
             .child(
                 div()
                     .text_sm()

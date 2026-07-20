@@ -536,7 +536,13 @@ impl Render for HistoryRefsHoverHost {
                     } else if frozen {
                         row
                     } else {
-                        row.bg(theme.colors.hover)
+                        // `theme.colors.hover` is nearly identical to the
+                        // elevated popover surface; use a text-tinted overlay
+                        // that reads clearly.
+                        row.bg(with_alpha(
+                            theme.colors.text,
+                            if theme.is_dark { 0.08 } else { 0.05 },
+                        ))
                     }
                 })
                 .active(move |row| {
@@ -623,8 +629,8 @@ impl Render for HistoryRefsHoverHost {
             .bg(theme.colors.surface_bg_elevated)
             .border_1()
             .border_color(theme.colors.border)
-            .rounded(px(theme.radii.panel))
-            .shadow_lg()
+            .rounded(px(theme.radii.popover))
+            .shadow(crate::theme::shadow_popover(theme))
             .occlude()
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
                 this.keep_open_at(e.position);

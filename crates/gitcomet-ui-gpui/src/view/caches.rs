@@ -68,18 +68,36 @@ pub(in crate::view) struct HistoryDisplayKey {
     pub(in crate::view) date_time_format: DateTimeFormat,
     pub(in crate::view) timezone: Timezone,
     pub(in crate::view) show_timezone: bool,
+    /// History-table-only "3 days ago" display; independent of the general
+    /// date format setting.
+    relative_dates: bool,
+    /// Minutes since the Unix epoch when `relative_dates` is set, zero
+    /// otherwise. Bumping once a minute invalidates cached relative strings
+    /// so "2 mins ago" doesn't freeze; absolute formats keep a stable key.
+    relative_now_bucket: u64,
 }
 
 impl HistoryDisplayKey {
-    pub(in crate::view) const fn new(
+    pub(in crate::view) fn new(
         date_time_format: DateTimeFormat,
         timezone: Timezone,
         show_timezone: bool,
+        relative_dates: bool,
     ) -> Self {
+        let relative_now_bucket = if relative_dates {
+            SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() / 60)
+                .unwrap_or(0)
+        } else {
+            0
+        };
         Self {
             date_time_format,
             timezone,
             show_timezone,
+            relative_dates,
+            relative_now_bucket,
         }
     }
 }
@@ -228,14 +246,23 @@ impl HistoryWhenVm {
             return formatted.clone();
         }
 
-        let mut formatted = String::with_capacity(32);
-        format_datetime_into(
-            &mut formatted,
-            self.time,
-            display_key.date_time_format,
-            display_key.timezone,
-            display_key.show_timezone,
-        );
+        let formatted = if display_key.relative_dates {
+            let unix_secs = match self.time.duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => d.as_secs() as i64,
+                Err(e) => -(e.duration().as_secs() as i64),
+            };
+            crate::view::date_time::format_relative_time(unix_secs, SystemTime::now())
+        } else {
+            let mut formatted = String::with_capacity(32);
+            format_datetime_into(
+                &mut formatted,
+                self.time,
+                display_key.date_time_format,
+                display_key.timezone,
+                display_key.show_timezone,
+            );
+            formatted
+        };
         let formatted = HistoryTextVm::new(formatted.into());
         *self.formatted.borrow_mut() = Some((display_key, formatted.clone()));
         formatted
@@ -297,6 +324,10 @@ pub(super) struct HistoryBaseRowVm {
 
 #[derive(Clone, Debug)]
 pub(super) struct HistoryDecorationRowVm {
+    /// Joined display text of all branch refs on the row. Rendering paints
+    /// per-ref chips from `ref_items`; this stays as the canonical flat form
+    /// that decoration-cache tests and benchmarks assert against.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) branches_text: HistoryTextVm,
     pub(super) tag_names: Arc<[HistoryTextVm]>,
     pub(super) ref_items: Arc<[HistoryRefListItem]>,
@@ -1439,7 +1470,7 @@ mod tests {
 
     #[test]
     fn history_when_vm_formats_lazily_and_caches_result() {
-        let display_key = HistoryDisplayKey::new(DateTimeFormat::YmdHm, Timezone::Utc, true);
+        let display_key = HistoryDisplayKey::new(DateTimeFormat::YmdHm, Timezone::Utc, true, false);
         let when = HistoryWhenVm::deferred(SystemTime::UNIX_EPOCH);
 
         assert!(when.formatted.borrow().is_none());

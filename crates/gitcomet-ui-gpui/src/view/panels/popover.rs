@@ -1,6 +1,7 @@
 use super::*;
 use gitcomet_core::services::InteractiveRebaseAction;
 
+mod add_repo_menu;
 mod app_menu;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
@@ -91,7 +92,6 @@ impl PopoverWidthSpec {
 }
 
 const DEFAULT_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 180.0, 380.0);
-const COMMIT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 260.0, 480.0);
 const NARROW_CONTEXT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 160.0, 220.0);
 const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0);
 const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
@@ -564,10 +564,13 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
+        PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
-        PopoverKind::CommitMenu { .. } => Some(COMMIT_MENU_WIDTH),
+        // "Browse repository at this point" needs more room than the default
+        // context-menu width.
+        PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
@@ -1394,6 +1397,7 @@ impl PopoverHost {
 
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         self.clear_truncated_tooltip(cx);
+        crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
@@ -2113,6 +2117,9 @@ impl PopoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         self.clear_truncated_tooltip(cx);
+        // The anchor stays hovered behind the opened surface; keep its
+        // tooltip from re-showing on top of the popover.
+        crate::view::tooltip::set_tooltips_suppressed_by_overlay(true, cx);
         self.request_lazy_popover_repo_data(&kind);
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
@@ -2534,6 +2541,7 @@ impl PopoverHost {
         self.date_time_format = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
+        self.sync_details_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -2544,6 +2552,7 @@ impl PopoverHost {
         self.timezone = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_timezone(next, cx));
+        self.sync_details_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -2558,7 +2567,16 @@ impl PopoverHost {
         self.show_timezone = enabled;
         self.main_pane
             .update(cx, |pane, cx| pane.set_show_timezone(enabled, cx));
+        self.sync_details_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
+    }
+
+    fn sync_details_pane_date_settings(&mut self, cx: &mut gpui::Context<Self>) {
+        let (format, timezone, show_timezone) =
+            (self.date_time_format, self.timezone, self.show_timezone);
+        self.details_pane.update(cx, |pane, cx| {
+            pane.set_date_settings(format, timezone, show_timezone, cx);
+        });
     }
 
     pub(in super::super) fn set_theme_mode(
@@ -2798,13 +2816,6 @@ impl PopoverHost {
         let margin_y = scaled_px(16.0);
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
-        let is_create_branch_or_stash_prompt = matches!(
-            &kind,
-            PopoverKind::CreateBranchFromRefPrompt { .. }
-                | PopoverKind::StashPrompt
-                | PopoverKind::CommitPrompt { .. }
-                | PopoverKind::StashPickerPrompt { .. }
-        );
         let is_context_menu = popover_is_context_menu(&kind);
         let mut anchor_corner = popover_anchor_corner(&kind);
 
@@ -3173,6 +3184,7 @@ impl PopoverHost {
                 cx,
             ),
             PopoverKind::AppMenu => app_menu::panel(self, cx),
+            PopoverKind::AddRepoMenu => add_repo_menu::panel(self, cx),
             PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
                 rebase_onto_confirm::panel(self, repo_id, onto, cx)
             }
@@ -3323,12 +3335,7 @@ impl PopoverHost {
         };
 
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
-        let use_accent_border = is_context_menu || is_app_menu || is_create_branch_or_stash_prompt;
-        let popover_border_color = if use_accent_border {
-            with_alpha(theme.colors.accent, 0.90)
-        } else {
-            theme.colors.border
-        };
+        let popover_border_color = theme.colors.border;
         let gap_y = if is_app_menu {
             crate::view::chrome::title_bar_height(ui_scale_percent)
         } else if anchor_is_bounds {
@@ -3408,6 +3415,14 @@ impl PopoverHost {
             panel
         };
 
+        // Centered prompts are modal dialogs; anchored popovers (menus,
+        // pickers) float just above the content and take the lighter lift.
+        let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
+        let popover_shadow = if is_centered {
+            crate::theme::shadow_modal(theme)
+        } else {
+            crate::theme::shadow_popover(theme)
+        };
         let mut popover_container = div()
             .id("app_popover")
             .debug_selector(|| "app_popover".to_string())
@@ -3416,8 +3431,8 @@ impl PopoverHost {
             .bg(theme.colors.surface_bg_elevated)
             .border_1()
             .border_color(popover_border_color)
-            .rounded(px(theme.radii.panel))
-            .shadow_lg()
+            .rounded(px(theme.radii.popover))
+            .shadow(popover_shadow)
             .overflow_hidden()
             .p_1()
             .child(panel);
@@ -3430,9 +3445,9 @@ impl PopoverHost {
                 .on_action(cx.listener(Self::focus_prev_prompt_field));
         }
 
-        let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
         if is_centered {
             let top_offset = scaled_px(80.0);
+            let scrim_bg = with_alpha(theme.colors.shadow, if theme.is_dark { 0.35 } else { 0.22 });
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
                 this.close_popover_and_restore_focus(window, cx);
             });
@@ -3447,7 +3462,7 @@ impl PopoverHost {
                         .top_0()
                         .left_0()
                         .size_full()
-                        .bg(gpui::rgba(0x00000022))
+                        .bg(scrim_bg)
                         .occlude()
                         .on_mouse_down(MouseButton::Left, scrim_close),
                 )

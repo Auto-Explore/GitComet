@@ -338,7 +338,7 @@ impl Button {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(theme.radii.row))
+            .rounded(px(theme.radii.control))
             .bg(bg)
             .text_sm()
             .text_color(text)

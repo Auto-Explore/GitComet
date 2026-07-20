@@ -12,6 +12,10 @@ pub const CONTROL_PAD_Y_PX: f32 = 3.0;
 /// Horizontal padding for icon-only buttons.
 pub const ICON_PAD_X_PX: f32 = 6.0;
 
+/// Horizontal inset applied to a list row's selection/hover highlight so the
+/// rounded background reads as an inset pill/card rather than a full-bleed band.
+pub const ROW_HIGHLIGHT_INSET_PX: f32 = 6.0;
+
 pub fn control_height(scale: impl Into<UiScale>) -> gpui::Pixels {
     scale.into().px(CONTROL_HEIGHT_PX)
 }

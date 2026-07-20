@@ -49,6 +49,7 @@ fn init_repo(repo: &Path) {
     run_git(repo, &["init"]);
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
 }
 
 fn commit_file(repo: &Path, name: &str, content: &str, message: &str) {

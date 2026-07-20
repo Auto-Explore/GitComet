@@ -30,7 +30,11 @@ const STREAMED_DIFF_TEXT_OVERSCAN_COLUMNS: usize = 64;
 const STREAMED_DIFF_TEXT_CELL_WIDTH_SAMPLE: &str = "0000000000";
 const DIFF_TEXT_WRAP_WIDTH_SAMPLE: &str = "WWWWWWWWWW";
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
-const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 44.0;
+/// Width of a line-number cell (excluding the shared horizontal padding).
+/// Sized to fit six digits of the diff monospace font; numbers right-align
+/// toward the content so any slack sits before the digits, not between the
+/// digits and the code.
+const DIFF_GUTTER_BASE_WIDTH_PX: f32 = 38.0;
 const DIFF_ROW_HORIZONTAL_PADDING_PX: f32 = 8.0;
 const DIFF_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 const DIFF_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
@@ -1750,21 +1754,20 @@ pub(super) fn inline_diff_line_row_canvas(
             }
 
             if show_line_numbers {
-                paint_gutter_text(
+                paint_gutter_text_right_aligned(
                     &old,
-                    prepaint.bounds.left() + prepaint.annot_w + prepaint.pad,
+                    prepaint.bounds.left() + prepaint.annot_w + prepaint.gutter_total
+                        - prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
                     window,
                     cx,
                 );
-                paint_gutter_text(
+                paint_gutter_text_right_aligned(
                     &new,
-                    prepaint.bounds.left()
-                        + prepaint.annot_w
-                        + prepaint.gutter_total
-                        + prepaint.pad,
+                    prepaint.bounds.left() + prepaint.annot_w + prepaint.gutter_total * 2.0
+                        - prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
@@ -1990,18 +1993,19 @@ pub(super) fn split_diff_line_row_canvas(
             }
 
             if show_line_numbers {
-                paint_gutter_text(
+                let gutter_total = gutter_cell_total_width(prepaint.pad, ui_scale_percent);
+                paint_gutter_text_right_aligned(
                     &old,
-                    prepaint.left_col.left() + prepaint.pad,
+                    prepaint.left_col.left() + gutter_total - prepaint.pad,
                     y,
                     left_gutter,
                     line_metrics,
                     window,
                     cx,
                 );
-                paint_gutter_text(
+                paint_gutter_text_right_aligned(
                     &new,
-                    prepaint.right_col.left() + prepaint.pad,
+                    prepaint.right_col.left() + gutter_total - prepaint.pad,
                     y,
                     right_gutter,
                     line_metrics,
@@ -2221,9 +2225,10 @@ pub(super) fn patch_split_column_row_canvas(
             }
 
             if show_line_numbers {
-                paint_gutter_text(
+                let gutter_total = gutter_cell_total_width(prepaint.pad, ui_scale_percent);
+                paint_gutter_text_right_aligned(
                     &line_no,
-                    prepaint.bounds.left() + prepaint.annot_w + prepaint.pad,
+                    prepaint.bounds.left() + prepaint.annot_w + gutter_total - prepaint.pad,
                     y,
                     gutter_fg,
                     line_metrics,
@@ -2404,9 +2409,10 @@ pub(super) fn worktree_preview_row_canvas(
 
             window.set_cursor_style(CursorStyle::IBeam, &prepaint.text_hitbox);
 
-            paint_gutter_text(
+            paint_gutter_text_right_aligned(
                 &line_no,
-                prepaint.inner.left() + prepaint.pad,
+                prepaint.inner.left() + gutter_cell_total_width(prepaint.pad, ui_scale_percent)
+                    - prepaint.pad,
                 y,
                 theme.colors.text_muted,
                 line_metrics,
@@ -2861,6 +2867,32 @@ fn column_text_bounds(col: Bounds<Pixels>, gutter_total: Pixels, pad: Pixels) ->
     single_column_text_bounds(col, gutter_total, pad)
 }
 
+/// Paints `text` with its right edge at `right`; used for line numbers so the
+/// digits hug the content edge of their gutter cell.
+#[allow(clippy::too_many_arguments)]
+fn paint_gutter_text_right_aligned(
+    text: &SharedString,
+    right: Pixels,
+    y: Pixels,
+    color: gpui::Rgba,
+    metrics: LineMetrics,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if text.is_empty() {
+        return;
+    }
+    let shaped = shaped_gutter_line(text, color, metrics, window);
+    let _ = shaped.paint(
+        point(right - shaped.width, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+}
+
 fn paint_gutter_text(
     text: &SharedString,
     x: Pixels,
@@ -2873,6 +2905,23 @@ fn paint_gutter_text(
     if text.is_empty() {
         return;
     }
+    let shaped = shaped_gutter_line(text, color, metrics, window);
+    let _ = shaped.paint(
+        point(x, y),
+        metrics.line_height,
+        gpui::TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+}
+
+fn shaped_gutter_line(
+    text: &SharedString,
+    color: gpui::Rgba,
+    metrics: LineMetrics,
+    window: &mut Window,
+) -> gpui::ShapedLine {
     let mut style = diff_text_style(window);
     style.color = color.into();
     let key = {
@@ -2889,7 +2938,7 @@ fn paint_gutter_text(
     };
 
     let shaped = GUTTER_TEXT_LAYOUT_CACHE.with(|cache| cache.borrow_mut().get(&key).cloned());
-    let shaped = shaped.unwrap_or_else(|| {
+    shaped.unwrap_or_else(|| {
         let run = style.to_run(text.len());
         let shaped = window
             .text_system()
@@ -2900,15 +2949,7 @@ fn paint_gutter_text(
         });
 
         shaped
-    });
-    let _ = shaped.paint(
-        point(x, y),
-        metrics.line_height,
-        gpui::TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

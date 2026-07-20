@@ -1442,7 +1442,11 @@ mod tests {
         CommitDetails {
             id,
             message: "message".to_string(),
+            author_name: String::new(),
+            author_email: String::new(),
+            authored_at_unix: 0,
             committed_at: "now".to_string(),
+            committed_at_unix: 0,
             parent_ids: Vec::new(),
             files: Vec::new(),
         }

@@ -5,7 +5,10 @@ use std::sync::OnceLock;
 
 const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/splash_backdrop.png"));
-const PANE_TOGGLE_EDGE_INSET_PX: f32 = 3.0;
+/// Gap (on the 8px grid) around the inset content/details cards so they read as
+/// rounded surfaces floating on the shared window canvas, with the sidebar
+/// blended into that canvas.
+const CONTENT_CARD_GAP_PX: f32 = 8.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 struct SplashInteractiveColors {
@@ -30,6 +33,95 @@ pub(in crate::view) fn load_splash_backdrop_image() -> Arc<gpui::Image> {
             ))
         })
         .clone()
+}
+
+/// Children clip to rectangles, so full-bleed content inside the card can
+/// square off its rounded corners. These caps repaint the four corner
+/// notches (the area between the content rectangle's corner and the card's
+/// inner arc) in the surrounding surface color, restoring the rounding over
+/// anything the content paints. Canvas elements take no hitboxes, so the
+/// overlay is invisible to the mouse.
+fn card_corner_caps(radius: Pixels, color: gpui::Rgba) -> AnyElement {
+    #[derive(Clone, Copy)]
+    enum CapCorner {
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+    }
+
+    let cap = move |corner: CapCorner| {
+        let paint = move |bounds: gpui::Bounds<Pixels>, window: &mut Window| {
+            use gpui::PathBuilder;
+            // Quarter-circle bezier approximation constant.
+            const K: f32 = 0.552_284_7;
+            let r = bounds.size.width;
+            let k = r * K;
+            let (corner_pt, arc_start, arc_end, c1, c2) = match corner {
+                CapCorner::TopLeft => (
+                    bounds.origin,
+                    point(bounds.left(), bounds.top() + r),
+                    point(bounds.left() + r, bounds.top()),
+                    point(bounds.left(), bounds.top() + r - k),
+                    point(bounds.left() + r - k, bounds.top()),
+                ),
+                CapCorner::TopRight => (
+                    point(bounds.right(), bounds.top()),
+                    point(bounds.left(), bounds.top()),
+                    point(bounds.right(), bounds.top() + r),
+                    point(bounds.left() + k, bounds.top()),
+                    point(bounds.right(), bounds.top() + r - k),
+                ),
+                CapCorner::BottomRight => (
+                    point(bounds.right(), bounds.bottom()),
+                    point(bounds.right(), bounds.top()),
+                    point(bounds.left(), bounds.bottom()),
+                    point(bounds.right(), bounds.top() + k),
+                    point(bounds.left() + k, bounds.bottom()),
+                ),
+                CapCorner::BottomLeft => (
+                    point(bounds.left(), bounds.bottom()),
+                    point(bounds.left() + r, bounds.bottom()),
+                    point(bounds.left(), bounds.top()),
+                    point(bounds.left() + r - k, bounds.bottom()),
+                    point(bounds.left(), bounds.top() + k),
+                ),
+            };
+            let mut path = PathBuilder::fill();
+            path.move_to(arc_start);
+            path.cubic_bezier_to(arc_end, c1, c2);
+            path.line_to(corner_pt);
+            path.line_to(arc_start);
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        };
+        let positioned = div().absolute().size(radius);
+        let positioned = match corner {
+            CapCorner::TopLeft => positioned.top_0().left_0(),
+            CapCorner::TopRight => positioned.top_0().right_0(),
+            CapCorner::BottomLeft => positioned.bottom_0().left_0(),
+            CapCorner::BottomRight => positioned.bottom_0().right_0(),
+        };
+        positioned.child(
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| paint(bounds, window),
+            )
+            .size_full(),
+        )
+    };
+
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .child(cap(CapCorner::TopLeft))
+        .child(cap(CapCorner::TopRight))
+        .child(cap(CapCorner::BottomLeft))
+        .child(cap(CapCorner::BottomRight))
+        .into_any_element()
 }
 
 impl GitCometView {
@@ -796,9 +888,6 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
-        let ui_scale_percent = self.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
 
         if self.is_startup_repository_loading_screen_active() {
             return self.startup_repository_loading_screen();
@@ -811,150 +900,130 @@ impl GitCometView {
         if renders_full_chrome(self.view_mode) {
             let terminal_panel = self.render_terminal_panel(theme, window, cx);
             let has_terminal_panel = terminal_panel.is_some();
-            let content =
-                div()
-                    .flex()
-                    .flex_col()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(stable_cached_fixed_height_view(
-                        self.repo_tabs_bar.clone(),
-                        components::Tab::container_height(self.ui_scale_percent),
-                    ))
-                    .child(self.open_repo_panel(cx))
-                    .child(stable_cached_fixed_height_view(
-                        self.action_bar.clone(),
-                        action_bar_height(cx),
-                    ))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .flex_1()
-                            .min_h(px(0.0))
-                            .child(
-                                div()
-                                    .id("sidebar_pane")
-                                    .relative()
-                                    .w(self.sidebar_render_width)
-                                    .min_h(px(0.0))
-                                    .bg(theme.colors.surface_bg)
-                                    .when(self.sidebar_collapsed, |d| {
-                                        d.border_r_1().border_color(theme.colors.border)
-                                    })
-                                    .when(!self.sidebar_collapsed, |d| {
-                                        d.child(self.sidebar_pane.clone())
-                                    })
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .bottom(px(6.0))
-                                            .right(px(PANE_TOGGLE_EDGE_INSET_PX))
-                                            .child(
-                                                components::Button::new("sidebar_toggle", "")
-                                                    .start_slot(svg_icon(
-                                                        if self.sidebar_collapsed {
-                                                            "icons/arrow_right.svg"
-                                                        } else {
-                                                            "icons/arrow_left.svg"
-                                                        },
-                                                        theme.colors.text_muted,
-                                                        scaled_px(12.0),
-                                                    ))
-                                                    .style(components::ButtonStyle::Transparent)
-                                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                                        this.set_sidebar_collapsed(
-                                                            !this.sidebar_collapsed,
-                                                            cx,
-                                                        );
-                                                    }),
-                                            ),
+            let content = div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h(px(0.0))
+                .child(self.open_repo_panel(cx))
+                .child(stable_cached_fixed_height_view(
+                    self.action_bar.clone(),
+                    action_bar_height(cx),
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .bg(theme.colors.sidebar_bg)
+                        .child(
+                            div()
+                                .id("sidebar_pane")
+                                .relative()
+                                .w(self.sidebar_render_width)
+                                .min_h(px(0.0))
+                                .bg(theme.colors.sidebar_bg)
+                                .when(!self.sidebar_collapsed, |d| {
+                                    d.child(self.sidebar_pane.clone())
+                                }),
+                        )
+                        .child(
+                            // Main + details share one card silhouette; the panes stay
+                            // independently resizable inside it. The card sits flush
+                            // against the action bar and sidebar (no top/left gap); the
+                            // sidebar resize strip overlays the card's left edge below.
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .min_h(px(0.0))
+                                .flex()
+                                .flex_row()
+                                // Kept minimal so the bottom bar's icons (pane
+                                // toggles + zoom) read as one row hugging the card.
+                                .mb(px(2.0))
+                                .mr(px(CONTENT_CARD_GAP_PX))
+                                .relative()
+                                .rounded(px(theme.radii.panel))
+                                .border_1()
+                                .border_color(theme.colors.border)
+                                .overflow_hidden()
+                                .bg(theme.colors.window_bg)
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .min_h(px(0.0))
+                                        .overflow_hidden()
+                                        .when_some(terminal_panel, |d, terminal_panel| {
+                                            d.flex()
+                                                .flex_col()
+                                                .child(div().flex_1().min_h(px(0.0)).child(
+                                                    stable_cached_fill_view(self.main_pane.clone()),
+                                                ))
+                                                .child(self.terminal_panel_resize_handle(theme, cx))
+                                                .child(terminal_panel)
+                                        })
+                                        .when(!has_terminal_panel, |d| {
+                                            d.child(stable_cached_fill_view(self.main_pane.clone()))
+                                        }),
+                                )
+                                .child(self.pane_resize_handle(
+                                    theme,
+                                    "pane_resize_details",
+                                    PaneResizeHandle::Details,
+                                    cx,
+                                ))
+                                .child(
+                                    div()
+                                        .id("details_pane")
+                                        .relative()
+                                        .w(self.details_render_width)
+                                        .min_h(px(0.0))
+                                        .flex()
+                                        .flex_col()
+                                        .overflow_hidden()
+                                        .when(self.details_collapsed, |d| {
+                                            // The resize handle is hidden while collapsed, so
+                                            // keep a hairline between main and the strip.
+                                            d.border_l_1().border_color(theme.colors.border_variant)
+                                        })
+                                        .when(!self.details_collapsed, |d| {
+                                            d.child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_h(px(0.0))
+                                                    .child(self.details_pane.clone()),
+                                            )
+                                        }),
+                                )
+                                .child(card_corner_caps(
+                                    px((theme.radii.panel - 1.0).max(0.0)),
+                                    theme.colors.sidebar_bg,
+                                ))
+                                .child(
+                                    // Sidebar resize grab strip overlaying the card's
+                                    // left edge, so the boundary consumes no layout
+                                    // space of its own.
+                                    div().absolute().left_0().top_0().bottom_0().child(
+                                        self.pane_resize_handle(
+                                            theme,
+                                            "pane_resize_sidebar",
+                                            PaneResizeHandle::Sidebar,
+                                            cx,
+                                        ),
                                     ),
-                            )
-                            .child(self.pane_resize_handle(
-                                theme,
-                                "pane_resize_sidebar",
-                                PaneResizeHandle::Sidebar,
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .min_h(px(0.0))
-                                    .when_some(terminal_panel, |d, terminal_panel| {
-                                        d.flex()
-                                            .flex_col()
-                                            .child(div().flex_1().min_h(px(0.0)).child(
-                                                stable_cached_fill_view(self.main_pane.clone()),
-                                            ))
-                                            .child(self.terminal_panel_resize_handle(theme, cx))
-                                            .child(terminal_panel)
-                                    })
-                                    .when(!has_terminal_panel, |d| {
-                                        d.child(stable_cached_fill_view(self.main_pane.clone()))
-                                    }),
-                            )
-                            .child(self.pane_resize_handle(
-                                theme,
-                                "pane_resize_details",
-                                PaneResizeHandle::Details,
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .id("details_pane")
-                                    .relative()
-                                    .w(self.details_render_width)
-                                    .min_h(px(0.0))
-                                    .flex()
-                                    .flex_col()
-                                    .when(self.details_collapsed, |d| {
-                                        d.border_l_1().border_color(theme.colors.border)
-                                    })
-                                    .when(!self.details_collapsed, |d| {
-                                        d.child(
-                                            div()
-                                                .flex_1()
-                                                .min_h(px(0.0))
-                                                .child(self.details_pane.clone()),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .absolute()
-                                            .bottom(px(6.0))
-                                            .left(px(PANE_TOGGLE_EDGE_INSET_PX))
-                                            .child(
-                                                components::Button::new("details_toggle", "")
-                                                    .start_slot(svg_icon(
-                                                        if self.details_collapsed {
-                                                            "icons/arrow_left.svg"
-                                                        } else {
-                                                            "icons/arrow_right.svg"
-                                                        },
-                                                        theme.colors.text_muted,
-                                                        scaled_px(12.0),
-                                                    ))
-                                                    .style(components::ButtonStyle::Transparent)
-                                                    .on_click(theme, cx, |this, _e, _w, cx| {
-                                                        this.set_details_collapsed(
-                                                            !this.details_collapsed,
-                                                            cx,
-                                                        );
-                                                    }),
-                                            ),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        // Keep the bottom bar uncached. It paints after the details pane,
-                        // so reusing its cached paint range can replay a stale input-handler
-                        // index while a focused TextInput is temporarily detached during a
-                        // Wayland text-input redraw.
-                        self.bottom_status_bar.clone(),
-                    )
-                    .into_any_element();
+                                ),
+                        ),
+                )
+                .child(
+                    // Keep the bottom bar uncached. It paints after the details pane,
+                    // so reusing its cached paint range can replay a stale input-handler
+                    // index while a focused TextInput is temporarily detached during a
+                    // Wayland text-input redraw.
+                    self.bottom_status_bar.clone(),
+                )
+                .into_any_element();
 
             if self.should_show_git_unavailable_overlay() {
                 return div()
