@@ -664,7 +664,7 @@ impl SettingsWindowView {
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
-        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(false);
+        let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_history_mode = ui_session.default_history_mode.unwrap_or_default();

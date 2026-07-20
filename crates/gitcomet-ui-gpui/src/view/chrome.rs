@@ -230,6 +230,10 @@ fn window_frame_outline_color(theme: AppTheme) -> gpui::Rgba {
     }
 }
 
+fn should_draw_window_frame_outline() -> bool {
+    !cfg!(target_os = "windows")
+}
+
 pub(super) fn cursor_style_for_resize_edge(edge: ResizeEdge) -> CursorStyle {
     match edge {
         ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
@@ -704,9 +708,11 @@ pub(crate) fn window_frame(
         .bg(theme.colors.window_bg);
 
     if !suppress_frame {
+        let draw_outline = should_draw_window_frame_outline();
         inner = inner
-            .border_1()
-            .border_color(window_frame_outline_color(theme))
+            .when(draw_outline, |d| {
+                d.border_1().border_color(window_frame_outline_color(theme))
+            })
             .when(!cfg!(target_os = "macos"), |d| {
                 d.rounded(px(theme.radii.window)).shadow_lg()
             });
@@ -789,6 +795,14 @@ mod tests {
             assert_eq!(window_frame_outline_color(dark), dark.colors.border);
             assert_eq!(window_frame_outline_color(light), light.colors.border);
         }
+    }
+
+    #[test]
+    fn window_frame_outline_is_omitted_on_windows() {
+        #[cfg(target_os = "windows")]
+        assert!(!should_draw_window_frame_outline());
+        #[cfg(not(target_os = "windows"))]
+        assert!(should_draw_window_frame_outline());
     }
 
     #[test]

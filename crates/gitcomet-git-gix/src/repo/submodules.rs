@@ -1372,6 +1372,11 @@ fn remove_local_submodule_config_section_if_present(
     let section = format!("submodule.{logical_name}");
 
     let mut cmd = git_workdir_cmd_for(workdir);
+    // This operation only reads and writes the repository's local config.
+    #[cfg(windows)]
+    cmd.env("GIT_CONFIG_GLOBAL", "NUL");
+    #[cfg(not(windows))]
+    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
     cmd.arg("config")
         .arg("--local")
         .arg("--remove-section")

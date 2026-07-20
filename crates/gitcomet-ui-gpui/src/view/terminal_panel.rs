@@ -2480,6 +2480,7 @@ impl GitCometView {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
                                 if !this.request_close_terminal_for_repo(close_repo, cx) {
                                     this.close_terminal_for_repo(close_repo, cx);
                                 }
