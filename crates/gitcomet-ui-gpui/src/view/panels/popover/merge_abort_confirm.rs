@@ -73,9 +73,7 @@ pub(super) fn panel(
                         AbortMode::RebaseOrApply => {
                             this.store.dispatch(Msg::RebaseAbort { repo_id })
                         }
-                        AbortMode::CherryPick => {
-                            this.store.dispatch(Msg::RebaseAbort { repo_id })
-                        }
+                        AbortMode::CherryPick => this.store.dispatch(Msg::RebaseAbort { repo_id }),
                     }
                     this.close_popover(cx);
                 }),

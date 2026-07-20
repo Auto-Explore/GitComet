@@ -24,9 +24,7 @@ fn choose_popover_anchor_corner_prefers_side_with_more_space() {
 }
 
 #[gpui::test]
-fn reword_dialog_with_long_squash_message_stays_within_viewport(
-    cx: &mut gpui::TestAppContext,
-) {
+fn reword_dialog_with_long_squash_message_stays_within_viewport(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

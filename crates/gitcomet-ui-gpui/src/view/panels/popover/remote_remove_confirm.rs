@@ -12,7 +12,12 @@ pub(super) fn panel(
         .text(theme, format!("Remote: {name}"))
         .render(
             theme,
-            dialog_cancel_button("remove_remote_cancel", "remove_remote_cancel_hint", theme, cx),
+            dialog_cancel_button(
+                "remove_remote_cancel",
+                "remove_remote_cancel_hint",
+                theme,
+                cx,
+            ),
             components::Button::new("remove_remote_go", "Remove")
                 .style(components::ButtonStyle::Danger)
                 .on_click(theme, cx, move |this, _e, _w, cx| {

@@ -64,8 +64,7 @@ impl PopoverHost {
         items: impl Fn(&mut Self, &str, &mut gpui::Context<Self>) -> Option<Vec<T>> + 'static,
         on_escape: impl Fn(&mut Self, &mut gpui::Context<Self>) + 'static,
         scroll_to: impl Fn(&mut Self, usize, &mut gpui::Context<Self>) + 'static,
-        on_enter: impl Fn(&mut Self, Option<T>, String, &mut Window, &mut gpui::Context<Self>)
-        + 'static,
+        on_enter: impl Fn(&mut Self, Option<T>, String, &mut Window, &mut gpui::Context<Self>) + 'static,
     ) -> gpui::Subscription {
         cx.observe_in(input, window, move |this, input, window, cx| {
             let keys = input.update(cx, |i, _| PickerNavKeys::take(i));
@@ -545,12 +544,11 @@ fn worktree_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
     match &this.popover {
         Some(PopoverKind::Repo {
             repo_id,
-            kind: RepoPopoverKind::Worktree(kind @ (WorktreePopoverKind::OpenPicker
-            | WorktreePopoverKind::RemovePicker)),
-        }) => Some((
-            *repo_id,
-            matches!(kind, WorktreePopoverKind::RemovePicker),
-        )),
+            kind:
+                RepoPopoverKind::Worktree(
+                    kind @ (WorktreePopoverKind::OpenPicker | WorktreePopoverKind::RemovePicker),
+                ),
+        }) => Some((*repo_id, matches!(kind, WorktreePopoverKind::RemovePicker))),
         _ => None,
     }
 }
@@ -559,12 +557,11 @@ fn submodule_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
     match &this.popover {
         Some(PopoverKind::Repo {
             repo_id,
-            kind: RepoPopoverKind::Submodule(kind @ (SubmodulePopoverKind::OpenPicker
-            | SubmodulePopoverKind::RemovePicker)),
-        }) => Some((
-            *repo_id,
-            matches!(kind, SubmodulePopoverKind::RemovePicker),
-        )),
+            kind:
+                RepoPopoverKind::Submodule(
+                    kind @ (SubmodulePopoverKind::OpenPicker | SubmodulePopoverKind::RemovePicker),
+                ),
+        }) => Some((*repo_id, matches!(kind, SubmodulePopoverKind::RemovePicker))),
         _ => None,
     }
 }

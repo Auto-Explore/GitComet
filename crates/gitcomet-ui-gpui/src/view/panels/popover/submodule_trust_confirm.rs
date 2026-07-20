@@ -181,8 +181,7 @@ pub(super) fn panel(
                         input.set_text(&restored_name_for_input, cx);
                         cx.notify();
                     });
-                    this.submodule_add_advanced_expanded =
-                        !restored_name.is_empty() || force;
+                    this.submodule_add_advanced_expanded = !restored_name.is_empty() || force;
                     this.submodule_force_enabled = force;
                     this.popover = Some(PopoverKind::submodule(
                         repo_id,

@@ -15,14 +15,12 @@ pub(super) fn panel(
         "Remove worktree".into()
     };
 
-    let mut dialog = ConfirmDialog::new(header, DIALOG_420_WIDTH)
-        .text(theme, path.display().to_string());
+    let mut dialog =
+        ConfirmDialog::new(header, DIALOG_420_WIDTH).text(theme, path.display().to_string());
     if let Some(branch) = branch.as_ref() {
         dialog = dialog.divider(theme).text(
             theme,
-            format!(
-                "This will remove the worktree folder and delete the local branch '{branch}'."
-            ),
+            format!("This will remove the worktree folder and delete the local branch '{branch}'."),
         );
     }
 

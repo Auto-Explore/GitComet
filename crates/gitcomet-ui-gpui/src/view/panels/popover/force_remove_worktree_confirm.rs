@@ -25,7 +25,10 @@ pub(super) fn panel(
     ConfirmDialog::new(header, DIALOG_460_WIDTH)
         .text(theme, description)
         .mono_value(theme, path.display().to_string())
-        .command(theme, format!("git worktree remove --force {}", path.display()))
+        .command(
+            theme,
+            format!("git worktree remove --force {}", path.display()),
+        )
         .render(
             theme,
             dialog_cancel_button(

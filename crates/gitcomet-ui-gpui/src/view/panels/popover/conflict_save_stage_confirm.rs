@@ -44,7 +44,12 @@ pub(super) fn panel(
         .text(theme, detail)
         .render(
             theme,
-            dialog_cancel_button("conflict_stage_cancel", "conflict_stage_cancel_hint", theme, cx),
+            dialog_cancel_button(
+                "conflict_stage_cancel",
+                "conflict_stage_cancel_hint",
+                theme,
+                cx,
+            ),
             components::Button::new("conflict_stage_anyway", "Stage anyway")
                 .style(components::ButtonStyle::Danger)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
