@@ -4916,6 +4916,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::CherryPickCommit {
                 repo_id,
                 commit_id: commit_id.clone(),
+                commit: true,
+                mainline: None,
+                summary: "pick me".into(),
             },
             1,
         ),
@@ -5238,7 +5241,13 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             },
             1,
         ),
-        (Effect::RebaseContinue { repo_id }, 1),
+        (
+            Effect::RebaseContinue {
+                repo_id,
+                auth: None,
+            },
+            1,
+        ),
         (Effect::RebaseAbort { repo_id }, 1),
         (Effect::MergeAbort { repo_id }, 1),
         (

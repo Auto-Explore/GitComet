@@ -7,7 +7,8 @@ use gitcomet_core::conflict_session::{
 use gitcomet_core::domain::*;
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{
-    BlameLine, ForcePushLease, SafePushAfterCommitContext, SubmoduleTrustTarget,
+    BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
+    SubmoduleTrustTarget,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -654,6 +655,14 @@ pub struct HistoryState {
     pub selected_commit_rev: u64,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
+    pub multi_selection: CommitMultiSelection,
+    pub squash_preview: Loadable<SquashPreview>,
+    pub squash_preview_rev: u64,
+    /// The `(oldest, head)` range whose message preview is currently being
+    /// loaded. Lets a returning preview result be accepted even if the squash
+    /// plan is transiently invalid (e.g. HEAD momentarily unresolved during a
+    /// concurrent reload), as long as the range still matches what was asked.
+    pub squash_preview_pending: Option<(CommitId, CommitId)>,
 }
 
 impl Default for HistoryState {
@@ -673,8 +682,46 @@ impl Default for HistoryState {
             selected_commit_rev: 0,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
+            multi_selection: CommitMultiSelection::default(),
+            squash_preview: Loadable::NotLoaded,
+            squash_preview_rev: 0,
+            squash_preview_pending: None,
         }
     }
+}
+
+/// Multi-selected commits in the history view. `commits` always mirrors the
+/// selection (a plain single-select stores one id here); only `len() > 1`
+/// switches the UI into multi-selection presentation. The anchor is the
+/// origin for shift-click ranges; `anchor_index`/`anchor_log_rev` are a
+/// resolution hint trusted only while the log revision is unchanged.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommitMultiSelection {
+    pub commits: Vec<CommitId>,
+    pub anchor: Option<CommitId>,
+    pub anchor_index: Option<usize>,
+    pub anchor_log_rev: Option<u64>,
+}
+
+impl CommitMultiSelection {
+    pub fn is_multi(&self) -> bool {
+        self.commits.len() > 1
+    }
+
+    pub fn contains(&self, id: &CommitId) -> bool {
+        self.commits.iter().any(|c| c == id)
+    }
+}
+
+/// Backend-built default message for the squash confirmation prompt.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SquashPreview {
+    pub oldest: CommitId,
+    pub head: CommitId,
+    /// Single-line subject, split from the combined message by core.
+    pub subject: String,
+    /// Message body (everything after the subject line), possibly empty.
+    pub body: String,
 }
 
 #[derive(Clone, Debug)]
@@ -798,6 +845,22 @@ fn mix_status_cache_revs(values: [u64; 2]) -> u64 {
 }
 
 #[derive(Clone, Debug)]
+pub struct InteractiveRebaseSetup {
+    pub base: String,
+    pub entries: Loadable<Vec<InteractiveRebaseEntry>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct InteractiveCherryPickSetup {
+    pub entries: Vec<InteractiveRebaseEntry>,
+    pub source_colors: Vec<(String, u8)>,
+    /// Full commit messages are loaded separately from the subject-only log
+    /// entries. The editor must not expose rewording or start the operation
+    /// until this is `Ready`, otherwise saving a reword can truncate a body.
+    pub full_messages: Loadable<()>,
+}
+
+#[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
@@ -846,7 +909,10 @@ pub struct RepoState {
     pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
     pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
+    pub sequencer_state: Loadable<SequencerState>,
     pub merge_commit_message: Loadable<Option<String>>,
+    pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
+    pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
     pub merge_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
@@ -933,7 +999,10 @@ impl RepoState {
             recent_commit_messages: Loadable::NotLoaded,
             recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
+            sequencer_state: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            interactive_rebase_setup: None,
+            interactive_cherry_pick_setup: None,
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
@@ -1183,6 +1252,31 @@ impl RepoState {
         }
     }
 
+    /// Whether an ordinary `git commit -m` would have no staged snapshot to
+    /// record. Unstaged and untracked changes do not make that command
+    /// committable; a merge waiting to be concluded is the exception because
+    /// Git still needs its merge commit even when the resulting tree is clean.
+    pub fn nothing_to_commit(&self) -> bool {
+        self.staged_status_entries()
+            .is_some_and(|entries| entries.is_empty())
+            && !matches!(self.merge_commit_message, Loadable::Ready(Some(_)))
+    }
+
+    /// Whether starting a history-rewriting operation (rebase, cherry-pick,
+    /// revert, squash) must be blocked. Git runs a single sequencer and
+    /// refuses to start any of these while a rebase, cherry-pick, or revert
+    /// is in progress or a merge awaits its commit — launch surfaces gate on
+    /// the same rule rather than surfacing git's refusal as a raw error.
+    pub fn history_rewrite_busy(&self) -> bool {
+        self.local_actions_in_flight > 0
+            || matches!(
+                self.sequencer_state,
+                Loadable::Ready(state) if state != SequencerState::None
+            )
+            || matches!(self.rebase_in_progress, Loadable::Ready(true))
+            || matches!(&self.merge_commit_message, Loadable::Ready(Some(_)))
+    }
+
     pub fn status_entries_for_area(&self, area: DiffArea) -> Option<&[FileStatus]> {
         match area {
             DiffArea::Unstaged => self.worktree_status_entries(),
@@ -1293,9 +1387,43 @@ impl RepoState {
     }
 
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
+        if v.is_none() {
+            // Clearing the selection always dissolves any multi-selection too;
+            // every clear site (scope change, repo switch, diff selection)
+            // relies on this.
+            self.history_state.multi_selection = CommitMultiSelection::default();
+        }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
+        if self.history_state.multi_selection == v {
+            return;
+        }
+        self.history_state.multi_selection = v;
+        self.history_state.selected_commit_rev =
+            self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_squash_preview(&mut self, v: Loadable<SquashPreview>) {
+        self.history_state.squash_preview = v;
+        self.history_state.squash_preview_rev =
+            self.history_state.squash_preview_rev.wrapping_add(1);
+    }
+
+    /// Resolves the commit HEAD points at: the current branch's target when
+    /// attached, else the detached HEAD commit.
+    pub fn head_commit_id(&self) -> Option<CommitId> {
+        if let Loadable::Ready(head_branch) = &self.head_branch
+            && head_branch != "HEAD"
+            && let Loadable::Ready(branches) = &self.branches
+            && let Some(branch) = branches.iter().find(|b| b.name == *head_branch)
+        {
+            return Some(branch.target.clone());
+        }
+        self.detached_head_commit.clone()
     }
 
     pub(crate) fn set_commit_details(&mut self, v: Loadable<Shared<CommitDetails>>) {
@@ -1311,6 +1439,11 @@ impl RepoState {
 
     pub(crate) fn set_rebase_in_progress(&mut self, v: Loadable<bool>) {
         self.rebase_in_progress = v;
+        self.merge_message_rev = self.merge_message_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_sequencer_state(&mut self, v: Loadable<SequencerState>) {
+        self.sequencer_state = v;
         self.merge_message_rev = self.merge_message_rev.wrapping_add(1);
     }
 
@@ -1992,6 +2125,62 @@ mod tests {
             repo.status_entry_for_path(DiffArea::Unstaged, std::path::Path::new("legacy.rs"))
                 .is_none()
         );
+    }
+
+    #[test]
+    fn nothing_to_commit_depends_on_staged_entries_not_unstaged_work() {
+        let mut repo = new_repo();
+        repo.set_staged_status(Loadable::Ready(vec![]));
+        repo.set_worktree_status(Loadable::Ready(vec![file_status(
+            "unstaged.rs",
+            FileStatusKind::Modified,
+        )]));
+
+        assert!(repo.nothing_to_commit());
+
+        repo.set_staged_status(Loadable::Ready(vec![file_status(
+            "staged.rs",
+            FileStatusKind::Added,
+        )]));
+        assert!(!repo.nothing_to_commit());
+    }
+
+    #[test]
+    fn nothing_to_commit_keeps_pending_merge_commit_available() {
+        let mut repo = new_repo();
+        repo.set_staged_status(Loadable::Ready(vec![]));
+        repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'topic'".to_string()));
+
+        assert!(!repo.nothing_to_commit());
+    }
+
+    #[test]
+    fn history_rewrite_busy_tracks_every_blocking_operation() {
+        let repo = new_repo();
+        assert!(!repo.history_rewrite_busy());
+
+        let mut repo = new_repo();
+        repo.local_actions_in_flight = 1;
+        assert!(repo.history_rewrite_busy());
+
+        for state in [SequencerState::CherryPick, SequencerState::RebaseOrApply] {
+            let mut repo = new_repo();
+            repo.sequencer_state = Loadable::Ready(state);
+            assert!(repo.history_rewrite_busy(), "sequencer {state:?}");
+        }
+        let mut repo = new_repo();
+        repo.sequencer_state = Loadable::Ready(SequencerState::None);
+        assert!(!repo.history_rewrite_busy());
+
+        let mut repo = new_repo();
+        repo.rebase_in_progress = Loadable::Ready(true);
+        assert!(repo.history_rewrite_busy());
+
+        let mut repo = new_repo();
+        repo.merge_commit_message = Loadable::Ready(Some("Merge branch 'topic'".to_string()));
+        assert!(repo.history_rewrite_busy());
+        repo.merge_commit_message = Loadable::Ready(None);
+        assert!(!repo.history_rewrite_busy());
     }
 
     #[test]

@@ -321,9 +321,42 @@ impl Render for ActionBarView {
         let is_merging = self
             .active_repo()
             .is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))));
-        let is_rebase_or_apply_in_progress = self
+        let sequencer_state = self
             .active_repo()
-            .is_some_and(|r| matches!(&r.rebase_in_progress, Loadable::Ready(true)));
+            .map(|repo| match repo.sequencer_state {
+                Loadable::Ready(state) => state,
+                _ if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) => {
+                    gitcomet_core::services::SequencerState::RebaseOrApply
+                }
+                _ => gitcomet_core::services::SequencerState::None,
+            })
+            .unwrap_or_default();
+        let is_cherry_pick_in_progress =
+            sequencer_state == gitcomet_core::services::SequencerState::CherryPick;
+        let is_rebase_or_apply_in_progress =
+            sequencer_state == gitcomet_core::services::SequencerState::RebaseOrApply;
+        let sequencer_label = if is_cherry_pick_in_progress {
+            "CHERRY-PICKING"
+        } else {
+            "APPLY/REBASE"
+        };
+        let sequencer_abort_id = if is_cherry_pick_in_progress {
+            "abort_cherry_pick"
+        } else {
+            "abort_rebase_or_apply"
+        };
+        let sequencer_continue_id = if is_cherry_pick_in_progress {
+            "continue_cherry_pick"
+        } else {
+            "continue_rebase_or_apply"
+        };
+        let sequencer_continue_tooltip = if is_cherry_pick_in_progress {
+            "Continue the in-progress cherry-pick"
+        } else {
+            "Continue the in-progress rebase or apply"
+        };
+        let rebase_has_unstaged_conflicts =
+            self.active_repo().is_some_and(|r| r.has_unstaged_conflicts);
 
         let (pull_count, push_count) = self
             .active_repo()
@@ -822,35 +855,64 @@ impl Render for ActionBarView {
                                 ),
                         )
                     })
-                    .when(!is_merging && is_rebase_or_apply_in_progress, |d| {
-                        d.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.colors.warning)
-                                        .font_weight(FontWeight::BOLD)
-                                        .child("APPLY/REBASE"),
-                                )
-                                .child(
-                                    components::Button::new("abort_rebase_or_apply", "Abort")
-                                        .style(components::ButtonStyle::Danger)
-                                        .on_click(theme, cx, |this, e: &ClickEvent, window, cx| {
-                                            if let Some(repo_id) = this.active_repo_id() {
-                                                this.open_popover_at(
-                                                    PopoverKind::MergeAbortConfirm { repo_id },
-                                                    e.position(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }
-                                        }),
-                                ),
-                        )
-                    }),
+                    .when(
+                        !is_merging
+                            && (is_rebase_or_apply_in_progress || is_cherry_pick_in_progress),
+                        |d| {
+                            d.child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.colors.warning)
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(sequencer_label),
+                                    )
+                                    .child(
+                                        components::Button::new(sequencer_abort_id, "Abort")
+                                            .style(components::ButtonStyle::Danger)
+                                            .on_click(
+                                                theme,
+                                                cx,
+                                                |this, e: &ClickEvent, window, cx| {
+                                                    if let Some(repo_id) = this.active_repo_id() {
+                                                        this.open_popover_at(
+                                                            PopoverKind::MergeAbortConfirm {
+                                                                repo_id,
+                                                            },
+                                                            e.position(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                },
+                                            ),
+                                    )
+                                    .child(
+                                        components::Button::new(sequencer_continue_id, "Continue")
+                                            .style(components::ButtonStyle::Outlined)
+                                            .disabled(rebase_has_unstaged_conflicts)
+                                            .on_click(theme, cx, |this, _e, _w, _cx| {
+                                                if let Some(repo_id) = this.active_repo_id() {
+                                                    this.store
+                                                        .dispatch(Msg::RebaseContinue { repo_id });
+                                                }
+                                            })
+                                            .gitcomet_tooltip(
+                                                theme,
+                                                if rebase_has_unstaged_conflicts {
+                                                    "Resolve all conflicts before continuing".into()
+                                                } else {
+                                                    sequencer_continue_tooltip.into()
+                                                },
+                                            ),
+                                    ),
+                            )
+                        },
+                    ),
             )
             .child(
                 div()

@@ -421,19 +421,15 @@ impl CommitShaHoverMenu {
         if self.allow_navigate {
             let navigate_selector = format!("{}_navigate", self.id);
             entries = entries.child(
-                super::context_menu_entry(
+                super::ContextMenuEntry::new(
                     (
                         ElementId::from("commit_sha_hover_menu_navigate"),
                         self.id.clone(),
                     ),
-                    self.theme,
-                    self.ui_scale,
-                    false,
-                    false,
-                    Some("icons/link.svg".into()),
                     "Navigate",
-                    None,
                 )
+                .icon(super::ContextMenuIconSlot::Icon("icons/link.svg".into()))
+                .render(self.theme, self.ui_scale, cx)
                 .debug_selector(move || navigate_selector.clone())
                 .on_mouse_down(
                     MouseButton::Left,
@@ -443,19 +439,15 @@ impl CommitShaHoverMenu {
         }
         let browse_selector = format!("{}_browse", self.id);
         entries = entries.child(
-            super::context_menu_entry(
+            super::ContextMenuEntry::new(
                 (
                     ElementId::from("commit_sha_hover_menu_browse"),
                     self.id.clone(),
                 ),
-                self.theme,
-                self.ui_scale,
-                false,
-                false,
-                Some("icons/history.svg".into()),
                 "Browse repository at this point",
-                None,
             )
+            .icon(super::ContextMenuIconSlot::Icon("icons/history.svg".into()))
+            .render(self.theme, self.ui_scale, cx)
             .debug_selector(move || browse_selector.clone())
             .on_mouse_down(
                 MouseButton::Left,

@@ -26,6 +26,34 @@ fn assert_declared_shortcuts(model: &ContextMenuModel, expected: &[&str]) {
     assert_eq!(declared_shortcuts(model), expected);
 }
 
+fn context_menu_entry_disabled_by_label(model: &ContextMenuModel, expected: &str) -> bool {
+    model
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.as_ref() == expected => Some(*disabled),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected `{expected}` entry to exist"))
+}
+
+/// Like [`context_menu_entry_disabled_by_label`], but matches on a label
+/// prefix — for entries whose labels embed branch names or commit shas.
+fn context_menu_entry_disabled_by_label_prefix(model: &ContextMenuModel, prefix: &str) -> bool {
+    model
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.as_ref().starts_with(prefix) => Some(*disabled),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected entry starting with `{prefix}` to exist"))
+}
+
 fn shortcut_entry<'a>(
     model: &'a ContextMenuModel,
     shortcut: &str,
@@ -514,10 +542,17 @@ fn open_popover_for_test(
 
 fn set_ui_scale_percent_for_test(
     cx: &mut gpui::VisualTestContext,
-    _view: &gpui::Entity<super::super::GitCometView>,
+    view: &gpui::Entity<super::super::GitCometView>,
     percent: u32,
 ) {
-    cx.update(|_window, app| {
+    // Apply to the test window through the view first: `set_app_ui_scale_percent`
+    // reaches open windows via `WindowHandle::update`, which silently fails here
+    // because the test window is already borrowed by this `cx.update`, leaving the
+    // window rem size (and thus text scaling) untouched.
+    cx.update(|window, app| {
+        view.update(app, |view, cx| {
+            view.apply_ui_scale_percent(percent, window, cx);
+        });
         crate::app::set_app_ui_scale_percent(app, percent);
     });
 }
@@ -995,7 +1030,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S"]);
+    assert_declared_shortcuts(&local_branch_model, &["P", "M", "S", "B"]);
     assert_shortcut_action!(
         local_branch_model,
         "Enter",
@@ -1026,6 +1061,13 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             reference
         } if *rid == repo_id && reference == "feature"
     );
+    assert_shortcut_action!(
+        local_branch_model,
+        "B",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
+        } if *rid == repo_id && onto == "feature"
+    );
 
     let remote_branch_name = "origin/feature".to_string();
     let remote_branch_model = cx.update(|_window, app| {
@@ -1039,7 +1081,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
-    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "F"]);
+    assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "B", "F"]);
     assert_shortcut_action!(
         remote_branch_model,
         "Enter",
@@ -1075,6 +1117,13 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             repo_id: rid,
             reference
         } if *rid == repo_id && reference == "origin/feature"
+    );
+    assert_shortcut_action!(
+        remote_branch_model,
+        "B",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
+        } if *rid == repo_id && onto == "origin/feature"
     );
     assert_shortcut_action!(
         remote_branch_model,
@@ -1201,7 +1250,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R"]);
+    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R", "B", "I"]);
     assert_shortcut_action!(
         commit_model,
         "Enter",
@@ -1243,6 +1292,19 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             repo_id: rid,
             commit_id: cid
         } if *rid == repo_id && cid == &commit_id
+    );
+    assert_shortcut_action!(
+        commit_model,
+        "B",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
+        } if *rid == repo_id && onto == commit_id.as_ref()
+    );
+    assert_shortcut_action!(
+        commit_model,
+        "I",
+        ContextMenuAction::LoadInteractiveRebaseSetup { repo_id: rid, base }
+            if *rid == repo_id && base == commit_id.as_ref()
     );
 
     let commit_file_model = cx.update(|_window, app| {
@@ -1604,6 +1666,85 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         "Ctrl+V",
         ContextMenuAction::ConflictResolverOutputPaste
     );
+}
+
+#[gpui::test]
+fn commit_context_menu_disables_history_rewrites_during_active_operations(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(1702);
+    let commit_id = CommitId("cafebabecafebabe".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_history_rewrite_guard",
+        std::process::id()
+    ));
+
+    // Each in-flight operation must disable every history-rewriting entry:
+    // they all contend for git's single sequencer slot.
+    let busy_states: [(&str, fn(&mut RepoState)); 3] = [
+        ("pending merge", |repo| {
+            repo.merge_commit_message = Loadable::Ready(Some("merge message".to_string()));
+        }),
+        ("rebase in progress", |repo| {
+            repo.rebase_in_progress = Loadable::Ready(true);
+        }),
+        ("cherry-pick sequencer", |repo| {
+            repo.sequencer_state =
+                Loadable::Ready(gitcomet_core::services::SequencerState::CherryPick);
+        }),
+    ];
+    for (state_name, make_busy) in busy_states {
+        let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+        make_busy(&mut repo);
+        apply_state(cx, &view, app_state_with_active_repo(repo));
+        let model = cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::CommitMenu {
+                    repo_id,
+                    commit_id: commit_id.clone(),
+                },
+            )
+        });
+        assert!(
+            context_menu_entry_disabled_by_label(&model, "Cherry-pick"),
+            "Cherry-pick enabled during {state_name}"
+        );
+        assert!(
+            context_menu_entry_disabled_by_label(&model, "Revert"),
+            "Revert enabled during {state_name}"
+        );
+        assert!(
+            context_menu_entry_disabled_by_label_prefix(&model, "Rebase "),
+            "Rebase onto enabled during {state_name}"
+        );
+        assert!(
+            context_menu_entry_disabled_by_label_prefix(&model, "Interactive rebase"),
+            "Interactive rebase enabled during {state_name}"
+        );
+
+        let branch_model = cx.update(|_window, app| {
+            context_menu_model_for(
+                &view,
+                app,
+                PopoverKind::BranchMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                    name: "feature".to_string(),
+                },
+            )
+        });
+        assert!(
+            context_menu_entry_disabled_by_label_prefix(&branch_model, "Rebase "),
+            "branch menu Rebase onto enabled during {state_name}"
+        );
+    }
 }
 
 #[gpui::test]

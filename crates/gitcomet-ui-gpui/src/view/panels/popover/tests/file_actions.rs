@@ -19,6 +19,44 @@ fn context_menu_entry_disabled(model: &ContextMenuModel, label: &str) -> bool {
         .unwrap_or_else(|| panic!("expected `{label}` context menu entry"))
 }
 
+fn context_menu_has_entry(model: &ContextMenuModel, label: &str) -> bool {
+    model.items.iter().any(|item| {
+        matches!(
+            item,
+            ContextMenuItem::Entry {
+                label: entry_label,
+                ..
+            } if entry_label.as_ref() == label
+        )
+    })
+}
+
+fn commit_menu_test_repo(repo_id: RepoId, commit_id: &CommitId) -> RepoState {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_menu",
+        std::process::id()
+    ));
+    let mut repo = RepoState::new_opening(repo_id, gitcomet_core::domain::RepoSpec { workdir });
+    repo.log = Loadable::Ready(
+        gitcomet_core::domain::LogPage {
+            commits: vec![gitcomet_core::domain::Commit {
+                id: commit_id.clone(),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                summary: "Hello".into(),
+                author: "Alice".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            next_cursor: None,
+        }
+        .into(),
+    );
+    repo.tags = Loadable::Ready(Arc::new(vec![]));
+    repo.rebase_in_progress = Loadable::Ready(false);
+    repo.sequencer_state = Loadable::Ready(gitcomet_core::services::SequencerState::None);
+    repo.merge_commit_message = Loadable::Ready(None);
+    repo
+}
+
 #[gpui::test]
 fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -27,40 +65,11 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
 
     let repo_id = RepoId(1);
     let commit_id = CommitId("deadbeefdeadbeef".into());
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_commit_menu_tag",
-        std::process::id()
-    ));
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let mut repo = RepoState::new_opening(
-                repo_id,
-                gitcomet_core::domain::RepoSpec {
-                    workdir: workdir.clone(),
-                },
-            );
-            repo.log = Loadable::Ready(
-                gitcomet_core::domain::LogPage {
-                    commits: vec![gitcomet_core::domain::Commit {
-                        id: commit_id.clone(),
-                        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
-                        summary: "Hello".into(),
-                        author: "Alice".into(),
-                        time: SystemTime::UNIX_EPOCH,
-                    }],
-                    next_cursor: None,
-                }
-                .into(),
-            );
-            repo.tags = Loadable::Ready(Arc::new(vec![]));
-
-            this.state = Arc::new(AppState {
-                repos: vec![repo],
-                active_repo: Some(repo_id),
-                ..Default::default()
-            });
-            cx.notify();
+            let repo = commit_menu_test_repo(repo_id, &commit_id);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
     });
 
@@ -100,6 +109,124 @@ fn commit_menu_has_add_tag_entry(cx: &mut gpui::TestAppContext) {
 
         assert_eq!(rid, repo_id);
         assert_eq!(target, commit_id.as_ref().to_string());
+    });
+}
+
+#[gpui::test]
+fn commit_menu_cherry_pick_action_opens_confirm_popover(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = commit_menu_test_repo(repo_id, &commit_id);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.cherry_pick_mainline = Some(2);
+                host.context_menu_activate_action(
+                    ContextMenuAction::CherryPickCommit {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    host.popover_kind_for_tests(),
+                    Some(PopoverKind::CherryPickCommitConfirm {
+                        repo_id,
+                        commit_id: commit_id.clone()
+                    })
+                );
+                assert_eq!(
+                    host.cherry_pick_mainline, None,
+                    "opening a single cherry-pick must not reuse an earlier parent choice"
+                );
+            });
+        });
+    });
+}
+
+#[gpui::test]
+fn commit_menu_hides_cherry_pick_for_current_head(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.detached_head_commit = Some(commit_id.clone());
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit context menu model");
+
+        assert!(!context_menu_has_entry(&model, "Cherry-pick"));
+    });
+}
+
+#[gpui::test]
+fn commit_menu_disables_cherry_pick_when_local_operation_in_progress(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(1);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.local_actions_in_flight = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit context menu model");
+
+        assert!(context_menu_entry_disabled(&model, "Cherry-pick"));
     });
 }
 

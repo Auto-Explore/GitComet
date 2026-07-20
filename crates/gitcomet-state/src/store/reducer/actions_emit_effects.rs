@@ -4,14 +4,18 @@ use super::util::{
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, Loadable, RepoId, RepoLoadsInFlight, RepoState};
+use crate::model::{
+    AppState, InteractiveCherryPickSetup, InteractiveRebaseSetup, Loadable, RepoId,
+    RepoLoadsInFlight, RepoState,
+};
 use crate::msg::{Effect, RepoCommandKind, RepoPathList};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolverStrategy};
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CommandOutput, GitRepository, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
+    CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitTarget,
 };
 use rustc_hash::FxHashMap as HashMap;
 use std::path::PathBuf;
@@ -45,8 +49,17 @@ pub(super) fn checkout_commit(
 pub(super) fn cherry_pick_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
 ) -> Vec<Effect> {
-    vec![Effect::CherryPickCommit { repo_id, commit_id }]
+    vec![Effect::CherryPickCommit {
+        repo_id,
+        commit_id,
+        commit,
+        mainline,
+        summary,
+    }]
 }
 
 pub(super) fn revert_commit(
@@ -468,12 +481,69 @@ pub(super) fn reset(repo_id: RepoId, target: String, mode: ResetMode) -> Vec<Eff
     }]
 }
 
+pub(super) fn squash_commits(
+    state: &mut AppState,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    expected_head: gitcomet_core::domain::CommitId,
+    message: String,
+    count: usize,
+) -> Vec<Effect> {
+    // Re-validate against the current selection and log: both may have
+    // changed between opening the prompt and confirming.
+    let plan = state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .and_then(super::effects::squash_plan_for_repo);
+    let still_valid = plan
+        .as_ref()
+        .is_some_and(|p| p.oldest == oldest && p.head == expected_head);
+    if !still_valid || message.trim().is_empty() {
+        super::util::push_notification(
+            state,
+            crate::model::AppNotificationKind::Warning,
+            "Squash cancelled: the selected commits are no longer squashable.".to_string(),
+        );
+        return Vec::new();
+    }
+    let plan = plan.unwrap();
+
+    // Range ends at HEAD: use the fast commit-tree + update-ref path that
+    // does not touch the worktree or index.
+    if plan.head == plan.actual_head {
+        super::begin_local_action(state, repo_id);
+        return vec![Effect::SquashCommits {
+            repo_id,
+            oldest,
+            expected_head,
+            message,
+            count,
+        }];
+    }
+
+    // Intermediate range: load the full commit list from base..HEAD so we
+    // can build a rebase todo that squashes only the selected commits.
+    vec![Effect::LoadSquashRebaseSetup {
+        repo_id,
+        base: plan.oldest_parent,
+        actual_head: plan.actual_head,
+        selected_ids: plan.ordered_ids,
+        reword_id: oldest,
+        message,
+        count,
+    }]
+}
+
 pub(super) fn rebase(repo_id: RepoId, onto: String) -> Vec<Effect> {
     vec![Effect::Rebase { repo_id, onto }]
 }
 
 pub(super) fn rebase_continue(repo_id: RepoId) -> Vec<Effect> {
-    vec![Effect::RebaseContinue { repo_id }]
+    vec![Effect::RebaseContinue {
+        repo_id,
+        auth: None,
+    }]
 }
 
 pub(super) fn rebase_abort(repo_id: RepoId) -> Vec<Effect> {
@@ -482,6 +552,85 @@ pub(super) fn rebase_abort(repo_id: RepoId) -> Vec<Effect> {
 
 pub(super) fn merge_abort(repo_id: RepoId) -> Vec<Effect> {
     vec![Effect::MergeAbort { repo_id }]
+}
+
+pub(super) fn load_interactive_rebase_setup(
+    state: &mut AppState,
+    repo_id: RepoId,
+    base: String,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.interactive_rebase_setup = Some(InteractiveRebaseSetup {
+            base: base.clone(),
+            entries: Loadable::Loading,
+        });
+    }
+    vec![Effect::LoadInteractiveRebaseSetup { repo_id, base }]
+}
+
+pub(super) fn interactive_rebase(
+    repo_id: RepoId,
+    base: String,
+    entries: Vec<InteractiveRebaseEntry>,
+) -> Vec<Effect> {
+    vec![Effect::InteractiveRebase {
+        repo_id,
+        base,
+        entries,
+        interactive: true,
+    }]
+}
+
+pub(super) fn open_interactive_cherry_pick_setup(
+    state: &mut AppState,
+    repo_id: RepoId,
+    entries: Vec<InteractiveRebaseEntry>,
+    source_colors: Vec<(String, u8)>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.interactive_rebase_setup = None;
+        // The entries arrive seeded with subjects only (the log page carries
+        // no bodies); load the full messages so a reword edit doesn't start
+        // from — and then silently commit — a body-less seed.
+        let ids = entries
+            .iter()
+            .map(|entry| entry.commit_id.clone())
+            .collect();
+        repo_state.interactive_cherry_pick_setup = Some(InteractiveCherryPickSetup {
+            entries,
+            source_colors,
+            full_messages: Loadable::Loading,
+        });
+        return vec![Effect::LoadInteractiveCherryPickMessages { repo_id, ids }];
+    }
+    vec![]
+}
+
+pub(super) fn interactive_cherry_pick(
+    repo_id: RepoId,
+    entries: Vec<InteractiveRebaseEntry>,
+) -> Vec<Effect> {
+    vec![Effect::InteractiveCherryPick { repo_id, entries }]
+}
+
+pub(super) fn cancel_interactive_rebase_setup(
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.interactive_rebase_setup = None;
+    }
+    vec![]
+}
+
+pub(super) fn cancel_interactive_cherry_pick_setup(
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.interactive_cherry_pick_setup = None;
+    }
+    vec![]
 }
 
 pub(super) fn create_tag(
@@ -786,9 +935,13 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
         RepoCommandKind::MergeRef { .. }
             | RepoCommandKind::SquashRef { .. }
             | RepoCommandKind::Reset { .. }
+            | RepoCommandKind::SquashCommits { .. }
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
+            | RepoCommandKind::InteractiveCherryPick { .. }
+            | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -831,6 +984,9 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::Rebase { .. }
             | RepoCommandKind::RebaseContinue
             | RepoCommandKind::RebaseAbort
+            | RepoCommandKind::InteractiveRebase { .. }
+            | RepoCommandKind::InteractiveCherryPick { .. }
+            | RepoCommandKind::CherryPick { .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -947,9 +1103,13 @@ pub(super) fn repo_command_finished(
             if matches!(
                 &command,
                 RepoCommandKind::Reset { .. }
+                    | RepoCommandKind::SquashCommits { .. }
                     | RepoCommandKind::Rebase { .. }
                     | RepoCommandKind::RebaseContinue
                     | RepoCommandKind::RebaseAbort
+                    | RepoCommandKind::InteractiveRebase { .. }
+                    | RepoCommandKind::InteractiveCherryPick { .. }
+                    | RepoCommandKind::CherryPick { .. }
                     | RepoCommandKind::MergeAbort
             ) {
                 repo_state.set_diff_target(None);
@@ -960,6 +1120,19 @@ pub(super) fn repo_command_finished(
                 repo_state.diff_state.inline_submodule_diff = None;
                 repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
                 repo_state.bump_diff_state_rev();
+            }
+            if matches!(
+                &command,
+                RepoCommandKind::SquashCommits { .. }
+                    | RepoCommandKind::InteractiveRebase { .. }
+                    | RepoCommandKind::InteractiveCherryPick { .. }
+            ) {
+                // The squashed/rebased commits may no longer exist; clear the
+                // selection and the prompt's preview.
+                repo_state.set_selected_commit(None);
+                repo_state.set_commit_details(Loadable::NotLoaded);
+                repo_state.history_state.squash_preview_pending = None;
+                repo_state.set_squash_preview(Loadable::NotLoaded);
             }
             push_command_log(repo_state, true, &command, &output, None);
         }

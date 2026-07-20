@@ -82,6 +82,8 @@ fn commit_details_author_row(
     )
 }
 
+const MULTI_COMMIT_ROW_HEIGHT_PX: f32 = 44.0;
+
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
     div()
         .flex()
@@ -113,7 +115,7 @@ fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
 fn commit_message_summary_highlights(
     message: &str,
     theme: AppTheme,
-    sha_highlights: &TextHighlights,
+    sha_highlights: &[TextHighlight],
 ) -> TextHighlights {
     let summary_end = message.find('\n').unwrap_or(message.len());
     if summary_end == 0 {
@@ -749,11 +751,12 @@ impl DetailsPaneView {
         message: &str,
         cx: &mut gpui::Context<Self>,
     ) {
+        let theme = self.theme;
         self.commit_details_message_input.update(cx, |input, cx| {
             if input.text() != message {
                 input.set_text(message.to_string(), cx);
             }
-            input.set_highlights(Vec::new(), cx);
+            input.set_highlights(commit_message_summary_highlights(message, theme, &[]), cx);
         });
         self.commit_details_message_sha_menu.update(cx, |menu, cx| {
             menu.sync(
@@ -768,6 +771,216 @@ impl DetailsPaneView {
         });
     }
 
+    /// Selected commits resolved against the loaded log page, in log order
+    /// (youngest first). Ids missing from the page are skipped.
+    fn multi_selected_commits_in_log_order(repo: &RepoState) -> Vec<Commit> {
+        let selection = &repo.history_state.multi_selection;
+        let Loadable::Ready(page) = &repo.log else {
+            return Vec::new();
+        };
+        page.commits
+            .iter()
+            .filter(|commit| selection.contains(&commit.id))
+            .cloned()
+            .collect()
+    }
+
+    pub(in super::super) fn render_multi_commit_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let _ = cx;
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let commits = Self::multi_selected_commits_in_log_order(repo);
+        let theme = this.theme;
+        let ui_scale_percent = this.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let now = std::time::SystemTime::now();
+
+        range
+            .filter_map(|ix| commits.get(ix).map(|commit| (ix, commit)))
+            .map(|(ix, commit)| {
+                let short_sha: SharedString = commit
+                    .id
+                    .as_ref()
+                    .get(0..8)
+                    .unwrap_or(commit.id.as_ref())
+                    .to_string()
+                    .into();
+                let summary: SharedString = commit.summary.to_string().into();
+                let unix_secs = commit
+                    .time
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let when: SharedString = format!(
+                    "{} · {}",
+                    commit.author,
+                    crate::view::date_time::format_relative_time(unix_secs, now)
+                )
+                .into();
+
+                div()
+                    .id(("commit_multi_row", ix))
+                    .debug_selector(move || format!("commit_multi_row_{ix}"))
+                    .h(scaled_px(MULTI_COMMIT_ROW_HEIGHT_PX))
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .gap(scaled_px(2.0))
+                    .px(scaled_px(8.0))
+                    .border_b_1()
+                    .border_color(theme.colors.border)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(scaled_px(8.0))
+                            .min_w(px(0.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+                                    .text_color(theme.colors.text_muted)
+                                    .child(short_sha),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.0))
+                                    .text_sm()
+                                    .line_clamp(1)
+                                    .child(summary),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(when),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    fn multi_commit_details_view(
+        &mut self,
+        repo_id: RepoId,
+        count: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(components::control_height_md(ui_scale))
+            .px_2()
+            .bg(theme.colors.surface_bg_elevated)
+            .border_b_1()
+            .border_color(theme.colors.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .line_clamp(1)
+                    .child(SharedString::from(format!("{count} commits selected"))),
+            )
+            .child(
+                components::Button::new("commit_details_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        if let Some(repo_id) = this.active_repo_id() {
+                            this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                        }
+                        cx.notify();
+                    })
+                    .gitcomet_tooltip(theme, "Close commit details".into()),
+            );
+
+        let list = uniform_list(
+            ("commit_multi_list", repo_id.0),
+            count,
+            cx.processor(Self::render_multi_commit_rows),
+        )
+        .w_full()
+        .h_full()
+        .min_h(px(0.0))
+        .track_scroll(&self.commit_multi_scroll);
+        let list = restrict_scroll_to_vertical_axis(list);
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            self.commit_multi_scroll.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
+
+        let body = div()
+            .id(("commit_multi_container", repo_id.0))
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .w_full()
+            .overflow_hidden()
+            .child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(scrollbar_gutter)
+                    .child(list),
+            )
+            .child(
+                components::Scrollbar::new(
+                    ("commit_multi_scrollbar", repo_id.0),
+                    self.commit_multi_scroll.clone(),
+                )
+                .render(theme),
+            );
+
+        div()
+            .id("commit_details_container")
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .child(header)
+            .child(
+                div()
+                    .id("commit_details_body_container")
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(body),
+            )
+            .into_any_element()
+    }
+
     pub(in super::super) fn commit_details_view(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -780,6 +993,16 @@ impl DetailsPaneView {
         let selected_id = self
             .active_repo()
             .and_then(|repo| repo.history_state.selected_commit.clone());
+
+        let multi_count = self
+            .active_repo()
+            .filter(|repo| repo.history_state.multi_selection.is_multi())
+            .map(Self::multi_selected_commits_in_log_order)
+            .filter(|commits| commits.len() > 1)
+            .map(|commits| commits.len());
+        if let (Some(repo_id), Some(count)) = (active_repo_id, multi_count) {
+            return self.multi_commit_details_view(repo_id, count, cx);
+        }
 
         if let (Some(repo_id), Some(selected_id)) = (active_repo_id, selected_id) {
             let show_delayed_loading = self.commit_details_delay.as_ref().is_some_and(|s| {

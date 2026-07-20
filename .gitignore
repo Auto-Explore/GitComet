@@ -17,3 +17,4 @@ __pycache__/
 *.pyc
 criterion
 .codex
+.worktrees/

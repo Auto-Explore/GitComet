@@ -174,6 +174,9 @@ fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     if repo_state.rebase_in_progress.is_loading() {
         repo_state.set_rebase_in_progress(Loadable::NotLoaded);
     }
+    if repo_state.sequencer_state.is_loading() {
+        repo_state.set_sequencer_state(Loadable::NotLoaded);
+    }
     if repo_state.merge_commit_message.is_loading() {
         repo_state.set_merge_commit_message(Loadable::NotLoaded);
     }
@@ -1072,6 +1075,7 @@ pub(super) fn repo_opened_ok(
             repo_state.set_stashes(Loadable::NotLoaded);
             repo_state.reflog = Loadable::NotLoaded;
             repo_state.set_rebase_in_progress(Loadable::Loading);
+            repo_state.set_sequencer_state(Loadable::Loading);
             repo_state.set_merge_commit_message(Loadable::Loading);
             repo_state.history_state.file_history_path = None;
             repo_state.history_state.file_history = Loadable::NotLoaded;

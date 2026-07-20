@@ -4,8 +4,9 @@ use gitcomet_core::auth::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{
-    CommandOutput, ConflictSide, ForcePushLease, GitRepository, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitContext, SafePushAfterCommitTarget, SubmoduleTrustTarget,
+    CommandOutput, ConflictSide, ForcePushLease, GitRepository, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitContext, SafePushAfterCommitTarget,
+    SubmoduleTrustTarget,
 };
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -857,6 +858,27 @@ pub(super) fn schedule_reset(
     );
 }
 
+pub(super) fn schedule_squash_commits(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    oldest: gitcomet_core::domain::CommitId,
+    expected_head: gitcomet_core::domain::CommitId,
+    message: String,
+    count: usize,
+) {
+    let command = RepoCommandKind::SquashCommits {
+        oldest: oldest.clone(),
+        expected_head: expected_head.clone(),
+        message: message.clone(),
+        count,
+    };
+    schedule_repo_command(executor, repos, msg_tx, repo_id, command, move |repo| {
+        repo.squash_commits_with_output(&oldest, &expected_head, &message)
+    });
+}
+
 pub(super) fn schedule_rebase(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -880,6 +902,7 @@ pub(super) fn schedule_rebase_continue(
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    auth: Option<StagedGitAuth>,
 ) {
     schedule_repo_command(
         executor,
@@ -887,7 +910,7 @@ pub(super) fn schedule_rebase_continue(
         msg_tx,
         repo_id,
         RepoCommandKind::RebaseContinue,
-        |repo| repo.rebase_continue_with_output(),
+        move |repo| run_with_git_auth(auth, || repo.rebase_continue_with_output()),
     );
 }
 
@@ -904,6 +927,75 @@ pub(super) fn schedule_rebase_abort(
         repo_id,
         RepoCommandKind::RebaseAbort,
         |repo| repo.rebase_abort_with_output(),
+    );
+}
+
+pub(super) fn schedule_interactive_rebase(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    base: String,
+    entries: Vec<InteractiveRebaseEntry>,
+    interactive: bool,
+) {
+    let base_for_cmd = base.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::InteractiveRebase {
+            base: base_for_cmd,
+            interactive,
+        },
+        move |repo| repo.interactive_rebase_with_output(&base, &entries),
+    );
+}
+
+pub(super) fn schedule_interactive_cherry_pick(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    entries: Vec<InteractiveRebaseEntry>,
+) {
+    let command_entries = entries.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::InteractiveCherryPick {
+            entries: command_entries,
+        },
+        move |repo| repo.interactive_cherry_pick_with_output(&entries),
+    );
+}
+
+pub(super) fn schedule_cherry_pick_commit(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+    commit: bool,
+    mainline: Option<usize>,
+    summary: String,
+) {
+    let command_commit_id = commit_id.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CherryPick {
+            commit_id: command_commit_id,
+            commit,
+            mainline,
+            summary,
+        },
+        move |repo| repo.cherry_pick_with_output(&commit_id, commit, mainline),
     );
 }
 

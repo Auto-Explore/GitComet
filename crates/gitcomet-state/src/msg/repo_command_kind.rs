@@ -1,7 +1,7 @@
 use gitcomet_core::domain::CommitId;
 use gitcomet_core::services::{
-    ConflictSide, ForcePushLease, PullMode, RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
-    SubmoduleTrustTarget,
+    ConflictSide, ForcePushLease, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
+    SafePushAfterCommitTarget, SubmoduleTrustTarget,
 };
 use std::path::PathBuf;
 
@@ -51,11 +51,34 @@ pub enum RepoCommandKind {
         mode: ResetMode,
         target: String,
     },
+    SquashCommits {
+        oldest: CommitId,
+        expected_head: CommitId,
+        message: String,
+        count: usize,
+    },
     Rebase {
         onto: String,
     },
     RebaseContinue,
     RebaseAbort,
+    InteractiveRebase {
+        base: String,
+        /// True when the interactive-rebase editor was opened by the user;
+        /// false for automated todo-list rebases (e.g. squashing history that
+        /// doesn't include HEAD), which report as a plain "Rebase".
+        interactive: bool,
+    },
+    InteractiveCherryPick {
+        entries: Vec<InteractiveRebaseEntry>,
+    },
+    CherryPick {
+        commit_id: CommitId,
+        commit: bool,
+        /// Git's 1-based mainline parent for a single merge commit.
+        mainline: Option<usize>,
+        summary: String,
+    },
     MergeAbort,
     CreateTag {
         name: String,

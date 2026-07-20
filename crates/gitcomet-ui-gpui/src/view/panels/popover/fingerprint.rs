@@ -138,6 +138,9 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushPicker
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu
+        | PopoverKind::RebaseReword { .. }
+        | PopoverKind::InteractiveRebaseActionMenu { .. }
+        | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::TerminalShutdownConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
@@ -148,6 +151,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::StashPickerPrompt { repo_id, .. }
         | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
+        | PopoverKind::SquashPrompt { repo_id }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
         | PopoverKind::StashDropConfirm { repo_id, .. }
         | PopoverKind::StashMenu { repo_id, .. }
@@ -157,12 +161,14 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::FileHistory { repo_id, .. }
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
+        | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::ConflictSaveStageConfirm { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
+        | PopoverKind::RebaseOntoConfirm { repo_id, .. }
         | PopoverKind::CommitOptionsMenu { repo_id }
         | PopoverKind::PreviousCommitMessagesMenu { repo_id }
         | PopoverKind::DiffHunkMenu { repo_id, .. }
@@ -292,6 +298,16 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
         }
 
+        // The squash prompt tracks the message preview plus everything that
+        // can invalidate the selection's eligibility while it is open.
+        PopoverKind::SquashPrompt { .. } => {
+            repo.history_state.squash_preview_rev.hash(hasher);
+            repo.history_state.selected_commit_rev.hash(hasher);
+            repo.history_state.log_rev.hash(hasher);
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
+        }
+
         PopoverKind::TagMenu { .. } | PopoverKind::TagRefMenu { .. } => {
             repo.tags_rev.hash(hasher);
             repo.remotes_rev.hash(hasher);
@@ -299,7 +315,12 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         }
 
         // Most prompt-style popovers don't require live state updates.
-        PopoverKind::MergeAbortConfirm { .. }
+        PopoverKind::InteractiveRebaseActionMenu { .. }
+        | PopoverKind::InteractiveRebaseAutosquashMenu
+        | PopoverKind::RebaseReword { .. }
+        | PopoverKind::RebaseOntoConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
@@ -421,6 +442,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             target.hash(hasher);
             hash_reset_mode(*mode, hasher);
         }
+        PopoverKind::SquashPrompt { repo_id } => {
+            75u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
         PopoverKind::CreateTagPrompt { repo_id, target } => {
             8u8.hash(hasher);
             repo_id.hash(hasher);
@@ -443,6 +468,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ForcePushConfirm { repo_id } => {
             31u8.hash(hasher);
             repo_id.hash(hasher);
+        }
+        PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
+            76u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
         }
         PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
             32u8.hash(hasher);
@@ -652,6 +682,35 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             74u8.hash(hasher);
             repo_id.hash(hasher);
             (*purpose as u8).hash(hasher);
+        }
+        PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
+            75u8.hash(hasher);
+            repo_id.hash(hasher);
+            onto.hash(hasher);
+        }
+        PopoverKind::RebaseReword {
+            ix,
+            original_action,
+            original_message,
+        } => {
+            77u8.hash(hasher);
+            ix.hash(hasher);
+            (*original_action as u8).hash(hasher);
+            original_message.hash(hasher);
+        }
+        PopoverKind::InteractiveRebaseActionMenu {
+            ix,
+            can_squash,
+            can_drop,
+        } => {
+            78u8.hash(hasher);
+            ix.hash(hasher);
+            can_squash.hash(hasher);
+            can_drop.hash(hasher);
+            can_squash.hash(hasher);
+        }
+        PopoverKind::InteractiveRebaseAutosquashMenu => {
+            79u8.hash(hasher);
         }
     }
 }

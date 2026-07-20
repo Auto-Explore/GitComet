@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::services::InteractiveRebaseAction;
 
 const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
@@ -69,6 +70,10 @@ pub(in crate::view) enum ContextMenuAction {
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// Opens the squash confirmation prompt for the current multi-selection.
+    SquashSelectedCommits {
+        repo_id: RepoId,
     },
     CheckoutBranch {
         repo_id: RepoId,
@@ -201,6 +206,22 @@ pub(in crate::view) enum ContextMenuAction {
     OpenPopover {
         kind: PopoverKind,
     },
+    LoadInteractiveRebaseSetup {
+        repo_id: RepoId,
+        base: String,
+    },
+    OpenInteractiveCherryPickSetup {
+        repo_id: RepoId,
+        entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
+        source_colors: Vec<(String, u8)>,
+    },
+    SetInteractiveRebaseAction {
+        ix: usize,
+        action: InteractiveRebaseAction,
+    },
+    SetInteractiveRebaseAutosquashMode {
+        mode: AutosquashMode,
+    },
     ConflictResolverPick {
         target: ResolverPickTarget,
     },
@@ -268,6 +289,8 @@ pub(in crate::view) enum ContextMenuAction {
 enum ContextMenuItem {
     Separator,
     Header(components::ContextMenuText),
+    /// Muted helper text placed directly under the menu's header.
+    Description(components::ContextMenuText),
     Label(components::ContextMenuText),
     Entry {
         label: SharedString,

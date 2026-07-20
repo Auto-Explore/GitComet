@@ -186,23 +186,6 @@ pub(super) fn schedule_checkout_commit(
     );
 }
 
-pub(super) fn schedule_cherry_pick_commit(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    commit_id: gitcomet_core::domain::CommitId,
-) {
-    schedule_repo_action(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoActionKind::CherryPickCommit,
-        move |repo| repo.cherry_pick(&commit_id),
-    );
-}
-
 pub(super) fn schedule_revert_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,

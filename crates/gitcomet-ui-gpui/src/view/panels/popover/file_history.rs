@@ -27,7 +27,9 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
+    let ui_scale = super::popover_ui_scale(cx);
+    let ui_scale_percent = ui_scale.percent();
+    let width = super::LARGE_PICKER_WIDTH;
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
     // The commit the viewer currently shows this file at, so its row can be
@@ -162,8 +164,7 @@ pub(super) fn panel(
         div()
             .flex()
             .flex_col()
-            .w(scaled_px(520.0))
-            .max_w(scaled_px(820.0))
+            .w(width.preferred_px(ui_scale))
             .child(header)
             .child(div().border_t_1().border_color(theme.colors.border))
             .child(body),

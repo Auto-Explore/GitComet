@@ -1,4 +1,5 @@
 use super::*;
+use gitcomet_core::services::SequencerState;
 
 pub(super) fn panel(
     this: &mut PopoverHost,
@@ -10,6 +11,7 @@ pub(super) fn panel(
     enum AbortMode {
         Merge,
         RebaseOrApply,
+        CherryPick,
     }
 
     let mode = this
@@ -20,6 +22,11 @@ pub(super) fn panel(
         .map(|repo| {
             if matches!(&repo.merge_commit_message, Loadable::Ready(Some(_))) {
                 AbortMode::Merge
+            } else if matches!(
+                &repo.sequencer_state,
+                Loadable::Ready(SequencerState::CherryPick)
+            ) {
+                AbortMode::CherryPick
             } else if matches!(&repo.rebase_in_progress, Loadable::Ready(true)) {
                 AbortMode::RebaseOrApply
             } else {
@@ -42,6 +49,13 @@ pub(super) fn panel(
             "git rebase --abort / git am --abort",
             "rebase_or_apply_abort_go",
             "Abort",
+        ),
+        AbortMode::CherryPick => (
+            "Abort cherry-pick?",
+            "This will abort the current cherry-pick and restore the previous state. Any resolved conflicts will be lost.",
+            "git cherry-pick --abort",
+            "cherry_pick_abort_go",
+            "Abort cherry-pick",
         ),
     };
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
@@ -108,6 +122,9 @@ pub(super) fn panel(
                                     this.store.dispatch(Msg::MergeAbort { repo_id })
                                 }
                                 AbortMode::RebaseOrApply => {
+                                    this.store.dispatch(Msg::RebaseAbort { repo_id })
+                                }
+                                AbortMode::CherryPick => {
                                     this.store.dispatch(Msg::RebaseAbort { repo_id })
                                 }
                             }

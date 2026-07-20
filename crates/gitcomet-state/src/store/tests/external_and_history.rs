@@ -523,7 +523,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
             repo_id: RepoId(1),
-            result: Ok(false),
+            result: Ok(gitcomet_core::services::SequencerState::None),
         }),
     );
     reduce(
@@ -752,7 +752,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded {
             repo_id: RepoId(1),
-            result: Ok(false),
+            result: Ok(gitcomet_core::services::SequencerState::None),
         }),
     );
     assert!(matches!(
@@ -1611,6 +1611,58 @@ fn log_loaded_appends_when_loading_more() {
     assert_eq!(page.commits[0].id.as_ref(), "c1");
     assert_eq!(page.commits[1].id.as_ref(), "c2");
     assert_eq!(page.next_cursor, None);
+}
+
+#[test]
+fn log_loaded_reconciles_commit_multi_selection() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let commit = |id: &str| Commit {
+        id: CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "s".into(),
+        author: "a".into(),
+        time: SystemTime::UNIX_EPOCH,
+    };
+
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
+        commits: vec![CommitId("kept".into()), CommitId("gone".into())],
+        anchor: Some(CommitId("gone".into())),
+        anchor_index: Some(1),
+        anchor_log_rev: Some(repo_state.history_state.log_rev),
+    };
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("kept"), commit("other")],
+                next_cursor: None,
+            }),
+        }),
+    );
+
+    let sel = &state.repos[0].history_state.multi_selection;
+    assert_eq!(sel.commits, vec![CommitId("kept".into())]);
+    assert_eq!(sel.anchor, None);
+    assert_eq!(sel.anchor_index, None);
+    assert_eq!(sel.anchor_log_rev, None);
 }
 
 #[test]

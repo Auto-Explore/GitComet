@@ -2017,14 +2017,20 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         Msg::CherryPickCommit {
             repo_id,
             commit_id: CommitId("deadbeef".into()),
+            commit: true,
+            mainline: Some(2),
+            summary: "pick me".into(),
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::CherryPickCommit {
             repo_id: RepoId(1),
+            commit: true,
+            mainline: Some(2),
+            summary,
             ..
-        }]
+        }] if summary == "pick me"
     ));
 
     let effects = reduce(
@@ -2238,7 +2244,10 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     );
     assert!(matches!(
         effects.as_slice(),
-        [Effect::RebaseContinue { repo_id: RepoId(1) }]
+        [Effect::RebaseContinue {
+            repo_id: RepoId(1),
+            auth: None,
+        }]
     ));
 
     let effects = reduce(
@@ -3638,6 +3647,9 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         Msg::CherryPickCommit {
             repo_id,
             commit_id: CommitId("3333333333333333333333333333333333333333".into()),
+            commit: true,
+            mainline: None,
+            summary: "pick me".into(),
         },
     );
 
@@ -3645,6 +3657,38 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
         &state.repos[0].recent_commit_messages,
         Loadable::NotLoaded
     ));
+    assert_eq!(state.repos[0].pending_force_push_lease, None);
+}
+
+#[test]
+fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state
+        .repos
+        .push(repo_with_head_dependent_cached_state(repo_id));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::InteractiveCherryPick {
+                entries: vec![gitcomet_core::services::InteractiveRebaseEntry {
+                    action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+                    commit_id: "3333333333333333333333333333333333333333".to_string(),
+                    summary: "pick me".to_string(),
+                    message: "pick me".to_string(),
+                    new_message: None,
+                }],
+            },
+            result: Ok(CommandOutput::empty_success("git cherry-pick")),
+        }),
+    );
+
     assert_eq!(state.repos[0].pending_force_push_lease, None);
 }
 
@@ -4086,4 +4130,218 @@ fn create_tag_with_message_propagates_to_effect() {
         [Effect::CreateTag { repo_id: RepoId(1), name, target, message: Some(msg), annotated: true }]
             if name == "v1.0.0" && target == "HEAD" && msg == "Release 1.0"
     ));
+}
+
+#[test]
+fn cherry_pick_setup_loads_full_messages_and_patches_entries() {
+    const SHA: &str = "1111111111111111111111111111111111111111";
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    // Opening the setup with subject-only seeds schedules the full-message
+    // load for the selected commits.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInteractiveCherryPickSetup {
+            repo_id: RepoId(1),
+            entries: vec![gitcomet_core::services::InteractiveRebaseEntry {
+                action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+                commit_id: SHA.to_string(),
+                summary: "subject".to_string(),
+                message: "subject".to_string(),
+                new_message: None,
+            }],
+            source_colors: vec![],
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadInteractiveCherryPickMessages { repo_id: RepoId(1), ids }]
+            if ids.as_slice() == [SHA.to_string()]
+    ));
+    let setup = state.repos[0]
+        .interactive_cherry_pick_setup
+        .as_ref()
+        .expect("setup opens in a loading state");
+    assert!(matches!(setup.full_messages, Loadable::Loading));
+
+    // Only after every full message arrives does the setup become editable;
+    // the full body replaces the subject-only seed while the summary stays.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id: RepoId(1),
+                requested_ids: vec![SHA.to_string()],
+                result: Ok(vec![(SHA.to_string(), "subject\n\nfull body".to_string())]),
+            },
+        ),
+    );
+    let setup = state.repos[0]
+        .interactive_cherry_pick_setup
+        .as_ref()
+        .expect("setup stays open");
+    assert_eq!(setup.entries[0].message, "subject\n\nfull body");
+    assert_eq!(setup.entries[0].summary, "subject");
+    assert!(matches!(setup.full_messages, Loadable::Ready(())));
+}
+
+#[test]
+fn cherry_pick_setup_applies_repository_topological_order() {
+    const DESCENDANT: &str = "3333333333333333333333333333333333333333";
+    const ANCESTOR: &str = "1111111111111111111111111111111111111111";
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let entry = |commit_id: &str, summary: &str| gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: commit_id.to_string(),
+        summary: summary.to_string(),
+        message: summary.to_string(),
+        new_message: None,
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInteractiveCherryPickSetup {
+            repo_id: RepoId(1),
+            entries: vec![entry(DESCENDANT, "descendant"), entry(ANCESTOR, "ancestor")],
+            source_colors: vec![],
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id: RepoId(1),
+                requested_ids: vec![DESCENDANT.to_string(), ANCESTOR.to_string()],
+                result: Ok(vec![
+                    (ANCESTOR.to_string(), "ancestor full".to_string()),
+                    (DESCENDANT.to_string(), "descendant full".to_string()),
+                ]),
+            },
+        ),
+    );
+
+    let setup = state.repos[0]
+        .interactive_cherry_pick_setup
+        .as_ref()
+        .expect("setup stays open");
+    assert_eq!(
+        setup
+            .entries
+            .iter()
+            .map(|entry| entry.commit_id.as_str())
+            .collect::<Vec<_>>(),
+        [ANCESTOR, DESCENDANT]
+    );
+    assert_eq!(setup.entries[0].message, "ancestor full");
+    assert_eq!(setup.entries[1].message, "descendant full");
+    assert!(matches!(setup.full_messages, Loadable::Ready(())));
+}
+
+#[test]
+fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load() {
+    const OLD_SHA: &str = "1111111111111111111111111111111111111111";
+    const NEW_SHA: &str = "2222222222222222222222222222222222222222";
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    let entry = |commit_id: &str| gitcomet_core::services::InteractiveRebaseEntry {
+        action: gitcomet_core::services::InteractiveRebaseAction::Pick,
+        commit_id: commit_id.to_string(),
+        summary: "subject".to_string(),
+        message: "subject".to_string(),
+        new_message: None,
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInteractiveCherryPickSetup {
+            repo_id: RepoId(1),
+            entries: vec![entry(OLD_SHA)],
+            source_colors: vec![],
+        },
+    );
+    // Replace the selection before the detached response for the first one
+    // arrives. That stale body must not unlock or alter the new setup.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenInteractiveCherryPickSetup {
+            repo_id: RepoId(1),
+            entries: vec![entry(NEW_SHA)],
+            source_colors: vec![],
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id: RepoId(1),
+                requested_ids: vec![OLD_SHA.to_string()],
+                result: Ok(vec![(OLD_SHA.to_string(), "old full body".to_string())]),
+            },
+        ),
+    );
+    let setup = state.repos[0]
+        .interactive_cherry_pick_setup
+        .as_ref()
+        .expect("new setup stays open");
+    assert_eq!(setup.entries[0].commit_id, NEW_SHA);
+    assert_eq!(setup.entries[0].message, "subject");
+    assert!(matches!(setup.full_messages, Loadable::Loading));
+
+    // A response missing even one requested full message becomes an error,
+    // never a subject-only Ready state.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(
+            crate::msg::InternalMsg::InteractiveCherryPickMessagesLoaded {
+                repo_id: RepoId(1),
+                requested_ids: vec![NEW_SHA.to_string()],
+                result: Ok(vec![]),
+            },
+        ),
+    );
+    let setup = state.repos[0]
+        .interactive_cherry_pick_setup
+        .as_ref()
+        .expect("setup stays open with its load error");
+    assert!(matches!(setup.full_messages, Loadable::Error(_)));
+    assert_eq!(setup.entries[0].message, "subject");
 }
