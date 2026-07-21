@@ -21,6 +21,7 @@ pub struct UiSession {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub sidebar_collapsed: Option<bool>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
     pub ui_font_family: Option<String>,
@@ -150,6 +151,7 @@ struct UiSessionFile {
     window_height: Option<u32>,
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
+    sidebar_collapsed: Option<bool>,
     theme_mode: Option<String>,
     ui_scale_percent: Option<u32>,
     ui_font_family: Option<String>,
@@ -256,6 +258,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         window_height: file.window_height,
         sidebar_width: file.sidebar_width,
         details_width: file.details_width,
+        sidebar_collapsed: file.sidebar_collapsed,
         theme_mode: file.theme_mode,
         ui_scale_percent: file.ui_scale_percent,
         ui_font_family: file.ui_font_family,
@@ -561,6 +564,7 @@ pub struct UiSettings {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub sidebar_collapsed: Option<bool>,
     pub repo_sidebar_collapsed_items: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
@@ -619,6 +623,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(w) = settings.details_width {
             file.details_width = Some(w);
+        }
+        if let Some(collapsed) = settings.sidebar_collapsed {
+            file.sidebar_collapsed = Some(collapsed);
         }
         if let Some(items) = settings.repo_sidebar_collapsed_items {
             let items = path_keyed_string_sets_to_storage(items);
@@ -1813,6 +1820,56 @@ mod tests {
                 .get(&path_storage_key(&repo_fetch)),
             Some(&true)
         );
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_sidebar_collapsed() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-session-sidebar-collapsed-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let session_file = dir.join("session.json");
+
+        // Default (unset) leaves the field absent.
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, None);
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                sidebar_collapsed: Some(true),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist collapsed");
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(true));
+
+        // A later settings write that doesn't touch the field preserves it.
+        persist_ui_settings_to_path(
+            UiSettings {
+                theme_mode: Some("dark".to_string()),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist theme");
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(true));
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                sidebar_collapsed: Some(false),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist expanded");
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(false));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

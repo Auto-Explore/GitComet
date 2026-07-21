@@ -1545,6 +1545,7 @@ impl GitCometView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let restored_sidebar_collapsed = ui_session.sidebar_collapsed.unwrap_or(false);
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_session
             .theme_mode
@@ -1969,6 +1970,13 @@ impl GitCometView {
                 .max(DETAILS_MIN_PX);
         let initial_sidebar_width = scale.px(initial_sidebar_width_design);
         let initial_details_width = scale.px(initial_details_width_design);
+        // Reopen collapsed if the user quit while collapsed: the render width must
+        // also start at the collapsed strip so it doesn't flash open on launch.
+        let initial_sidebar_render_width = if restored_sidebar_collapsed {
+            scale.px(PANE_COLLAPSED_PX)
+        } else {
+            initial_sidebar_width
+        };
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
 
@@ -2040,7 +2048,7 @@ impl GitCometView {
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
-            sidebar_collapsed: false,
+            sidebar_collapsed: restored_sidebar_collapsed,
             sidebar_collapsed_popover: None,
             sidebar_collapsed_popover_closing: None,
             sidebar_collapsed_popover_anim_seq: 0,
@@ -2049,7 +2057,7 @@ impl GitCometView {
             details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
             details_width: initial_details_width,
-            sidebar_render_width: initial_sidebar_width,
+            sidebar_render_width: initial_sidebar_render_width,
             details_render_width: initial_details_width,
             sidebar_width_anim_seq: 0,
             details_width_anim_seq: 0,
@@ -2889,6 +2897,8 @@ impl GitCometView {
             self.sidebar_width
         };
         self.animate_sidebar_render_width_to(target, cx);
+        // Persist so the sidebar reopens in the same state next launch.
+        self.schedule_ui_settings_persist(cx);
         cx.notify();
     }
 

@@ -919,6 +919,7 @@ impl SettingsWindowView {
             window_height: None,
             sidebar_width: None,
             details_width: None,
+            sidebar_collapsed: None,
             repo_sidebar_collapsed_items: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.ui_scale_percent),

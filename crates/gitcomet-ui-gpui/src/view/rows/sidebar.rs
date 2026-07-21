@@ -835,6 +835,12 @@ impl SidebarPaneView {
                                             components::TruncatedText::path(path_label.clone())
                                                 .id(("worktree_path_text", ix))
                                                 .text_sm()
+                                                // Set the color explicitly: TruncatedText
+                                                // resolves an unset color from the ambient text
+                                                // style inside a deferred measure closure, which
+                                                // doesn't see ancestor `text_color` — so in the
+                                                // collapsed popover it would render near-black.
+                                                .text_color(theme.colors.text)
                                                 .full_text_tooltip(this.tooltip_host.clone())
                                                 .render(cx),
                                         ),
