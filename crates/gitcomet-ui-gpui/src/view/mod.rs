@@ -215,7 +215,7 @@ pub use mod_helpers::{
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 pub(crate) use panes::MainPaneView;
-use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
+use panes::{CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;
@@ -255,6 +255,8 @@ const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const PANE_COLLAPSED_PX: f32 = 34.0;
 const PANE_COLLAPSE_ANIM_MS: u64 = 120;
+/// Fade-in/out duration for the collapsed-sidebar section popover.
+const COLLAPSED_POPOVER_FADE_MS: u64 = 110;
 const SIDEBAR_MIN_PX: f32 = 200.0;
 const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
@@ -1355,7 +1357,9 @@ impl GitCometView {
     /// Whether a popover, dialog, prompt, or context menu is currently open
     /// (all are tracked as a `PopoverKind` by the popover host).
     pub(in crate::view) fn is_overlay_open(&self, cx: &App) -> bool {
-        self.popover_host.read(cx).is_open()
+        // The collapsed-sidebar section popover covers the history view too, so it
+        // must suppress ref hovers the same way the popover host does.
+        self.popover_host.read(cx).is_open() || self.sidebar_collapsed_popover.is_some()
     }
 
     pub(in crate::view) fn show_history_refs_hover(
@@ -2037,6 +2041,9 @@ impl GitCometView {
             open_repo_input,
             hover_resize_edge: None,
             sidebar_collapsed: false,
+            sidebar_collapsed_popover: None,
+            sidebar_collapsed_popover_closing: None,
+            sidebar_collapsed_popover_anim_seq: 0,
             details_collapsed: false,
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,
@@ -2654,8 +2661,51 @@ impl GitCometView {
         });
     }
 
-    fn ease_out_cubic(t: f32) -> f32 {
-        1.0 - (1.0 - t).powi(3)
+    /// Evaluate a CSS-style `cubic-bezier(x1, y1, x2, y2)` timing function at
+    /// progress `t` in `[0, 1]`. Endpoints P0=(0,0) and P3=(1,1) are implicit.
+    ///
+    /// The curve is parametric in `s`, so for a given time `t` we first solve
+    /// `bezier_x(s) = t` (a few Newton-Raphson steps — the x-curve is monotonic
+    /// for the control points we use) and then read off `bezier_y(s)`.
+    fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+        if t <= 0.0 {
+            return 0.0;
+        }
+        if t >= 1.0 {
+            return 1.0;
+        }
+
+        // B(s) = 3(1-s)^2 s c1 + 3(1-s) s^2 c2 + s^3, with c0 = 0, c3 = 1.
+        let bezier = |c1: f32, c2: f32, s: f32| {
+            let inv = 1.0 - s;
+            3.0 * inv * inv * s * c1 + 3.0 * inv * s * s * c2 + s * s * s
+        };
+        // B'(s) = 3(1-s)^2 c1 + 6(1-s) s (c2 - c1) + 3 s^2 (1 - c2).
+        let bezier_prime = |c1: f32, c2: f32, s: f32| {
+            let inv = 1.0 - s;
+            3.0 * inv * inv * c1 + 6.0 * inv * s * (c2 - c1) + 3.0 * s * s * (1.0 - c2)
+        };
+
+        let mut s = t;
+        for _ in 0..8 {
+            let x = bezier(x1, x2, s) - t;
+            if x.abs() < 1e-4 {
+                break;
+            }
+            let dx = bezier_prime(x1, x2, s);
+            if dx.abs() < 1e-6 {
+                break;
+            }
+            s = (s - x / dx).clamp(0.0, 1.0);
+        }
+
+        bezier(y1, y2, s)
+    }
+
+    /// Easing for pane collapse/expand: a "fast-out, slow-in" cubic bezier
+    /// (the Material standard curve) that reads smoothly in both directions.
+    fn pane_collapse_ease(t: f32) -> f32 {
+        Self::cubic_bezier(0.4, 0.0, 0.2, 1.0, t)
     }
 
     fn animate_sidebar_render_width_to(&mut self, target: Pixels, cx: &mut gpui::Context<Self>) {
@@ -2692,7 +2742,7 @@ impl GitCometView {
                     t = 1.0;
                 }
                 let t = t.clamp(0.0, 1.0);
-                let eased = Self::ease_out_cubic(t);
+                let eased = Self::pane_collapse_ease(t);
                 let mut done = t >= 1.0;
 
                 let _ = view.update(cx, |this, cx| {
@@ -2762,7 +2812,7 @@ impl GitCometView {
                     t = 1.0;
                 }
                 let t = t.clamp(0.0, 1.0);
-                let eased = Self::ease_out_cubic(t);
+                let eased = Self::pane_collapse_ease(t);
                 let mut done = t >= 1.0;
 
                 let _ = view.update(cx, |this, cx| {
@@ -2804,6 +2854,15 @@ impl GitCometView {
         }
 
         self.sidebar_collapsed = collapsed;
+        // The collapsed-rail popover only exists while collapsed; drop it (and any
+        // in-flight fade) instantly when the full sidebar comes back so it can't
+        // linger over the expanded pane.
+        if !collapsed {
+            self.sidebar_collapsed_popover = None;
+            self.sidebar_collapsed_popover_closing = None;
+            self.sidebar_collapsed_popover_anim_seq =
+                self.sidebar_collapsed_popover_anim_seq.wrapping_add(1);
+        }
         if matches!(
             self.pane_resize,
             Some(PaneResizeState {
@@ -2814,6 +2873,13 @@ impl GitCometView {
             self.pane_resize = None;
         }
         if !collapsed {
+            // Mark the sidebar as animating before clamping: the width reconcile
+            // in `clamp_pane_widths_to_window` snaps `sidebar_render_width` to the
+            // target whenever it isn't animating, which would collapse the open
+            // animation to a single frame (start == target). With the flag set it
+            // preserves the current (collapsed) render width so the animation below
+            // can grow it out.
+            self.sidebar_width_animating = true;
             self.clamp_pane_widths_to_window();
         }
 
@@ -2824,6 +2890,66 @@ impl GitCometView {
         };
         self.animate_sidebar_render_width_to(target, cx);
         cx.notify();
+    }
+
+    /// Toggle the collapsed-sidebar popover for `section`. Clicking the icon of
+    /// the open section closes it; clicking a different one switches to it and
+    /// triggers any lazy data load that section needs.
+    pub(in crate::view) fn toggle_sidebar_collapsed_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.sidebar_collapsed_popover == Some(section) {
+            self.close_sidebar_collapsed_popover(cx);
+        } else {
+            self.open_sidebar_collapsed_popover(section, cx);
+        }
+    }
+
+    fn open_sidebar_collapsed_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.sidebar_collapsed_popover = Some(section);
+        self.sidebar_collapsed_popover_closing = None;
+        self.sidebar_collapsed_popover_anim_seq =
+            self.sidebar_collapsed_popover_anim_seq.wrapping_add(1);
+        self.sidebar_pane.update(cx, |pane, cx| {
+            pane.ensure_collapsed_section_data(section, cx);
+        });
+        cx.notify();
+    }
+
+    /// Begin dismissing the popover: hand the section to `..._closing` so it stays
+    /// mounted for the fade-out, then clear it after the fade with a seq-guarded
+    /// timer so a fresh open during the fade isn't clobbered.
+    pub(in crate::view) fn close_sidebar_collapsed_popover(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(section) = self.sidebar_collapsed_popover.take() else {
+            return;
+        };
+        self.sidebar_collapsed_popover_closing = Some(section);
+        self.sidebar_collapsed_popover_anim_seq =
+            self.sidebar_collapsed_popover_anim_seq.wrapping_add(1);
+        let seq = self.sidebar_collapsed_popover_anim_seq;
+        cx.notify();
+
+        cx.spawn(async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
+            smol::Timer::after(Duration::from_millis(COLLAPSED_POPOVER_FADE_MS)).await;
+            let _ = view.update(cx, |this, cx| {
+                if this.sidebar_collapsed_popover_anim_seq == seq
+                    && this.sidebar_collapsed_popover_closing.is_some()
+                {
+                    this.sidebar_collapsed_popover_closing = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn set_details_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
@@ -2842,6 +2968,10 @@ impl GitCometView {
             self.pane_resize = None;
         }
         if !collapsed {
+            // Same reasoning as the sidebar: flag the animation before clamping so
+            // the width reconcile preserves the collapsed render width instead of
+            // snapping to the target and cancelling the open animation.
+            self.details_width_animating = true;
             self.clamp_pane_widths_to_window();
         }
 

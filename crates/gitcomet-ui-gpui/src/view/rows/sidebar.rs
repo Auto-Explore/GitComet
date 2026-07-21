@@ -283,7 +283,13 @@ impl SidebarPaneView {
         let Some(repo_id) = this.active_repo_id() else {
             return Vec::new();
         };
-        let Some(presentation) = this.branch_sidebar_presentation_cached() else {
+        // Prefer the transient section-scoped presentation set while rendering a
+        // collapsed-sidebar popover; fall back to the full cached presentation.
+        let Some(presentation) = this
+            .collapsed_popover_presentation
+            .clone()
+            .or_else(|| this.branch_sidebar_presentation_cached())
+        else {
             return Vec::new();
         };
         let rows = presentation.rows;

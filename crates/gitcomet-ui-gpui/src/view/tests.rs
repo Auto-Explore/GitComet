@@ -1961,22 +1961,6 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
     ));
 }
 
-#[test]
-fn ease_out_cubic_hits_expected_anchor_points() {
-    assert_eq!(GitCometView::ease_out_cubic(0.0), 0.0);
-    assert_eq!(GitCometView::ease_out_cubic(1.0), 1.0);
-    assert!((GitCometView::ease_out_cubic(0.5) - 0.875).abs() < 1e-6);
-}
-
-#[test]
-fn ease_out_cubic_is_monotonic_in_unit_interval() {
-    let a = GitCometView::ease_out_cubic(0.2);
-    let b = GitCometView::ease_out_cubic(0.6);
-    let c = GitCometView::ease_out_cubic(0.9);
-    assert!(a < b);
-    assert!(b < c);
-}
-
 #[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -3273,4 +3257,41 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
         "auth prompt should be cleared after successful submit with credentials",
         || store_for_assert.snapshot().auth_prompt.is_none(),
     );
+}
+
+#[test]
+fn pane_collapse_ease_is_a_well_formed_easing_curve() {
+    // Endpoints are pinned.
+    assert_eq!(GitCometView::pane_collapse_ease(0.0), 0.0);
+    assert_eq!(GitCometView::pane_collapse_ease(1.0), 1.0);
+
+    // Out-of-range inputs clamp to the endpoints.
+    assert_eq!(GitCometView::pane_collapse_ease(-0.5), 0.0);
+    assert_eq!(GitCometView::pane_collapse_ease(1.5), 1.0);
+
+    // Monotonically non-decreasing across the domain.
+    let mut prev = 0.0;
+    for i in 0..=100 {
+        let t = i as f32 / 100.0;
+        let y = GitCometView::pane_collapse_ease(t);
+        assert!(
+            y >= prev - 1e-4,
+            "easing should be monotonic: y({t}) = {y} < previous {prev}"
+        );
+        assert!((0.0..=1.0).contains(&y), "easing stays in [0, 1]: y({t}) = {y}");
+        prev = y;
+    }
+
+    // Fast-out, slow-in: past the halfway mark well before the halfway time.
+    assert!(GitCometView::pane_collapse_ease(0.5) > 0.5);
+}
+
+#[test]
+fn cubic_bezier_matches_a_linear_curve_for_the_identity_control_points() {
+    // cubic-bezier(1/3, 1/3, 2/3, 2/3) is the straight line y = x.
+    for i in 0..=20 {
+        let t = i as f32 / 20.0;
+        let y = GitCometView::cubic_bezier(1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, t);
+        assert!((y - t).abs() < 1e-3, "linear bezier: y({t}) = {y}");
+    }
 }

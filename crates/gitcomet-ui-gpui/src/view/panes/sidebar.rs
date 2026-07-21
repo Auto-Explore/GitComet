@@ -1,4 +1,4 @@
-use super::super::branch_sidebar::BranchSection;
+use super::super::branch_sidebar::{BranchSection, BranchSidebarRow};
 use super::super::caches::BranchSidebarFingerprint;
 use super::super::file_icons;
 use super::super::sidebar_presentation::{
@@ -6,7 +6,7 @@ use super::super::sidebar_presentation::{
 };
 use super::super::*;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
-use gitcomet_state::model::{Loadable, SidebarMode};
+use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
 use rustc_hash::FxHasher;
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +34,74 @@ struct FileBrowserVisibleRow {
     is_expanded: bool,
 }
 
+/// A section of the sidebar that gets its own icon in the collapsed rail and,
+/// when clicked, opens in a floating popover without expanding the sidebar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum CollapsedSidebarSection {
+    Local,
+    Remote,
+    Worktrees,
+    Submodules,
+    Stashes,
+    Files,
+}
+
+impl CollapsedSidebarSection {
+    /// Rail order, top to bottom.
+    pub(in crate::view) const ALL: [Self; 6] = [
+        Self::Local,
+        Self::Remote,
+        Self::Worktrees,
+        Self::Submodules,
+        Self::Stashes,
+        Self::Files,
+    ];
+
+    pub(in crate::view) fn icon_path(self) -> &'static str {
+        match self {
+            Self::Local => "icons/computer.svg",
+            Self::Remote => "icons/cloud.svg",
+            Self::Worktrees => "icons/git_worktree.svg",
+            Self::Submodules => "icons/box.svg",
+            Self::Stashes => super::super::icons::STASH_ICON_PATH,
+            Self::Files => "icons/file.svg",
+        }
+    }
+
+    pub(in crate::view) fn title(self) -> &'static str {
+        match self {
+            Self::Local => "Local Branches",
+            Self::Remote => "Remote Branches",
+            Self::Worktrees => "Worktrees",
+            Self::Submodules => "Submodules",
+            Self::Stashes => "Stashes",
+            Self::Files => "Files",
+        }
+    }
+
+    pub(in crate::view) fn element_id(self) -> &'static str {
+        match self {
+            Self::Local => "collapsed_sidebar_icon_local",
+            Self::Remote => "collapsed_sidebar_icon_remote",
+            Self::Worktrees => "collapsed_sidebar_icon_worktrees",
+            Self::Submodules => "collapsed_sidebar_icon_submodules",
+            Self::Stashes => "collapsed_sidebar_icon_stashes",
+            Self::Files => "collapsed_sidebar_icon_files",
+        }
+    }
+
+    fn storage_key(self) -> Option<&'static str> {
+        match self {
+            Self::Local => Some(branch_sidebar::local_section_storage_key()),
+            Self::Remote => Some(branch_sidebar::remote_section_storage_key()),
+            Self::Worktrees => Some(branch_sidebar::worktrees_section_storage_key()),
+            Self::Submodules => Some(branch_sidebar::submodules_section_storage_key()),
+            Self::Stashes => Some(branch_sidebar::stash_section_storage_key()),
+            Self::Files => None,
+        }
+    }
+}
+
 pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -54,6 +122,14 @@ pub(in super::super) struct SidebarPaneView {
     selected_branch: Option<SelectedBranch>,
     file_search_options: DiffSearchOptions,
     file_browser_rows_cache: FileBrowserRowsCache,
+    /// Set transiently while rendering a collapsed-sidebar section popover so the
+    /// shared branch-row renderer draws the section-scoped rows instead of the
+    /// full cached presentation. `None` during normal (expanded) rendering.
+    pub(in super::super) collapsed_popover_presentation: Option<SidebarPresentation>,
+    /// When set (and the sidebar is collapsed), this pane renders only the given
+    /// section as popover content instead of the full sidebar. The root view
+    /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
+    collapsed_popover_section: Option<CollapsedSidebarSection>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +254,8 @@ impl SidebarPaneView {
             selected_branch: None,
             file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
+            collapsed_popover_presentation: None,
+            collapsed_popover_section: None,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -188,6 +266,16 @@ impl SidebarPaneView {
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    /// Sync the section this pane should render as collapsed-rail popover content.
+    /// No `cx.notify()`: the root re-renders (and re-embeds this pane) whenever the
+    /// value changes, so an extra notify would only cause a redundant paint.
+    pub(in super::super) fn set_collapsed_popover_section(
+        &mut self,
+        section: Option<CollapsedSidebarSection>,
+    ) {
+        self.collapsed_popover_section = section;
     }
 
     fn toggle_file_search_option(
@@ -379,6 +467,186 @@ impl SidebarPaneView {
             .min_h(px(0.0))
             .child(tab_bar)
             .child(content)
+    }
+
+    /// Render a single sidebar section as popover content, shown next to the
+    /// collapsed rail without expanding the sidebar. Files reuses the file
+    /// browser; branch sections render a scoped slice of the branch list.
+    pub(in super::super) fn render_collapsed_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+
+        let title = div()
+            .flex_none()
+            .px(scaled_px(10.0))
+            .pt(scaled_px(8.0))
+            .pb(scaled_px(6.0))
+            .text_size(scaled_px(12.0))
+            .font_weight(FontWeight::BOLD)
+            .text_color(theme.colors.text)
+            .child(section.title());
+
+        let divider = div()
+            .flex_none()
+            .h(px(1.0))
+            .w_full()
+            .bg(theme.colors.border_variant);
+
+        // Files has its own search + virtualized list that need a bounded height,
+        // so it fills the panel. Branch sections render their rows at intrinsic
+        // height and let the panel size to content (and scroll) around them.
+        let is_files = matches!(section, CollapsedSidebarSection::Files);
+
+        let root = div()
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            // Establish the base text color for the popover subtree. Rows that rely
+            // on the ambient color (e.g. worktree path labels) would otherwise fall
+            // back to the default text style across the panel/entity boundary and
+            // render near-black.
+            .text_color(theme.colors.text)
+            .child(title)
+            .child(divider);
+
+        if is_files {
+            root.h_full()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .child(self.render_file_browser_content(theme, cx)),
+                )
+                .into_any()
+        } else {
+            root.child(self.render_collapsed_popover_branch_section(section, window, cx))
+                .into_any()
+        }
+    }
+
+    fn render_collapsed_popover_branch_section(
+        &mut self,
+        section: CollapsedSidebarSection,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let Some(presentation) = self.build_collapsed_popover_presentation(section) else {
+            return components::empty_state(theme, section.title(), "No repository selected.")
+                .into_any_element();
+        };
+        let row_count = presentation.rows.len();
+        if row_count == 0 {
+            return components::empty_state(theme, section.title(), "Nothing here yet.")
+                .into_any_element();
+        }
+
+        // Render the scoped rows eagerly (a single section is bounded) so the
+        // shared row renderer can reuse the transient presentation override.
+        self.collapsed_popover_presentation = Some(presentation);
+        let rows = Self::render_branch_sidebar_rows(self, 0..row_count, window, cx);
+        self.collapsed_popover_presentation = None;
+
+        // Intrinsic height: the enclosing popover panel sizes to content and owns
+        // the scroll, so this just stacks the rows.
+        div()
+            .flex()
+            .flex_col()
+            .pt(px(2.0))
+            // A little breathing room below the last row (content-sized popovers
+            // otherwise sit the last item flush against the bottom border).
+            .pb(px(6.0))
+            .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn build_collapsed_popover_presentation(
+        &mut self,
+        section: CollapsedSidebarSection,
+    ) -> Option<SidebarPresentation> {
+        // Workspace badges are collapse-independent; reuse the cached ones.
+        let base = self.branch_sidebar_presentation_cached()?;
+        let repo = self.active_repo()?;
+        let mut collapsed = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo.spec.workdir)
+            .cloned()
+            .unwrap_or_default();
+        // Force-expand the target section so its content is present regardless of
+        // the persisted collapse state (which we never mutate here).
+        if let Some(key) = section.storage_key()
+            && branch_sidebar::is_collapsed(&collapsed, key)
+        {
+            branch_sidebar::toggle_collapse_state(&mut collapsed, key);
+        }
+        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed);
+        let scoped = section_content_rows(&full, section);
+        Some(SidebarPresentation {
+            rows: scoped.into(),
+            workspace_badges: base.workspace_badges,
+        })
+    }
+
+    /// Kick off any lazy data load a section needs before it can render in the
+    /// collapsed-rail popover. Worktrees load eagerly, but stashes, submodules,
+    /// and the file browser are only fetched when their section is opened.
+    pub(in super::super) fn ensure_collapsed_section_data(
+        &mut self,
+        section: CollapsedSidebarSection,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let repo_id = repo.id;
+        match section {
+            CollapsedSidebarSection::Submodules => {
+                if matches!(repo.submodules, Loadable::NotLoaded | Loadable::Error(_)) {
+                    self.store.dispatch(Msg::LoadSubmodules { repo_id });
+                }
+            }
+            CollapsedSidebarSection::Stashes => {
+                self.store.dispatch(Msg::EnsureSidebarData {
+                    repo_id,
+                    request: SidebarDataRequest {
+                        worktrees: true,
+                        submodules: false,
+                        stashes: true,
+                    },
+                });
+            }
+            CollapsedSidebarSection::Worktrees => {
+                self.store.dispatch(Msg::EnsureSidebarData {
+                    repo_id,
+                    request: SidebarDataRequest {
+                        worktrees: true,
+                        submodules: false,
+                        stashes: false,
+                    },
+                });
+            }
+            CollapsedSidebarSection::Files => {
+                if matches!(
+                    repo.file_browser.entries,
+                    Loadable::NotLoaded | Loadable::Error(_)
+                ) {
+                    let source = repo.file_browser.source.clone();
+                    self.store
+                        .dispatch(Msg::LoadFileBrowser { repo_id, source });
+                }
+            }
+            CollapsedSidebarSection::Local | CollapsedSidebarSection::Remote => {}
+        }
     }
 
     fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
@@ -1075,9 +1343,74 @@ impl SidebarPaneView {
 }
 
 impl Render for SidebarPaneView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        self.sidebar(cx)
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        match self.collapsed_popover_section {
+            Some(section) => self.render_collapsed_popover(section, window, cx),
+            None => self.sidebar(cx).into_any_element(),
+        }
     }
+}
+
+/// True for any row that begins a top-level sidebar section, used to bound a
+/// single section's content when scoping rows for a collapsed-sidebar popover.
+fn is_section_header(row: &BranchSidebarRow) -> bool {
+    matches!(
+        row,
+        BranchSidebarRow::SectionHeader { .. }
+            | BranchSidebarRow::WorktreesHeader { .. }
+            | BranchSidebarRow::SubmodulesHeader { .. }
+            | BranchSidebarRow::StashHeader { .. }
+    )
+}
+
+fn matches_section_header(row: &BranchSidebarRow, section: CollapsedSidebarSection) -> bool {
+    matches!(
+        (row, section),
+        (
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Local,
+                ..
+            },
+            CollapsedSidebarSection::Local,
+        ) | (
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Remote,
+                ..
+            },
+            CollapsedSidebarSection::Remote,
+        ) | (
+            BranchSidebarRow::WorktreesHeader { .. },
+            CollapsedSidebarSection::Worktrees,
+        ) | (
+            BranchSidebarRow::SubmodulesHeader { .. },
+            CollapsedSidebarSection::Submodules,
+        ) | (
+            BranchSidebarRow::StashHeader { .. },
+            CollapsedSidebarSection::Stashes,
+        )
+    )
+}
+
+/// The content rows belonging to `section` (between its header and the next
+/// section header), with the header and inter-section spacers dropped — the
+/// popover supplies its own title.
+fn section_content_rows(
+    rows: &[BranchSidebarRow],
+    section: CollapsedSidebarSection,
+) -> Vec<BranchSidebarRow> {
+    let Some(start) = rows.iter().position(|r| matches_section_header(r, section)) else {
+        return Vec::new();
+    };
+    let end = rows[start + 1..]
+        .iter()
+        .position(is_section_header)
+        .map(|pos| start + 1 + pos)
+        .unwrap_or(rows.len());
+    rows[start + 1..end]
+        .iter()
+        .filter(|r| !matches!(r, BranchSidebarRow::SectionSpacer))
+        .cloned()
+        .collect()
 }
 
 fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {

@@ -3583,6 +3583,15 @@ pub struct GitCometView {
     pub(super) hover_resize_edge: Option<ResizeEdge>,
 
     pub(super) sidebar_collapsed: bool,
+    /// Which sidebar section is currently shown in the collapsed-rail popover, if
+    /// any. Only meaningful while `sidebar_collapsed` is true.
+    pub(super) sidebar_collapsed_popover: Option<CollapsedSidebarSection>,
+    /// A section whose popover is fading out. Kept mounted (invisible input) for
+    /// the fade-out duration, then cleared by a timer keyed on the anim seq.
+    pub(super) sidebar_collapsed_popover_closing: Option<CollapsedSidebarSection>,
+    /// Bumped on every open/close transition; keys the fade animation (so it
+    /// restarts each time) and guards the close timer against races.
+    pub(super) sidebar_collapsed_popover_anim_seq: u64,
     pub(super) details_collapsed: bool,
     pub(super) sidebar_width_design: f32,
     pub(super) details_width_design: f32,
