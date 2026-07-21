@@ -887,6 +887,12 @@ impl SidebarPaneView {
                                                         )
                                                         .id(("worktree_branch_badge_text", ix))
                                                         .text_size(scaled_px(11.0))
+                                                        // Explicit color: TruncatedText resolves an
+                                                        // unset color from the ambient text style in
+                                                        // a deferred measure closure that misses the
+                                                        // pill's `.text_color`, rendering near-black
+                                                        // in the collapsed popover.
+                                                        .text_color(branch_badge_colors.text)
                                                         .full_text_tooltip(
                                                             this.tooltip_host.clone(),
                                                         )
