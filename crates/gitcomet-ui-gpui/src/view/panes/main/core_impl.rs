@@ -799,7 +799,8 @@ fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
 
     let row_h = px(CONFLICT_PREVIEW_ROW_H);
     let output_ix = N - 1;
-    let offsets: [Pixels; N] = std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()));
+    let offsets: [Pixels; N] =
+        std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()));
     let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
         axis.max_scroll_component(handles[ix].max_offset().into())
             .max(px(0.0))
@@ -1639,7 +1640,8 @@ impl MainPaneView {
             conflict_resolver_input,
             _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),
-            conflict_resolver_vsplit_ratio: 0.5,
+            conflict_open_summary_toasted_files: HashSet::default(),
+            conflict_resolver_vsplit_ratio: 0.6,
             conflict_resolver_vsplit_resize: None,
             conflict_three_way_col_ratios: [1.0 / 3.0, 2.0 / 3.0],
             conflict_three_way_col_widths: [px(0.0); 3],
@@ -3807,19 +3809,6 @@ impl MainPaneView {
             return;
         }
         self.mergetool_auto_advance = next;
-        self.schedule_ui_settings_persist(cx);
-        cx.notify();
-    }
-
-    pub(in crate::view) fn set_mergetool_vertical_split_and_persist(
-        &mut self,
-        next: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.mergetool_vertical_split == next {
-            return;
-        }
-        self.mergetool_vertical_split = next;
         self.schedule_ui_settings_persist(cx);
         cx.notify();
     }

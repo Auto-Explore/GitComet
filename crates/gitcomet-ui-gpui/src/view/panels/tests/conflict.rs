@@ -5237,6 +5237,28 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
         );
     });
 
+    // Returning to the first conflict file in this window must not announce it
+    // a second time.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo =
+                repo_with_conflict(&file_a, &base_text, &ours_text, &theirs_text, &current_text);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let pane = this.main_pane.read(app);
+        assert_eq!(pane.conflict_resolver.path.as_ref(), Some(&file_a));
+        assert!(pane.conflict_resolver.open_summary_announced);
+        assert_eq!(
+            this.toast_host.read(app).toast_count_for_tests(),
+            2,
+            "reopening a previously announced conflict file must not push another toast",
+        );
+    });
+
     cx.run_until_parked();
     std::fs::remove_dir_all(&workdir).expect("cleanup view-mode persist fixture");
 }

@@ -378,6 +378,7 @@ impl MainPaneView {
     fn conflict_resolver_footer(
         &self,
         theme: AppTheme,
+        can_reset_from_markers: bool,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
         let total = self.conflict_resolver_conflict_count();
@@ -390,11 +391,9 @@ impl MainPaneView {
         // resolved output to a String on every render. Streamed mode never
         // materializes the text in the TextInput, so it has no markers to scan.
         let has_conflict_markers = !self.conflict_resolved_output_is_streamed()
-            && self
-                .conflict_resolver_input
-                .read_with(cx, |i, _| {
-                    conflict_resolver::text_contains_conflict_markers(i.text())
-                });
+            && self.conflict_resolver_input.read_with(cx, |i, _| {
+                conflict_resolver::text_contains_conflict_markers(i.text())
+            });
 
         let status: AnyElement = if total == 0 {
             div()
@@ -456,6 +455,14 @@ impl MainPaneView {
                                 .text_color(theme.colors.danger)
                                 .child("markers remain"),
                         )
+                    }),
+            )
+            .child(
+                components::Button::new("conflict_reset_markers", "Reset from markers")
+                    .style(components::ButtonStyle::Transparent)
+                    .disabled(!can_reset_from_markers)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        this.conflict_resolver_reset_output_from_markers(cx);
                     }),
             )
     }
@@ -534,73 +541,6 @@ impl MainPaneView {
                             let has_current = file.current.is_some();
 
                             let view_mode = self.conflict_resolver.view_mode;
-                            let set_view_three_way =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_set_view_mode(
-                                        ConflictResolverViewMode::ThreeWay,
-                                        cx,
-                                    );
-                                };
-                            let set_view_two_way =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_set_view_mode(
-                                        ConflictResolverViewMode::TwoWayDiff,
-                                        cx,
-                                    );
-                                };
-
-                            let reset_from_markers =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_reset_output_from_markers(cx);
-                                };
-
-                            let view_toggle_selected_bg = with_alpha(
-                                theme.colors.accent,
-                                if theme.is_dark { 0.26 } else { 0.20 },
-                            );
-                            let view_toggle_border = with_alpha(
-                                theme.colors.text_muted,
-                                if theme.is_dark { 0.38 } else { 0.28 },
-                            );
-                            let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
-
-                            let view_mode_controls = div()
-                                .id("conflict_view_mode_toggle")
-                                .flex()
-                                .items_center()
-                                .h(components::control_height(ui_scale_percent))
-                                .rounded(px(theme.radii.row))
-                                .border_1()
-                                .border_color(view_toggle_border)
-                                .bg(gpui::rgba(0x00000000))
-                                .overflow_hidden()
-                                .p(px(1.0))
-                                .child(
-                                    components::Button::new("conflict_view_three_way", "3-way")
-                                        .borderless()
-                                        .style(components::ButtonStyle::Subtle)
-                                        .selected(view_mode == ConflictResolverViewMode::ThreeWay)
-                                        .selected_bg(view_toggle_selected_bg)
-                                        .on_click(theme, cx, set_view_three_way),
-                                )
-                                .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
-                                .child(
-                                    components::Button::new("conflict_view_two_way", "2-way")
-                                        .borderless()
-                                        .style(components::ButtonStyle::Subtle)
-                                        .selected(view_mode == ConflictResolverViewMode::TwoWayDiff)
-                                        .selected_bg(view_toggle_selected_bg)
-                                        .on_click(theme, cx, set_view_two_way),
-                                );
 
                             let diff_len = match view_mode {
                                 ConflictResolverViewMode::ThreeWay => {
@@ -624,7 +564,6 @@ impl MainPaneView {
                             let active_conflict = self.conflict_resolver.active_conflict;
                             let has_conflicts = conflict_count > 0;
                             let resolved_count = self.conflict_resolver_resolved_count();
-                            let unresolved_count = conflict_count - resolved_count;
                             let active_autosolve_trace = repo
                                 .conflict_state.conflict_session
                                 .as_ref()
@@ -637,13 +576,6 @@ impl MainPaneView {
                                 })
                                 .map(SharedString::from);
 
-                            let auto_resolve =
-                                |this: &mut Self,
-                                 _e: &ClickEvent,
-                                 _w: &mut Window,
-                                 cx: &mut gpui::Context<Self>| {
-                                    this.conflict_resolver_auto_resolve(cx);
-                                };
                             let toggle_hide_resolved =
                                 |this: &mut Self,
                                  _e: &ClickEvent,
@@ -657,21 +589,7 @@ impl MainPaneView {
                                 .items_center()
                                 .gap_1()
                                 .when(has_conflicts, |d| {
-                                    let nav_label: SharedString = format!(
-                                        "Conflict {}/{}",
-                                        active_conflict + 1,
-                                        conflict_count
-                                    )
-                                    .into();
-                                    // Just the active-conflict position here;
-                                    // resolved/auto/remaining counts live in the
-                                    // footer status line to avoid repetition.
-                                    let mut d = d.child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(theme.colors.text_muted)
-                                            .child(nav_label),
-                                    );
+                                    let mut d = d;
                                     if let Some(label) = active_autosolve_trace.as_ref() {
                                         d = d.child(
                                             div()
@@ -681,41 +599,6 @@ impl MainPaneView {
                                         );
                                     }
                                     d
-                                })
-                                .child(
-                                    components::Button::new(
-                                        "conflict_reset_markers",
-                                        "Reset from markers",
-                                    )
-                                    .style(components::ButtonStyle::Transparent)
-                                    .disabled(!has_current)
-                                    .on_click(
-                                        theme,
-                                        cx,
-                                        reset_from_markers,
-                                    ),
-                                )
-                                .when(has_conflicts && unresolved_count > 0, |d| {
-                                    d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
-                                        .child(
-                                            components::Button::new(
-                                                "conflict_auto_resolve",
-                                                "Auto-resolve",
-                                            )
-                                            .style(components::ButtonStyle::Outlined)
-                                            .on_click(
-                                                theme,
-                                                cx,
-                                                auto_resolve,
-                                            )
-                                            .gitcomet_tooltip(
-                                                theme,
-                                                "Re-run safe auto-solve and the low-confidence \
-                                                 history/changelog merge (high and medium \
-                                                 confidence tiers already ran on open)"
-                                                    .into(),
-                                            ),
-                                        )
                                 })
                                 .when(has_conflicts && resolved_count > 0, |d| {
                                     d.child(
@@ -800,42 +683,9 @@ impl MainPaneView {
                                     )
                             });
 
-                            let top_header = div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(
-                                            div().text_xs().text_color(theme.colors.text_muted).child(
-                                                if is_rendered_preview_active {
-                                                    "Preview inputs (base / local / remote)"
-                                                } else {
-                                                    match view_mode {
-                                                        ConflictResolverViewMode::ThreeWay => {
-                                                            "Merge inputs (base / local / remote)"
-                                                        }
-                                                        ConflictResolverViewMode::TwoWayDiff => {
-                                                            "Diff (local ↔ remote)"
-                                                        }
-                                                    }
-                                                },
-                                            ),
-                                        )
-                                        .when_some(preview_toggle, |d, toggle| d.child(toggle)),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .when(!is_rendered_preview_active, |d| {
-                                            d.child(view_mode_controls)
-                                        }),
-                                );
+                            let top_header = preview_toggle.map(|toggle| {
+                                div().flex().items_center().justify_end().child(toggle)
+                            });
 
                             // Compute three-way column widths
                             let vertical_sync_enabled =
@@ -1709,7 +1559,7 @@ impl MainPaneView {
                                 .px_2()
                                 .py_2()
                                 .gap_1()
-                                .child(top_header)
+                                .when_some(top_header, |d, header| d.child(header))
                                 .child({
                                     let mut top_section = div()
                                         .min_h(min_section_h)
@@ -1862,12 +1712,22 @@ impl MainPaneView {
                                                                                 )
                                                                             },
                                                                         )
-                                                                        .when(
-                                                                            self.mergetool_show_line_numbers,
-                                                                            |d| d.child(
+                                                                        // The gutter also carries the marker lane and
+                                                                        // A/B/C origin badges (which conflict each output
+                                                                        // line was picked for), so it stays even when line
+                                                                        // numbers are hidden — only its width shrinks.
+                                                                        .child(
                                                                             div()
                                                                                 .id("conflict_resolver_output_gutter")
-                                                                                .w(px(92.0))
+                                                                                // shown = hidden (54) + line-number cell (38)
+                                                                                // + the half gap before the badge (4), so the
+                                                                                // badge keeps the same spacing off the divider
+                                                                                // in both modes.
+                                                                                .w(if self.mergetool_show_line_numbers {
+                                                                                    px(96.0)
+                                                                                } else {
+                                                                                    px(54.0)
+                                                                                })
                                                                                 .h_full()
                                                                                 .min_h(px(0.0))
                                                                                 .flex_shrink_0()
@@ -1876,7 +1736,7 @@ impl MainPaneView {
                                                                                     theme.colors.border,
                                                                                 )
                                                                                 .child(outline_list),
-                                                                        ))
+                                                                        )
                                                                         .child(
                                                                             div()
                                                                                 .id(
@@ -1993,7 +1853,7 @@ impl MainPaneView {
                                     bottom_section.style().flex_basis = Some(relative(0.).into());
                                     bottom_section
                                 })
-                                .child(self.conflict_resolver_footer(theme, cx))
+                                .child(self.conflict_resolver_footer(theme, has_current, cx))
                                 // section 30 split: ends a row-drag on mouse-up anywhere.
                                 .child(ConflictRowSelectionTracker { view: cx.entity() })
                                 .into_any_element()

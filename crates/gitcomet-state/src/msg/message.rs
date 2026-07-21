@@ -733,6 +733,9 @@ pub enum Msg {
         path: RepoPath,
         region_index: usize,
         boundaries: gitcomet_core::conflict_session::ConflictRegionSplitBoundaries,
+        /// Resolver revision from which the region index and boundaries were
+        /// calculated. Stale requests are rejected before editing the session.
+        expected_conflict_rev: u64,
     },
     /// section 30 join: merge conflict blocks `region_index` and `region_index + 1`,
     /// absorbing the context between them into every side.

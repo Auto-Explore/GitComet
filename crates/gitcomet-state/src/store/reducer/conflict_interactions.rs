@@ -121,7 +121,14 @@ pub(super) fn split_region(
     path: RepoPath,
     region_index: usize,
     boundaries: ConflictRegionSplitBoundaries,
+    expected_conflict_rev: u64,
 ) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if repo_state.conflict_state.conflict_rev != expected_conflict_rev {
+        return Vec::new();
+    }
     edit_regions(
         state,
         repo_id,

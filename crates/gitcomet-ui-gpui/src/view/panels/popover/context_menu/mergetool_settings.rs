@@ -7,7 +7,9 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let (auto_advance, _collapse_default, _vertical_split, output_scroll_sync, show_line_numbers) =
         pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
+    let three_way_view = pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
     model_for_mergetool_settings(
+        three_way_view,
         auto_advance,
         collapse_context,
         output_scroll_sync,
@@ -15,10 +17,11 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     )
 }
 
-// NOTE: a "Stack columns vertically" entry (backed by the persisted
-// `mergetool_vertical_split` setting and `SetMergetoolVerticalSplit`) is
-// deliberately not offered yet — the stacked column rendering is deferred.
+// NOTE: a "Stack columns vertically" entry backed by the persisted
+// `mergetool_vertical_split` setting is deliberately not offered yet — the
+// stacked column rendering is deferred.
 fn model_for_mergetool_settings(
+    three_way_view: bool,
     auto_advance: bool,
     collapse_context: bool,
     output_scroll_sync: bool,
@@ -26,6 +29,21 @@ fn model_for_mergetool_settings(
 ) -> ContextMenuModel {
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Merge tool settings".into()),
+        ContextMenuItem::Separator,
+        ContextMenuItem::Entry {
+            label: "3-way merge".into(),
+            icon: three_way_view.then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetMergetoolThreeWayView { enabled: true }),
+        },
+        ContextMenuItem::Entry {
+            label: "2-way diff".into(),
+            icon: (!three_way_view).then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetMergetoolThreeWayView { enabled: false }),
+        },
         ContextMenuItem::Separator,
         ContextMenuItem::Entry {
             label: "Auto-advance to next unresolved after pick".into(),
@@ -70,7 +88,32 @@ mod tests {
 
     #[test]
     fn model_marks_enabled_options_and_toggles_them() {
-        let model = model_for_mergetool_settings(true, false, true, true);
+        let model = model_for_mergetool_settings(true, true, false, true, true);
+
+        assert!(model.items.iter().any(|item| {
+            matches!(
+                item,
+                ContextMenuItem::Entry { label, icon, action, .. }
+                    if label.as_ref() == "3-way merge"
+                        && icon.is_some()
+                        && matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetMergetoolThreeWayView { enabled: true }
+                        )
+            )
+        }));
+        assert!(model.items.iter().any(|item| {
+            matches!(
+                item,
+                ContextMenuItem::Entry { label, icon, action, .. }
+                    if label.as_ref() == "2-way diff"
+                        && icon.is_none()
+                        && matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetMergetoolThreeWayView { enabled: false }
+                        )
+            )
+        }));
 
         assert!(model.items.iter().any(|item| {
             matches!(

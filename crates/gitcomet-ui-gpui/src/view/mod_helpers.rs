@@ -1691,17 +1691,34 @@ impl ConflictResolverUiState {
             return None;
         }
 
-        // Side-space block ranges (the stored ranges are aligned-space).
-        let maps = conflict_resolver::build_three_way_conflict_maps_without_line_maps(
-            &self.marker_segments,
-            self.three_way_line_count(ThreeWayColumn::Base),
-            self.three_way_line_count(ThreeWayColumn::Ours),
-            self.three_way_line_count(ThreeWayColumn::Theirs),
-        );
+        let marker_block = self
+            .marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .nth(conflict_ix)?;
+        let line_count = |text: &str| {
+            if text.is_empty() {
+                0
+            } else {
+                text.as_bytes()
+                    .iter()
+                    .filter(|&&byte| byte == b'\n')
+                    .count()
+                    + usize::from(!text.ends_with('\n'))
+            }
+        };
 
         let side_bounds = |side: usize| -> Option<([usize; 2], usize)> {
-            let side_range = maps.conflict_ranges[side].get(conflict_ix)?;
-            let base = side_range.start;
+            // The aligned map is built from the actual staged sides. Its position
+            // at the block's first aligned row remains correct when clean context
+            // before this block exists on only one side; marker Text segments do
+            // not retain enough information to reconstruct that position.
+            let base = self
+                .three_way_aligned
+                .side_line_lower_bound(side, block.start);
             let b0 = self
                 .three_way_aligned
                 .side_line_lower_bound(side, sel_start)
@@ -1710,7 +1727,12 @@ impl ConflictResolverUiState {
                 .three_way_aligned
                 .side_line_lower_bound(side, sel_end_inclusive + 1)
                 .saturating_sub(base);
-            let len = side_range.len();
+            let len = match side {
+                0 => line_count(marker_block.base.as_deref().unwrap_or_default()),
+                1 => line_count(&marker_block.ours),
+                2 => line_count(&marker_block.theirs),
+                _ => return None,
+            };
             let b0 = b0.min(len);
             let b1 = b1.clamp(b0, len);
             Some(([b0, b1], len))
@@ -3158,6 +3180,92 @@ mod conflict_resolver_ui_state_tests {
     }
 
     #[test]
+    fn split_boundaries_use_staged_positions_after_one_sided_clean_context() {
+        let base = "ctx\nb1\nb2\ntail\n";
+        let ours = "ctx\nours clean insertion\no1\no2\ntail\n";
+        let theirs = "ctx\nt1\nt2\ntail\n";
+        use gitcomet_core::merge::{AlignedRun, AlignedRunKind};
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(&[
+            AlignedRun {
+                base: 0..1,
+                ours: 0..1,
+                theirs: 0..1,
+                kind: AlignedRunKind::Unchanged,
+            },
+            AlignedRun {
+                base: 1..1,
+                ours: 1..2,
+                theirs: 1..1,
+                kind: AlignedRunKind::OursChanged,
+            },
+            AlignedRun {
+                base: 1..3,
+                ours: 2..4,
+                theirs: 1..3,
+                kind: AlignedRunKind::Conflict,
+            },
+            AlignedRun {
+                base: 3..4,
+                ours: 4..5,
+                theirs: 3..4,
+                kind: AlignedRunKind::Unchanged,
+            },
+        ]);
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                ConflictSegment::Text("ctx\nours clean insertion\n".into()),
+                ConflictSegment::Block(ConflictBlock {
+                    base: Some("b1\nb2\n".into()),
+                    ours: "o1\no2\n".into(),
+                    theirs: "t1\nt2\n".into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                }),
+                ConflictSegment::Text("tail\n".into()),
+            ],
+            conflict_region_indices: vec![0],
+            conflict_region_marker_has_base: vec![true],
+            strategy: Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver,
+            ),
+            three_way_text: ThreeWaySides {
+                base: base.into(),
+                ours: ours.into(),
+                theirs: theirs.into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: super::deferred_line_starts_for_text(base).into(),
+                ours: super::deferred_line_starts_for_text(ours).into(),
+                theirs: super::deferred_line_starts_for_text(theirs).into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+        state.rebuild_three_way_visible_state();
+        let first_conflict_row = state
+            .three_way_block_aligned_range(0)
+            .unwrap()
+            .find(|&row| {
+                state.three_way_row_text(ThreeWayColumn::Base, row) == Some("b1")
+                    && state.three_way_row_text(ThreeWayColumn::Ours, row) == Some("o1")
+                    && state.three_way_row_text(ThreeWayColumn::Theirs, row) == Some("t1")
+            })
+            .expect("first conflict row");
+        state.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: first_conflict_row,
+            head_row: first_conflict_row,
+            selecting: false,
+        });
+
+        let boundaries = state.split_boundaries_for_selection().unwrap().1;
+        assert_eq!(boundaries.base, Some([0, 1]));
+        assert_eq!(boundaries.ours, [0, 1]);
+        assert_eq!(boundaries.theirs, [0, 1]);
+    }
+
+    #[test]
     fn split_boundaries_reject_whole_block_and_ambiguous_region_maps() {
         let mut state = split_ready_state();
         state.row_selection = Some(ConflictRowSelection {
@@ -4436,6 +4544,7 @@ pub struct GitCometView {
     pub(super) hover_resize_edge: Option<ResizeEdge>,
 
     pub(super) sidebar_collapsed: bool,
+    pub(super) sidebar_collapsed_before_merge_view: Option<bool>,
     pub(super) details_collapsed: bool,
     pub(super) sidebar_width_design: f32,
     pub(super) details_width_design: f32,

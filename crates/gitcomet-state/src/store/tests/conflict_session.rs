@@ -2429,6 +2429,7 @@ fn conflict_split_region_rewrites_markers_and_carries_over_resolutions() {
                 theirs: [1, 1],
                 base: None,
             },
+            expected_conflict_rev: before_rev,
         },
     );
 
@@ -2563,6 +2564,7 @@ fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    let before_split_rev = state.repos[0].conflict_state.conflict_rev;
 
     reduce(
         &mut repos,
@@ -2577,6 +2579,7 @@ fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
                 theirs: [1, 1],
                 base: None,
             },
+            expected_conflict_rev: before_split_rev,
         },
     );
     reduce(
@@ -2628,6 +2631,7 @@ fn conflict_split_noops_on_degenerate_selection() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    let before_rev = state.repos[0].conflict_state.conflict_rev;
 
     let effects = reduce(
         &mut repos,
@@ -2643,6 +2647,7 @@ fn conflict_split_noops_on_degenerate_selection() {
                 theirs: [0, 2],
                 base: None,
             },
+            expected_conflict_rev: before_rev,
         },
     );
     assert!(effects.is_empty(), "degenerate split emits no effects");
@@ -2655,6 +2660,47 @@ fn conflict_split_noops_on_degenerate_selection() {
             .regions
             .len(),
         2
+    );
+}
+
+#[test]
+fn conflict_split_region_rejects_stale_revision() {
+    use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    let current_rev = state.repos[0].conflict_state.conflict_rev;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSplitRegion {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            boundaries: ConflictRegionSplitBoundaries {
+                ours: [1, 1],
+                theirs: [1, 1],
+                base: None,
+            },
+            expected_conflict_rev: current_rev.wrapping_add(1),
+        },
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, current_rev);
+    assert_eq!(
+        state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .regions
+            .len(),
+        2,
     );
 }
 

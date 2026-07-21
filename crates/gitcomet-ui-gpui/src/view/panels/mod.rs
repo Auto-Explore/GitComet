@@ -236,13 +236,13 @@ pub(in crate::view) enum ContextMenuAction {
         enabled: bool,
     },
     ToggleMergetoolCollapseUnchanged,
-    SetMergetoolVerticalSplit {
-        enabled: bool,
-    },
     SetMergetoolOutputScrollSync {
         enabled: bool,
     },
     SetMergetoolShowLineNumbers {
+        enabled: bool,
+    },
+    SetMergetoolThreeWayView {
         enabled: bool,
     },
     ConflictResolverOutputCut {

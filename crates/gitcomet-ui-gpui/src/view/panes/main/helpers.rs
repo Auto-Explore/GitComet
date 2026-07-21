@@ -2588,6 +2588,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in crate::view) conflict_resolver: ConflictResolverUiState,
+    pub(in crate::view) conflict_open_summary_toasted_files: HashSet<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) conflict_resolver_vsplit_ratio: f32,
     pub(in crate::view) conflict_resolver_vsplit_resize: Option<ConflictVSplitResizeState>,
     pub(in crate::view) conflict_three_way_col_ratios: [f32; 2],

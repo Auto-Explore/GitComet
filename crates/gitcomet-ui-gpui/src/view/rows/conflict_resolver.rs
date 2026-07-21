@@ -752,9 +752,7 @@ impl MainPaneView {
                             )))
                         })
                         .when(show_line_numbers, |d| {
-                            d.child(
-                                conflict_diff_line_number_cell(theme, line_no),
-                            )
+                            d.child(conflict_diff_line_number_cell(theme, line_no))
                         })
                         .child(conflict_diff_text_cell(line_text.clone(), styled, show_ws));
 
@@ -1084,9 +1082,10 @@ impl MainPaneView {
                         )
                     })
                     .when(show_line_numbers, |d| {
-                        d.child(
-                            conflict_diff_line_number_cell(theme, line_number_string(line_no)),
-                        )
+                        d.child(conflict_diff_line_number_cell(
+                            theme,
+                            line_number_string(line_no),
+                        ))
                     })
                     .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
 
@@ -1501,9 +1500,10 @@ impl MainPaneView {
                             )))
                         })
                         .when(show_line_numbers, |d| {
-                            d.child(
-                                conflict_diff_line_number_cell(theme, line_number_string(line_no_opt)),
-                            )
+                            d.child(conflict_diff_line_number_cell(
+                                theme,
+                                line_number_string(line_no_opt),
+                            ))
                         })
                         .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
 
@@ -1804,6 +1804,7 @@ impl MainPaneView {
                 };
                 let marker_lane = div()
                     .w(px(12.0))
+                    .mr_2()
                     .h_full()
                     .flex()
                     .items_center()
@@ -1847,7 +1848,6 @@ impl MainPaneView {
                     .px_2()
                     .flex()
                     .items_center()
-                    .gap_2()
                     .text_xs()
                     .font_family(editor_font_family.clone())
                     .text_color(theme.colors.text)
@@ -1858,12 +1858,20 @@ impl MainPaneView {
                         ))
                     })
                     .child(marker_lane)
-                    .child(
-                        div()
-                            .w(px(38.0))
-                            .text_color(theme.colors.text_muted)
-                            .child(line_number_string(u32::try_from(ix + 1).ok())),
-                    )
+                    .when(this.mergetool_show_line_numbers, |d| {
+                        // half the marker gap between the number and the badge;
+                        // right-align so short numbers hug the badge instead of
+                        // leaving a wide empty stretch inside the cell.
+                        d.child(
+                            div()
+                                .w(px(38.0))
+                                .mr_1()
+                                .flex()
+                                .justify_end()
+                                .text_color(theme.colors.text_muted)
+                                .child(line_number_string(u32::try_from(ix + 1).ok())),
+                        )
+                    })
                     .child({
                         // section 30: confidence dot on the first row of an
                         // auto-resolved conflict (accent/warning/danger for
@@ -2600,9 +2608,10 @@ impl MainPaneView {
             .whitespace_nowrap()
             .overflow_hidden()
             .when(self.mergetool_show_line_numbers, |d| {
-                d.child(
-                    conflict_diff_line_number_cell(theme, line_number_string(row.old_line)),
-                )
+                d.child(conflict_diff_line_number_cell(
+                    theme,
+                    line_number_string(row.old_line),
+                ))
             })
             .child(conflict_diff_text_cell(
                 left_text.clone(),
@@ -2626,9 +2635,10 @@ impl MainPaneView {
             .whitespace_nowrap()
             .overflow_hidden()
             .when(self.mergetool_show_line_numbers, |d| {
-                d.child(
-                    conflict_diff_line_number_cell(theme, line_number_string(row.new_line)),
-                )
+                d.child(conflict_diff_line_number_cell(
+                    theme,
+                    line_number_string(row.new_line),
+                ))
             })
             .child(conflict_diff_text_cell(
                 right_text.clone(),
@@ -2934,10 +2944,7 @@ fn split_cell_bg(
     match (kind, side) {
         (gitcomet_core::file_diff::FileDiffRowKind::Add, ConflictPickSide::Theirs)
         | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Theirs) => {
-            with_alpha(
-                theme.colors.accent,
-                if theme.is_dark { 0.14 } else { 0.10 },
-            )
+            with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
         }
         (gitcomet_core::file_diff::FileDiffRowKind::Remove, ConflictPickSide::Ours)
         | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Ours) => {

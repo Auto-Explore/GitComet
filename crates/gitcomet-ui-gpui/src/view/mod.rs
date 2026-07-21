@@ -414,6 +414,27 @@ pub(in crate::view) fn pane_resize_handles_width(
     px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
 }
 
+fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
+    let repo_id = state.active_repo?;
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    Some((repo_id, repo.diff_state.diff_target.clone()?))
+}
+
+fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
+    let (repo_id, target) = active_diff_target(state)?;
+    let DiffTarget::WorkingTree { path, area } = &target else {
+        return None;
+    };
+    if *area != DiffArea::Unstaged {
+        return None;
+    }
+
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    repo.status_entry_for_path(DiffArea::Unstaged, path)
+        .filter(|entry| entry.kind == FileStatusKind::Conflicted && entry.conflict.is_some())?;
+    Some((repo_id, target))
+}
+
 #[cfg(test)]
 pub(in crate::view) fn pane_resize_drag_width_bounds(
     handle: PaneResizeHandle,
@@ -2050,6 +2071,7 @@ impl GitCometView {
             open_repo_input,
             hover_resize_edge: None,
             sidebar_collapsed: false,
+            sidebar_collapsed_before_merge_view: None,
             details_collapsed: false,
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,

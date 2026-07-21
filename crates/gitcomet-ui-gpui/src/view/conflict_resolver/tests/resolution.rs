@@ -574,23 +574,6 @@ fn stage_safety_requires_confirmation_when_markers_remain() {
 }
 
 #[test]
-fn autosolve_trace_summary_safe_mode() {
-    let stats = gitcomet_state::msg::ConflictAutosolveStats {
-        pass1: 2,
-        pass2_split: 1,
-        pass1_after_split: 0,
-        regex: 0,
-        history: 0,
-    };
-    let summary = format_autosolve_trace_summary(AutosolveTraceMode::Safe, 5, 2, &stats);
-    assert!(summary.contains("Last autosolve (safe)"));
-    assert!(summary.contains("resolved 3 blocks"));
-    assert!(summary.contains("unresolved 5 -> 2"));
-    assert!(summary.contains("pass1 2"));
-    assert!(summary.contains("split 1"));
-}
-
-#[test]
 fn autosolve_trace_summary_history_mode_uses_history_stat() {
     let stats = gitcomet_state::msg::ConflictAutosolveStats {
         pass1: 0,

@@ -1082,8 +1082,11 @@ impl MainPaneView {
             } else {
                 session_open_summary.map(|(_, _, auto_solved)| auto_solved)
             };
-        let open_summary_announced =
-            is_same_conflict && self.conflict_resolver.open_summary_announced;
+        let open_summary_announced = (is_same_conflict
+            && self.conflict_resolver.open_summary_announced)
+            || self
+                .conflict_open_summary_toasted_files
+                .contains(&(repo_id, path.clone()));
 
         self.conflict_three_way_segments_cache.clear();
 
@@ -1282,6 +1285,13 @@ impl MainPaneView {
                     conflict_resolver::format_open_summary_toast(total, auto_solved, resolved)
                 {
                     self.conflict_resolver.open_summary_announced = true;
+                    if let (Some(repo_id), Some(path)) = (
+                        self.conflict_resolver.repo_id,
+                        self.conflict_resolver.path.as_ref(),
+                    ) {
+                        self.conflict_open_summary_toasted_files
+                            .insert((repo_id, path.clone()));
+                    }
                     // The sync runs inside a GitCometView update; push the
                     // toast after the current update flush to avoid reentrant
                     // root-view updates.
@@ -2064,25 +2074,29 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         // `line_ix` arrives from input-row menus in aligned-row space (section 30).
-        let line = match choice {
-            conflict_resolver::ConflictChoice::Base => self
-                .conflict_resolver
-                .three_way_row_text(ThreeWayColumn::Base, line_ix),
-            conflict_resolver::ConflictChoice::Ours => self
-                .conflict_resolver
-                .three_way_row_text(ThreeWayColumn::Ours, line_ix),
-            conflict_resolver::ConflictChoice::Theirs => self
-                .conflict_resolver
-                .three_way_row_text(ThreeWayColumn::Theirs, line_ix),
+        let side = match choice {
+            conflict_resolver::ConflictChoice::Base => ThreeWayColumn::Base,
+            conflict_resolver::ConflictChoice::Ours => ThreeWayColumn::Ours,
+            conflict_resolver::ConflictChoice::Theirs => ThreeWayColumn::Theirs,
             conflict_resolver::ConflictChoice::Both => {
                 // Both is chunk-level only, not line-level.
                 return;
             }
         };
-        let Some(_) = line else {
+        let Some(source_line_ix) = self
+            .conflict_resolver
+            .three_way_side_line_for_row(side, line_ix)
+        else {
             return;
         };
-        self.conflict_resolver_output_replace_line(line_ix, choice, cx);
+        let Some(replacement) = self
+            .conflict_resolver
+            .three_way_line_text(side, source_line_ix)
+            .map(ToString::to_string)
+        else {
+            return;
+        };
+        self.conflict_resolver_output_replace_line_with_text(source_line_ix, &replacement, cx);
     }
 
     pub(in crate::view) fn conflict_resolver_set_output(
@@ -2306,20 +2320,28 @@ impl MainPaneView {
         let Some(replacement) = replacement else {
             return;
         };
+        self.conflict_resolver_output_replace_line_with_text(line_ix, &replacement, cx);
+    }
 
+    fn conflict_resolver_output_replace_line_with_text(
+        &mut self,
+        output_line_ix: usize,
+        replacement: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let theme = self.theme;
         let mut scroll_to_line = None;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             let content = input.text();
-            if let Some(range) = line_content_byte_range_for_index(content, line_ix) {
-                input.replace_utf8_range(range, &replacement, cx);
-                scroll_to_line = Some(line_ix);
+            if let Some(range) = line_content_byte_range_for_index(content, output_line_ix) {
+                input.replace_utf8_range(range, replacement, cx);
+                scroll_to_line = Some(output_line_ix);
                 return;
             }
 
             let append_line_ix = source_line_count(content);
-            let insertion = append_line_insertion_text(content, &replacement);
+            let insertion = append_line_insertion_text(content, replacement);
             let end = content.len();
             input.replace_utf8_range(end..end, &insertion, cx);
             scroll_to_line = Some(append_line_ix);
@@ -2834,6 +2856,7 @@ impl MainPaneView {
                 path,
                 region_index,
                 boundaries,
+                expected_conflict_rev: self.conflict_resolver.conflict_rev,
             });
         }
         // Keep the selection until the state round-trip confirms the edit.
@@ -2921,146 +2944,6 @@ impl MainPaneView {
             self.conflict_resolver_session_counts(),
         );
         resolved
-    }
-
-    pub(super) fn dispatch_conflict_autosolve_telemetry(
-        &self,
-        mode: gitcomet_state::msg::ConflictAutosolveMode,
-        total_conflicts_before: usize,
-        total_conflicts_after: usize,
-        unresolved_before: usize,
-        unresolved_after: usize,
-        stats: gitcomet_state::msg::ConflictAutosolveStats,
-    ) {
-        let Some(repo_id) = self
-            .conflict_resolver
-            .repo_id
-            .or_else(|| self.active_repo_id())
-        else {
-            return;
-        };
-        self.store.dispatch(Msg::RecordConflictAutosolveTelemetry {
-            repo_id,
-            path: self.conflict_resolver.path.clone(),
-            mode,
-            total_conflicts_before,
-            total_conflicts_after,
-            unresolved_before,
-            unresolved_after,
-            stats,
-        });
-    }
-
-    /// Apply safe auto-resolve rules to all unresolved conflict blocks.
-    /// Updates the resolved output text and notifies the UI.
-    pub(in crate::view) fn conflict_resolver_auto_resolve(&mut self, cx: &mut gpui::Context<Self>) {
-        let total_before = self.conflict_resolver_conflict_count();
-        if total_before == 0 {
-            return;
-        }
-        let unresolved_before =
-            total_before.saturating_sub(self.conflict_resolver_resolved_count());
-        // Pass 1: safe whole-block auto-resolve.
-        let pass1 = conflict_resolver::auto_resolve_segments_with_options(
-            &mut self.conflict_resolver.marker_segments,
-            false,
-        );
-        // Pass 2: heuristic subchunk splitting — split remaining unresolved
-        // blocks into finer line-level subchunks where possible.
-        let pass2 = conflict_resolver::auto_resolve_segments_pass2_with_region_indices(
-            &mut self.conflict_resolver.marker_segments,
-            &mut self.conflict_resolver.conflict_region_indices,
-        );
-        let pass1_after_split = if pass2 > 0 {
-            // Re-run Pass 1 on newly created sub-blocks (they may now
-            // satisfy whole-block rules after splitting).
-            conflict_resolver::auto_resolve_segments_with_options(
-                &mut self.conflict_resolver.marker_segments,
-                false,
-            )
-        } else {
-            0
-        };
-        let count = pass1 + pass2 + pass1_after_split;
-        if count > 0 {
-            self.conflict_resolver_rebuild_visible_map();
-            if self.conflict_resolved_output_is_streamed() {
-                let output_path = self.conflict_resolver.path.clone();
-                self.refresh_streamed_resolved_output_preview_from_markers(output_path.as_ref());
-            } else {
-                let resolved = conflict_resolver::generate_resolved_text(
-                    &self.conflict_resolver.marker_segments,
-                );
-                self.conflict_resolver_set_output(resolved, cx);
-            }
-            // Keep focus aligned with unresolved navigation after auto-resolve.
-            if let Some(next_unresolved) = conflict_resolver::next_unresolved_conflict_index(
-                &self.conflict_resolver.marker_segments,
-                self.conflict_resolver.active_conflict,
-            ) {
-                self.conflict_resolver.active_conflict = next_unresolved;
-            }
-        }
-        let total_after = self.conflict_resolver_conflict_count();
-        let unresolved_after = total_after.saturating_sub(self.conflict_resolver_resolved_count());
-        let stats = gitcomet_state::msg::ConflictAutosolveStats {
-            pass1,
-            pass2_split: pass2,
-            pass1_after_split,
-            regex: 0,
-            history: 0,
-        };
-        self.conflict_resolver.last_autosolve_summary = Some(
-            conflict_resolver::format_autosolve_trace_summary(
-                conflict_resolver::AutosolveTraceMode::Safe,
-                unresolved_before,
-                unresolved_after,
-                &stats,
-            )
-            .into(),
-        );
-        self.dispatch_conflict_autosolve_telemetry(
-            gitcomet_state::msg::ConflictAutosolveMode::Safe,
-            total_before,
-            total_after,
-            unresolved_before,
-            unresolved_after,
-            stats,
-        );
-        if count > 0
-            && let (Some(repo_id), Some(path)) = (
-                self.conflict_resolver
-                    .repo_id
-                    .or_else(|| self.active_repo_id()),
-                self.conflict_resolver.dispatch_path(),
-            )
-        {
-            self.store.dispatch(Msg::ConflictApplyAutosolve {
-                repo_id,
-                path,
-                mode: gitcomet_state::msg::ConflictAutosolveMode::Safe,
-                whitespace_normalize: false,
-            });
-        }
-        // section 30: the Low-confidence tier (history/changelog merge) only ever
-        // runs from this explicit action, never automatically. Results flow
-        // back into the blocks through the conflict_rev resync.
-        if unresolved_after > 0
-            && let (Some(repo_id), Some(path)) = (
-                self.conflict_resolver
-                    .repo_id
-                    .or_else(|| self.active_repo_id()),
-                self.conflict_resolver.dispatch_path(),
-            )
-        {
-            self.store.dispatch(Msg::ConflictApplyAutosolve {
-                repo_id,
-                path,
-                mode: gitcomet_state::msg::ConflictAutosolveMode::History,
-                whitespace_normalize: false,
-            });
-        }
-        cx.notify();
     }
 }
 

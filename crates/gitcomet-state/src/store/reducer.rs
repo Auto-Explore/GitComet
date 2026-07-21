@@ -1574,9 +1574,16 @@ fn reduce_inner(
             path,
             region_index,
             boundaries,
+            expected_conflict_rev,
         } => {
-            let effects =
-                conflict_interactions::split_region(state, repo_id, path, region_index, boundaries);
+            let effects = conflict_interactions::split_region(
+                state,
+                repo_id,
+                path,
+                region_index,
+                boundaries,
+                expected_conflict_rev,
+            );
             if !effects.is_empty() {
                 begin_local_action(state, repo_id);
             }

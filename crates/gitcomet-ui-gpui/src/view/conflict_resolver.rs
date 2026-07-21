@@ -144,7 +144,6 @@ impl ConflictSplitStyledTextCache {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutosolveTraceMode {
-    Safe,
     /// High+Medium tiers applied automatically when the file opened (section 30).
     OnOpen,
     #[cfg(test)]
@@ -620,14 +619,6 @@ pub fn format_autosolve_trace_summary(
     let resolved = unresolved_before.saturating_sub(unresolved_after);
     let blocks_word = if resolved == 1 { "block" } else { "blocks" };
     match mode {
-        AutosolveTraceMode::Safe => format!(
-            "Last autosolve (safe): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}).",
-            unresolved_before,
-            unresolved_after,
-            stats.pass1,
-            stats.pass2_split,
-            stats.pass1_after_split
-        ),
         AutosolveTraceMode::OnOpen => format!(
             "Auto-solved on open: resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, regex {}).",
             unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.regex
@@ -1271,6 +1262,11 @@ pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
 }
 
 /// Like [`auto_resolve_segments`] but with an optional whitespace-normalization toggle.
+///
+/// Segment-based autosolve is now test-only: the live on-open path uses the
+/// session-based `apply_autosolve_to_session` in gitcomet-state, and the
+/// manual re-trigger button was removed.
+#[cfg(test)]
 pub fn auto_resolve_segments_with_options(
     segments: &mut [ConflictSegment],
     whitespace_normalize: bool,
@@ -1425,6 +1421,7 @@ pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize
 }
 
 /// Like [`auto_resolve_segments_pass2`] but keeps block->region mappings in sync.
+#[cfg(test)]
 pub fn auto_resolve_segments_pass2_with_region_indices(
     segments: &mut Vec<ConflictSegment>,
     block_region_indices: &mut Vec<usize>,

@@ -692,9 +692,14 @@ fn aligned_two_way_word_highlights_mark_changed_rows() {
     );
 
     // Rows 1, 2 and 3 differ between ours and theirs; rows 0 and 4 do not.
-    assert!(!two_way.is_empty(), "changed rows should get ours↔theirs highlights");
     assert!(
-        two_way.values().all(|(o, n)| !o.is_empty() || !n.is_empty()),
+        !two_way.is_empty(),
+        "changed rows should get ours↔theirs highlights"
+    );
+    assert!(
+        two_way
+            .values()
+            .all(|(o, n)| !o.is_empty() || !n.is_empty()),
         "every recorded row should carry a non-empty side range"
     );
 

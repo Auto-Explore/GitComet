@@ -1051,13 +1051,6 @@ impl PopoverHost {
                 });
                 cx.notify();
             }
-            ContextMenuAction::SetMergetoolVerticalSplit { enabled } => {
-                close_after_action = false;
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.set_mergetool_vertical_split_and_persist(enabled, cx);
-                });
-                cx.notify();
-            }
             ContextMenuAction::SetMergetoolOutputScrollSync { enabled } => {
                 close_after_action = false;
                 self.main_pane.update(cx, |pane, cx| {
@@ -1069,6 +1062,20 @@ impl PopoverHost {
                 close_after_action = false;
                 self.main_pane.update(cx, |pane, cx| {
                     pane.set_mergetool_show_line_numbers_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolThreeWayView { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_set_view_mode(
+                        if enabled {
+                            ConflictResolverViewMode::ThreeWay
+                        } else {
+                            ConflictResolverViewMode::TwoWayDiff
+                        },
+                        cx,
+                    );
                 });
                 cx.notify();
             }

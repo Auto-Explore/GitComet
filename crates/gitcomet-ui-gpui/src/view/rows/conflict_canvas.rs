@@ -131,6 +131,8 @@ pub(super) fn split_conflict_row_canvas(
                         );
                     },
                 );
+                paint_gutter_divider(left_gutter, pad, theme.colors.border, window);
+                paint_gutter_divider(right_gutter, pad, theme.colors.border, window);
             }
 
             let left_text_bounds =
@@ -343,6 +345,7 @@ pub(super) fn single_column_conflict_canvas(
                         );
                     },
                 );
+                paint_gutter_divider(gutter_bounds, pad, theme.colors.border, window);
             }
 
             let text_bounds = split_column_text_bounds(bounds, pad, gap, show_line_numbers);
@@ -723,6 +726,26 @@ fn split_column_text_bounds(
 
 fn conflict_line_no_width() -> Pixels {
     px(38.0)
+}
+
+/// Paint the vertical divider between the line-number gutter and the code,
+/// matching the div path's `conflict_diff_line_number_cell` right border. Sits
+/// at the right edge of the number cell (before the gap), so it stays pinned
+/// with the sticky gutter as the column scrolls horizontally.
+fn paint_gutter_divider(
+    gutter_bounds: Bounds<Pixels>,
+    pad: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    let x = gutter_bounds.left() + pad + conflict_line_no_width();
+    window.paint_quad(fill(
+        Bounds::new(
+            point(x, gutter_bounds.top()),
+            size(px(1.0), gutter_bounds.size.height),
+        ),
+        color,
+    ));
 }
 
 /// Keep the line-number gutter at the visible edge of a horizontally scrolled

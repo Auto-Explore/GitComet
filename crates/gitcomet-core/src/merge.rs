@@ -1129,12 +1129,9 @@ fn emit_conflict_markers(
             // Trimming by the raw length drops real base content (git zdiff3
             // keeps it). The hoisted prefix/suffix are common to ours and theirs,
             // so comparing against `ours_lines` is equivalent to `theirs_lines`.
-            let base_prefix =
-                base_common_prefix_len(base_lines, &ours_lines[..prefix_len]);
-            let base_suffix = base_common_suffix_len(
-                base_lines,
-                &ours_lines[ours_lines.len() - suffix_len..],
-            );
+            let base_prefix = base_common_prefix_len(base_lines, &ours_lines[..prefix_len]);
+            let base_suffix =
+                base_common_suffix_len(base_lines, &ours_lines[ours_lines.len() - suffix_len..]);
             let base_start = base_prefix.min(base_lines.len());
             let base_end = base_lines.len().saturating_sub(base_suffix).max(base_start);
             let base_conflict = &base_lines[base_start..base_end];
