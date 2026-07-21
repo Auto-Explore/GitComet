@@ -145,7 +145,7 @@ impl ConflictSplitStyledTextCache {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutosolveTraceMode {
     Safe,
-    /// High+Medium tiers applied automatically when the file opened (§30).
+    /// High+Medium tiers applied automatically when the file opened (section 30).
     OnOpen,
     #[cfg(test)]
     History,
@@ -571,7 +571,7 @@ pub fn conflict_quick_pick_choice_for_key(
     }
 }
 
-/// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (§30 keyboard model).
+/// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (section 30 keyboard model).
 ///
 /// Unlike the single-letter picks these also work while the output editor is
 /// focused, since they cannot collide with text input.
@@ -640,8 +640,9 @@ pub fn format_autosolve_trace_summary(
     }
 }
 
-/// Build the persistent conflict-count summary shown in the resolver chrome.
-pub fn format_conflict_count_summary(
+/// Build the one-shot toast message pushed when a conflict file's resolver
+/// opens fresh (kdiff3-style open summary: total / auto-solved / remaining).
+pub fn format_open_summary_toast(
     total: usize,
     auto_solved: usize,
     resolved: usize,
@@ -652,9 +653,32 @@ pub fn format_conflict_count_summary(
     let auto_solved = auto_solved.min(total);
     let resolved = resolved.min(total);
     let remaining = total.saturating_sub(resolved);
+    let noun = if total == 1 { "conflict" } else { "conflicts" };
     Some(format!(
-        "Conflicts: {total} total, {auto_solved} auto-solved, {remaining} remaining"
+        "{total} {noun}: {auto_solved} auto-solved, {remaining} remaining"
     ))
+}
+
+/// Total, auto-solved, and resolved region counts for the open summary.
+/// Counts come from the session rather than rendered blocks because a custom
+/// manual/auto result may materialize as plain text and disappear from the
+/// block projection.
+pub fn conflict_session_summary_counts(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+) -> (usize, usize, usize) {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    let auto_solved = session
+        .regions
+        .iter()
+        .filter(|region| {
+            matches!(
+                &region.resolution,
+                ConflictRegionResolution::AutoResolved { .. }
+            )
+        })
+        .count();
+    (session.total_regions(), auto_solved, session.solved_count())
 }
 
 /// Summarize the on-open autosolve pass from session region resolutions.
@@ -703,25 +727,6 @@ pub fn on_open_autosolve_summary(
 
 /// Count conflict blocks whose backing session regions were auto-resolved when
 /// the resolver opened.
-pub fn auto_resolved_region_count_for_blocks(
-    session: &gitcomet_core::conflict_session::ConflictSession,
-    conflict_region_indices: &[usize],
-) -> usize {
-    use gitcomet_core::conflict_session::ConflictRegionResolution;
-
-    conflict_region_indices
-        .iter()
-        .filter(|region_ix| {
-            session.regions.get(**region_ix).is_some_and(|region| {
-                matches!(
-                    &region.resolution,
-                    ConflictRegionResolution::AutoResolved { .. }
-                )
-            })
-        })
-        .count()
-}
-
 /// Build a per-conflict autosolve trace label for the active conflict.
 ///
 /// Returns `None` when the active conflict does not map to an auto-resolved
@@ -2747,7 +2752,7 @@ fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
 }
 
 /// Whether computing the three-way alignment is practical for these sides
-/// (§30 aligned row space).
+/// (section 30 aligned row space).
 ///
 /// The alignment diff is O(size × dissimilarity): a whole-file conflict on a
 /// large file makes Myers effectively quadratic. Small files always align;
@@ -2779,7 +2784,7 @@ pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) ->
     shared_enough(ours, ours_count) && shared_enough(theirs, theirs_count)
 }
 
-/// Whether computing the direct two-way alignment is practical (§30 aligned
+/// Whether computing the direct two-way alignment is practical (section 30 aligned
 /// row space, no-base fallback). Same rationale as
 /// [`three_way_alignment_is_practical`], with ours standing in for the base
 /// as the similarity anchor.
@@ -3849,7 +3854,7 @@ pub enum ThreeWayVisibleItem {
     Line(usize),
     /// A collapsed summary row for a resolved conflict block (by conflict index).
     CollapsedBlock(usize),
-    /// A folded run of unchanged context lines (§30 collapsed context mode).
+    /// A folded run of unchanged context lines (section 30 collapsed context mode).
     CollapsedContext {
         source_line_start: usize,
         len: usize,
@@ -3859,7 +3864,7 @@ pub enum ThreeWayVisibleItem {
     },
 }
 
-/// kdiff3-style aligned row space over base/ours/theirs (§30).
+/// kdiff3-style aligned row space over base/ours/theirs (section 30).
 ///
 /// Maps between visual rows (shared by all columns) and per-side line
 /// indices. Sides shorter than a run are padded: their rows map to `None`.
@@ -3948,19 +3953,180 @@ impl ThreeWayAlignedMap {
         }
     }
 
+    /// section 30 split: the side line index a split boundary at aligned `row` maps
+    /// to — i.e. the first side line at or after `row` (padding rows round up
+    /// to the next real line; rows past the aligned end clamp to the side
+    /// length). Use with `row` and `row_end + 1` to bracket a selection.
+    pub fn side_line_lower_bound(&self, side: usize, row: usize) -> usize {
+        if self.is_identity() {
+            return row;
+        }
+        match self.run_for_row(row) {
+            Some(run) => {
+                let offset = row - run.aligned_start;
+                run.starts[side] + offset.min(run.lens[side])
+            }
+            None => self
+                .runs
+                .last()
+                .map(|run| run.starts[side] + run.lens[side])
+                .unwrap_or(0),
+        }
+    }
+
     /// Map a per-side line range to the aligned row range covering it.
     pub fn aligned_range_for_side_range(
         &self,
         side: usize,
         range: std::ops::Range<usize>,
     ) -> std::ops::Range<usize> {
-        if self.is_identity() || range.is_empty() {
+        if self.is_identity() {
             return range;
+        }
+        if range.is_empty() {
+            let boundary = self.row_for_side_line(side, range.start);
+            return boundary..boundary;
         }
         let start = self.row_for_side_line(side, range.start);
         let end = self.row_for_side_line(side, range.end.saturating_sub(1)) + 1;
         start..end.max(start)
     }
+}
+
+/// section 30 R11: cap on aligned rows that receive word-level highlights, bounding
+/// the per-row word-diff work on files with huge change counts.
+pub const ALIGNED_WORD_HIGHLIGHT_MAX_ROWS: usize = 4_000;
+
+fn merge_word_highlight_ranges(
+    highlights: &mut WordHighlights,
+    line_ix: usize,
+    ranges: Vec<Range<usize>>,
+) {
+    if ranges.is_empty() {
+        return;
+    }
+    let entry = highlights.entry(line_ix).or_default();
+    entry.extend(ranges);
+    entry.sort_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(entry.len());
+    for r in entry.drain(..) {
+        if let Some(last) = merged.last_mut().filter(|l| r.start <= l.end) {
+            last.end = last.end.max(r.end);
+            continue;
+        }
+        merged.push(r);
+    }
+    *entry = merged;
+}
+
+/// section 30 R11 (kdiff3 change colours): word highlights over the aligned row
+/// space. For each aligned row where a side's line differs from the base line
+/// paired at the same row, word-diff the pair and record ranges keyed by each
+/// side's own line index (the renderer's cache key space). Padding rows
+/// (added/removed lines) get no word ranges — the per-side row tint already
+/// marks them whole. Requires a real base; both-added (two-way) maps use the
+/// two-way highlight path instead.
+pub fn compute_aligned_three_way_word_highlights(
+    aligned: &ThreeWayAlignedMap,
+    base_text: &str,
+    base_line_starts: &[usize],
+    ours_text: &str,
+    ours_line_starts: &[usize],
+    theirs_text: &str,
+    theirs_line_starts: &[usize],
+) -> (WordHighlights, WordHighlights, WordHighlights) {
+    let mut wh_base = WordHighlights::default();
+    let mut wh_ours = WordHighlights::default();
+    let mut wh_theirs = WordHighlights::default();
+    if aligned.is_identity() || base_text.is_empty() {
+        return (wh_base, wh_ours, wh_theirs);
+    }
+
+    let mut budget = ALIGNED_WORD_HIGHLIGHT_MAX_ROWS;
+    for row in 0..aligned.aligned_len() {
+        if budget == 0 {
+            break;
+        }
+        let Some(base_ix) = aligned.side_line_for_row(0, row) else {
+            continue;
+        };
+        let Some(base_line) = indexed_line_text(base_text, base_line_starts, base_ix) else {
+            continue;
+        };
+        let mut row_diffed = false;
+        for (side, side_text, side_starts, side_highlights) in [
+            (1usize, ours_text, ours_line_starts, &mut wh_ours),
+            (2usize, theirs_text, theirs_line_starts, &mut wh_theirs),
+        ] {
+            let Some(side_ix) = aligned.side_line_for_row(side, row) else {
+                continue;
+            };
+            let Some(side_line) = indexed_line_text(side_text, side_starts, side_ix) else {
+                continue;
+            };
+            if side_line == base_line {
+                continue;
+            }
+            let (base_ranges, side_ranges) =
+                crate::view::word_diff::capped_word_diff_ranges(base_line, side_line);
+            merge_word_highlight_ranges(&mut wh_base, base_ix, base_ranges);
+            merge_word_highlight_ranges(side_highlights, side_ix, side_ranges);
+            row_diffed = true;
+        }
+        if row_diffed {
+            budget -= 1;
+        }
+    }
+
+    (wh_base, wh_ours, wh_theirs)
+}
+
+/// section 30 R11: aligned two-way (ours↔theirs) word highlights, precomputed
+/// once per conflict-source rebuild and shared by both diff columns (Ours and
+/// Theirs). Keyed by aligned row — the renderer's row space. Only rows where
+/// both sides have a line and the two lines differ byte-wise get an entry; the
+/// render-time whitespace mode still decides whether to *apply* them
+/// (whitespace-equal rows render as context), so this stays independent of that
+/// toggle. Replaces the previous per-render, per-column inline word diff.
+pub fn compute_aligned_two_way_word_highlights(
+    aligned: &ThreeWayAlignedMap,
+    ours_text: &str,
+    ours_line_starts: &[usize],
+    theirs_text: &str,
+    theirs_line_starts: &[usize],
+) -> FxHashMap<usize, TwoWayWordHighlightPair> {
+    let mut highlights = FxHashMap::default();
+    if aligned.is_identity() {
+        return highlights;
+    }
+
+    let mut budget = ALIGNED_WORD_HIGHLIGHT_MAX_ROWS;
+    for row in 0..aligned.aligned_len() {
+        if budget == 0 {
+            break;
+        }
+        let (Some(ours_ix), Some(theirs_ix)) = (
+            aligned.side_line_for_row(1, row),
+            aligned.side_line_for_row(2, row),
+        ) else {
+            continue;
+        };
+        let (Some(ours_line), Some(theirs_line)) = (
+            indexed_line_text(ours_text, ours_line_starts, ours_ix),
+            indexed_line_text(theirs_text, theirs_line_starts, theirs_ix),
+        ) else {
+            continue;
+        };
+        if ours_line == theirs_line {
+            continue;
+        }
+        if let Some(pair) = compute_word_highlights_for_texts(ours_line, theirs_line) {
+            highlights.insert(row, pair);
+            budget -= 1;
+        }
+    }
+
+    highlights
 }
 
 /// Span-based replacement for `Vec<ThreeWayVisibleItem>` that uses O(spans) memory
@@ -4224,7 +4390,7 @@ fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bo
 /// All lines in every conflict block are included (no preview gaps).
 /// Resolved blocks collapse to a single summary row when `hide_resolved` is true.
 /// Context lines kept visible on each side of a conflict when collapsed
-/// context mode is active (§30).
+/// context mode is active (section 30).
 pub(crate) const CONFLICT_COLLAPSED_CONTEXT_LINES: usize = 3;
 
 /// Runs shorter than this stay expanded — a fold row would not be
@@ -4250,7 +4416,7 @@ pub(in crate::view) struct ConflictFoldReveal {
 #[derive(Clone, Copy, Default)]
 pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
     pub hide_resolved: bool,
-    /// §30 collapsed context mode: fold unchanged runs beyond
+    /// section 30 collapsed context mode: fold unchanged runs beyond
     /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
     pub collapse_context: bool,
     /// Per-fold reveal state, keyed by fold identity (pre-reveal start line).

@@ -2587,7 +2587,7 @@ fn search_three_way_via_spans(
                 len,
             } => {
                 for i in 0..len {
-                    // §30: rows are aligned; each side renders its own line
+                    // section 30: rows are aligned; each side renders its own line
                     // there (padding rows have no text).
                     let row = source_line_start + i;
                     let aligned = ctx.three_way_aligned;
@@ -2667,7 +2667,7 @@ fn search_three_way_via_spans_with_matcher(
             } => {
                 for i in 0..len {
                     let visible_ix = visible_start + i;
-                    // §30: rows are aligned; translate per side.
+                    // section 30: rows are aligned; translate per side.
                     let row = source_line_start + i;
                     let aligned = ctx.three_way_aligned;
                     base_rows.push((
@@ -2767,7 +2767,7 @@ fn three_way_visible_item_matches_query(
 
     match item {
         conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-            // §30: `ix` is an aligned row; translate per side.
+            // section 30: `ix` is an aligned row; translate per side.
             let aligned = ctx.three_way_aligned;
             let base = aligned.side_line_for_row(0, ix).map_or("", |l| {
                 line_text(ctx.three_way_base_text, ctx.three_way_base_line_starts, l)

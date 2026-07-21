@@ -555,6 +555,9 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             is_three_way,
             selected_choices,
             output_line_ix,
+            split_selection_rows,
+            join_previous_region,
+            join_next_region,
         } => {
             59u8.hash(hasher);
             conflict_ix.hash(hasher);
@@ -562,6 +565,9 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             is_three_way.hash(hasher);
             selected_choices.hash(hasher);
             output_line_ix.hash(hasher);
+            split_selection_rows.hash(hasher);
+            join_previous_region.hash(hasher);
+            join_next_region.hash(hasher);
         }
         PopoverKind::ConflictResolverOutputMenu {
             cursor_line,

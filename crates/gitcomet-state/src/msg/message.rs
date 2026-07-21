@@ -726,6 +726,24 @@ pub enum Msg {
         repo_id: RepoId,
         path: RepoPath,
     },
+    /// section 30 split: rewrite one conflict-marker block into 2–3 blocks at
+    /// block-local line boundaries and persist the rewritten marker text.
+    ConflictSplitRegion {
+        repo_id: RepoId,
+        path: RepoPath,
+        region_index: usize,
+        boundaries: gitcomet_core::conflict_session::ConflictRegionSplitBoundaries,
+    },
+    /// section 30 join: merge conflict blocks `region_index` and `region_index + 1`,
+    /// absorbing the context between them into every side.
+    ConflictJoinRegions {
+        repo_id: RepoId,
+        path: RepoPath,
+        region_index: usize,
+        /// Resolver revision captured when the menu entry was built. The
+        /// reducer rejects stale actions atomically after region indices move.
+        expected_conflict_rev: u64,
+    },
     Stash {
         repo_id: RepoId,
         message: String,

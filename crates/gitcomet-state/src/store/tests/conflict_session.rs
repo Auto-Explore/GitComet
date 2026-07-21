@@ -1086,7 +1086,7 @@ same content\n\
         }),
     );
 
-    // UI_DESIGN.md §30: High-confidence rules (identical sides) apply on open.
+    // UI_DESIGN.md section 30: High-confidence rules (identical sides) apply on open.
     let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
     let session = repo_state
         .conflict_state
@@ -2331,5 +2331,733 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
             .regions[0]
             .resolution,
         gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
+    );
+}
+
+/// Load a two-conflict `file.txt` where the first block has two lines per
+/// side (so it can be split) and the second block has one. Returns the repo id.
+fn setup_two_conflict_file(
+    state: &mut AppState,
+    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    id_alloc: &AtomicU64,
+) -> RepoId {
+    let repo_id = setup_repo_with_conflict(
+        state,
+        repos,
+        id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+
+    let current = concat!(
+        "<<<<<<< ours\n",
+        "ours one\n",
+        "ours two\n",
+        "=======\n",
+        "theirs one\n",
+        "theirs two\n",
+        ">>>>>>> theirs\n",
+        "middle\n",
+        "<<<<<<< ours\n",
+        "ours three\n",
+        "=======\n",
+        "theirs three\n",
+        ">>>>>>> theirs\n",
+    );
+    let file = ConflictFile {
+        path: PathBuf::from("file.txt").into(),
+        base_bytes: Some(b"base\n".to_vec().into()),
+        ours_bytes: Some(b"ours\n".to_vec().into()),
+        theirs_bytes: Some(b"theirs\n".to_vec().into()),
+        current_bytes: Some(current.as_bytes().to_vec().into()),
+        base: Some("base\n".to_string().into()),
+        ours: Some("ours\n".to_string().into()),
+        theirs: Some("theirs\n".to_string().into()),
+        current: Some(current.to_string().into()),
+    };
+    reduce(
+        repos,
+        id_alloc,
+        state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        }),
+    );
+    repo_id
+}
+
+#[test]
+fn conflict_split_region_rewrites_markers_and_carries_over_resolutions() {
+    use gitcomet_core::conflict_session::{
+        ConflictRegionResolution, ConflictRegionSplitBoundaries,
+    };
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+
+    // Give the second conflict a resolution that must survive the split of the
+    // first (its index shifts from 1 to 2).
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 1,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+
+    let before_rev = state.repos[0].conflict_state.conflict_rev;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSplitRegion {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            boundaries: ConflictRegionSplitBoundaries {
+                ours: [1, 1],
+                theirs: [1, 1],
+                base: None,
+            },
+        },
+    );
+
+    // Exactly one save of the rewritten marker text, unstaged.
+    let save = effects
+        .iter()
+        .filter(|e| matches!(e, Effect::SaveWorktreeFile { .. }))
+        .count();
+    assert_eq!(save, 1, "split emits one SaveWorktreeFile");
+    assert!(matches!(
+        effects
+            .iter()
+            .find(|e| matches!(e, Effect::SaveWorktreeFile { .. }))
+            .unwrap(),
+        Effect::SaveWorktreeFile { stage: false, contents, .. }
+            if contents.matches("<<<<<<<").count() == 3
+    ));
+
+    let repo_state = &state.repos[0];
+    let session = repo_state.conflict_state.conflict_session.as_ref().unwrap();
+    assert_eq!(session.regions.len(), 3, "one block became two");
+    assert_eq!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Unresolved
+    );
+    assert_eq!(
+        session.regions[1].resolution,
+        ConflictRegionResolution::Unresolved
+    );
+    assert_eq!(
+        session.regions[2].resolution,
+        ConflictRegionResolution::PickTheirs,
+        "second block resolution carried over to its shifted index"
+    );
+    assert_eq!(
+        repo_state.conflict_state.conflict_rev,
+        before_rev.wrapping_add(1),
+        "one structural edit publishes exactly one conflict revision",
+    );
+
+    // The loaded conflict file's current text is kept in step.
+    if let crate::model::Loadable::Ready(Some(file)) = &repo_state.conflict_state.conflict_file {
+        assert!(file.current.as_ref().unwrap().matches("<<<<<<<").count() == 3);
+        assert!(file.current_bytes.is_none());
+    } else {
+        panic!("conflict file should still be loaded");
+    }
+}
+
+#[test]
+fn conflict_join_regions_merges_blocks_and_emits_save() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    let before_rev = state.repos[0].conflict_state.conflict_rev;
+
+    let stale_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictJoinRegions {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            expected_conflict_rev: before_rev.wrapping_add(1),
+        },
+    );
+    assert!(
+        stale_effects.is_empty(),
+        "stale join must be a reducer no-op"
+    );
+    assert_eq!(
+        state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .regions
+            .len(),
+        2,
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictJoinRegions {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            expected_conflict_rev: before_rev,
+        },
+    );
+
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::SaveWorktreeFile { .. }))
+            .count(),
+        1
+    );
+    let session = state.repos[0]
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        state.repos[0].conflict_state.conflict_rev,
+        before_rev.wrapping_add(1),
+        "one structural edit publishes exactly one conflict revision",
+    );
+    assert_eq!(session.regions.len(), 1, "two blocks became one");
+    assert_eq!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Unresolved
+    );
+    // "middle" context between the blocks was absorbed into both sides.
+    assert!(session.regions[0].ours.as_str().contains("middle"));
+    assert!(session.regions[0].theirs.as_str().contains("middle"));
+}
+
+#[test]
+fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
+    use gitcomet_core::conflict_session::{
+        ConflictRegionResolution, ConflictRegionSplitBoundaries,
+    };
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSplitRegion {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            boundaries: ConflictRegionSplitBoundaries {
+                ours: [1, 1],
+                theirs: [1, 1],
+                base: None,
+            },
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 2,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+    let before_join_rev = state.repos[0].conflict_state.conflict_rev;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictJoinRegions {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            expected_conflict_rev: before_join_rev,
+        },
+    );
+
+    let session = state.repos[0]
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .unwrap();
+    assert_eq!(session.regions.len(), 2);
+    assert_eq!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Unresolved,
+    );
+    assert_eq!(
+        session.regions[1].resolution,
+        ConflictRegionResolution::PickTheirs,
+        "the untouched trailing region keeps its resolution after its index shifts",
+    );
+}
+
+#[test]
+fn conflict_split_noops_on_degenerate_selection() {
+    use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSplitRegion {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 0,
+            // Whole block in one part -> None.
+            boundaries: ConflictRegionSplitBoundaries {
+                ours: [0, 2],
+                theirs: [0, 2],
+                base: None,
+            },
+        },
+    );
+    assert!(effects.is_empty(), "degenerate split emits no effects");
+    assert_eq!(
+        state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .regions
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn conflict_reload_via_stash_keeps_resolutions_and_skips_autosolve() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+    use gitcomet_core::domain::{DiffArea, DiffTarget};
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    state.active_repo = Some(repo_id);
+
+    // Identical sides -> the on-open autosolve resolves the region.
+    let current = "<<<<<<< ours\nsame\n=======\nsame\n>>>>>>> theirs\n";
+    let make_file = || ConflictFile {
+        path: PathBuf::from("file.txt").into(),
+        base_bytes: Some(b"base\n".to_vec().into()),
+        ours_bytes: Some(b"same\n".to_vec().into()),
+        theirs_bytes: Some(b"same\n".to_vec().into()),
+        current_bytes: Some(current.as_bytes().to_vec().into()),
+        base: Some("base\n".to_string().into()),
+        ours: Some("same\n".to_string().into()),
+        theirs: Some("same\n".to_string().into()),
+        current: Some(current.to_string().into()),
+    };
+    let load = |repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>, state: &mut AppState| {
+        reduce(
+            repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+                repo_id,
+                path: PathBuf::from("file.txt"),
+                result: Box::new(Ok(Some(make_file()))),
+                conflict_session: None,
+            }),
+        );
+    };
+
+    load(&mut repos, &mut state);
+    // User rejects the auto-resolution.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictResetResolutions {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+        },
+    );
+    assert_eq!(
+        state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .regions[0]
+            .resolution,
+        ConflictRegionResolution::Unresolved
+    );
+
+    // A real reload trigger (selecting the conflict diff) clears the live
+    // session and stashes it for restore.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("file.txt"),
+                area: DiffArea::Unstaged,
+            },
+        },
+    );
+    assert!(
+        state.repos[0].conflict_state.conflict_session.is_none(),
+        "reload clears the live session"
+    );
+    assert!(
+        state.repos[0]
+            .conflict_state
+            .session_pending_restore
+            .is_some(),
+        "reload stashes the session for restore"
+    );
+
+    // The reloaded file comes back with identical content; the stash must
+    // restore the user's reset instead of re-running autosolve.
+    load(&mut repos, &mut state);
+
+    let repo_state = &state.repos[0];
+    assert!(
+        repo_state.conflict_state.session_pending_restore.is_none(),
+        "stash consumed on load"
+    );
+    let session = repo_state.conflict_state.conflict_session.as_ref().unwrap();
+    assert_eq!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Unresolved,
+        "reload did not re-autosolve the region the user reset"
+    );
+}
+
+#[test]
+fn same_path_explicit_full_load_restores_session_resolutions() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 1,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+    let file = match &state.repos[0].conflict_state.conflict_file {
+        Loadable::Ready(Some(file)) => file.clone(),
+        other => panic!("expected loaded conflict file, got {other:?}"),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    );
+    let repo = &state.repos[0];
+    assert!(repo.conflict_state.conflict_session.is_none());
+    assert_eq!(
+        repo.conflict_state
+            .session_pending_restore
+            .as_ref()
+            .unwrap()
+            .regions[1]
+            .resolution,
+        ConflictRegionResolution::PickTheirs,
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        }),
+    );
+    let repo = &state.repos[0];
+    assert!(repo.conflict_state.session_pending_restore.is_none());
+    assert_eq!(
+        repo.conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .regions[1]
+            .resolution,
+        ConflictRegionResolution::PickTheirs,
+    );
+}
+
+#[test]
+fn failed_same_path_reload_keeps_stash_for_retry() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 1,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+    let file = match &state.repos[0].conflict_state.conflict_file {
+        Loadable::Ready(Some(file)) => file.clone(),
+        other => panic!("expected loaded conflict file, got {other:?}"),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Err(Error::new(ErrorKind::Backend("transient".into())))),
+            conflict_session: None,
+        }),
+    );
+    assert!(state.repos[0].conflict_state.conflict_session.is_none());
+    assert!(
+        state.repos[0]
+            .conflict_state
+            .session_pending_restore
+            .is_some(),
+        "a failed reload must retain the resolution stash",
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(file))),
+            conflict_session: None,
+        }),
+    );
+    assert_eq!(
+        state.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .unwrap()
+            .regions[1]
+            .resolution,
+        ConflictRegionResolution::PickTheirs,
+    );
+}
+
+#[test]
+fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    fn marker_text(indices: impl IntoIterator<Item = usize>) -> String {
+        let mut text = String::new();
+        for index in indices {
+            text.push_str(&format!(
+                "<<<<<<< ours\nours {index}\n=======\ntheirs {index}\n>>>>>>> theirs\n"
+            ));
+        }
+        text
+    }
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let make_file = |current: String| ConflictFile {
+        path: PathBuf::from("file.txt").into(),
+        base_bytes: None,
+        ours_bytes: None,
+        theirs_bytes: None,
+        current_bytes: Some(current.as_bytes().to_vec().into()),
+        base: None,
+        ours: None,
+        theirs: None,
+        current: Some(current.into()),
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(make_file(marker_text(0..40))))),
+            conflict_session: None,
+        }),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictSetRegionChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            region_index: 39,
+            choice: crate::msg::ConflictRegionChoice::Theirs,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            mode: crate::model::ConflictFileLoadMode::CurrentOnly,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::ConflictFileLoaded {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            result: Box::new(Ok(Some(make_file(marker_text(33..40))))),
+            conflict_session: None,
+        }),
+    );
+
+    let session = state.repos[0]
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .unwrap();
+    assert_eq!(session.regions.len(), 7);
+    assert_eq!(
+        session.regions[6].resolution,
+        ConflictRegionResolution::PickTheirs,
+        "the old region at offset 39 should align after deleting 33 predecessors",
+    );
+}
+
+#[test]
+fn clearing_conflict_context_drops_pending_restore_session() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadConflictFile {
+            repo_id,
+            path: PathBuf::from("file.txt"),
+            mode: crate::model::ConflictFileLoadMode::Full,
+        },
+    );
+    assert!(
+        state.repos[0]
+            .conflict_state
+            .session_pending_restore
+            .is_some()
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::LaunchMergetool {
+                path: PathBuf::from("file.txt"),
+            },
+            result: Ok(CommandOutput::empty_success("git mergetool file.txt")),
+        }),
+    );
+    assert!(state.repos[0].conflict_state.conflict_file_path.is_none());
+    assert!(
+        state.repos[0]
+            .conflict_state
+            .session_pending_restore
+            .is_none()
     );
 }

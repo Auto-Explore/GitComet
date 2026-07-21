@@ -193,7 +193,9 @@ use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_t
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
 use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
-use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
+use diff_text_selection::{
+    ConflictRowSelectionTracker, DiffTextSelectionOverlay, DiffTextSelectionTracker,
+};
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
     build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard,
@@ -1762,6 +1764,7 @@ impl GitCometView {
                 ui_session.mergetool_output_scroll_sync.unwrap_or(true);
             pane.mergetool_show_line_numbers =
                 ui_session.mergetool_show_line_numbers.unwrap_or(true);
+            pane.mergetool_view_three_way = ui_session.mergetool_view_three_way.unwrap_or(true);
         });
         let details_pane = cx.new(|cx| {
             DetailsPaneView::new(

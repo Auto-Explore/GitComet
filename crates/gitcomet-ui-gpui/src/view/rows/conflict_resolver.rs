@@ -368,7 +368,7 @@ impl MainPaneView {
             else {
                 continue;
             };
-            // §30 aligned row space: syntax documents, word highlights, and
+            // section 30 aligned row space: syntax documents, word highlights, and
             // the styled-text cache are all keyed by the side's own line.
             let Some(ix) = this
                 .conflict_resolver
@@ -440,6 +440,11 @@ impl MainPaneView {
 
         let chosen_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.12 });
         let conflict_choices = this.conflict_resolver.conflict_choices.as_slice();
+        // section 30 R11 (kdiff3 change colours): with a real base alignment, the
+        // side columns tint only rows whose own line differs from base; the
+        // base column keeps the marker-region tint as the pickable-conflict
+        // locator. Without alignment all columns fall back to region tints.
+        let per_side_change_rows = this.conflict_resolver.three_way_per_side_change_rows();
 
         let (canvas_id_prefix, div_id_prefix, chunk_menu_prefix, input_menu_prefix) = match column {
             ThreeWayColumn::Base => (
@@ -535,7 +540,7 @@ impl MainPaneView {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                // §30: clicking a conflict block body selects it.
+                                // section 30: clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
@@ -580,7 +585,7 @@ impl MainPaneView {
                     ));
                 }
                 conflict_resolver::ThreeWayVisibleItem::Line(ix) => {
-                    // §30 aligned row space: `ix` is the shared visual row;
+                    // section 30 aligned row space: `ix` is the shared visual row;
                     // each column renders its own line (or padding) there.
                     let side_line = this
                         .conflict_resolver
@@ -614,7 +619,25 @@ impl MainPaneView {
                     let styled = side_line
                         .and_then(|l| this.conflict_three_way_segments_cache.get(&(l, column)));
 
-                    let bg = if is_in_conflict {
+                    let bg = if per_side_change_rows && !matches!(column, ThreeWayColumn::Base) {
+                        if this
+                            .conflict_resolver
+                            .three_way_row_differs_from_base(column, ix)
+                        {
+                            match column {
+                                ThreeWayColumn::Ours => with_alpha(
+                                    theme.colors.success,
+                                    if theme.is_dark { 0.10 } else { 0.08 },
+                                ),
+                                _ => with_alpha(
+                                    theme.colors.accent,
+                                    if theme.is_dark { 0.14 } else { 0.10 },
+                                ),
+                            }
+                        } else {
+                            with_alpha(theme.colors.surface_bg_elevated, 0.0)
+                        }
+                    } else if is_in_conflict {
                         match column {
                             ThreeWayColumn::Base => with_alpha(
                                 theme.colors.warning,
@@ -656,6 +679,11 @@ impl MainPaneView {
 
                     let is_active_conflict =
                         range_ix == Some(this.conflict_resolver.active_conflict);
+                    // section 30 split: highlight rows in the drag selection; the
+                    // begin/extend handlers only fire when split is available.
+                    let row_selected = this.conflict_resolver.conflict_row_is_selected(ix);
+                    let row_selection_enabled =
+                        this.conflict_resolver.conflict_row_selection_enabled();
                     if this.conflict_canvas_rows_enabled {
                         let chunk_context = range_ix.map(|conflict_ix| ConflictChunkContext {
                             conflict_ix,
@@ -686,6 +714,7 @@ impl MainPaneView {
                             chunk_menu_prefix,
                             true,
                             is_active_conflict,
+                            row_selection_enabled.then_some(row_selected),
                         ));
                         continue;
                     }
@@ -716,17 +745,51 @@ impl MainPaneView {
                                     .bg(theme.colors.accent),
                             )
                         })
+                        .when(row_selected, |d| {
+                            d.child(div().absolute().inset_0().bg(with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.20 } else { 0.14 },
+                            )))
+                        })
                         .when(show_line_numbers, |d| {
                             d.child(
-                                div()
-                                    .w(px(38.0))
-                                    .text_color(theme.colors.text_muted)
-                                    .child(line_no),
+                                conflict_diff_line_number_cell(theme, line_no),
                             )
                         })
                         .child(conflict_diff_text_cell(line_text.clone(), styled, show_ws));
 
                     if let Some(conflict_ix) = range_ix {
+                        if row_selection_enabled {
+                            cell = cell
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, e: &MouseDownEvent, _window, cx| {
+                                        if e.modifiers.shift || e.modifiers.control {
+                                            this.conflict_resolver_click_row_selection(
+                                                conflict_ix,
+                                                ix,
+                                                e.modifiers,
+                                                cx,
+                                            );
+                                        } else {
+                                            this.conflict_resolver_begin_row_selection(
+                                                conflict_ix,
+                                                ix,
+                                                cx,
+                                            );
+                                        }
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    move |this, _e: &MouseMoveEvent, _window, cx| {
+                                        this.conflict_resolver_extend_row_selection(
+                                            conflict_ix,
+                                            ix,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                        }
                         let has_base = this
                             .conflict_resolver
                             .conflict_has_base
@@ -737,13 +800,17 @@ impl MainPaneView {
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                         let (line_label, line_target, chunk_label, chunk_target) =
                             three_way_input_row_menu_targets(ix, conflict_ix, choice_enum);
-                        cell = cell.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                // §30: clicking a conflict block body selects it.
-                                this.conflict_resolver_select_conflict(conflict_ix, cx);
-                            }),
-                        );
+                        if !row_selection_enabled {
+                            // When split-selection is available, the begin
+                            // handler above already selects the block.
+                            cell = cell.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                    // section 30: clicking a conflict block body selects it.
+                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
+                                }),
+                            );
+                        }
                         cell = cell.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -816,7 +883,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        // §30 aligned row space: two-way full mode shares the three-way
+        // section 30 aligned row space: two-way full mode shares the three-way
         // projection. The block-local path below remains for giant files and
         // partially loaded sides.
         if this.conflict_resolver.two_way_uses_aligned_rows() {
@@ -985,6 +1052,9 @@ impl MainPaneView {
                         chunk_menu_prefix,
                         false,
                         is_active_conflict,
+                        // Block-local two-way rows are not in the shared aligned
+                        // space, so split selection is unavailable here.
+                        None,
                     );
                 }
 
@@ -1015,10 +1085,7 @@ impl MainPaneView {
                     })
                     .when(show_line_numbers, |d| {
                         d.child(
-                            div()
-                                .w(px(38.0))
-                                .text_color(theme.colors.text_muted)
-                                .child(line_number_string(line_no)),
+                            conflict_diff_line_number_cell(theme, line_number_string(line_no)),
                         )
                     })
                     .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
@@ -1037,7 +1104,7 @@ impl MainPaneView {
                     cell = cell.on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                            // §30: clicking a conflict block body selects it.
+                            // section 30: clicking a conflict block body selects it.
                             this.conflict_resolver_select_conflict(conflict_ix, cx);
                         }),
                     );
@@ -1084,7 +1151,7 @@ impl MainPaneView {
             .collect()
     }
 
-    /// §30 aligned row space: two-way full mode. Renders one column of the
+    /// section 30 aligned row space: two-way full mode. Renders one column of the
     /// ours↔theirs diff over the shared three-way visible projection —
     /// whole-file rows, context folds, and collapsed resolved blocks — while
     /// keeping the two-way diff styling (add/remove/modify backgrounds and
@@ -1208,7 +1275,7 @@ impl MainPaneView {
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                // §30: clicking a conflict block body selects it.
+                                // section 30: clicking a conflict block body selects it.
                                 this.conflict_resolver_select_conflict(range_ix, cx);
                             }),
                         )
@@ -1288,22 +1355,24 @@ impl MainPaneView {
                         (None, None) => RK::Context,
                     };
 
-                    let word_pair = (styling_enabled && matches!(visual_kind, RK::Modify))
-                        .then(|| {
-                            conflict_resolver::compute_word_highlights_for_texts(
-                                ours_text.unwrap_or(""),
-                                theirs_text.unwrap_or(""),
-                            )
-                        })
-                        .flatten();
-                    let word_ranges: &[Range<usize>] = match side {
-                        ConflictPickSide::Ours => {
-                            word_pair.as_ref().map(|(o, _)| o.as_slice()).unwrap_or(&[])
-                        }
-                        ConflictPickSide::Theirs => {
-                            word_pair.as_ref().map(|(_, n)| n.as_slice()).unwrap_or(&[])
-                        }
-                    };
+                    // Word highlights are precomputed once per rebuild (shared by
+                    // both columns); look up this aligned row and take the current
+                    // side's ranges. Cloned into an owned Vec so it doesn't hold a
+                    // borrow of `this` across the `&mut this` cache use below.
+                    let word_ranges_owned: Vec<Range<usize>> =
+                        if styling_enabled && matches!(visual_kind, RK::Modify) {
+                            this.conflict_resolver
+                                .two_way_aligned_word_highlights
+                                .get(&row)
+                                .map(|(o, n)| match side {
+                                    ConflictPickSide::Ours => o.as_slice().to_vec(),
+                                    ConflictPickSide::Theirs => n.as_slice().to_vec(),
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+                    let word_ranges: &[Range<usize>] = &word_ranges_owned;
 
                     let (side_line, side_text) = match side {
                         ConflictPickSide::Ours => (ours_line, ours_text),
@@ -1361,6 +1430,9 @@ impl MainPaneView {
                         .conflict_index_for_side_line(column, row);
                     let is_active_conflict =
                         conflict_ix == Some(this.conflict_resolver.active_conflict);
+                    let row_selected = this.conflict_resolver.conflict_row_is_selected(row);
+                    let row_selection_enabled =
+                        this.conflict_resolver.conflict_row_selection_enabled();
 
                     if this.conflict_canvas_rows_enabled {
                         let chunk_context = conflict_ix.map(|conflict_ix| ConflictChunkContext {
@@ -1392,6 +1464,7 @@ impl MainPaneView {
                             chunk_menu_prefix,
                             false,
                             is_active_conflict,
+                            row_selection_enabled.then_some(row_selected),
                         ));
                         continue;
                     }
@@ -1421,12 +1494,15 @@ impl MainPaneView {
                                     .bg(theme.colors.accent),
                             )
                         })
+                        .when(row_selected, |d| {
+                            d.child(div().absolute().inset_0().bg(with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.20 } else { 0.14 },
+                            )))
+                        })
                         .when(show_line_numbers, |d| {
                             d.child(
-                                div()
-                                    .w(px(38.0))
-                                    .text_color(theme.colors.text_muted)
-                                    .child(line_number_string(line_no_opt)),
+                                conflict_diff_line_number_cell(theme, line_number_string(line_no_opt)),
                             )
                         })
                         .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
@@ -1442,13 +1518,45 @@ impl MainPaneView {
                             this.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix);
                         let (line_label, line_target, chunk_label, chunk_target) =
                             two_way_aligned_input_row_menu_targets(row, conflict_ix, side);
-                        cell = cell.on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                                // §30: clicking a conflict block body selects it.
-                                this.conflict_resolver_select_conflict(conflict_ix, cx);
-                            }),
-                        );
+                        if row_selection_enabled {
+                            cell = cell
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, e: &MouseDownEvent, _window, cx| {
+                                        if e.modifiers.shift || e.modifiers.control {
+                                            this.conflict_resolver_click_row_selection(
+                                                conflict_ix,
+                                                row,
+                                                e.modifiers,
+                                                cx,
+                                            );
+                                        } else {
+                                            this.conflict_resolver_begin_row_selection(
+                                                conflict_ix,
+                                                row,
+                                                cx,
+                                            );
+                                        }
+                                    }),
+                                )
+                                .on_mouse_move(cx.listener(
+                                    move |this, _e: &MouseMoveEvent, _window, cx| {
+                                        this.conflict_resolver_extend_row_selection(
+                                            conflict_ix,
+                                            row,
+                                            cx,
+                                        );
+                                    },
+                                ));
+                        } else {
+                            cell = cell.on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                    // section 30: clicking a conflict block body selects it.
+                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
+                                }),
+                            );
+                        }
                         cell = cell.on_mouse_down(
                             MouseButton::Right,
                             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -1497,7 +1605,7 @@ impl MainPaneView {
         elements
     }
 
-    /// Diff-view-style collapsed context fold row (§30, R6): muted band,
+    /// Diff-view-style collapsed context fold row (section 30, R6): muted band,
     /// reveal arrows clustered where the line-number gutter sits, and a
     /// left-aligned hidden-range label; clicking elsewhere expands the whole
     /// fold. `output_pane` selects which fold-reveal state the controls
@@ -1672,6 +1780,15 @@ impl MainPaneView {
                     .unwrap_or_default();
                 let source = gutter_row.source();
                 let (_, badge_fg) = resolved_output_source_badge_colors(theme, source);
+                // section 30 R11: outside marker regions the badge is provenance of
+                // a line git itself pre-merged (or plain context), not a
+                // resolver pick — mute it so only real picks read as
+                // decisions.
+                let badge_fg = if gutter_row.has_marker() {
+                    badge_fg
+                } else {
+                    with_alpha(badge_fg, if theme.is_dark { 0.45 } else { 0.55 })
+                };
                 let conflict_ix = gutter_row.marker_conflict_ix();
                 let conflict_active = conflict_ix == Some(this.conflict_resolver.active_conflict);
                 let conflict_unresolved = gutter_row.unresolved();
@@ -1748,7 +1865,7 @@ impl MainPaneView {
                             .child(line_number_string(u32::try_from(ix + 1).ok())),
                     )
                     .child({
-                        // §30: confidence dot on the first row of an
+                        // section 30: confidence dot on the first row of an
                         // auto-resolved conflict (accent/warning/danger for
                         // high/medium/low). Rule detail for the active
                         // conflict shows in the resolver header trace label.
@@ -2484,10 +2601,7 @@ impl MainPaneView {
             .overflow_hidden()
             .when(self.mergetool_show_line_numbers, |d| {
                 d.child(
-                    div()
-                        .w(px(38.0))
-                        .text_color(theme.colors.text_muted)
-                        .child(line_number_string(row.old_line)),
+                    conflict_diff_line_number_cell(theme, line_number_string(row.old_line)),
                 )
             })
             .child(conflict_diff_text_cell(
@@ -2513,10 +2627,7 @@ impl MainPaneView {
             .overflow_hidden()
             .when(self.mergetool_show_line_numbers, |d| {
                 d.child(
-                    div()
-                        .w(px(38.0))
-                        .text_color(theme.colors.text_muted)
-                        .child(line_number_string(row.new_line)),
+                    conflict_diff_line_number_cell(theme, line_number_string(row.new_line)),
                 )
             })
             .child(conflict_diff_text_cell(
@@ -2543,6 +2654,21 @@ impl MainPaneView {
             .child(right)
             .into_any_element()
     }
+}
+
+/// A diff-column line-number cell: fixed width, vertically centered, with a
+/// full-height right divider separating the number gutter from the code —
+/// matching the resolved-output gutter's separator.
+fn conflict_diff_line_number_cell(theme: AppTheme, line_no: SharedString) -> gpui::Div {
+    div()
+        .w(px(38.0))
+        .h_full()
+        .flex()
+        .items_center()
+        .border_r_1()
+        .border_color(theme.colors.border)
+        .text_color(theme.colors.text_muted)
+        .child(line_no)
 }
 
 fn conflict_diff_text_cell(
@@ -2757,7 +2883,7 @@ fn two_way_split_input_row_menu_targets(
     )
 }
 
-/// Input-row menu targets for the §30 aligned two-way view. `row_ix` is an
+/// Input-row menu targets for the section 30 aligned two-way view. `row_ix` is an
 /// aligned visual row (shared by both columns), so the line pick reuses the
 /// aligned-row-space `ThreeWayLine` target with this side's choice.
 fn two_way_aligned_input_row_menu_targets(
@@ -2801,18 +2927,22 @@ fn split_cell_bg(
     kind: gitcomet_core::file_diff::FileDiffRowKind,
     side: ConflictPickSide,
 ) -> gpui::Rgba {
+    // Side-identity colours, matching the three-way view: Ours = success
+    // (green), Theirs = accent (blue). A cell is tinted only when that side
+    // actually has changed content on the row (Ours: Remove/Modify, Theirs:
+    // Add/Modify), so unchanged padding stays transparent.
     match (kind, side) {
         (gitcomet_core::file_diff::FileDiffRowKind::Add, ConflictPickSide::Theirs)
         | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Theirs) => {
             with_alpha(
-                theme.colors.success,
-                if theme.is_dark { 0.10 } else { 0.08 },
+                theme.colors.accent,
+                if theme.is_dark { 0.14 } else { 0.10 },
             )
         }
         (gitcomet_core::file_diff::FileDiffRowKind::Remove, ConflictPickSide::Ours)
         | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Ours) => {
             with_alpha(
-                theme.colors.warning,
+                theme.colors.success,
                 if theme.is_dark { 0.10 } else { 0.08 },
             )
         }

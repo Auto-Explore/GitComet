@@ -6,6 +6,7 @@ use std::sync::Arc;
 mod autosolve;
 mod history;
 mod marker_parse;
+mod region_edit;
 mod subchunk;
 
 #[cfg(test)]
@@ -28,6 +29,10 @@ pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
     ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
     ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_segments,
+};
+pub use region_edit::{
+    ConflictRegionEditOutcome, ConflictRegionSplitBoundaries, join_conflict_regions_text,
+    split_conflict_region_text,
 };
 pub use subchunk::{Subchunk, split_conflict_into_subchunks};
 

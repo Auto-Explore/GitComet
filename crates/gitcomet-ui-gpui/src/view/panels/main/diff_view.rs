@@ -260,16 +260,35 @@ impl MainPaneView {
         let mut handled = false;
 
         // When the editable resolved-output pane is focused the user is typing
-        // free text: every keystroke (space, a/b/c/d, etc.) belongs to that
-        // editor, not to the diff/conflict shortcut table. Letting them through
-        // here staged the conflict file on the first space typed (StagePath →
-        // the file leaves Conflicted → the resolver closes mid-edit).
+        // free text: every text-producing keystroke (space, a/b/c/d, etc.)
+        // belongs to that editor, not to the diff/conflict shortcut table.
+        // Letting them through here staged the conflict file on the first space
+        // typed (StagePath → the file leaves Conflicted → the resolver closes
+        // mid-edit). Two deliberate carve-outs:
+        //   * Ctrl+1/2/3 pick aliases are chords with no text-input collision,
+        //     so they stay live while editing (kdiff3 parity).
+        //   * Ctrl+Home/End/PgUp/PgDn are intentionally NOT handled here, so the
+        //     editor keeps them for cursor movement (kdiff3 parity).
         if self
             .conflict_resolver_input
             .read(cx)
             .focus_handle()
             .is_focused(window)
         {
+            if self.is_conflict_resolver_active()
+                && (mods.control || mods.platform)
+                && !mods.alt
+                && !mods.function
+                && !mods.shift
+                && self.conflict_resolver_conflict_count() > 0
+                && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
+                    key,
+                    self.conflict_resolver.view_mode,
+                )
+            {
+                self.conflict_resolver_pick_active_conflict(choice, cx);
+                return true;
+            }
             return false;
         }
 
@@ -771,14 +790,15 @@ impl MainPaneView {
                 self.conflict_resolver_pick_active_conflict(choice, cx);
                 handled = true;
             } else if key == "u" {
-                // §30: U un-resolves the active conflict (pick or auto-solve).
+                // section 30: U un-resolves the active conflict (pick or auto-solve).
                 self.conflict_resolver_unresolve_active_conflict(cx);
                 handled = true;
             }
         }
 
-        // §30: kdiff3-compatible Ctrl+1/2/3 pick aliases. These stay usable
-        // while the output editor is focused (no text-input collision).
+        // section 30: kdiff3-compatible Ctrl+1/2/3 pick aliases. When the output
+        // editor is focused these are handled by the carve-out at the top of this
+        // fn; this block covers the case where focus is elsewhere.
         if !handled
             && conflict_resolver_active
             && (mods.control || mods.platform)
@@ -795,7 +815,7 @@ impl MainPaneView {
             handled = true;
         }
 
-        // §30: kdiff3-compatible delta navigation — Ctrl+Home/End jump to the
+        // section 30: kdiff3-compatible delta navigation — Ctrl+Home/End jump to the
         // first/last delta, Ctrl+PgUp/PgDn to the previous/next unresolved
         // conflict.
         if !handled
@@ -2261,7 +2281,7 @@ impl MainPaneView {
 
         if let Some(repo_id) = repo_id {
             // The full text resolver gets its own settings menu under the cog
-            // (§30); everything else keeps the diff actions menu.
+            // (section 30); everything else keeps the diff actions menu.
             let resolver_settings_active = is_conflict_resolver && !is_simple_conflict_strategy;
             let (cog_id, cog_kind, cog_tooltip): (&'static str, PopoverKind, &'static str) =
                 if resolver_settings_active {

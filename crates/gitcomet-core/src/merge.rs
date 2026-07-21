@@ -203,7 +203,7 @@ impl AlignedRun {
     }
 }
 
-/// Compute the three-way alignment of base/ours/theirs (§30 aligned row
+/// Compute the three-way alignment of base/ours/theirs (section 30 aligned row
 /// space). This walks the same base-anchored regions the merge algorithm
 /// uses to produce conflict markers, but reports per-side line ranges
 /// instead of merged content. The runs partition each input exactly.
@@ -301,7 +301,7 @@ pub fn align_three_way(
     runs
 }
 
-/// Compute a direct two-way alignment of ours/theirs (§30 aligned row space,
+/// Compute a direct two-way alignment of ours/theirs (section 30 aligned row space,
 /// two-way full mode without a base version — e.g. both-added conflicts).
 ///
 /// Runs carry empty base ranges. A replaced region pairs its lines 1:1
@@ -1122,12 +1122,22 @@ fn emit_conflict_markers(
                 output.push_str(line_ending);
             }
             emit_marker(output, '|', ms, options.labels.base.as_deref(), line_ending);
-            // In zdiff3, the base section shows the trimmed base content.
-            let base_conflict = if base_lines.len() > prefix_len + suffix_len {
-                &base_lines[prefix_len..base_lines.len() - suffix_len]
-            } else {
-                &[] as &[&str]
-            };
+            // The base section shows the ancestor of the *conflicting* region.
+            // Trim it only by the prefix/suffix lines the two sides share *with
+            // the base* — not by the sides' full common prefix/suffix length,
+            // which can include lines both sides merely added (absent from base).
+            // Trimming by the raw length drops real base content (git zdiff3
+            // keeps it). The hoisted prefix/suffix are common to ours and theirs,
+            // so comparing against `ours_lines` is equivalent to `theirs_lines`.
+            let base_prefix =
+                base_common_prefix_len(base_lines, &ours_lines[..prefix_len]);
+            let base_suffix = base_common_suffix_len(
+                base_lines,
+                &ours_lines[ours_lines.len() - suffix_len..],
+            );
+            let base_start = base_prefix.min(base_lines.len());
+            let base_end = base_lines.len().saturating_sub(base_suffix).max(base_start);
+            let base_conflict = &base_lines[base_start..base_end];
             for line in base_conflict {
                 output.push_str(line);
                 output.push_str(line_ending);
@@ -1221,6 +1231,31 @@ fn common_prefix_suffix_lines<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize) 
         suffix += 1;
     }
     (prefix, suffix)
+}
+
+/// Count leading lines of `base` that match the corresponding hoisted context
+/// lines in `side`. Used to trim the zdiff3 base section by shared-with-base
+/// context only, so lines both sides merely added (absent from base) never
+/// cause real base content to be dropped.
+fn base_common_prefix_len(base: &[&str], side: &[Cow<'_, str>]) -> usize {
+    let mut n = 0;
+    while n < base.len() && n < side.len() && base[n] == side[n].as_ref() {
+        n += 1;
+    }
+    n
+}
+
+/// Count trailing lines of `base` that match the corresponding hoisted context
+/// lines in `side`. Companion to [`base_common_prefix_len`].
+fn base_common_suffix_len(base: &[&str], side: &[Cow<'_, str>]) -> usize {
+    let mut n = 0;
+    while n < base.len()
+        && n < side.len()
+        && base[base.len() - 1 - n] == side[side.len() - 1 - n].as_ref()
+    {
+        n += 1;
+    }
+    n
 }
 
 /// Detect the dominant line ending in the full-file merge inputs.
@@ -1507,6 +1542,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn zdiff3_preserves_base_when_sides_share_added_prefix() {
+        // Both sides prepend "A" (a line absent from base) before diverging.
+        // The zdiff3 base section must still show the real ancestor line "X",
+        // not be trimmed away by the sides' common-prefix length.
+        let base = "pre\nX\npost\n";
+        let ours = "pre\nA\nO\npost\n";
+        let theirs = "pre\nA\nT\npost\n";
+        let result = merge_file(base, ours, theirs, &opts_with_style(ConflictStyle::Zdiff3));
+        assert!(!result.is_clean());
+        let base_marker = result.output.find("|||||||").expect("base marker");
+        let sep = result.output[base_marker..]
+            .find("=======")
+            .expect("separator")
+            + base_marker;
+        let base_section = &result.output[base_marker..sep];
+        assert!(
+            base_section.contains("\nX\n"),
+            "zdiff3 base section should preserve ancestor line X, got: {base_section:?}"
+        );
+    }
+
+    #[test]
+    fn zdiff3_shows_base_when_prefix_suffix_span_whole_base() {
+        // Regression: conflict base region is exactly prefix_len + suffix_len
+        // long. The old `len > prefix + suffix` guard emitted an empty base
+        // section here; the ancestor lines must be shown.
+        let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+        let ours = "1\n2\n3\n4\nA\nB\nC\nD\nE\n7\n8\n9\n";
+        let theirs = "1\n2\n3\n4\nA\nX\nC\nY\nE\n7\n8\n9\n";
+        let result = merge_file(base, ours, theirs, &opts_with_style(ConflictStyle::Zdiff3));
+        assert!(!result.is_clean());
+        let base_marker = result.output.find("|||||||").expect("base marker");
+        let sep = result.output[base_marker..]
+            .find("=======")
+            .expect("separator")
+            + base_marker;
+        let base_section = &result.output[base_marker..sep];
+        assert!(
+            base_section.contains("\n5\n6\n"),
+            "zdiff3 base section should show ancestor lines 5,6, got: {base_section:?}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Marker size
     // -----------------------------------------------------------------------
@@ -1666,7 +1745,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Three-way alignment (§30 aligned row space)
+    // Three-way alignment (section 30 aligned row space)
     // -----------------------------------------------------------------------
 
     fn run_lens(runs: &[AlignedRun]) -> (usize, usize, usize) {
@@ -1863,7 +1942,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Two-way alignment (§30 aligned row space, no-base fallback)
+    // Two-way alignment (section 30 aligned row space, no-base fallback)
     // -----------------------------------------------------------------------
 
     fn assert_two_way_partitions(runs: &[AlignedRun], ours: &str, theirs: &str) {

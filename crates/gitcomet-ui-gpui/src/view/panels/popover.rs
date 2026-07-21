@@ -97,9 +97,11 @@ const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0
 const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
 const DIFF_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 320.0);
+const MERGETOOL_SETTINGS_MENU_WIDTH: PopoverWidthSpec =
+    PopoverWidthSpec::range(320.0, 280.0, 420.0);
 const DIFF_EDITOR_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 200.0, 340.0);
 const CONFLICT_INPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 280.0);
-const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 190.0, 280.0);
+const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 220.0, 360.0);
 const CONFLICT_OUTPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 300.0);
 const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 360.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
@@ -751,7 +753,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         // "Browse repository at this point" needs more room than the default
         // context-menu width.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
-        PopoverKind::MergetoolSettingsMenu => Some(DIFF_ACTION_MENU_WIDTH),
+        // Resolver settings have substantially longer labels than diff actions.
+        // A dedicated preferred width also feeds the shared anchor-side chooser,
+        // allowing the menu to flip toward the side where the full label fits.
+        PopoverKind::MergetoolSettingsMenu => Some(MERGETOOL_SETTINGS_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
@@ -3556,6 +3561,9 @@ impl PopoverHost {
                 is_three_way,
                 selected_choices,
                 output_line_ix,
+                split_selection_rows,
+                join_previous_region,
+                join_next_region,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3563,6 +3571,9 @@ impl PopoverHost {
                     is_three_way,
                     selected_choices,
                     output_line_ix,
+                    split_selection_rows,
+                    join_previous_region,
+                    join_next_region,
                 },
                 cx,
             ),

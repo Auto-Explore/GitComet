@@ -623,16 +623,25 @@ fn autosolve_trace_summary_on_open_mode() {
 }
 
 #[test]
-fn conflict_count_summary_reports_total_auto_and_remaining() {
+fn open_summary_toast_reports_total_auto_and_remaining() {
     assert_eq!(
-        format_conflict_count_summary(5, 2, 3).as_deref(),
-        Some("Conflicts: 5 total, 2 auto-solved, 2 remaining")
+        format_open_summary_toast(21, 19, 19).as_deref(),
+        Some("21 conflicts: 19 auto-solved, 2 remaining")
     );
     assert_eq!(
-        format_conflict_count_summary(3, 9, 9).as_deref(),
-        Some("Conflicts: 3 total, 3 auto-solved, 0 remaining")
+        format_open_summary_toast(5, 0, 0).as_deref(),
+        Some("5 conflicts: 0 auto-solved, 5 remaining")
     );
-    assert!(format_conflict_count_summary(0, 0, 0).is_none());
+    assert_eq!(
+        format_open_summary_toast(1, 1, 1).as_deref(),
+        Some("1 conflict: 1 auto-solved, 0 remaining")
+    );
+    // Counts clamp to the total and never underflow.
+    assert_eq!(
+        format_open_summary_toast(3, 9, 9).as_deref(),
+        Some("3 conflicts: 3 auto-solved, 0 remaining")
+    );
+    assert!(format_open_summary_toast(0, 0, 0).is_none());
 }
 
 #[test]
@@ -714,7 +723,7 @@ fn on_open_autosolve_summary_is_none_without_auto_resolutions() {
 }
 
 #[test]
-fn auto_resolved_region_count_for_blocks_counts_only_mapped_auto_resolutions() {
+fn conflict_session_summary_counts_include_materialized_auto_resolutions() {
     use gitcomet_core::conflict_session::{
         AutosolveRule, ConflictPayload, ConflictRegion, ConflictRegionResolution as R,
         ConflictSession,
@@ -738,7 +747,7 @@ fn auto_resolved_region_count_for_blocks_counts_only_mapped_auto_resolutions() {
         region(R::AutoResolved {
             rule: AutosolveRule::IdenticalSides,
             confidence: AutosolveRule::IdenticalSides.confidence(),
-            content: String::new(),
+            content: "custom merged output\n".to_string(),
         }),
         region(R::PickOurs),
         region(R::AutoResolved {
@@ -749,14 +758,7 @@ fn auto_resolved_region_count_for_blocks_counts_only_mapped_auto_resolutions() {
         region(R::Unresolved),
     ];
 
-    assert_eq!(
-        auto_resolved_region_count_for_blocks(&session, &[0, 1, 3, 99]),
-        1
-    );
-    assert_eq!(
-        auto_resolved_region_count_for_blocks(&session, &[0, 2]),
-        2
-    );
+    assert_eq!(conflict_session_summary_counts(&session), (4, 2, 3));
 }
 
 #[test]

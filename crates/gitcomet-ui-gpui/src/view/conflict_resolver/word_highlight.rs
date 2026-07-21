@@ -318,7 +318,7 @@ pub fn compute_word_highlights_for_row(
 }
 
 /// Compute word-level highlights for an ours/theirs line pair directly
-/// (§30 aligned two-way rows, where no `FileDiffRow` is materialized).
+/// (section 30 aligned two-way rows, where no `FileDiffRow` is materialized).
 pub fn compute_word_highlights_for_texts(old: &str, new: &str) -> Option<TwoWayWordHighlightPair> {
     let (old_ranges, new_ranges) =
         crate::view::word_diff::compact_capped_word_diff_ranges(old, new);

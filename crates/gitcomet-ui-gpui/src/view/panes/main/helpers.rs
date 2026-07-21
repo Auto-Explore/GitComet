@@ -2383,23 +2383,26 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) layout_details_collapsed: bool,
 
     pub(in crate::view) reveal_whitespace_chars: bool,
-    /// §30 merge tool: auto-advance to the next unresolved conflict after a
+    /// section 30 merge tool: auto-advance to the next unresolved conflict after a
     /// source pick. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_auto_advance: bool,
-    /// §30 merge tool: default for the collapse-unchanged-context mode when a
+    /// section 30 merge tool: default for the collapse-unchanged-context mode when a
     /// conflicted file opens. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_collapse_unchanged: bool,
-    /// §30 merge tool: stack the source columns vertically instead of
+    /// section 30 merge tool: stack the source columns vertically instead of
     /// side-by-side. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_vertical_split: bool,
-    /// §30 merge tool: sync the resolved output pane's scroll with the source
+    /// section 30 merge tool: sync the resolved output pane's scroll with the source
     /// columns (in modes where they share a row space). Persisted UI setting
     /// (cog menu). Merge-tool-specific rather than a general diff setting
     /// because the resolver ships as a standalone tool.
     pub(in crate::view) mergetool_output_scroll_sync: bool,
-    /// §30 merge tool: show per-column and resolved-output line number
+    /// section 30 merge tool: show per-column and resolved-output line number
     /// gutters. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_show_line_numbers: bool,
+    /// section 30 merge tool: last-used view mode (true = 3-way). Fresh opens of
+    /// base-present conflicts default to this; toolbar toggle persists it.
+    pub(in crate::view) mergetool_view_three_way: bool,
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) annotate_enabled: bool,
     /// Width (design px) of the annotate column; user-resizable, session-local.

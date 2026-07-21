@@ -675,10 +675,17 @@ fn sync_conflict_preview_axis(
     axis: SyncedScrollAxis,
     mode: DiffScrollSync,
     group: ConflictPreviewSyncGroup,
+    anchors: &[(f32, f32)],
 ) {
     match group {
         ConflictPreviewSyncGroup::ColumnsAndOutput => {
-            maybe_sync_synced_scroll_offsets(handles, last_synced, axis, mode);
+            maybe_sync_synced_scroll_offsets_with_output_anchor(
+                handles,
+                last_synced,
+                axis,
+                mode,
+                anchors,
+            );
         }
         ConflictPreviewSyncGroup::ColumnsOnly => {
             let columns = [handles[0].clone(), handles[1].clone(), handles[2].clone()];
@@ -699,7 +706,13 @@ fn sync_conflict_preview_axis(
         ConflictPreviewSyncGroup::TwoWayPairAndOutput => {
             let group = [handles[0].clone(), handles[2].clone(), handles[3].clone()];
             let mut group_last = [last_synced[0], last_synced[2], last_synced[3]];
-            maybe_sync_synced_scroll_offsets(&group, &mut group_last, axis, mode);
+            maybe_sync_synced_scroll_offsets_with_output_anchor(
+                &group,
+                &mut group_last,
+                axis,
+                mode,
+                anchors,
+            );
             last_synced[0] = group_last[0];
             last_synced[2] = group_last[1];
             last_synced[3] = group_last[2];
@@ -721,7 +734,7 @@ fn sync_synced_scroll_offsets<const N: usize>(
     axis: SyncedScrollAxis,
 ) {
     let offsets: [Point<Pixels>; N] = std::array::from_fn(|ix| handles[ix].offset());
-    let max_scrolls = std::array::from_fn(|ix| {
+    let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
         axis.max_scroll_component(handles[ix].max_offset().into())
             .max(px(0.0))
     });
@@ -751,6 +764,102 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
     } else {
         *last_synced = snapshot_synced_scroll_offsets(handles, axis);
     }
+}
+
+/// Row height (px) shared by the aligned columns and the resolved-output
+/// preview/editor. Both render 20px rows, so column↔output sync is a pure
+/// row-index remap.
+const CONFLICT_PREVIEW_ROW_H: f32 = 20.0;
+
+/// Sync a group that includes the resolved output. The aligned columns carry
+/// padding rows (one-sided insertions/deletions) the merged output does not, so
+/// a single global ratio drifts across the file. Horizontal stays pixel-aligned;
+/// vertically we re-anchor on the nearest conflict — context regions between
+/// conflicts are 1:1, so applying the master↔follower row shift of the nearest
+/// conflict keeps drift bounded to a single conflict block's padding.
+///
+/// The resolved output is always the LAST handle in `handles`; the rest are
+/// aligned columns. `anchors` are `(aligned_row, output_row)` pairs.
+fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+    mode: DiffScrollSync,
+    anchors: &[(f32, f32)],
+) {
+    if !axis.includes(mode) {
+        *last_synced = snapshot_synced_scroll_offsets(handles, axis);
+        return;
+    }
+    if axis != SyncedScrollAxis::Vertical || N == 0 {
+        // Horizontal scrolling stays pixel-aligned across the panes.
+        sync_synced_scroll_offsets(handles, last_synced, axis);
+        return;
+    }
+
+    let row_h = px(CONFLICT_PREVIEW_ROW_H);
+    let output_ix = N - 1;
+    let offsets: [Pixels; N] = std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()));
+    let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
+        axis.max_scroll_component(handles[ix].max_offset().into())
+            .max(px(0.0))
+    });
+    let to_rows = |off: Pixels| -> f32 {
+        let mag = if off < px(0.0) { -off } else { off };
+        (mag / row_h).max(0.0)
+    };
+
+    // Master = the handle the user moved since the last sync. Prefer the output
+    // when it changed; otherwise the first changed column drives the output.
+    let output_changed = offsets[output_ix] != last_synced[output_ix];
+    let master_column = (0..output_ix).find(|&ix| offsets[ix] != last_synced[ix]);
+
+    let mut targets = offsets;
+    if output_changed || master_column.is_none() {
+        // Output drives the columns.
+        let out_row = to_rows(offsets[output_ix]);
+        let col_row = (out_row + nearest_anchor_shift(anchors, out_row, false)).max(0.0);
+        for ix in 0..output_ix {
+            targets[ix] = clamp_raw_scroll_y(-(row_h * col_row), max_scrolls[ix]);
+        }
+    } else {
+        // A column drives the output; the other columns follow it 1:1.
+        let master = master_column.expect("changed column present");
+        let al_row = to_rows(offsets[master]);
+        let out_row = (al_row + nearest_anchor_shift(anchors, al_row, true)).max(0.0);
+        targets[output_ix] = clamp_raw_scroll_y(-(row_h * out_row), max_scrolls[output_ix]);
+        for ix in 0..output_ix {
+            targets[ix] = clamp_raw_scroll_y(offsets[master], max_scrolls[ix]);
+        }
+    }
+
+    for ix in 0..N {
+        if offsets[ix] != targets[ix] {
+            handles[ix].set_offset(axis.with_offset_component(handles[ix].offset(), targets[ix]));
+        }
+    }
+    *last_synced = targets;
+}
+
+/// Row shift `follower_row - master_row` at the conflict anchor nearest `pos`.
+/// `by_aligned` selects whether `pos`/matching is in aligned-row space (a column
+/// is the master → follower is the output) or output-row space (vice versa).
+fn nearest_anchor_shift(anchors: &[(f32, f32)], pos: f32, by_aligned: bool) -> f32 {
+    let mut best_shift = 0.0f32;
+    let mut best_dist = f32::INFINITY;
+    for &(aligned, output) in anchors {
+        let (coord, shift) = if by_aligned {
+            (aligned, output - aligned)
+        } else {
+            (output, aligned - output)
+        };
+        let dist = (coord - pos).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best_shift = shift;
+        }
+    }
+    best_shift
 }
 
 /// Resolve the file path and blame source for a diff target, or `None` for
@@ -1365,6 +1474,7 @@ impl MainPaneView {
             mergetool_vertical_split: false,
             mergetool_output_scroll_sync: true,
             mergetool_show_line_numbers: true,
+            mergetool_view_three_way: true,
             diff_view: diff_view_mode,
             annotate_enabled,
             annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
@@ -3727,6 +3837,27 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn set_mergetool_view_three_way_and_persist(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.mergetool_view_three_way == next {
+            return;
+        }
+        self.mergetool_view_three_way = next;
+        // Unlike the cog-menu setters this can run while the root view is
+        // already being updated (view-mode toggles), so schedule the persist
+        // after the current update flush.
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.schedule_ui_settings_persist(cx);
+            });
+        });
+        cx.notify();
+    }
+
     pub(in crate::view) fn set_mergetool_show_line_numbers_and_persist(
         &mut self,
         next: bool,
@@ -3873,6 +4004,9 @@ impl MainPaneView {
                 self.conflict_resolver_reveal_resolved_output_line(line, line_count);
             }
         }
+        let split_selection_rows = self.conflict_resolver_split_selection_row_count(conflict_ix);
+        let (join_previous_region, join_next_region) =
+            self.conflict_resolver_join_region_targets(conflict_ix);
         self.open_popover_at(
             PopoverKind::ConflictResolverChunkMenu {
                 conflict_ix,
@@ -3880,6 +4014,9 @@ impl MainPaneView {
                 is_three_way,
                 selected_choices,
                 output_line_ix,
+                split_selection_rows,
+                join_previous_region,
+                join_next_region,
             },
             anchor,
             window,
@@ -3911,6 +4048,109 @@ impl MainPaneView {
             })
             .nth(conflict_ix)
             .unwrap_or(false)
+    }
+
+    pub(in crate::view) fn conflict_resolver_split_selection_row_count(
+        &self,
+        conflict_ix: usize,
+    ) -> Option<usize> {
+        let selection = self.conflict_resolver.row_selection?;
+        if selection.selecting || selection.conflict_ix != conflict_ix {
+            return None;
+        }
+        self.conflict_resolver.split_boundaries_for_selection()?;
+        Some(selection.row_range().count())
+    }
+
+    fn conflict_resolver_join_region_targets(
+        &self,
+        conflict_ix: usize,
+    ) -> (
+        Option<ConflictResolverJoinTarget>,
+        Option<ConflictResolverJoinTarget>,
+    ) {
+        let Some(region_index) = self
+            .conflict_resolver
+            .conflict_region_indices
+            .get(conflict_ix)
+            .copied()
+        else {
+            return (None, None);
+        };
+        if self
+            .conflict_resolver
+            .conflict_region_indices
+            .iter()
+            .filter(|&&index| index == region_index)
+            .take(2)
+            .count()
+            != 1
+        {
+            return (None, None);
+        }
+        let Some(repo_id) = self
+            .conflict_resolver
+            .repo_id
+            .or_else(|| self.active_repo_id())
+        else {
+            return (None, None);
+        };
+        let Some(path) = self.conflict_resolver.dispatch_path() else {
+            return (None, None);
+        };
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            return (None, None);
+        };
+        if repo.conflict_state.conflict_rev != self.conflict_resolver.conflict_rev {
+            return (None, None);
+        }
+        let Some(session) = repo.conflict_state.conflict_session.as_ref() else {
+            return (None, None);
+        };
+        if session.path != path.as_path()
+            || session.strategy
+                != gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver
+            || region_index >= session.regions.len()
+        {
+            return (None, None);
+        }
+
+        let target = |first_region_index| ConflictResolverJoinTarget {
+            repo_id,
+            path: path.clone(),
+            conflict_rev: repo.conflict_state.conflict_rev,
+            first_region_index,
+        };
+        let visible_ix_for_unique_region = |wanted: usize| {
+            let mut matches = self
+                .conflict_resolver
+                .conflict_region_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, &region)| (region == wanted).then_some(ix));
+            let first = matches.next()?;
+            matches.next().is_none().then_some(first)
+        };
+        let previous = region_index.checked_sub(1).and_then(|previous_region| {
+            let previous_ix = visible_ix_for_unique_region(previous_region)?;
+            (previous_ix.checked_add(1) == Some(conflict_ix)
+                && self
+                    .conflict_resolver
+                    .conflict_blocks_have_joinable_context(previous_ix, conflict_ix))
+            .then(|| target(previous_region))
+        });
+        let next = region_index.checked_add(1).and_then(|next_region| {
+            if next_region >= session.regions.len() {
+                return None;
+            }
+            let next_ix = visible_ix_for_unique_region(next_region)?;
+            (conflict_ix.checked_add(1) == Some(next_ix)
+                && self
+                    .conflict_resolver
+                    .conflict_blocks_have_joinable_context(conflict_ix, next_ix))
+            .then(|| target(region_index))
+        });
+        (previous, next)
     }
 
     pub(in crate::view) fn open_conflict_resolver_output_context_menu(
@@ -5132,6 +5372,7 @@ impl MainPaneView {
     pub(in crate::view) fn sync_conflict_preview_scroll(&mut self) {
         let handles = self.conflict_preview_scroll_handles();
         let group = self.conflict_preview_sync_group();
+        let anchors = self.conflict_output_row_anchors();
         for (axis, last_synced) in [
             (
                 SyncedScrollAxis::Vertical,
@@ -5142,8 +5383,54 @@ impl MainPaneView {
                 &mut self.conflict_preview_last_synced_x,
             ),
         ] {
-            sync_conflict_preview_axis(&handles, last_synced, axis, self.diff_scroll_sync, group);
+            sync_conflict_preview_axis(
+                &handles,
+                last_synced,
+                axis,
+                self.diff_scroll_sync,
+                group,
+                &anchors,
+            );
         }
+    }
+
+    /// `(aligned_row, output_row)` anchor pairs for the conflict-anchored
+    /// output scroll sync — the aligned column row and the resolved-output line
+    /// where each conflict starts. Seeded with `(0, 0)` so scrolling above the
+    /// first conflict stays 1:1. Conflicts with no locatable output line (e.g.
+    /// resolved, no marker) are skipped; the nearest remaining anchor is used.
+    fn conflict_output_row_anchors(&self) -> Vec<(f32, f32)> {
+        let mut anchors = vec![(0.0f32, 0.0f32)];
+        // The anchors map aligned diff rows to output lines. In markdown/image
+        // preview the columns render rendered content, not the 20px aligned row
+        // space, so the mapping is meaningless — keep only the `(0, 0)` seed,
+        // which makes the sync degenerate to a raw 1:1 copy.
+        if self.is_markdown_preview_active() {
+            return anchors;
+        }
+        let streamed = self.conflict_resolved_output_is_streamed();
+        for conflict_ix in 0..self.conflict_resolver_conflict_count() {
+            let Some(aligned) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) else {
+                continue;
+            };
+            let output = if streamed {
+                self.conflict_resolved_output_projection
+                    .as_ref()
+                    .and_then(|projection| projection.conflict_line_range(conflict_ix))
+                    .map(|range| range.start)
+            } else {
+                first_output_marker_line_for_conflict(
+                    &self.conflict_resolver.resolved_outline.markers,
+                    conflict_ix,
+                )
+            };
+            let Some(output) = output else {
+                continue;
+            };
+            anchors.push((aligned as f32, output as f32));
+        }
+        anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
+        anchors
     }
 
     /// Which conflict-preview lists share a row space and may be raw-offset
@@ -5151,7 +5438,7 @@ impl MainPaneView {
     ///
     /// The resolved output renders full merged lines, so it only joins the
     /// group when the columns render an unfolded whole-file row space — the
-    /// three-way unfolded columns or the §30 aligned two-way full mode — and
+    /// three-way unfolded columns or the section 30 aligned two-way full mode — and
     /// only when the merge-tool output-scroll-sync setting is on. Folded
     /// column spaces (hide-resolved / collapsed context) and block-local
     /// giant-file two-way rows keep the output independent, because raw
@@ -5356,6 +5643,26 @@ mod tests {
         );
 
         assert_eq!(targets, [px(-100.0), px(-100.0), px(-100.0), px(-320.0)]);
+    }
+
+    #[test]
+    fn nearest_anchor_shift_uses_closest_conflict_in_each_space() {
+        // Conflict 1: aligned row 10 / output row 8 (2 padding rows above it).
+        // Conflict 2: aligned row 30 / output row 25 (5 padding rows above it).
+        let anchors = [(0.0, 0.0), (10.0, 8.0), (30.0, 25.0)];
+
+        // A column drives the output (by_aligned=true): shift = output - aligned.
+        // Just past conflict 1, the nearest anchor is (10, 8) → shift -2, so an
+        // aligned row of 12 maps to output row 10.
+        assert_eq!(nearest_anchor_shift(&anchors, 12.0, true), -2.0);
+        // Near conflict 2, shift -5 (aligned 32 → output 27).
+        assert_eq!(nearest_anchor_shift(&anchors, 32.0, true), -5.0);
+
+        // The output drives the columns (by_aligned=false): shift = aligned - output.
+        // Output row 9 is nearest anchor (10, 8) → shift +2 (aligned row 11).
+        assert_eq!(nearest_anchor_shift(&anchors, 9.0, false), 2.0);
+        // Above the first conflict, the (0, 0) seed keeps it 1:1.
+        assert_eq!(nearest_anchor_shift(&anchors, 3.0, false), 0.0);
     }
 
     #[test]

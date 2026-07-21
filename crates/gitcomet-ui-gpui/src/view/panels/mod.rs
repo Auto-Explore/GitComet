@@ -228,6 +228,10 @@ pub(in crate::view) enum ContextMenuAction {
     ConflictResolverUnresolve {
         conflict_ix: usize,
     },
+    ConflictResolverSplitSelection,
+    ConflictResolverJoinRegions {
+        target: ConflictResolverJoinTarget,
+    },
     SetMergetoolAutoAdvance {
         enabled: bool,
     },

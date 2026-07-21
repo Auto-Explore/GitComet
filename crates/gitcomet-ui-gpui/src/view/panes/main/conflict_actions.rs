@@ -2,7 +2,7 @@
 //!
 //! Extracted from `actions_impl.rs`: mergetool bootstrap tracing, conflict
 //! navigation, pick/choice application, output editing ops, session
-//! resolution sync, and autosolve dispatch. See UI_DESIGN.md §30.
+//! resolution sync, and autosolve dispatch. See UI_DESIGN.md section 30.
 
 use super::helpers::*;
 use super::*;
@@ -736,11 +736,18 @@ impl MainPaneView {
         } else {
             Vec::new()
         };
+        let conflict_region_marker_has_base = marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block.base.is_some()),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .collect();
         let rendering_mode = conflict_resolver::select_conflict_rendering_mode(
             &marker_segments,
             three_way_side_max_len,
         );
-        // §30 aligned row space: compute the kdiff3-style alignment once per
+        // section 30 aligned row space: compute the kdiff3-style alignment once per
         // bootstrap (side texts are immutable for the session). Files without
         // a base version (e.g. both-added conflicts) align ours↔theirs
         // directly with empty base ranges, so the two-way view gets the same
@@ -924,11 +931,32 @@ impl MainPaneView {
         });
         let inline_row_count = 0;
 
-        // Streamed mode must avoid bootstrap diff work entirely. Three-way word
-        // highlights still depend on side_by_side_rows/myers, so keep them
-        // empty here and reserve that quality improvement for a later lazy path.
+        // section 30 R11: the aligned row space gives exact base↔side line pairs, so
+        // word highlights come from a row-capped per-line word diff instead of
+        // the old whole-file side_by_side/myers pass (which the streamed path
+        // had to skip). Identity maps (no side texts / impractical alignment)
+        // and both-added conflicts (two-way highlight path) stay empty.
         let three_way_word_highlights_started = Instant::now();
-        let three_way_word_highlights = ThreeWaySides::default();
+        let three_way_word_highlights = if !three_way_aligned.is_identity() && !base_text.is_empty()
+        {
+            let (wh_base, wh_ours, wh_theirs) =
+                conflict_resolver::compute_aligned_three_way_word_highlights(
+                    &three_way_aligned,
+                    base_text,
+                    three_way_line_starts.base.starts(base_text),
+                    ours_text,
+                    three_way_line_starts.ours.starts(ours_text),
+                    theirs_text,
+                    three_way_line_starts.theirs.starts(theirs_text),
+                );
+            ThreeWaySides {
+                base: wh_base,
+                ours: wh_ours,
+                theirs: wh_theirs,
+            }
+        } else {
+            ThreeWaySides::default()
+        };
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(
@@ -939,7 +967,22 @@ impl MainPaneView {
                 .with_conflict_block_count(Some(conflict_block_count))
         });
 
+        // section 30 R11: aligned two-way (ours↔theirs) word highlights, computed
+        // once here and shared by both diff columns, replacing the old
+        // per-render/per-column inline word diff. Independent of base, so this
+        // runs even for both-added conflicts where the three-way pass stays empty.
         let two_way_word_highlights_started = Instant::now();
+        let two_way_aligned_word_highlights = if three_way_aligned.is_identity() {
+            rustc_hash::FxHashMap::default()
+        } else {
+            conflict_resolver::compute_aligned_two_way_word_highlights(
+                &three_way_aligned,
+                ours_text,
+                three_way_line_starts.ours.starts(ours_text),
+                theirs_text,
+                three_way_line_starts.theirs.starts(theirs_text),
+            )
+        };
         mergetool_trace::record_with(|| {
             trace_ctx
                 .bootstrap_event(
@@ -954,15 +997,24 @@ impl MainPaneView {
         // Three-way conflict maps and visible state are deferred to
         // `rebuild_three_way_visible_state()` after state construction.
 
+        let three_way_source_available = file.base.is_some()
+            || (needs_full_side_texts
+                && matches!(
+                    conflict_kind,
+                    Some(gitcomet_core::domain::FileConflictKind::BothModified)
+                ));
         let view_mode = if is_same_conflict {
             self.conflict_resolver.view_mode
         } else if matches!(
             conflict_strategy,
             Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
-        ) && file.base.is_some()
+        ) && three_way_source_available
+            && self.mergetool_view_three_way
         {
             ConflictResolverViewMode::ThreeWay
         } else {
+            // Base-absent conflicts and non-full-text strategies always open
+            // two-way; base-present opens honor the persisted last-used mode.
             ConflictResolverViewMode::TwoWayDiff
         };
 
@@ -990,7 +1042,7 @@ impl MainPaneView {
                 self.conflict_resolver.active_conflict.min(total - 1)
             }
         } else {
-            // §30: on open, selection lands on the first unresolved conflict
+            // section 30: on open, selection lands on the first unresolved conflict
             // (earlier ones may have been auto-solved on load).
             conflict_resolver::unresolved_conflict_indices(&marker_segments)
                 .first()
@@ -1011,19 +1063,27 @@ impl MainPaneView {
                 .and_then(conflict_resolver::on_open_autosolve_summary)
                 .map(Into::into)
         };
-        let auto_solved_on_open = if is_same_conflict {
-            self.conflict_resolver.auto_solved_on_open
-        } else {
-            repo.conflict_state
-                .conflict_session
-                .as_ref()
-                .map(|session| {
-                    conflict_resolver::auto_resolved_region_count_for_blocks(
-                        session,
-                        &conflict_region_indices,
-                    )
-                })
-        };
+        let session_open_summary = repo
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .filter(|session| session.path.as_path() == path.as_path())
+            .map(|session| {
+                let (total, auto_solved, resolved) =
+                    conflict_resolver::conflict_session_summary_counts(session);
+                (total, resolved, auto_solved)
+            });
+        // Same-conflict syncs keep the open-time snapshot, but backfill it when
+        // still unset: the fast CurrentOnly first paint can run before the
+        // session (and its autosolve pass) exists.
+        let auto_solved_on_open =
+            if is_same_conflict && self.conflict_resolver.auto_solved_on_open.is_some() {
+                self.conflict_resolver.auto_solved_on_open
+            } else {
+                session_open_summary.map(|(_, _, auto_solved)| auto_solved)
+            };
+        let open_summary_announced =
+            is_same_conflict && self.conflict_resolver.open_summary_announced;
 
         self.conflict_three_way_segments_cache.clear();
 
@@ -1089,8 +1149,12 @@ impl MainPaneView {
                 std::collections::HashMap::default()
             },
             conflict_region_indices,
+            conflict_region_marker_has_base,
             active_conflict,
             hovered_conflict: None,
+            // section 30 split: any pending row selection is invalidated by a source
+            // rebuild (which happens after a split changes the segmentation).
+            row_selection: None,
             mode_state,
             view_mode,
             three_way_text,
@@ -1105,6 +1169,7 @@ impl MainPaneView {
             two_way_split_visual_kind_cache: HashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights,
+            two_way_aligned_word_highlights,
             nav_anchor,
             hide_resolved,
             is_binary_conflict: false,
@@ -1113,6 +1178,7 @@ impl MainPaneView {
             conflict_kind,
             last_autosolve_summary,
             auto_solved_on_open,
+            open_summary_announced,
             conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
@@ -1191,14 +1257,48 @@ impl MainPaneView {
         // keeps the buffer authoritative (all streamed paths are gated on
         // `conflict_resolved_output_is_streamed`).
         self.ensure_conflict_resolved_output_materialized(cx);
-        // §30: on a fresh open, bring every view to the initial active
+        // section 30: on a fresh open, bring every view to the initial active
         // conflict. Deferred item scrolls apply once the lists lay out, so
         // this works even though nothing has rendered yet.
         if !is_same_conflict && conflict_block_count > 0 {
             let initial_conflict = self.conflict_resolver.active_conflict;
             self.conflict_resolver_scroll_all_views_to_conflict(initial_conflict, None, None, cx);
         }
-        // §30 aligned row space: whole-file column rows (three-way and
+        // kdiff3-style one-shot open summary: announce total / auto-solved /
+        // remaining once per resolver open, as soon as the session-derived
+        // auto count is available (the fast first paint may precede the
+        // session and its on-open autosolve pass).
+        if !self.conflict_resolver.open_summary_announced {
+            if let Some(auto_solved) = self.conflict_resolver.auto_solved_on_open {
+                let (total, resolved) = session_open_summary
+                    .map(|(total, resolved, _)| (total, resolved))
+                    .unwrap_or_else(|| {
+                        (
+                            self.conflict_resolver_conflict_count(),
+                            self.conflict_resolver_resolved_count(),
+                        )
+                    });
+                if let Some(message) =
+                    conflict_resolver::format_open_summary_toast(total, auto_solved, resolved)
+                {
+                    self.conflict_resolver.open_summary_announced = true;
+                    // The sync runs inside a GitCometView update; push the
+                    // toast after the current update flush to avoid reentrant
+                    // root-view updates.
+                    let root_view = self.root_view.clone();
+                    cx.defer(move |cx| {
+                        let _ = root_view.update(cx, |root, cx| {
+                            root.push_toast(
+                                crate::view::components::ToastKind::Success,
+                                message,
+                                cx,
+                            );
+                        });
+                    });
+                }
+            }
+        }
+        // section 30 aligned row space: whole-file column rows (three-way and
         // two-way full mode) need the side texts, which the fast CurrentOnly
         // first paint does not include. Upgrade fresh opens of reasonably
         // sized text conflicts to a Full load in the background; this
@@ -1285,6 +1385,13 @@ impl MainPaneView {
         } else {
             Vec::new()
         };
+        let conflict_region_marker_has_base = marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block.base.is_some()),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .collect();
         // Re-populate bases from ancestor (needed for 2-way markers).
         if let Some(base_text) = file.base.clone() {
             conflict_resolver::populate_block_bases_from_shared_ancestor(
@@ -1331,8 +1438,10 @@ impl MainPaneView {
         // Update only the fields that change during a state re-sync.
         self.conflict_resolver.marker_segments = marker_segments;
         self.conflict_resolver.conflict_region_indices = conflict_region_indices;
+        self.conflict_resolver.conflict_region_marker_has_base = conflict_region_marker_has_base;
         self.conflict_resolver.hide_resolved = hide_resolved;
         self.conflict_resolver.active_conflict = active_conflict;
+        self.conflict_resolver.row_selection = None;
         self.conflict_resolver.conflict_syntax_language = self
             .conflict_resolver
             .path
@@ -1413,6 +1522,10 @@ impl MainPaneView {
             return;
         }
         self.conflict_resolver.view_mode = view_mode;
+        self.set_mergetool_view_three_way_and_persist(
+            view_mode == ConflictResolverViewMode::ThreeWay,
+            cx,
+        );
         self.conflict_resolver.nav_anchor = None;
         self.conflict_resolver.hovered_conflict = None;
         // View-mode switches rebuild visible projections and can temporarily
@@ -1497,7 +1610,7 @@ impl MainPaneView {
         cx.notify();
     }
 
-    /// Toggle §30 collapsed context mode: fold unchanged runs beyond the
+    /// Toggle section 30 collapsed context mode: fold unchanged runs beyond the
     /// per-conflict context window in the source columns.
     pub(in crate::view) fn conflict_resolver_toggle_collapse_context(
         &mut self,
@@ -1774,7 +1887,7 @@ impl MainPaneView {
     }
 
     /// Un-resolve the active conflict regardless of how it was resolved
-    /// (§30: one keypress reverts a pick or auto-resolution).
+    /// (section 30: one keypress reverts a pick or auto-resolution).
     pub(in crate::view) fn conflict_resolver_unresolve_active_conflict(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -1950,7 +2063,7 @@ impl MainPaneView {
         choice: conflict_resolver::ConflictChoice,
         cx: &mut gpui::Context<Self>,
     ) {
-        // `line_ix` arrives from input-row menus in aligned-row space (§30).
+        // `line_ix` arrives from input-row menus in aligned-row space (section 30).
         let line = match choice {
             conflict_resolver::ConflictChoice::Base => self
                 .conflict_resolver
@@ -2319,7 +2432,7 @@ impl MainPaneView {
         total
     }
 
-    pub(super) fn conflict_resolver_session_counts(&self) -> Option<(usize, usize)> {
+    pub(in crate::view) fn conflict_resolver_session_counts(&self) -> Option<(usize, usize)> {
         let resolver_path = self.conflict_resolver.path.as_ref()?;
         let session = self
             .active_repo()?
@@ -2437,7 +2550,7 @@ impl MainPaneView {
     }
 
     /// Confidence tier of the auto-resolve rule applied to a conflict, when
-    /// its session region is `AutoResolved` (§30 gutter badges).
+    /// its session region is `AutoResolved` (section 30 gutter badges).
     pub(in crate::view) fn conflict_autosolve_confidence_for_ix(
         &self,
         conflict_ix: usize,
@@ -2467,7 +2580,7 @@ impl MainPaneView {
     }
 
     /// Rebuild the resolved-output fold projection for collapsed context mode
-    /// (§30). Output line space; derived from the outline's conflict markers.
+    /// (section 30). Output line space; derived from the outline's conflict markers.
     /// Streamed outputs stay unfolded (their row space is already projected).
     pub(in crate::view) fn rebuild_resolved_output_visible_projection(&mut self) {
         let fold = self.conflict_resolver.collapse_context
@@ -2581,7 +2694,7 @@ impl MainPaneView {
             .count()
     }
 
-    /// Select a conflict as the active one without picking a side (§30:
+    /// Select a conflict as the active one without picking a side (section 30:
     /// clicking a conflict block body selects it).
     pub(in crate::view) fn conflict_resolver_select_conflict(
         &mut self,
@@ -2595,6 +2708,191 @@ impl MainPaneView {
             return;
         }
         self.conflict_resolver.active_conflict = conflict_ix;
+        cx.notify();
+    }
+
+    /// section 30 split: begin a drag selection of aligned rows at `aligned_row`
+    /// inside conflict block `conflict_ix`. Also selects the block so the
+    /// pick affordances follow. No-op when split is unavailable.
+    pub(in crate::view) fn conflict_resolver_begin_row_selection(
+        &mut self,
+        conflict_ix: usize,
+        aligned_row: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.conflict_resolver.conflict_row_selection_enabled() {
+            return;
+        }
+        let row = self
+            .conflict_resolver
+            .clamp_row_to_conflict_block(conflict_ix, aligned_row);
+        self.conflict_resolver.active_conflict = conflict_ix;
+        self.conflict_resolver.row_selection = Some(ConflictRowSelection {
+            conflict_ix,
+            anchor_row: row,
+            head_row: row,
+            selecting: true,
+        });
+        cx.notify();
+    }
+
+    /// Select a row with a keyboard modifier. Shift/Ctrl-click extends the
+    /// existing contiguous selection from its anchor; without an existing
+    /// selection it starts a single-row selection. Keeping the selection
+    /// contiguous matches the split operation's byte-range surgery.
+    pub(in crate::view) fn conflict_resolver_click_row_selection(
+        &mut self,
+        conflict_ix: usize,
+        aligned_row: usize,
+        modifiers: gpui::Modifiers,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.conflict_resolver.conflict_row_selection_enabled() {
+            return;
+        }
+        let row = self
+            .conflict_resolver
+            .clamp_row_to_conflict_block(conflict_ix, aligned_row);
+        let anchor = self
+            .conflict_resolver
+            .row_selection
+            .filter(|selection| selection.conflict_ix == conflict_ix)
+            .map(|selection| selection.anchor_row)
+            .unwrap_or(row);
+        let extend = modifiers.shift || modifiers.control;
+        self.conflict_resolver.active_conflict = conflict_ix;
+        self.conflict_resolver.row_selection = Some(ConflictRowSelection {
+            conflict_ix,
+            anchor_row: if extend { anchor } else { row },
+            head_row: row,
+            selecting: false,
+        });
+        cx.notify();
+    }
+
+    /// Extend the in-progress selection to `aligned_row`, clamped to the
+    /// anchored block even when the pointer has entered a neighbouring block.
+    pub(in crate::view) fn conflict_resolver_extend_row_selection(
+        &mut self,
+        _conflict_ix: usize,
+        aligned_row: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(mut selection) = self.conflict_resolver.row_selection else {
+            return;
+        };
+        if !selection.selecting {
+            return;
+        }
+        let row = self
+            .conflict_resolver
+            .clamp_row_to_conflict_block(selection.conflict_ix, aligned_row);
+        if row == selection.head_row {
+            return;
+        }
+        selection.head_row = row;
+        self.conflict_resolver.row_selection = Some(selection);
+        cx.notify();
+    }
+
+    /// section 30 split: finish the drag (keeps the selected range for the menu).
+    pub(in crate::view) fn conflict_resolver_end_row_selection(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(mut selection) = self.conflict_resolver.row_selection else {
+            return;
+        };
+        if !selection.selecting {
+            return;
+        }
+        selection.selecting = false;
+        self.conflict_resolver.row_selection = Some(selection);
+        cx.notify();
+    }
+
+    /// section 30 split: split the active row selection into its own conflict(s).
+    /// Dispatches `Msg::ConflictSplitRegion`; the state round-trip rebuilds
+    /// the resolver (which also clears the selection).
+    pub(in crate::view) fn conflict_resolver_split_selection(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some((region_index, boundaries)) =
+            self.conflict_resolver.split_boundaries_for_selection()
+        else {
+            return;
+        };
+        if let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.dispatch_path(),
+        ) {
+            self.store.dispatch(Msg::ConflictSplitRegion {
+                repo_id,
+                path,
+                region_index,
+                boundaries,
+            });
+        }
+        // Keep the selection until the state round-trip confirms the edit.
+        // A stale repo/path/session can make the reducer reject the request;
+        // retaining it lets the user retry instead of silently losing work.
+        cx.notify();
+    }
+
+    pub(in crate::view) fn conflict_resolver_join_regions(
+        &mut self,
+        target: ConflictResolverJoinTarget,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.repo_id != Some(target.repo_id)
+            || self.conflict_resolver.dispatch_path().as_ref() != Some(&target.path)
+            || self.conflict_resolver.conflict_rev != target.conflict_rev
+        {
+            return;
+        }
+        let snapshot = self.store.snapshot();
+        let target_is_current = snapshot
+            .repos
+            .iter()
+            .find(|repo| repo.id == target.repo_id)
+            .is_some_and(|repo| {
+                repo.conflict_state.conflict_rev == target.conflict_rev
+                    && repo.conflict_state.conflict_file_path.as_deref()
+                        == Some(target.path.as_path())
+                    && repo
+                        .conflict_state
+                        .conflict_session
+                        .as_ref()
+                        .is_some_and(|session| {
+                            session.path == target.path.as_path()
+                                && target
+                                    .first_region_index
+                                    .checked_add(1)
+                                    .is_some_and(|next| next < session.regions.len())
+                        })
+            });
+        if !target_is_current {
+            return;
+        }
+
+        if let Some(conflict_ix) = self
+            .conflict_resolver
+            .conflict_region_indices
+            .iter()
+            .position(|&region_index| region_index == target.first_region_index)
+        {
+            self.conflict_resolver.active_conflict = conflict_ix;
+        }
+        self.conflict_resolver.row_selection = None;
+        self.store.dispatch(Msg::ConflictJoinRegions {
+            repo_id: target.repo_id,
+            path: target.path,
+            region_index: target.first_region_index,
+            expected_conflict_rev: target.conflict_rev,
+        });
         cx.notify();
     }
 
@@ -2744,7 +3042,7 @@ impl MainPaneView {
                 whitespace_normalize: false,
             });
         }
-        // §30: the Low-confidence tier (history/changelog merge) only ever
+        // section 30: the Low-confidence tier (history/changelog merge) only ever
         // runs from this explicit action, never automatically. Results flow
         // back into the blocks through the conflict_rev resync.
         if unresolved_after > 0

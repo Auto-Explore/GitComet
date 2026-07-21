@@ -570,3 +570,152 @@ fn projection_multiple_collapsed_blocks() {
 // ---------------------------------------------------------------------------
 // Phase 3: ConflictSplitRowIndex and TwoWaySplitProjection tests
 // ---------------------------------------------------------------------------
+
+#[test]
+fn aligned_three_way_word_highlights_mark_only_changed_side_lines() {
+    fn line_starts(text: &str) -> Vec<usize> {
+        let mut starts = vec![0];
+        for (ix, byte) in text.as_bytes().iter().enumerate() {
+            if *byte == b'\n' {
+                starts.push(ix + 1);
+            }
+        }
+        starts
+    }
+
+    // Mirrors the gitmess kernel-03 shape: ours renames a variable on lines
+    // 1 and 3, theirs changes line 2 only.
+    let base_text = "fn a() {\n    let acc = 1;\n    let n = len();\n    push(acc);\n}\n";
+    let ours_text = "fn a() {\n    let folded = 1;\n    let n = len();\n    push(folded);\n}\n";
+    let theirs_text = "fn a() {\n    let acc = 1;\n    let n = len().max(1);\n    push(acc);\n}\n";
+
+    let aligned = ThreeWayAlignedMap::from_alignment(&gitcomet_core::merge::align_three_way(
+        base_text,
+        ours_text,
+        theirs_text,
+        gitcomet_core::merge::DiffAlgorithm::Myers,
+    ));
+    assert!(!aligned.is_identity());
+
+    let (base_hl, ours_hl, theirs_hl) = compute_aligned_three_way_word_highlights(
+        &aligned,
+        base_text,
+        &line_starts(base_text),
+        ours_text,
+        &line_starts(ours_text),
+        theirs_text,
+        &line_starts(theirs_text),
+    );
+
+    assert!(ours_hl.contains_key(&1), "ours renamed line 1");
+    assert!(ours_hl.contains_key(&3), "ours renamed line 3");
+    assert!(!ours_hl.contains_key(&0), "ours line 0 unchanged");
+    assert!(!ours_hl.contains_key(&2), "ours line 2 unchanged");
+
+    assert!(theirs_hl.contains_key(&2), "theirs changed line 2");
+    assert!(!theirs_hl.contains_key(&1), "theirs line 1 unchanged");
+    assert!(!theirs_hl.contains_key(&3), "theirs line 3 unchanged");
+
+    assert!(base_hl.contains_key(&1), "base line 1 differs from ours");
+    assert!(base_hl.contains_key(&2), "base line 2 differs from theirs");
+    assert!(base_hl.contains_key(&3), "base line 3 differs from ours");
+    assert!(
+        !base_hl.contains_key(&0),
+        "base line 0 unchanged everywhere"
+    );
+
+    // Word-level, not whole-line: the ours rename highlight covers `folded`,
+    // not the shared `let ` prefix.
+    let line1_ranges = &ours_hl[&1];
+    assert!(
+        line1_ranges.iter().all(|r| r.start > 0),
+        "rename highlight should not start at the shared line prefix, got {line1_ranges:?}"
+    );
+
+    // No base (both-added) and identity maps stay empty — those go through
+    // the two-way highlight path.
+    let empty = compute_aligned_three_way_word_highlights(
+        &aligned,
+        "",
+        &line_starts(""),
+        ours_text,
+        &line_starts(ours_text),
+        theirs_text,
+        &line_starts(theirs_text),
+    );
+    assert!(empty.0.is_empty() && empty.1.is_empty() && empty.2.is_empty());
+    let identity = compute_aligned_three_way_word_highlights(
+        &ThreeWayAlignedMap::default(),
+        base_text,
+        &line_starts(base_text),
+        ours_text,
+        &line_starts(ours_text),
+        theirs_text,
+        &line_starts(theirs_text),
+    );
+    assert!(identity.0.is_empty() && identity.1.is_empty() && identity.2.is_empty());
+}
+
+#[test]
+fn aligned_two_way_word_highlights_mark_changed_rows() {
+    fn line_starts(text: &str) -> Vec<usize> {
+        let mut starts = vec![0];
+        for (ix, b) in text.bytes().enumerate() {
+            if b == b'\n' {
+                starts.push(ix + 1);
+            }
+        }
+        starts
+    }
+
+    // Same shape as the three-way test: ours renames on lines 1 and 3, theirs
+    // changes line 2. The two-way (ours↔theirs) diff should mark every aligned
+    // row where the two sides' lines differ, and nothing else.
+    let base_text = "fn a() {\n    let acc = 1;\n    let n = len();\n    push(acc);\n}\n";
+    let ours_text = "fn a() {\n    let folded = 1;\n    let n = len();\n    push(folded);\n}\n";
+    let theirs_text = "fn a() {\n    let acc = 1;\n    let n = len().max(1);\n    push(acc);\n}\n";
+
+    let aligned = ThreeWayAlignedMap::from_alignment(&gitcomet_core::merge::align_three_way(
+        base_text,
+        ours_text,
+        theirs_text,
+        gitcomet_core::merge::DiffAlgorithm::Myers,
+    ));
+    assert!(!aligned.is_identity());
+
+    let two_way = compute_aligned_two_way_word_highlights(
+        &aligned,
+        ours_text,
+        &line_starts(ours_text),
+        theirs_text,
+        &line_starts(theirs_text),
+    );
+
+    // Rows 1, 2 and 3 differ between ours and theirs; rows 0 and 4 do not.
+    assert!(!two_way.is_empty(), "changed rows should get ours↔theirs highlights");
+    assert!(
+        two_way.values().all(|(o, n)| !o.is_empty() || !n.is_empty()),
+        "every recorded row should carry a non-empty side range"
+    );
+
+    // Word-level, not whole-line: the ours rename on line 1 (`folded`) must skip
+    // the shared `    let ` prefix.
+    let rename_row = (0..aligned.aligned_len())
+        .find(|&r| aligned.side_line_for_row(1, r) == Some(1))
+        .expect("aligned row for ours line 1");
+    let (ours_ranges, _) = &two_way[&rename_row];
+    assert!(
+        !ours_ranges.is_empty() && ours_ranges.as_slice().iter().all(|r| r.start > 0),
+        "rename highlight should be word-level, got {ours_ranges:?}"
+    );
+
+    // Identity maps short-circuit to empty (nothing to align).
+    let identity = compute_aligned_two_way_word_highlights(
+        &ThreeWayAlignedMap::default(),
+        ours_text,
+        &line_starts(ours_text),
+        theirs_text,
+        &line_starts(theirs_text),
+    );
+    assert!(identity.is_empty());
+}

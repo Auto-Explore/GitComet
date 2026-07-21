@@ -73,7 +73,15 @@ pub(super) fn conflict_file_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path)
     {
-        let existing_session = repo_state.conflict_state.conflict_session.as_ref();
+        // A same-path reload stashes the previous session (see
+        // `reset_conflict_target_reload_state`); it counts as the existing
+        // session for resolution restore and suppresses the on-open autosolve.
+        let stashed_session = repo_state.conflict_state.session_pending_restore.take();
+        let existing_session = repo_state
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .or(stashed_session.as_ref());
         let fresh_open = existing_session.is_none();
         let session = conflict_session.or_else(|| match &result {
             Ok(Some(file)) => build_conflict_session(repo_state, file),
@@ -92,16 +100,20 @@ pub(super) fn conflict_file_loaded(
                 Loadable::Error(e.to_string())
             }
         };
+        let keep_stashed_session = session.is_none() && stashed_session.is_some();
         repo_state.set_conflict_file(value);
         repo_state.set_conflict_session(session);
-        if fresh_open {
+        if keep_stashed_session {
+            repo_state.conflict_state.session_pending_restore = stashed_session;
+        }
+        if fresh_open && repo_state.conflict_state.conflict_session.is_some() {
             auto_resolve_session_on_open(repo_state, &path);
         }
     }
     Vec::new()
 }
 
-/// UI_DESIGN.md §30 auto-solve policy: the High and Medium confidence tiers
+/// UI_DESIGN.md section 30 auto-solve policy: the High and Medium confidence tiers
 /// (safe rules, subchunk split, whitespace/regex normalization) apply
 /// automatically when a conflicted file first opens in the resolver. The Low
 /// tier (history merge) only ever runs behind the explicit Auto-solve action.
@@ -155,10 +167,65 @@ fn restore_conflict_session_resolutions(existing: &ConflictSession, next: &mut C
         return;
     }
 
-    for (prev, current) in existing.regions.iter().zip(next.regions.iter_mut()) {
-        if prev.base == current.base && prev.ours == current.ours && prev.theirs == current.theirs {
-            current.resolution = prev.resolution.clone();
+    let same_region =
+        |left: &gitcomet_core::conflict_session::ConflictRegion,
+         right: &gitcomet_core::conflict_session::ConflictRegion| {
+            left.base == right.base && left.ours == right.ours && left.theirs == right.theirs
+        };
+
+    // The common reload case is positionally identical. Preserve every
+    // resolution, including duplicate-content regions, without ambiguity.
+    if existing.regions.len() == next.regions.len()
+        && existing
+            .regions
+            .iter()
+            .zip(next.regions.iter())
+            .all(|(left, right)| same_region(left, right))
+    {
+        for (previous, current) in existing.regions.iter().zip(next.regions.iter_mut()) {
+            current.resolution = previous.resolution.clone();
         }
+        return;
+    }
+
+    // When the region sequence changed, only restore identities that are
+    // unique on both sides. This aligns insertions/deletions while avoiding
+    // silently assigning the wrong resolution among indistinguishable
+    // duplicate blocks.
+    let next_unique: Vec<bool> = next
+        .regions
+        .iter()
+        .map(|region| {
+            next.regions
+                .iter()
+                .filter(|candidate| same_region(region, candidate))
+                .take(2)
+                .count()
+                == 1
+        })
+        .collect();
+    let mut cursor = 0usize;
+    for (current_ix, current) in next.regions.iter_mut().enumerate() {
+        if !next_unique[current_ix]
+            || existing
+                .regions
+                .iter()
+                .filter(|candidate| same_region(current, candidate))
+                .take(2)
+                .count()
+                != 1
+        {
+            continue;
+        }
+        let Some(found) = existing.regions.get(cursor..).and_then(|remaining| {
+            remaining
+                .iter()
+                .position(|previous| same_region(previous, current))
+        }) else {
+            continue;
+        };
+        current.resolution = existing.regions[cursor + found].resolution.clone();
+        cursor += found + 1;
     }
 }
 
@@ -566,11 +633,9 @@ pub(super) fn load_conflict_file(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    let same_path = repo_state.conflict_state.conflict_file_path.as_ref() == Some(&path);
     repo_state.set_conflict_file_path(Some(path.clone()));
-    repo_state.set_conflict_file_load_mode(mode);
-    repo_state.set_conflict_file(Loadable::Loading);
-    repo_state.set_conflict_session(None);
-    repo_state.set_conflict_hide_resolved(false);
+    super::util::reset_conflict_target_reload_state(repo_state, mode, same_path);
     vec![Effect::LoadConflictFile {
         repo_id,
         path,
@@ -1101,6 +1166,7 @@ fn clear_resolved_conflict_context(repo_state: &mut crate::model::RepoState) {
     repo_state.set_conflict_file_path(None);
     repo_state.set_conflict_file_load_mode(ConflictFileLoadMode::CurrentOnly);
     repo_state.set_conflict_file(Loadable::NotLoaded);
+    repo_state.conflict_state.session_pending_restore = None;
     repo_state.set_conflict_session(None);
     repo_state.set_conflict_hide_resolved(false);
 }

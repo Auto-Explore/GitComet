@@ -2,7 +2,7 @@
 //!
 //! Extracted from `diff_view.rs`: the kdiff3-style three-way resolver pane,
 //! its toolbar control clusters, and the rendered (SVG/Markdown) conflict
-//! previews. See UI_DESIGN.md §30 for the design spec.
+//! previews. See UI_DESIGN.md section 30 for the design spec.
 
 use super::*;
 
@@ -181,7 +181,7 @@ impl MainPaneView {
             .when(
                 !conflict_rendered_preview_active && self.conflict_resolver_conflict_count() > 0,
                 |d| {
-                    // §30: visible pick affordances for the active conflict,
+                    // section 30: visible pick affordances for the active conflict,
                     // mirroring the A/B/C/D quick-pick keys.
                     let active_ix = self.conflict_resolver.active_conflict;
                     let has_base = self
@@ -371,7 +371,7 @@ impl MainPaneView {
         controls
     }
 
-    /// Footer bar for the text conflict resolver (§30): live resolution
+    /// Footer bar for the text conflict resolver (section 30): live resolution
     /// status line plus the leftover-marker indicator. The save/stage
     /// completion actions live in the top toolbar; merge abort lives in
     /// the action bar's "Abort merge" button.
@@ -383,24 +383,18 @@ impl MainPaneView {
         let total = self.conflict_resolver_conflict_count();
         let resolved = self.conflict_resolver_resolved_count();
         let unresolved = total.saturating_sub(resolved);
+        let auto_solved = self.conflict_resolver_auto_resolved_count().min(total);
 
-        let stage_safety = if self.conflict_resolved_output_is_streamed() {
-            // Streamed mode: output is not materialized in the TextInput,
-            // so skip the text-based marker check. Unresolved blocks are
-            // still tracked via segments.
-            conflict_resolver::conflict_stage_safety_check(
-                "",
-                &self.conflict_resolver.marker_segments,
-            )
-        } else {
-            let resolved_output_text = self
+        // The footer only needs the marker-presence bit. Scan the editor text
+        // in place (`text()` borrows a `&str`) instead of cloning the whole
+        // resolved output to a String on every render. Streamed mode never
+        // materializes the text in the TextInput, so it has no markers to scan.
+        let has_conflict_markers = !self.conflict_resolved_output_is_streamed()
+            && self
                 .conflict_resolver_input
-                .read_with(cx, |i, _| i.text().to_string());
-            conflict_resolver::conflict_stage_safety_check(
-                &resolved_output_text,
-                &self.conflict_resolver.marker_segments,
-            )
-        };
+                .read_with(cx, |i, _| {
+                    conflict_resolver::text_contains_conflict_markers(i.text())
+                });
 
         let status: AnyElement = if total == 0 {
             div()
@@ -427,6 +421,20 @@ impl MainPaneView {
                 .into_any_element()
         };
 
+        // Consolidated count detail (total / resolved / auto-solved) that used
+        // to live in the center divider now rides alongside the footer status.
+        let progress: Option<AnyElement> = (total > 0).then(|| {
+            let mut label = format!("{resolved}/{total} resolved");
+            if auto_solved > 0 {
+                label.push_str(&format!(" · {auto_solved} auto-solved"));
+            }
+            div()
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .child(label)
+                .into_any_element()
+        });
+
         div()
             .id("conflict_resolver_footer")
             .flex()
@@ -434,17 +442,22 @@ impl MainPaneView {
             .justify_between()
             .gap_2()
             .px_1()
-            .child(div().flex().items_center().gap_2().child(status).when(
-                stage_safety.has_conflict_markers,
-                |d| {
-                    d.child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.danger)
-                            .child("markers remain"),
-                    )
-                },
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(status)
+                    .when_some(progress, |d, p| d.child(p))
+                    .when(has_conflict_markers, |d| {
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.danger)
+                                .child("markers remain"),
+                        )
+                    }),
+            )
     }
 
     /// The main conflict resolver pane body: three-way / two-way source
@@ -650,34 +663,14 @@ impl MainPaneView {
                                         conflict_count
                                     )
                                     .into();
-                                    let auto_resolved_count =
-                                        self.conflict_resolver_auto_resolved_count();
-                                    let resolved_label: SharedString = if auto_resolved_count > 0 {
-                                        format!(
-                                            "Resolved {}/{} ({} auto)",
-                                            resolved_count, conflict_count, auto_resolved_count
-                                        )
-                                        .into()
-                                    } else {
-                                        format!("Resolved {}/{}", resolved_count, conflict_count)
-                                            .into()
-                                    };
-
+                                    // Just the active-conflict position here;
+                                    // resolved/auto/remaining counts live in the
+                                    // footer status line to avoid repetition.
                                     let mut d = d.child(
                                         div()
                                             .text_xs()
                                             .text_color(theme.colors.text_muted)
                                             .child(nav_label),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(if unresolved_count == 0 {
-                                                theme.colors.success
-                                            } else {
-                                                theme.colors.text_muted
-                                            })
-                                            .child(resolved_label),
                                     );
                                     if let Some(label) = active_autosolve_trace.as_ref() {
                                         d = d.child(
@@ -1628,16 +1621,6 @@ impl MainPaneView {
                                 .child(start_controls);
                             let autosolve_summary =
                                 self.conflict_resolver.last_autosolve_summary.clone();
-                            let auto_solved_on_open = self
-                                .conflict_resolver
-                                .auto_solved_on_open
-                                .unwrap_or_else(|| self.conflict_resolver_auto_resolved_count());
-                            let conflict_summary =
-                                conflict_resolver::format_conflict_count_summary(
-                                    self.conflict_resolver_conflict_count(),
-                                    auto_solved_on_open,
-                                    self.conflict_resolver_resolved_count(),
-                                );
 
                             // Vertical resize handle between merge inputs and resolved output
                             let vsplit_ratio = self.conflict_resolver_vsplit_ratio;
@@ -1746,26 +1729,8 @@ impl MainPaneView {
                                 })
                                 .child(vsplit_handle)
                                 .child(output_header)
-                                .when_some(conflict_summary, |d, summary| {
-                                    d.child(
-                                        div()
-                                            .id("conflict_resolver_count_summary")
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .px_2()
-                                            .py_0p5()
-                                            .rounded(px(theme.radii.row))
-                                            .bg(theme.colors.surface_bg_elevated)
-                                            .border_1()
-                                            .border_color(theme.colors.border)
-                                            .text_xs()
-                                            .text_color(theme.colors.text)
-                                            .child(summary),
-                                    )
-                                })
                                 .when_some(autosolve_summary, |d, summary| {
-                                    // §30: make the autosolve pass visible on
+                                    // section 30: make the autosolve pass visible on
                                     // open — accent chip, not a muted footnote.
                                     d.child(
                                         div()
@@ -2029,6 +1994,8 @@ impl MainPaneView {
                                     bottom_section
                                 })
                                 .child(self.conflict_resolver_footer(theme, cx))
+                                // section 30 split: ends a row-drag on mouse-up anywhere.
+                                .child(ConflictRowSelectionTracker { view: cx.entity() })
                                 .into_any_element()
                             }
                         }

@@ -356,12 +356,18 @@ impl PopoverHost {
                 is_three_way,
                 selected_choices,
                 output_line_ix,
+                split_selection_rows,
+                join_previous_region,
+                join_next_region,
             } => Some(conflict_resolver_chunk::model(
                 *conflict_ix,
                 *has_base,
                 *is_three_way,
                 selected_choices,
                 *output_line_ix,
+                *split_selection_rows,
+                join_previous_region.clone(),
+                join_next_region.clone(),
             )),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,
@@ -1019,6 +1025,16 @@ impl PopoverHost {
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_select_conflict(conflict_ix, cx);
                     pane.conflict_resolver_unresolve_active_conflict(cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverSplitSelection => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_split_selection(cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverJoinRegions { target } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_join_regions(target, cx);
                 });
             }
             ContextMenuAction::SetMergetoolAutoAdvance { enabled } => {

@@ -657,6 +657,164 @@ fn conflict_resolver_input_lists_measure_later_long_rows_for_horizontal_scroll(
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver hscroll fixture");
 }
 
+#[gpui::test]
+fn conflict_resolver_three_way_remote_horizontal_overflow_with_divergent_context(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    fn assert_horizontal_overflow(handle: &gpui::UniformListScrollHandle, renderer: &str) {
+        let size = handle
+            .0
+            .borrow()
+            .last_item_size
+            .expect("expected rendered Remote list item size");
+        assert!(
+            size.contents.width > size.item.width,
+            "Remote should report horizontal overflow with {renderer} rows, got item={:?} contents={:?}",
+            size.item,
+            size.contents,
+        );
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(174);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_remote_divergent_hscroll",
+        std::process::id()
+    ));
+    let file_rel =
+        std::path::PathBuf::from("fixtures/conflict_resolver_remote_divergent_hscroll.txt");
+    let abs_path = workdir.join(&file_rel);
+
+    // The merged file carries Local's longer pre-conflict context, while the
+    // Remote stage reaches the conflict much earlier. This makes Remote's side
+    // line index differ from the shared aligned row used by the three-way list.
+    let base_prefix = ["shared", "base context one", "base context two"].join("\n");
+    let ours_prefix = [
+        "shared",
+        "local context one",
+        "local context two",
+        "local context three",
+        "local context four",
+        "local context five",
+        "local context six",
+    ]
+    .join("\n");
+    let theirs_prefix = "shared";
+    let base_conflict = "base value";
+    let ours_conflict = "local value";
+    let long_remote = format!("remote value {}", "R".repeat(420));
+    let base_text = format!("{base_prefix}\n{base_conflict}\ntail\n");
+    let ours_text = format!("{ours_prefix}\n{ours_conflict}\ntail\n");
+    let theirs_text = format!("{theirs_prefix}\n{long_remote}\ntail\n");
+    let current_text = format!(
+        "{ours_prefix}\n<<<<<<< ours\n{ours_conflict}\n||||||| base\n{base_conflict}\n=======\n{long_remote}\n>>>>>>> theirs\ntail\n"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create divergent-context hscroll fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write divergent-context hscroll fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base_text.clone(),
+                ours_text.clone(),
+                theirs_text.clone(),
+                current_text.clone(),
+            );
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.clone(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_text.clone().into()),
+                ConflictPayload::Text(ours_text.clone().into()),
+                ConflictPayload::Text(theirs_text.clone().into()),
+                &current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "divergent-context Remote hscroll fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_visible_len() >= 3
+        },
+        |pane| {
+            format!(
+                "path={:?} three_way_visible={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_visible_len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                let remote_line = theirs_text
+                    .lines()
+                    .position(|line| line == long_remote)
+                    .expect("long Remote line should exist in the Remote stage");
+                let expected_row = pane
+                    .conflict_resolver
+                    .three_way_row_for_side_line(ThreeWayColumn::Theirs, remote_line);
+                assert_eq!(
+                    pane.conflict_resolver
+                        .three_way_horizontal_measure_row(ThreeWayColumn::Theirs),
+                    expected_row,
+                    "Remote width measurement must translate its stage line to the aligned row",
+                );
+            });
+        });
+    });
+
+    for canvas_rows_enabled in [true, false] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_canvas_rows_enabled = canvas_rows_enabled;
+                    cx.notify();
+                });
+            });
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            let pane = view.read(app).main_pane.read(app);
+            assert_horizontal_overflow(
+                &pane.conflict_preview_theirs_scroll,
+                if canvas_rows_enabled { "canvas" } else { "div" },
+            );
+        });
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup divergent-context Remote hscroll fixture");
+}
+
 fn build_conflict_scroll_matrix_current_text(ours_text: &str, theirs_text: &str) -> String {
     format!("<<<<<<< ours\n{ours_text}\n=======\n{theirs_text}\n>>>>>>> theirs\n")
 }
@@ -1235,7 +1393,7 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
         draw_and_drain_test_window(cx);
     };
 
-    // §30 aligned two-way full mode (this fixture has a base, so ours/theirs
+    // section 30 aligned two-way full mode (this fixture has a base, so ours/theirs
     // align onto the shared whole-file row space). The left/right columns
     // always couple as a pair; the resolved output couples with them only when
     // the merge-tool output-scroll-sync setting is on. Both are still gated by
@@ -4893,4 +5051,656 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict resolver fixture");
+}
+
+#[gpui::test]
+fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(171);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_view_mode_persist",
+        std::process::id()
+    ));
+
+    let base_text = "base line\ncontext\ntail".to_string();
+    let ours_text = "ours line\ncontext\ntail".to_string();
+    let theirs_text = "theirs line\ncontext\ntail".to_string();
+    let current_text =
+        format!("<<<<<<< ours\n{ours_text}\n=======\n{theirs_text}\n>>>>>>> theirs\n");
+
+    let file_a = std::path::PathBuf::from("fixtures/view_mode_persist_a.txt");
+    let file_b = std::path::PathBuf::from("fixtures/view_mode_persist_b.txt");
+    let _ = std::fs::remove_dir_all(&workdir);
+    for file_rel in [&file_a, &file_b] {
+        let abs_path = workdir.join(file_rel);
+        std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+            .expect("create view-mode fixture dir");
+        std::fs::write(&abs_path, &current_text).expect("write view-mode fixture");
+    }
+
+    let repo_with_conflict = |file_rel: &std::path::PathBuf,
+                              base_text: &String,
+                              ours_text: &String,
+                              theirs_text: &String,
+                              current_text: &String| {
+        let mut repo = opening_repo_state(repo_id, &workdir);
+        set_test_conflict_status(
+            &mut repo,
+            file_rel.clone(),
+            gitcomet_core::domain::DiffArea::Unstaged,
+        );
+        set_test_conflict_file(
+            &mut repo,
+            file_rel.clone(),
+            base_text.clone(),
+            ours_text.clone(),
+            theirs_text.clone(),
+            current_text.clone(),
+        );
+        repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+            file_rel.clone(),
+            gitcomet_core::domain::FileConflictKind::BothModified,
+            ConflictPayload::Text(base_text.clone().into()),
+            ConflictPayload::Text(ours_text.clone().into()),
+            ConflictPayload::Text(theirs_text.clone().into()),
+            current_text,
+        ));
+        repo
+    };
+
+    // Persisted preference says the user last used two-way mode.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.mergetool_view_three_way = false;
+            });
+            let repo =
+                repo_with_conflict(&file_a, &base_text, &ours_text, &theirs_text, &current_text);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "view-mode fixture A open summary announced",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_a)
+                && pane.conflict_resolver.open_summary_announced
+        },
+        |pane| {
+            format!(
+                "path={:?} announced={} auto={:?}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.open_summary_announced,
+                pane.conflict_resolver.auto_solved_on_open,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let pane = this.main_pane.read(app);
+        assert_eq!(
+            pane.conflict_resolver.view_mode,
+            ConflictResolverViewMode::TwoWayDiff,
+            "base-present fresh open should honor the persisted two-way preference",
+        );
+        assert_eq!(
+            this.toast_host.read(app).toast_count_for_tests(),
+            1,
+            "fresh open should push exactly one summary toast",
+        );
+    });
+
+    // Re-syncing the same conflict must not announce again.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo =
+                repo_with_conflict(&file_a, &base_text, &ours_text, &theirs_text, &current_text);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        assert_eq!(
+            this.toast_host.read(app).toast_count_for_tests(),
+            1,
+            "same-conflict re-sync must not push another summary toast",
+        );
+    });
+
+    // Toggling to three-way persists the preference.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                assert!(
+                    pane.mergetool_view_three_way,
+                    "switching to three-way should persist the preference",
+                );
+            });
+        });
+    });
+
+    // A different conflict file is a fresh open: it honors the new preference
+    // and announces its own summary.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo =
+                repo_with_conflict(&file_b, &base_text, &ours_text, &theirs_text, &current_text);
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "view-mode fixture B open summary announced",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_b)
+                && pane.conflict_resolver.open_summary_announced
+        },
+        |pane| {
+            format!(
+                "path={:?} announced={} auto={:?}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.open_summary_announced,
+                pane.conflict_resolver.auto_solved_on_open,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        let pane = this.main_pane.read(app);
+        assert_eq!(
+            pane.conflict_resolver.view_mode,
+            ConflictResolverViewMode::ThreeWay,
+            "fresh open after toggling should default to the persisted three-way mode",
+        );
+        assert_eq!(
+            this.toast_host.read(app).toast_count_for_tests(),
+            2,
+            "a different conflict file is a fresh open and gets its own toast",
+        );
+    });
+
+    cx.run_until_parked();
+    std::fs::remove_dir_all(&workdir).expect("cleanup view-mode persist fixture");
+}
+
+#[gpui::test]
+fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(172);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_split_selection",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/split_selection.txt");
+    let base = "ctx\nb1\nb2\nb3\ntail\n".to_string();
+    let ours = "ctx\no1\no2\no3\ntail\n".to_string();
+    let theirs = "ctx\nt1\nt2\nt3\ntail\n".to_string();
+    let current = concat!(
+        "ctx\n",
+        "<<<<<<< ours\n",
+        "o1\n",
+        "o2\n",
+        "o3\n",
+        "=======\n",
+        "t1\n",
+        "t2\n",
+        "t3\n",
+        ">>>>>>> theirs\n",
+        "tail\n",
+    )
+    .to_string();
+
+    let mut repo = opening_repo_state(repo_id, &workdir);
+    set_test_conflict_status(
+        &mut repo,
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    set_test_conflict_file(
+        &mut repo,
+        file_rel.clone(),
+        base.clone(),
+        ours.clone(),
+        theirs.clone(),
+        current.clone(),
+    );
+    repo.conflict_state.conflict_file_load_mode = gitcomet_state::model::ConflictFileLoadMode::Full;
+    repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+        file_rel.clone(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+        &current,
+    ));
+    let state = app_state_with_repo(repo, repo_id);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.store.replace_snapshot_for_test(Arc::clone(&state));
+            push_test_state(this, Arc::clone(&state), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "split-ready conflict alignment",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.conflict_row_selection_enabled()
+                && pane
+                    .conflict_resolver
+                    .three_way_block_aligned_range(0)
+                    .is_some_and(|range| range.len() >= 3)
+                && pane.conflict_resolver.conflict_region_indices == vec![0]
+        },
+        |pane| {
+            format!(
+                "path={:?} enabled={} range={:?} regions={:?}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.conflict_row_selection_enabled(),
+                pane.conflict_resolver.three_way_block_aligned_range(0),
+                pane.conflict_resolver.conflict_region_indices,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let range = pane
+                    .conflict_resolver
+                    .three_way_block_aligned_range(0)
+                    .expect("aligned block");
+                pane.conflict_resolver_begin_row_selection(0, 0, cx);
+                let selection = pane.conflict_resolver.row_selection.expect("selection");
+                assert_eq!(selection.anchor_row, range.start);
+                assert!(selection.selecting);
+                pane.conflict_resolver_extend_row_selection(99, usize::MAX, cx);
+                assert_eq!(
+                    pane.conflict_resolver.row_selection.unwrap().head_row,
+                    range.end - 1,
+                    "dragging into another block clamps to the anchored block",
+                );
+                pane.conflict_resolver_extend_row_selection(99, 0, cx);
+                assert_eq!(
+                    pane.conflict_resolver.row_selection.unwrap().head_row,
+                    range.start,
+                );
+                pane.conflict_resolver_end_row_selection(cx);
+                assert!(!pane.conflict_resolver.row_selection.unwrap().selecting);
+
+                let middle_row = range.start + 1;
+                pane.conflict_resolver_begin_row_selection(0, middle_row, cx);
+                pane.conflict_resolver_end_row_selection(cx);
+                assert_eq!(pane.conflict_resolver_split_selection_row_count(0), Some(1),);
+
+                pane.conflict_resolver_click_row_selection(
+                    0,
+                    range.end - 1,
+                    gpui::Modifiers {
+                        shift: true,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                let selection = pane.conflict_resolver.row_selection.unwrap();
+                assert_eq!(selection.anchor_row, middle_row);
+                assert_eq!(selection.head_row, range.end - 1);
+                assert!(!selection.selecting);
+                assert_eq!(pane.conflict_resolver_split_selection_row_count(0), Some(2));
+
+                pane.conflict_resolver_click_row_selection(
+                    0,
+                    range.start,
+                    gpui::Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                let selection = pane.conflict_resolver.row_selection.unwrap();
+                assert_eq!(selection.anchor_row, middle_row);
+                assert_eq!(selection.head_row, range.start);
+                assert_eq!(pane.conflict_resolver_split_selection_row_count(0), Some(2));
+
+                pane.conflict_resolver_begin_row_selection(0, middle_row, cx);
+                pane.conflict_resolver_end_row_selection(cx);
+                pane.conflict_resolver_split_selection(cx);
+                assert!(
+                    pane.conflict_resolver.row_selection.is_some(),
+                    "selection stays available until the split is accepted"
+                );
+            });
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "split dispatch to reach the store",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |_pane| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .first()
+                .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+                .is_some_and(|session| session.regions.len() == 3)
+        },
+        |_pane| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot
+                .repos
+                .first()
+                .map(|repo| {
+                    (
+                        repo.conflict_state.conflict_rev,
+                        repo.conflict_state
+                            .conflict_session
+                            .as_ref()
+                            .map(|session| session.regions.len()),
+                    )
+                })
+                .unwrap_or_default()
+        },
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "split reducer round-trip",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            crate::view::conflict_resolver::conflict_count(&pane.conflict_resolver.marker_segments)
+                == 3
+                && pane.conflict_resolver.conflict_region_indices == vec![0, 1, 2]
+                && pane.conflict_resolver.row_selection.is_none()
+        },
+        |pane| {
+            format!(
+                "blocks={} regions={:?} rev={}",
+                crate::view::conflict_resolver::conflict_count(
+                    &pane.conflict_resolver.marker_segments,
+                ),
+                pane.conflict_resolver.conflict_region_indices,
+                pane.conflict_resolver.conflict_rev,
+            )
+        },
+    );
+
+    let snapshot = store_for_assert.snapshot();
+    let session = snapshot.repos[0]
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .expect("split session");
+    assert_eq!(session.regions.len(), 3);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let target = ConflictResolverJoinTarget {
+                    repo_id,
+                    path: file_rel.clone().into(),
+                    conflict_rev: pane.conflict_resolver.conflict_rev,
+                    first_region_index: 0,
+                };
+                let mut stale = target.clone();
+                stale.conflict_rev = stale.conflict_rev.wrapping_add(1);
+                pane.conflict_resolver_join_regions(stale, cx);
+                pane.conflict_resolver_join_regions(target, cx);
+            });
+        });
+    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "join dispatch to reach the store",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |_pane| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .first()
+                .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+                .is_some_and(|session| session.regions.len() == 2)
+        },
+        |_pane| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .first()
+                .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+                .map(|session| session.regions.len())
+        },
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "join reducer round-trip",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            crate::view::conflict_resolver::conflict_count(&pane.conflict_resolver.marker_segments)
+                == 2
+                && pane.conflict_resolver.conflict_region_indices == vec![0, 1]
+        },
+        |pane| {
+            format!(
+                "blocks={} regions={:?} rev={}",
+                crate::view::conflict_resolver::conflict_count(
+                    &pane.conflict_resolver.marker_segments,
+                ),
+                pane.conflict_resolver.conflict_region_indices,
+                pane.conflict_resolver.conflict_rev,
+            )
+        },
+    );
+}
+
+#[gpui::test]
+fn conflict_resolver_current_only_then_full_keeps_persisted_three_way_mode(
+    cx: &mut gpui::TestAppContext,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(173);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_current_only_mode",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/current_only_mode.txt");
+    let base = "ctx\nbase\ntail\n".to_string();
+    let ours = "ctx\nours\ntail\n".to_string();
+    let theirs = "ctx\ntheirs\ntail\n".to_string();
+    let current = "ctx\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\ntail\n";
+
+    let mut current_only_repo = opening_repo_state(repo_id, &workdir);
+    set_test_conflict_status(
+        &mut current_only_repo,
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    current_only_repo.conflict_state.conflict_file_path = Some(file_rel.clone());
+    current_only_repo.conflict_state.conflict_file_load_mode =
+        gitcomet_state::model::ConflictFileLoadMode::CurrentOnly;
+    current_only_repo.conflict_state.conflict_file =
+        gitcomet_state::model::Loadable::Ready(Some(gitcomet_state::model::ConflictFile {
+            path: file_rel.clone().into(),
+            base_bytes: None,
+            ours_bytes: None,
+            theirs_bytes: None,
+            current_bytes: None,
+            base: None,
+            ours: None,
+            theirs: None,
+            current: Some(current.to_string().into()),
+        }));
+    current_only_repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+        file_rel.clone(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        ConflictPayload::Absent,
+        current,
+    ));
+
+    let current_only_state = app_state_with_repo(current_only_repo, repo_id);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.mergetool_view_three_way = true;
+            });
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&current_only_state));
+            push_test_state(this, Arc::clone(&current_only_state), cx);
+        });
+    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "current-only persisted three-way mode",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane
+                    .conflict_resolver
+                    .loaded_file
+                    .as_ref()
+                    .is_some_and(|file| file.base.is_none())
+        },
+        |pane| {
+            format!(
+                "path={:?} mode={:?} has_base={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.view_mode,
+                pane.conflict_resolver
+                    .loaded_file
+                    .as_ref()
+                    .is_some_and(|file| file.base.is_some()),
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolver
+                .view_mode,
+            ConflictResolverViewMode::ThreeWay,
+            "a BothModified CurrentOnly first paint should honor persisted three-way mode",
+        );
+    });
+
+    let mut full_repo = opening_repo_state(repo_id, &workdir);
+    set_test_conflict_status(
+        &mut full_repo,
+        file_rel.clone(),
+        gitcomet_core::domain::DiffArea::Unstaged,
+    );
+    set_test_conflict_file(
+        &mut full_repo,
+        file_rel.clone(),
+        base.clone(),
+        ours.clone(),
+        theirs.clone(),
+        current.to_string(),
+    );
+    full_repo.conflict_state.conflict_file_load_mode =
+        gitcomet_state::model::ConflictFileLoadMode::Full;
+    // The reducer bumps this when the CurrentOnly request upgrades to Full;
+    // mirror that notification boundary in this direct-state test fixture.
+    full_repo.conflict_state.conflict_rev = current_only_state.repos[0]
+        .conflict_state
+        .conflict_rev
+        .wrapping_add(1);
+    full_repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+        file_rel.clone(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Text(base.clone().into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+        current,
+    ));
+    let full_state = app_state_with_repo(full_repo, repo_id);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&full_state));
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "full-side upgrade preserves three-way mode",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_text.base.as_ref() == base
+                && !pane.conflict_resolver.three_way_aligned.is_identity()
+        },
+        |pane| {
+            format!(
+                "path={:?} mode={:?} base_len={} identity={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.view_mode,
+                pane.conflict_resolver.three_way_text.base.len(),
+                pane.conflict_resolver.three_way_aligned.is_identity(),
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolver
+                .view_mode,
+            ConflictResolverViewMode::ThreeWay,
+        );
+    });
 }

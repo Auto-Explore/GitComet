@@ -1,6 +1,6 @@
 use super::*;
 
-/// Cog-wheel settings menu for the merge conflict resolver (§30). Holds the
+/// Cog-wheel settings menu for the merge conflict resolver (section 30). Holds the
 /// resolver-specific view options that used to borrow the diff-actions menu.
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let pane = host.main_pane.read(cx);
