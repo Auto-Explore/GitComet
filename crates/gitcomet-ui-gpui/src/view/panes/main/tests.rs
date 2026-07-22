@@ -17,7 +17,8 @@ use super::{
     replace_output_lines_in_range, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
-    split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
+    resolved_output_snapshot_is_modified, split_target_conflict_block_into_subchunks,
+    versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current,
 };
 use crate::kit::text_model::TextModel;
@@ -408,6 +409,26 @@ fn resolved_output_source_revision_tracks_edits_and_document_replacement() {
     model.set_text("replacement");
     let replaced = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
     assert_ne!(replaced.model_id, edited.model_id);
+}
+
+#[test]
+fn resolved_output_modified_state_tracks_saved_snapshot_and_undo() {
+    let mut model = TextModel::from("saved output");
+    let saved = model.snapshot();
+    assert!(!resolved_output_snapshot_is_modified(None, &saved));
+    assert!(!resolved_output_snapshot_is_modified(Some(&saved), &saved));
+
+    model.replace_range(6..12, "result");
+    assert!(resolved_output_snapshot_is_modified(
+        Some(&saved),
+        &model.snapshot(),
+    ));
+
+    model = saved.clone().into();
+    assert!(!resolved_output_snapshot_is_modified(
+        Some(&saved),
+        &model.snapshot(),
+    ));
 }
 
 #[test]

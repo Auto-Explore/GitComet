@@ -14,6 +14,10 @@ fn conflict_output_wheel_requires_notify(delta_y: Pixels, horizontal_changed: bo
     delta_y != px(0.0) || horizontal_changed
 }
 
+fn conflict_output_post_layout_scroll_y(gutter_y: Pixels, editor_max_y: Pixels) -> Pixels {
+    gutter_y.clamp(-editor_max_y.max(px(0.0)), px(0.0))
+}
+
 #[cfg(test)]
 mod wheel_tests {
     use super::*;
@@ -23,6 +27,22 @@ mod wheel_tests {
         assert!(conflict_output_wheel_requires_notify(px(-1.0), false));
         assert!(conflict_output_wheel_requires_notify(px(0.0), true));
         assert!(!conflict_output_wheel_requires_notify(px(0.0), false));
+    }
+
+    #[test]
+    fn resolved_output_post_layout_scroll_clamps_to_editor_range() {
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(-240.0), px(180.0)),
+            px(-180.0)
+        );
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(-120.0), px(180.0)),
+            px(-120.0)
+        );
+        assert_eq!(
+            conflict_output_post_layout_scroll_y(px(12.0), px(180.0)),
+            px(0.0)
+        );
     }
 }
 
@@ -105,6 +125,7 @@ impl MainPaneView {
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
+                        .borderless()
                         .disabled(!can_jump_first)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_first(cx);
@@ -115,6 +136,7 @@ impl MainPaneView {
                     components::Button::new("conflict_prev", "")
                         .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
                         .style(components::ButtonStyle::Outlined)
+                        .borderless()
                         .disabled(!can_nav_prev)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_prev(cx);
@@ -137,6 +159,7 @@ impl MainPaneView {
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
+                        .borderless()
                         .disabled(!can_nav_next)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_next(cx);
@@ -159,6 +182,7 @@ impl MainPaneView {
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
+                        .borderless()
                         .disabled(!can_jump_last)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_last(cx);
@@ -173,6 +197,7 @@ impl MainPaneView {
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
+                        .borderless()
                         .disabled(!can_prev_unresolved)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_prev_unresolved(cx);
@@ -187,6 +212,7 @@ impl MainPaneView {
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
+                        .borderless()
                         .disabled(!can_next_unresolved)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_next_unresolved(cx);
@@ -411,6 +437,14 @@ impl MainPaneView {
                 conflict_resolver::text_contains_conflict_markers(i.text())
             });
 
+        let progress_label = (total > 0).then(|| {
+            let mut label = format!("{resolved}/{total} resolved");
+            if auto_solved > 0 {
+                label.push_str(&format!(" · {auto_solved} auto-solved"));
+            }
+            SharedString::from(label)
+        });
+
         let status: AnyElement = if total == 0 {
             div()
                 .text_xs()
@@ -424,31 +458,31 @@ impl MainPaneView {
                 "conflicts"
             };
             div()
+                .id("conflict_resolver_status")
                 .text_xs()
                 .text_color(theme.colors.warning)
                 .child(format!("⚠ {unresolved} {noun} unresolved"))
+                .gitcomet_tooltip(
+                    theme,
+                    progress_label
+                        .clone()
+                        .unwrap_or_else(|| "Resolution progress".into()),
+                )
                 .into_any_element()
         } else {
             div()
+                .id("conflict_resolver_status")
                 .text_xs()
                 .text_color(theme.colors.success)
                 .child("✓ All conflicts resolved")
+                .gitcomet_tooltip(
+                    theme,
+                    progress_label
+                        .clone()
+                        .unwrap_or_else(|| "Resolution complete".into()),
+                )
                 .into_any_element()
         };
-
-        // Consolidated count detail (total / resolved / auto-solved) that used
-        // to live in the center divider now rides alongside the footer status.
-        let progress: Option<AnyElement> = (total > 0).then(|| {
-            let mut label = format!("{resolved}/{total} resolved");
-            if auto_solved > 0 {
-                label.push_str(&format!(" · {auto_solved} auto-solved"));
-            }
-            div()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child(label)
-                .into_any_element()
-        });
 
         div()
             .id("conflict_resolver_footer")
@@ -456,14 +490,14 @@ impl MainPaneView {
             .items_center()
             .justify_between()
             .gap_2()
-            .px_1()
+            .px_2()
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
+                    .pl_1()
                     .child(status)
-                    .when_some(progress, |d, p| d.child(p))
                     .when(has_conflict_markers, |d| {
                         d.child(
                             div()
@@ -1524,15 +1558,28 @@ impl MainPaneView {
                                 }
                             };
 
+                            let output_modified = self.conflict_resolved_output_is_modified();
                             let output_header = div()
                                 .flex()
                                 .items_center()
                                 .justify_between()
+                                .px_2()
                                 .child(
                                     div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
                                         .text_xs()
                                         .text_color(theme.colors.text_muted)
-                                        .child("Resolved output"),
+                                        .child("Resolved output")
+                                        .when(output_modified, |d| {
+                                            d.child(
+                                                div()
+                                                    .id("conflict_resolved_output_modified")
+                                                    .text_color(theme.colors.warning)
+                                                    .child("[Modified]"),
+                                            )
+                                        }),
                                 )
                                 .child(start_controls);
                             let autosolve_summary =
@@ -1546,6 +1593,10 @@ impl MainPaneView {
                             let vsplit_handle = div()
                                 .id("conflict_resolver_vsplit_handle")
                                 .group("conflict_resolver_vsplit_handle")
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .bottom(px(-4.0))
                                 .w_full()
                                 .h(handle_h)
                                 .cursor(CursorStyle::ResizeUpDown)
@@ -1622,28 +1673,34 @@ impl MainPaneView {
                                 .h_full()
                                 .min_h(px(0.0))
                                 .overflow_hidden()
-                                .px_2()
                                 .py_2()
                                 .gap_1()
                                 .when_some(top_header, |d, header| d.child(header))
                                 .child({
                                     let mut top_section = div()
+                                        .relative()
                                         .min_h(min_section_h)
-                                        .border_1()
-                                        .border_color(theme.colors.border)
-                                        .rounded(px(theme.radii.row))
-                                        .overflow_hidden()
-                                        .flex()
-                                        .flex_col()
-                                        .child(top_title_row)
-                                        .child(div().border_t_1().border_color(theme.colors.border))
-                                        .child(top_body);
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .inset_0()
+                                                .overflow_hidden()
+                                                .flex()
+                                                .flex_col()
+                                                .child(top_title_row)
+                                                .child(
+                                                    div()
+                                                        .border_t_1()
+                                                        .border_color(theme.colors.border),
+                                                )
+                                                .child(top_body),
+                                        )
+                                        .child(vsplit_handle);
                                     top_section.style().flex_grow = Some(vsplit_ratio);
                                     top_section.style().flex_shrink = Some(1.0);
                                     top_section.style().flex_basis = Some(relative(0.).into());
                                     top_section
                                 })
-                                .child(vsplit_handle)
                                 .child(output_header)
                                 .when_some(autosolve_summary, |d, summary| {
                                     // section 30: make the autosolve pass visible on
@@ -1673,9 +1730,6 @@ impl MainPaneView {
                                         div()
                                             .id("conflict_resolver_output")
                                             .min_h(min_section_h)
-                                            .border_1()
-                                            .border_color(theme.colors.border)
-                                            .rounded(px(theme.radii.row))
                                             .overflow_hidden()
                                             .flex()
                                             .flex_col()
@@ -1709,7 +1763,62 @@ impl MainPaneView {
                                                     // free-text `TextInput`.
                                                     let streamed =
                                                         self.conflict_resolved_output_is_streamed();
+                                                    let output_gutter_scroll =
+                                                        self.conflict_resolved_preview_gutter_scroll
+                                                            .clone();
+                                                    let mirror_deferred_output_scroll =
+                                                        output_gutter_scroll
+                                                            .0
+                                                            .borrow()
+                                                            .deferred_scroll_to_item
+                                                            .is_some();
+                                                    let output_editor_scroll =
+                                                        self.conflict_resolved_output_editor_scroll
+                                                            .clone();
                                                     div()
+                                                        // `scroll_to_item_strict` is consumed by the
+                                                        // virtualized gutter during prepaint, after the
+                                                        // normal gutter/editor synchronizer has already
+                                                        // run for this frame. Mirror that newly-applied
+                                                        // offset immediately and request the follow-up
+                                                        // paint, so conflict navigation updates the
+                                                        // editable output without waiting for incidental
+                                                        // input (for example, mouse movement).
+                                                        .when(
+                                                            !streamed
+                                                                && mirror_deferred_output_scroll,
+                                                            move |d| {
+                                                            d.on_children_prepainted(
+                                                                move |_bounds, window, _cx| {
+                                                                    let gutter_y =
+                                                                        output_gutter_scroll
+                                                                            .0
+                                                                            .borrow()
+                                                                            .base_handle
+                                                                            .offset()
+                                                                            .y;
+                                                                    let editor_offset =
+                                                                        output_editor_scroll.offset();
+                                                                    let target_y =
+                                                                        conflict_output_post_layout_scroll_y(
+                                                                            gutter_y,
+                                                                            output_editor_scroll
+                                                                                .max_offset()
+                                                                                .y,
+                                                                        );
+                                                                    if editor_offset.y != target_y {
+                                                                        output_editor_scroll.set_offset(
+                                                                            point(
+                                                                                editor_offset.x,
+                                                                                target_y,
+                                                                            ),
+                                                                        );
+                                                                        window.refresh();
+                                                                    }
+                                                                },
+                                                            )
+                                                            },
+                                                        )
                                                         .id("conflict_resolver_output_body")
                                                         .relative()
                                                         .flex_1()

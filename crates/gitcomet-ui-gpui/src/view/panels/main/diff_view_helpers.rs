@@ -280,6 +280,7 @@ impl MainPaneView {
     pub(super) fn diff_prev_next_file_buttons(
         &self,
         repo_id: Option<RepoId>,
+        borderless: bool,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
@@ -298,7 +299,13 @@ impl MainPaneView {
                         theme.colors.text,
                         px(14.0),
                     ))
-                    .style(components::ButtonStyle::Outlined)
+                    .style(components::ButtonStyle::Outlined);
+                let prev_btn = if borderless {
+                    prev_btn.borderless()
+                } else {
+                    prev_btn
+                };
+                let prev_btn = prev_btn
                     .disabled(prev_disabled)
                     .on_click(theme, cx, move |this, _e, window, cx| {
                         if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
@@ -314,7 +321,13 @@ impl MainPaneView {
                         theme.colors.text,
                         px(14.0),
                     ))
-                    .style(components::ButtonStyle::Outlined)
+                    .style(components::ButtonStyle::Outlined);
+                let next_btn = if borderless {
+                    next_btn.borderless()
+                } else {
+                    next_btn
+                };
+                let next_btn = next_btn
                     .disabled(next_disabled)
                     .on_click(theme, cx, move |this, _e, window, cx| {
                         if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {
@@ -355,7 +368,13 @@ impl MainPaneView {
                     theme.colors.text,
                     px(14.0),
                 ))
-                .style(components::ButtonStyle::Outlined)
+                .style(components::ButtonStyle::Outlined);
+            let prev_btn = if borderless {
+                prev_btn.borderless()
+            } else {
+                prev_btn
+            };
+            let prev_btn = prev_btn
                 .disabled(prev_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
                     if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
@@ -371,7 +390,13 @@ impl MainPaneView {
                     theme.colors.text,
                     px(14.0),
                 ))
-                .style(components::ButtonStyle::Outlined)
+                .style(components::ButtonStyle::Outlined);
+            let next_btn = if borderless {
+                next_btn.borderless()
+            } else {
+                next_btn
+            };
+            let next_btn = next_btn
                 .disabled(next_disabled)
                 .on_click(theme, cx, move |this, _e, window, cx| {
                     if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {

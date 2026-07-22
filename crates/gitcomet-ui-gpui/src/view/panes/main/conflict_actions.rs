@@ -558,6 +558,8 @@ impl MainPaneView {
 
     fn clear_conflict_resolver_state(&mut self) {
         self.conflict_resolver = ConflictResolverUiState::default();
+        self.conflict_resolved_output_saved_snapshot = None;
+        self.conflict_resolved_output_modified = false;
         self.conflict_resolver_invalidate_resolved_outline();
     }
 
@@ -1266,6 +1268,7 @@ impl MainPaneView {
         // keeps the buffer authoritative (all streamed paths are gated on
         // `conflict_resolved_output_is_streamed`).
         self.ensure_conflict_resolved_output_materialized(cx);
+        self.mark_conflict_resolved_output_saved(cx);
         // section 30: on a fresh open, bring every view to the initial active
         // conflict. Deferred item scrolls apply once the lists lay out, so
         // this works even though nothing has rendered yet.

@@ -237,6 +237,13 @@ impl ResolvedOutputSourceRevision {
     }
 }
 
+pub(super) fn resolved_output_snapshot_is_modified(
+    saved: Option<&TextModelSnapshot>,
+    current: &TextModelSnapshot,
+) -> bool {
+    saved.is_some_and(|saved| current != saved)
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct VersionedCachedDiffStyledText {
     pub(in crate::view) syntax_epoch: u64,
@@ -2624,6 +2631,11 @@ pub(crate) struct MainPaneView {
     /// supersede debounce work without materializing and scanning the document.
     pub(in crate::view) conflict_resolved_preview_source_revision:
         Option<ResolvedOutputSourceRevision>,
+    /// Editable-output snapshot at the last file load/save refresh. Snapshot
+    /// equality is O(1), and undo restores the matching snapshot, so this can
+    /// drive the user-facing Modified state without hashing the whole output.
+    pub(in crate::view) conflict_resolved_output_saved_snapshot: Option<TextModelSnapshot>,
+    pub(in crate::view) conflict_resolved_output_modified: bool,
     pub(in crate::view) conflict_resolved_output_projection:
         Option<conflict_resolver::ResolvedOutputProjection>,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,

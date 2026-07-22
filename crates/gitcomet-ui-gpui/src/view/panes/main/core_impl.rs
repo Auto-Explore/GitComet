@@ -1521,6 +1521,14 @@ impl MainPaneView {
                     (input.text_snapshot(), input.take_recent_utf8_edit_delta())
                 });
                 let source_revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
+                let output_modified = resolved_output_snapshot_is_modified(
+                    this.conflict_resolved_output_saved_snapshot.as_ref(),
+                    &output_snapshot,
+                );
+                if this.conflict_resolved_output_modified != output_modified {
+                    this.conflict_resolved_output_modified = output_modified;
+                    cx.notify();
+                }
                 let outline_delta = resolved_outline_delta_for_snapshot_transition(
                     &this.conflict_resolved_preview_text,
                     &output_snapshot,
@@ -1834,6 +1842,8 @@ impl MainPaneView {
             conflict_three_way_syntax_inflight: ThreeWaySides::default(),
             conflict_resolved_preview_path: None,
             conflict_resolved_preview_source_revision: None,
+            conflict_resolved_output_saved_snapshot: None,
+            conflict_resolved_output_modified: false,
             conflict_resolved_output_projection: None,
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
@@ -2046,6 +2056,22 @@ impl MainPaneView {
 
     pub(in crate::view) fn conflict_resolved_output_is_streamed(&self) -> bool {
         self.conflict_resolved_output_projection.is_some()
+    }
+
+    pub(in crate::view) fn conflict_resolved_output_is_modified(&self) -> bool {
+        self.conflict_resolved_output_modified
+    }
+
+    pub(in crate::view) fn mark_conflict_resolved_output_saved(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.conflict_resolved_output_saved_snapshot =
+            (!self.conflict_resolved_output_is_streamed()).then(|| {
+                self.conflict_resolver_input
+                    .read_with(cx, |input, _| input.text_snapshot())
+            });
+        self.conflict_resolved_output_modified = false;
     }
 
     fn sync_conflict_resolved_preview_projection(
