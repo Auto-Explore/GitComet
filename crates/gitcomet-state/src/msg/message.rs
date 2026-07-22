@@ -27,6 +27,7 @@ pub enum RepoActionKind {
     RevertCommit,
     CreateBranch,
     CreateBranchAndCheckout,
+    RenameBranch,
     DeleteBranch,
     ForceDeleteBranch,
     StagePath,
@@ -389,6 +390,11 @@ pub enum Msg {
         repo_id: RepoId,
         name: String,
         target: String,
+    },
+    RenameBranch {
+        repo_id: RepoId,
+        old_name: String,
+        new_name: String,
     },
     DeleteBranch {
         repo_id: RepoId,

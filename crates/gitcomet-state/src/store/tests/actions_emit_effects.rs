@@ -980,7 +980,7 @@ fn rebase_emits_effect() {
 }
 
 #[test]
-fn create_and_delete_branch_emit_effects() {
+fn create_rename_and_delete_branch_emit_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1009,6 +1009,25 @@ fn create_and_delete_branch_emit_effects() {
             name,
             target,
         }] if name == "feature" && target == "HEAD"
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RenameBranch {
+            repo_id: RepoId(1),
+            old_name: "feature".to_string(),
+            new_name: "renamed-feature".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RenameBranch {
+            repo_id: RepoId(1),
+            old_name,
+            new_name,
+        }] if old_name == "feature" && new_name == "renamed-feature"
     ));
 
     let effects = reduce(

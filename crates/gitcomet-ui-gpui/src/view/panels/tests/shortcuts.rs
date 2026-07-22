@@ -1077,6 +1077,19 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             kind: PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }
         } if *rid == repo_id && onto == "feature"
     );
+    assert!(local_branch_model.items.iter().any(|item| {
+        matches!(
+            item,
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Rename branch…"
+                    && matches!(
+                        action.as_ref(),
+                        ContextMenuAction::OpenPopover {
+                            kind: PopoverKind::RenameBranchPrompt { repo_id: rid, name }
+                        } if *rid == repo_id && name == "feature"
+                    )
+        )
+    }));
 
     let remote_branch_name = "origin/feature".to_string();
     let remote_branch_model = cx.update(|_window, app| {
@@ -1090,6 +1103,12 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
             },
         )
     });
+    assert!(!remote_branch_model.items.iter().any(|item| {
+        matches!(
+            item,
+            ContextMenuItem::Entry { label, .. } if label.as_ref() == "Rename branch…"
+        )
+    }));
     assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "B", "F"]);
     assert_shortcut_action!(
         remote_branch_model,

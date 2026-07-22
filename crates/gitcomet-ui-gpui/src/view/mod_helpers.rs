@@ -2508,6 +2508,10 @@ pub(super) enum PopoverKind {
         target: String,
         source_selectable: bool,
     },
+    RenameBranchPrompt {
+        repo_id: RepoId,
+        name: String,
+    },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
         remote: String,

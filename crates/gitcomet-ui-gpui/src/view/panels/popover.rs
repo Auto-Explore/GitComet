@@ -28,6 +28,7 @@ mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
+mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
 mod search_inputs;
@@ -604,6 +605,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
+        | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::StashPrompt
         | PopoverKind::StashDropConfirm { .. }
         | PopoverKind::CloneRepo
@@ -674,6 +676,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
+        | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::StashDropConfirm { .. }
         | PopoverKind::Repo {
@@ -1280,6 +1283,7 @@ impl PopoverHost {
                 matches!(
                     this.popover,
                     Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                        | Some(PopoverKind::RenameBranchPrompt { .. })
                         | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
                 )
             },
@@ -1289,6 +1293,8 @@ impl PopoverHost {
                     Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                 ) {
                     this.submit_create_branch(window, cx);
+                } else if matches!(this.popover, Some(PopoverKind::RenameBranchPrompt { .. })) {
+                    this.submit_rename_branch(window, cx);
                 } else {
                     this.submit_checkout_remote_branch(cx);
                 }
@@ -1753,6 +1759,7 @@ impl PopoverHost {
         matches!(
             self.popover,
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                | Some(PopoverKind::RenameBranchPrompt { .. })
                 | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
                 | Some(PopoverKind::StashPrompt)
                 | Some(PopoverKind::CommitPrompt { .. })
@@ -2202,6 +2209,34 @@ impl PopoverHost {
         self.dismiss_inline_popover(window, cx);
     }
 
+    fn can_submit_rename_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
+        let Some(PopoverKind::RenameBranchPrompt { name, .. }) = &self.popover else {
+            return false;
+        };
+        self.create_branch_input.read_with(cx, |input, _| {
+            let new_name = input.text().trim();
+            !new_name.is_empty() && new_name != name
+        })
+    }
+
+    fn submit_rename_branch(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::RenameBranchPrompt { repo_id, name }) = self.popover.clone() else {
+            return;
+        };
+        let new_name = self
+            .create_branch_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if new_name.is_empty() || new_name == name {
+            return;
+        }
+        self.store.dispatch(Msg::RenameBranch {
+            repo_id,
+            old_name: name,
+            new_name,
+        });
+        self.dismiss_inline_popover(window, cx);
+    }
+
     fn can_submit_stash(&self, cx: &mut gpui::Context<Self>) -> bool {
         self.active_repo_id().is_some()
             && self
@@ -2583,6 +2618,7 @@ impl PopoverHost {
             || matches!(
                 &kind,
                 PopoverKind::CreateBranchFromRefPrompt { .. }
+                    | PopoverKind::RenameBranchPrompt { .. }
                     | PopoverKind::StashPrompt
                     | PopoverKind::CommitPrompt { .. }
                     | PopoverKind::StashPickerPrompt { .. }
@@ -2644,6 +2680,19 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::RenameBranchPrompt { name, .. } => {
+                    let theme = self.theme;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text(name.clone(), cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |input, _| input.focus_handle());
                     window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
@@ -3320,6 +3369,9 @@ impl PopoverHost {
                 window,
                 cx,
             ),
+            PopoverKind::RenameBranchPrompt { repo_id, name } => {
+                rename_branch_prompt::panel(self, repo_id, name, cx)
+            }
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
                 remote,

@@ -150,6 +150,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::CommitPrompt { repo_id }
         | PopoverKind::StashPickerPrompt { repo_id, .. }
         | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+        | PopoverKind::RenameBranchPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::SquashPrompt { repo_id }
         | PopoverKind::CheckoutRemoteBranchPrompt { repo_id, .. }
@@ -196,6 +197,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
     match popover {
         PopoverKind::BranchPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
+        | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
@@ -382,6 +384,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             target.hash(hasher);
             source_selectable.hash(hasher);
+        }
+        PopoverKind::RenameBranchPrompt { repo_id, name } => {
+            80u8.hash(hasher);
+            repo_id.hash(hasher);
+            name.hash(hasher);
         }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,

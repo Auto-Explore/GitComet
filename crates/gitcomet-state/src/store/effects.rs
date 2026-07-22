@@ -654,6 +654,9 @@ fn send_unavailable_git_effect_result(
             runtime,
             &send,
         ),
+        Effect::RenameBranch { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::RenameBranch, runtime, &send)
+        }
         Effect::DeleteBranch { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::DeleteBranch, runtime, &send)
         }
@@ -1925,6 +1928,15 @@ pub(super) fn schedule_effect(
         } => {
             repo_actions::schedule_create_branch_and_checkout(
                 executor, repos, msg_tx, repo_id, name, target,
+            );
+        }
+        Effect::RenameBranch {
+            repo_id,
+            old_name,
+            new_name,
+        } => {
+            repo_actions::schedule_rename_branch(
+                executor, repos, msg_tx, repo_id, old_name, new_name,
             );
         }
         Effect::DeleteBranch { repo_id, name } => {

@@ -4946,6 +4946,14 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             1,
         ),
         (
+            Effect::RenameBranch {
+                repo_id,
+                old_name: "topic2".to_string(),
+                new_name: "renamed-topic".to_string(),
+            },
+            1,
+        ),
+        (
             Effect::DeleteBranch {
                 repo_id,
                 name: "topic".to_string(),

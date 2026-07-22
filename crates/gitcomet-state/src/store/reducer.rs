@@ -130,6 +130,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RevertCommit { .. }
             | Msg::CreateBranch { .. }
             | Msg::CreateBranchAndCheckout { .. }
+            | Msg::RenameBranch { .. }
             | Msg::DeleteBranch { .. }
             | Msg::ForceDeleteBranch { .. }
             | Msg::CloneRepo { .. }
@@ -1072,6 +1073,14 @@ fn reduce_inner(
             }
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
+        }
+        Msg::RenameBranch {
+            repo_id,
+            old_name,
+            new_name,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::rename_branch(repo_id, old_name, new_name)
         }
         Msg::DeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);

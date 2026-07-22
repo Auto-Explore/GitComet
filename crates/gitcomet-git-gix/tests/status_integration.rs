@@ -5317,7 +5317,7 @@ fn merge_abort_with_output_clears_conflict_state() {
 }
 
 #[test]
-fn create_and_delete_local_branch() {
+fn create_rename_and_delete_local_branch() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
@@ -5359,11 +5359,37 @@ fn create_and_delete_local_branch() {
         &["show-ref", "--verify", "--quiet", "refs/heads/feature"],
     );
 
-    opened.delete_branch("feature").unwrap();
-    let deleted = git_command()
+    opened.rename_branch("feature", "renamed-feature").unwrap();
+    run_git(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/renamed-feature",
+        ],
+    );
+    let old_name = git_command()
         .arg("-C")
         .arg(repo)
         .args(["show-ref", "--verify", "--quiet", "refs/heads/feature"])
+        .status()
+        .expect("show-ref old branch name");
+    assert!(
+        !old_name.success(),
+        "expected old branch name to be removed"
+    );
+
+    opened.delete_branch("renamed-feature").unwrap();
+    let deleted = git_command()
+        .arg("-C")
+        .arg(repo)
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            "refs/heads/renamed-feature",
+        ])
         .status()
         .expect("show-ref");
     assert!(!deleted.success(), "expected branch to be deleted");
