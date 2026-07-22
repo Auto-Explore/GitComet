@@ -1286,41 +1286,38 @@ impl MainPaneView {
         // auto count is available (the fast first paint may precede the
         // session and its on-open autosolve pass).
         if !self.conflict_resolver.open_summary_announced
-            && let Some(auto_solved) = self.conflict_resolver.auto_solved_on_open {
-                let (total, resolved) = session_open_summary
-                    .map(|(total, resolved, _)| (total, resolved))
-                    .unwrap_or_else(|| {
-                        (
-                            self.conflict_resolver_conflict_count(),
-                            self.conflict_resolver_resolved_count(),
-                        )
-                    });
-                if let Some(message) =
-                    conflict_resolver::format_open_summary_toast(total, auto_solved, resolved)
-                {
-                    self.conflict_resolver.open_summary_announced = true;
-                    if let (Some(repo_id), Some(path)) = (
-                        self.conflict_resolver.repo_id,
-                        self.conflict_resolver.path.as_ref(),
-                    ) {
-                        self.conflict_open_summary_toasted_files
-                            .insert((repo_id, path.clone()));
-                    }
-                    // The sync runs inside a GitCometView update; push the
-                    // toast after the current update flush to avoid reentrant
-                    // root-view updates.
-                    let root_view = self.root_view.clone();
-                    cx.defer(move |cx| {
-                        let _ = root_view.update(cx, |root, cx| {
-                            root.push_toast(
-                                crate::view::components::ToastKind::Success,
-                                message,
-                                cx,
-                            );
-                        });
-                    });
+            && let Some(auto_solved) = self.conflict_resolver.auto_solved_on_open
+        {
+            let (total, resolved) = session_open_summary
+                .map(|(total, resolved, _)| (total, resolved))
+                .unwrap_or_else(|| {
+                    (
+                        self.conflict_resolver_conflict_count(),
+                        self.conflict_resolver_resolved_count(),
+                    )
+                });
+            if let Some(message) =
+                conflict_resolver::format_open_summary_toast(total, auto_solved, resolved)
+            {
+                self.conflict_resolver.open_summary_announced = true;
+                if let (Some(repo_id), Some(path)) = (
+                    self.conflict_resolver.repo_id,
+                    self.conflict_resolver.path.as_ref(),
+                ) {
+                    self.conflict_open_summary_toasted_files
+                        .insert((repo_id, path.clone()));
                 }
+                // The sync runs inside a GitCometView update; push the
+                // toast after the current update flush to avoid reentrant
+                // root-view updates.
+                let root_view = self.root_view.clone();
+                cx.defer(move |cx| {
+                    let _ = root_view.update(cx, |root, cx| {
+                        root.push_toast(crate::view::components::ToastKind::Success, message, cx);
+                    });
+                });
             }
+        }
         // section 30 aligned row space: whole-file column rows (three-way and
         // two-way full mode) need the side texts, which the fast CurrentOnly
         // first paint does not include. Upgrade fresh opens of reasonably
