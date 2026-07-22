@@ -972,15 +972,14 @@ impl SettingsWindowView {
             this.search_query = next;
             // Keep the visible page in the filtered set: if the current
             // category no longer matches, jump to the first one that does.
-            if !this.selected_category.matches_query(&this.search_query) {
-                if let Some(first) = SettingsCategory::ALL
+            if !this.selected_category.matches_query(&this.search_query)
+                && let Some(first) = SettingsCategory::ALL
                     .iter()
                     .copied()
                     .find(|category| category.matches_query(&this.search_query))
-                {
-                    this.selected_category = first;
-                    this.expanded_section = None;
-                }
+            {
+                this.selected_category = first;
+                this.expanded_section = None;
             }
             cx.notify();
         });

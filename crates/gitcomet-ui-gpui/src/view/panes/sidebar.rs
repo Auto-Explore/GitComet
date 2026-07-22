@@ -289,16 +289,6 @@ impl SidebarPaneView {
         self.collapsed_popover_section = section;
     }
 
-    pub(in super::super) fn collapsed_files_popover_height(
-        &mut self,
-        ui_scale_percent: u32,
-    ) -> Pixels {
-        ui_scale::design_px_from_percent(
-            collapsed_files_popover_design_height(self.file_browser_visible_rows().len()),
-            ui_scale_percent,
-        )
-    }
-
     fn toggle_file_search_option(
         &mut self,
         toggle: impl FnOnce(&mut DiffSearchOptions),
@@ -537,7 +527,13 @@ impl SidebarPaneView {
             .child(divider);
 
         if is_files {
-            root.h_full()
+            // Keep the content-driven height with the entity that owns the file
+            // rows. Expanding a directory re-renders this subtree, so the outer
+            // panel grows immediately without relying on its parent to rerender.
+            let content_height = scaled_px(collapsed_files_popover_design_height(
+                self.file_browser_visible_rows().len(),
+            ));
+            root.h(content_height)
                 .child(
                     div()
                         .flex_1()
