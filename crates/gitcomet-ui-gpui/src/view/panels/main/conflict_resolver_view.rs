@@ -907,6 +907,83 @@ impl MainPaneView {
                                         )
                                 };
 
+                            let conflict_diff_split_dragging =
+                                self.conflict_diff_split_resize.is_some();
+                            let conflict_diff_split_resize_handle = |id: &'static str| {
+                                div()
+                                    .id(id)
+                                    .group(id)
+                                    .w(handle_w)
+                                    .h_full()
+                                    .cursor(CursorStyle::ResizeLeftRight)
+                                    .child(components::resize_grip(
+                                        theme,
+                                        ui_scale_percent,
+                                        id,
+                                        components::ResizeGripAxis::Vertical,
+                                        conflict_diff_split_dragging,
+                                        Some(theme.colors.border),
+                                    ))
+                                    .on_drag(
+                                        ConflictDiffSplitResizeHandle::Divider,
+                                        |_, _, _, cx| {
+                                            cx.new(|_| ConflictDiffSplitResizeDragGhost)
+                                        },
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                                            cx.stop_propagation();
+                                            this.conflict_diff_split_resize =
+                                                Some(ConflictDiffSplitResizeState {
+                                                    start_x: e.position.x,
+                                                    start_ratio: this.conflict_diff_split_ratio,
+                                                });
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .on_drag_move(cx.listener(
+                                        |this,
+                                         e: &gpui::DragMoveEvent<
+                                            ConflictDiffSplitResizeHandle,
+                                        >,
+                                         _w,
+                                         cx| {
+                                            let Some(state) = this.conflict_diff_split_resize else {
+                                                return;
+                                            };
+                                            let Some(new_ratio) = next_conflict_diff_split_ratio(
+                                                state,
+                                                e.event.position.x,
+                                                this.conflict_diff_split_col_widths,
+                                            ) else {
+                                                return;
+                                            };
+                                            if (this.conflict_diff_split_ratio - new_ratio).abs()
+                                                <= f32::EPSILON
+                                            {
+                                                return;
+                                            }
+                                            this.conflict_diff_split_ratio = new_ratio;
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .on_mouse_up(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _e, _w, cx| {
+                                            this.conflict_diff_split_resize = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .on_mouse_up_out(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _e, _w, cx| {
+                                            this.conflict_diff_split_resize = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                            };
+
                             let top_title_row = div()
                                 .h(px(22.0))
                                 .w_full()
@@ -981,87 +1058,9 @@ impl MainPaneView {
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Local (index :2)"),
                                     )
-                                    .child(
-                                        div()
-                                            .id("conflict_diff_split_resize_handle")
-                                            .group("conflict_diff_split_resize_handle")
-                                            .w(handle_w)
-                                            .h_full()
-                                            .cursor(CursorStyle::ResizeLeftRight)
-                                            .child(components::resize_grip(
-                                                theme,
-                                                ui_scale_percent,
-                                                "conflict_diff_split_resize_handle",
-                                                components::ResizeGripAxis::Vertical,
-                                                self.conflict_diff_split_resize.is_some(),
-                                                Some(theme.colors.border),
-                                            ))
-                                            .on_drag(
-                                                ConflictDiffSplitResizeHandle::Divider,
-                                                |_, _, _, cx| {
-                                                    cx.new(|_| ConflictDiffSplitResizeDragGhost)
-                                                },
-                                            )
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|this, e: &MouseDownEvent, _w, cx| {
-                                                    cx.stop_propagation();
-                                                    this.conflict_diff_split_resize = Some(
-                                                        ConflictDiffSplitResizeState {
-                                                            start_x: e.position.x,
-                                                            start_ratio: this
-                                                                .conflict_diff_split_ratio,
-                                                        },
-                                                    );
-                                                    cx.notify();
-                                                }),
-                                            )
-                                            .on_drag_move(cx.listener(
-                                                |this,
-                                                 e: &gpui::DragMoveEvent<
-                                                    ConflictDiffSplitResizeHandle,
-                                                >,
-                                                 _w,
-                                                 cx| {
-                                                    let Some(state) =
-                                                        this.conflict_diff_split_resize
-                                                    else {
-                                                        return;
-                                                    };
-                                                    let Some(new_ratio) =
-                                                        next_conflict_diff_split_ratio(
-                                                            state,
-                                                            e.event.position.x,
-                                                            this.conflict_diff_split_col_widths,
-                                                        )
-                                                    else {
-                                                        return;
-                                                    };
-                                                    if (this.conflict_diff_split_ratio - new_ratio)
-                                                        .abs()
-                                                        <= f32::EPSILON
-                                                    {
-                                                        return;
-                                                    }
-                                                    this.conflict_diff_split_ratio = new_ratio;
-                                                    cx.notify();
-                                                },
-                                            ))
-                                            .on_mouse_up(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _e, _w, cx| {
-                                                    this.conflict_diff_split_resize = None;
-                                                    cx.notify();
-                                                }),
-                                            )
-                                            .on_mouse_up_out(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _e, _w, cx| {
-                                                    this.conflict_diff_split_resize = None;
-                                                    cx.notify();
-                                                }),
-                                            ),
-                                    )
+                                    .child(conflict_diff_split_resize_handle(
+                                        "conflict_diff_split_header_handle",
+                                    ))
                                     .child(
                                         div()
                                             .w(right_w)
@@ -1488,21 +1487,9 @@ impl MainPaneView {
                                                                 .render(theme),
                                                             ),
                                                     )
-                                                    .child(
-                                                        div()
-                                                            .id("conflict_diff_split_body_handle")
-                                                            .w(handle_w)
-                                                            .h_full()
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .child(
-                                                                div()
-                                                                    .w(px(1.0))
-                                                                    .h_full()
-                                                                    .bg(theme.colors.border),
-                                                            ),
-                                                    )
+                                                    .child(conflict_diff_split_resize_handle(
+                                                        "conflict_diff_split_body_handle",
+                                                    ))
                                                     .child(
                                                         div()
                                                             .relative()
