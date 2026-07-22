@@ -34,6 +34,17 @@ struct FileBrowserVisibleRow {
     is_expanded: bool,
 }
 
+const FILE_BROWSER_ROW_HEIGHT_PX: f32 = 22.0;
+// Title, divider, search controls, list top inset, and the panel borders. The
+// row contribution is added separately so the collapsed Files popover can size
+// to the visible tree without giving up the bounded viewport its uniform list
+// requires.
+const COLLAPSED_FILES_POPOVER_CHROME_HEIGHT_PX: f32 = 76.0;
+
+fn collapsed_files_popover_design_height(visible_row_count: usize) -> f32 {
+    COLLAPSED_FILES_POPOVER_CHROME_HEIGHT_PX + FILE_BROWSER_ROW_HEIGHT_PX * visible_row_count as f32
+}
+
 /// A section of the sidebar that gets its own icon in the collapsed rail and,
 /// when clicked, opens in a floating popover without expanding the sidebar.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,6 +287,16 @@ impl SidebarPaneView {
         section: Option<CollapsedSidebarSection>,
     ) {
         self.collapsed_popover_section = section;
+    }
+
+    pub(in super::super) fn collapsed_files_popover_height(
+        &mut self,
+        ui_scale_percent: u32,
+    ) -> Pixels {
+        ui_scale::design_px_from_percent(
+            collapsed_files_popover_design_height(self.file_browser_visible_rows().len()),
+            ui_scale_percent,
+        )
     }
 
     fn toggle_file_search_option(
@@ -1117,7 +1138,6 @@ impl SidebarPaneView {
         const INDENT_STEP_PX: f32 = 8.0;
         const CHEVRON_SLOT_PX: f32 = 12.0;
         const ICON_SLOT_PX: f32 = 16.0;
-        const ROW_HEIGHT_PX: f32 = 22.0;
 
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -1202,7 +1222,7 @@ impl SidebarPaneView {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .h(scaled_px(ROW_HEIGHT_PX))
+                    .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
                     .w_full()
                     .pl(left_pad)
                     .pr_2()
@@ -1571,6 +1591,13 @@ mod file_search_tests {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn collapsed_files_popover_height_tracks_visible_rows() {
+        assert_eq!(collapsed_files_popover_design_height(0), 76.0);
+        assert_eq!(collapsed_files_popover_design_height(1), 98.0);
+        assert_eq!(collapsed_files_popover_design_height(10), 296.0);
+    }
 
     fn repo_state(id: RepoId, path: &str) -> RepoState {
         RepoState::new_opening(

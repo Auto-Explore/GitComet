@@ -978,11 +978,15 @@ impl GitCometView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        // Files keeps its search + virtualized list, which need a bounded height,
-        // so it fills the whole available box. Branch sections size to their
-        // content — at least a third of the available height, at most all of it
-        // (scrolling past that).
+        // Files keeps its search + virtualized list, which needs a definite
+        // viewport height. Give it the height of its visible content, then clamp
+        // it to the same one-third/full-height range as the branch sections.
         let is_files = matches!(section, CollapsedSidebarSection::Files);
+        let files_height = is_files.then(|| {
+            self.sidebar_pane.update(cx, |pane, _cx| {
+                pane.collapsed_files_popover_height(ui_scale_percent)
+            })
+        });
 
         let mut panel = div()
             .id("collapsed_sidebar_popover")
@@ -999,8 +1003,12 @@ impl GitCometView {
             // through to the dismiss scrim underneath.
             .occlude()
             .child(self.sidebar_pane.clone());
-        panel = if is_files {
-            panel.h_full().overflow_hidden()
+        panel = if let Some(files_height) = files_height {
+            panel
+                .h(files_height)
+                .min_h(gpui::relative(1.0 / 3.0))
+                .max_h(gpui::relative(1.0))
+                .overflow_hidden()
         } else {
             panel
                 .min_h(gpui::relative(1.0 / 3.0))
