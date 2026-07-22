@@ -3318,6 +3318,10 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
             "expected the + button to open the add-repository menu"
         );
     });
+    assert!(
+        cx.debug_bounds("add_repo_menu_init").is_some(),
+        "expected the add-repository menu to include initialize repository"
+    );
 }
 
 #[gpui::test]

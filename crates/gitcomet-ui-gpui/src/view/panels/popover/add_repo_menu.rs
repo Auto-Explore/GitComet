@@ -1,7 +1,7 @@
 use super::*;
 
-/// Menu behind the "+" button after the repository tabs: open an existing
-/// repository or clone a new one.
+/// Menu behind the "+" button after the repository tabs: open, clone, or
+/// initialize a repository.
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
@@ -72,6 +72,19 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     return;
                 };
                 this.open_popover(PopoverKind::CloneRepo, anchor, window, cx);
+            })),
+        )
+        .child(
+            entry(
+                "add_repo_menu_init",
+                "icons/git_branch.svg",
+                "Initialize repository".into(),
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                this.close_popover(cx);
+                let _ = this
+                    .root_view
+                    .update(cx, |root, cx| root.prompt_init_repo(window, cx));
             })),
         )
 }
