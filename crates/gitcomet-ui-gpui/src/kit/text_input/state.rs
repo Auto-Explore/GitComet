@@ -312,6 +312,9 @@ impl TextInputStyle {
 #[derive(Clone, Debug, Default)]
 pub struct TextInputOptions {
     pub placeholder: SharedString,
+    /// Optional icon rendered before the editable text using the input's
+    /// placeholder color.
+    pub leading_icon: Option<&'static str>,
     pub multiline: bool,
     pub read_only: bool,
     pub chromeless: bool,
@@ -503,6 +506,7 @@ pub struct TextInput {
     pub(super) focus_handle: FocusHandle,
     pub(super) content: TextModel,
     pub(super) placeholder: SharedString,
+    pub(super) leading_icon: Option<&'static str>,
     pub(super) multiline: bool,
     pub(super) read_only: bool,
     pub(super) chromeless: bool,

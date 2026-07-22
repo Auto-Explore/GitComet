@@ -19,6 +19,7 @@ impl TextInput {
             focus_handle,
             content: TextModel::new(),
             placeholder: options.placeholder,
+            leading_icon: options.leading_icon,
             multiline: options.multiline,
             read_only: options.read_only,
             chromeless: options.chromeless,

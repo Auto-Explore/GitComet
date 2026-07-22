@@ -9,6 +9,7 @@ impl Render for TextInput {
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        let leading_icon = self.leading_icon;
         let pad_x = if chromeless { px(0.0) } else { px(8.0) };
         let pad_y = if chromeless || !multiline {
             px(0.0)
@@ -66,7 +67,12 @@ impl Render for TextInput {
         let text_surface = div()
             .w_full()
             .min_w(px(0.0))
-            .px(pad_x)
+            .pl(if leading_icon.is_some() {
+                px(6.0)
+            } else {
+                pad_x
+            })
+            .pr(pad_x)
             .py(pad_y)
             .overflow_hidden()
             .child(TextElement { input: cx.entity() });
@@ -131,6 +137,16 @@ impl Render for TextInput {
             })
             .when(!multiline, |d| d.items_center())
             .when(multiline, |d| d.items_start())
+            .when_some(leading_icon, |d, icon_path| {
+                d.child(
+                    div().pl(pad_x).flex_none().child(
+                        gpui::svg()
+                            .path(icon_path)
+                            .size(crate::ui_scale::design_px_from_window(14.0, window))
+                            .text_color(style.placeholder),
+                    ),
+                )
+            })
             .child(text_surface);
 
         if !chromeless {
