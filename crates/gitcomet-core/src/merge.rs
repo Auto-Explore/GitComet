@@ -486,7 +486,7 @@ fn side_region_shape(
 /// Free lines from both sides pair up top-aligned; a side's free lines always
 /// flush before its own anchored copy so side ranges stay contiguous.
 /// Returns the per-side cursor positions after the region.
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn emit_region_rows(
     runs: &mut Vec<AlignedRun>,
     ours_lines: &[&str],
