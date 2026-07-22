@@ -1285,8 +1285,8 @@ impl MainPaneView {
         // remaining once per resolver open, as soon as the session-derived
         // auto count is available (the fast first paint may precede the
         // session and its on-open autosolve pass).
-        if !self.conflict_resolver.open_summary_announced {
-            if let Some(auto_solved) = self.conflict_resolver.auto_solved_on_open {
+        if !self.conflict_resolver.open_summary_announced
+            && let Some(auto_solved) = self.conflict_resolver.auto_solved_on_open {
                 let (total, resolved) = session_open_summary
                     .map(|(total, resolved, _)| (total, resolved))
                     .unwrap_or_else(|| {
@@ -1321,7 +1321,6 @@ impl MainPaneView {
                     });
                 }
             }
-        }
         // section 30 aligned row space: whole-file column rows (three-way and
         // two-way full mode) need the side texts, which the fast CurrentOnly
         // first paint does not include. Upgrade fresh opens of reasonably

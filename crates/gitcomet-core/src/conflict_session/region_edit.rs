@@ -120,7 +120,7 @@ pub fn split_conflict_region_text(
     let base = block.base.as_ref().map(|range| &current[range.clone()]);
 
     // Per side: three byte-range slices from the two (clamped) boundaries.
-    fn side_slices<'a>(side: &'a str, bounds: [usize; 2]) -> [&'a str; 3] {
+    fn side_slices(side: &str, bounds: [usize; 2]) -> [&str; 3] {
         let cut0 = nth_line_start(side, bounds[0]);
         let cut1 = nth_line_start(side, bounds[0].max(bounds[1])).max(cut0);
         [&side[..cut0], &side[cut0..cut1], &side[cut1..]]
