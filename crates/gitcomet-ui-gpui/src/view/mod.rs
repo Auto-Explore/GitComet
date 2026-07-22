@@ -215,7 +215,9 @@ pub use mod_helpers::{
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 pub(crate) use panes::MainPaneView;
-use panes::{CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
+use panes::{
+    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView,
+};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;
@@ -2940,17 +2942,19 @@ impl GitCometView {
         let seq = self.sidebar_collapsed_popover_anim_seq;
         cx.notify();
 
-        cx.spawn(async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-            smol::Timer::after(Duration::from_millis(COLLAPSED_POPOVER_FADE_MS)).await;
-            let _ = view.update(cx, |this, cx| {
-                if this.sidebar_collapsed_popover_anim_seq == seq
-                    && this.sidebar_collapsed_popover_closing.is_some()
-                {
-                    this.sidebar_collapsed_popover_closing = None;
-                    cx.notify();
-                }
-            });
-        })
+        cx.spawn(
+            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
+                smol::Timer::after(Duration::from_millis(COLLAPSED_POPOVER_FADE_MS)).await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.sidebar_collapsed_popover_anim_seq == seq
+                        && this.sidebar_collapsed_popover_closing.is_some()
+                    {
+                        this.sidebar_collapsed_popover_closing = None;
+                        cx.notify();
+                    }
+                });
+            },
+        )
         .detach();
     }
 

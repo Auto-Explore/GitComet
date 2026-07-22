@@ -3278,7 +3278,10 @@ fn pane_collapse_ease_is_a_well_formed_easing_curve() {
             y >= prev - 1e-4,
             "easing should be monotonic: y({t}) = {y} < previous {prev}"
         );
-        assert!((0.0..=1.0).contains(&y), "easing stays in [0, 1]: y({t}) = {y}");
+        assert!(
+            (0.0..=1.0).contains(&y),
+            "easing stays in [0, 1]: y({t}) = {y}"
+        );
         prev = y;
     }
 
