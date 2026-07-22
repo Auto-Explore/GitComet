@@ -2189,6 +2189,7 @@ impl MainPaneView {
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
                     .borderless()
+                    .rounded_left()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Inline)
                     .selected_bg(view_toggle_selected_bg)
@@ -2221,6 +2222,7 @@ impl MainPaneView {
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
                     .borderless()
+                    .rounded_right()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Split)
                     .selected_bg(view_toggle_selected_bg)
@@ -2256,6 +2258,7 @@ impl MainPaneView {
 
                 let view_toggle = div()
                     .id("diff_view_toggle")
+                    .debug_selector(|| "diff_view_toggle".to_string())
                     .flex()
                     .items_center()
                     .h(components::control_height(ui_scale_percent))
@@ -2264,7 +2267,6 @@ impl MainPaneView {
                     .border_color(view_toggle_border)
                     .bg(gpui::rgba(0x00000000))
                     .overflow_hidden()
-                    .p(px(1.0))
                     .child(diff_inline_btn)
                     .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
                     .child(diff_split_btn);
@@ -2381,6 +2383,8 @@ impl MainPaneView {
         }
 
         let header = div()
+            .debug_selector(|| "diff_file_header".to_string())
+            .w_full()
             .flex()
             .items_center()
             .justify_between()
@@ -4424,6 +4428,10 @@ impl MainPaneView {
 
                                             let columns_header = div()
                                                 .id("diff_split_columns_header")
+                                                .debug_selector(|| {
+                                                    "diff_split_columns_header".to_string()
+                                                })
+                                                .w_full()
                                                 .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
@@ -4463,14 +4471,15 @@ impl MainPaneView {
                                                 .flex_col()
                                                 .bg(theme.colors.window_bg)
                                                 .font_family(editor_font_family.clone())
+                                                .child(columns_header)
                                                 .child(
                                                     div()
+                                                        .relative()
                                                         .pr(shared_scrollbar_gutter)
                                                         .flex()
                                                         .flex_col()
-                                                        .h_full()
+                                                        .flex_1()
                                                         .min_h(px(0.0))
-                                                        .child(columns_header)
                                                         .child(
                                                             div()
                                                                 .flex_1()

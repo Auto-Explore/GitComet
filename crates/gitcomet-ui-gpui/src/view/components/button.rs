@@ -20,6 +20,14 @@ pub enum ButtonStyle {
     Danger,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ButtonRounding {
+    #[default]
+    All,
+    Left,
+    Right,
+}
+
 pub struct Button {
     id: SharedString,
     label: SharedString,
@@ -27,6 +35,7 @@ pub struct Button {
     disabled: bool,
     selected: bool,
     selected_bg: Option<gpui::Rgba>,
+    rounding: ButtonRounding,
     borderless: bool,
     suppress_hover_border: bool,
     no_focus: bool,
@@ -45,6 +54,7 @@ impl Button {
             disabled: false,
             selected: false,
             selected_bg: None,
+            rounding: ButtonRounding::All,
             borderless: false,
             suppress_hover_border: false,
             no_focus: false,
@@ -62,6 +72,18 @@ impl Button {
 
     pub fn selected_bg(mut self, bg: gpui::Rgba) -> Self {
         self.selected_bg = Some(bg);
+        self
+    }
+
+    /// Round only the outside edge of a button in a segmented control.
+    pub fn rounded_left(mut self) -> Self {
+        self.rounding = ButtonRounding::Left;
+        self
+    }
+
+    /// Round only the outside edge of a button in a segmented control.
+    pub fn rounded_right(mut self) -> Self {
+        self.rounding = ButtonRounding::Right;
         self
     }
 
@@ -165,6 +187,7 @@ impl Button {
             disabled,
             selected,
             selected_bg,
+            rounding,
             borderless,
             suppress_hover_border,
             no_focus,
@@ -330,6 +353,7 @@ impl Button {
             (_, None) => leading,
         };
 
+        let control_radius = px(theme.radii.control);
         let mut base = div()
             .id(id.clone())
             .h(control_height)
@@ -338,7 +362,15 @@ impl Button {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(theme.radii.control))
+            .when(rounding == ButtonRounding::All, |d| {
+                d.rounded(control_radius)
+            })
+            .when(rounding == ButtonRounding::Left, |d| {
+                d.rounded_tl(control_radius).rounded_bl(control_radius)
+            })
+            .when(rounding == ButtonRounding::Right, |d| {
+                d.rounded_tr(control_radius).rounded_br(control_radius)
+            })
             .bg(bg)
             .text_sm()
             .text_color(text)

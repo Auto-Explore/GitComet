@@ -1148,15 +1148,10 @@ impl GitCometView {
                                             d.child(stable_cached_fill_view(self.main_pane.clone()))
                                         }),
                                 )
-                                .child(self.pane_resize_handle(
-                                    theme,
-                                    "pane_resize_details",
-                                    PaneResizeHandle::Details,
-                                    cx,
-                                ))
                                 .child(
                                     div()
                                         .id("details_pane")
+                                        .debug_selector(|| "details_pane".to_string())
                                         .relative()
                                         .w(self.details_render_width)
                                         .min_h(px(0.0))
@@ -1176,6 +1171,25 @@ impl GitCometView {
                                                     .child(self.details_pane.clone()),
                                             )
                                         }),
+                                )
+                                .child(
+                                    // Keep the full resize hit target without reserving a
+                                    // visible strip between the main and details panes.
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right(
+                                            (self.details_render_width
+                                                - self.pane_resize_handle_width() / 2.0)
+                                                .max(px(0.0)),
+                                        )
+                                        .child(self.pane_resize_handle(
+                                            theme,
+                                            "pane_resize_details",
+                                            PaneResizeHandle::Details,
+                                            cx,
+                                        )),
                                 )
                                 .child(card_corner_caps(
                                     px((theme.radii.panel - 1.0).max(0.0)),

@@ -406,14 +406,6 @@ impl Element for UiScaleScrollCapture {
     }
 }
 
-pub(in crate::view) fn pane_resize_handles_width(
-    sidebar_collapsed: bool,
-    details_collapsed: bool,
-) -> Pixels {
-    let visible_handles = u8::from(!sidebar_collapsed).saturating_add(u8::from(!details_collapsed));
-    px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
-}
-
 #[cfg(test)]
 pub(in crate::view) fn pane_resize_drag_width_bounds(
     handle: PaneResizeHandle,
@@ -443,13 +435,13 @@ pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
     other_width: Pixels,
     other_collapsed: bool,
     total_w: Pixels,
-    sidebar_collapsed: bool,
-    details_collapsed: bool,
+    _sidebar_collapsed: bool,
+    _details_collapsed: bool,
 ) -> (Pixels, Pixels) {
-    let handles_w = pane_resize_handles_width(sidebar_collapsed, details_collapsed);
     let main_min = px(MAIN_MIN_PX);
     let collapsed_w = px(PANE_COLLAPSED_PX);
-    let available_w = total_w - main_min - handles_w;
+    // Both pane resize handles overlay their boundaries and consume no layout width.
+    let available_w = total_w - main_min;
     let other_width = if other_collapsed {
         collapsed_w
     } else {
@@ -3016,6 +3008,7 @@ impl GitCometView {
         let dragging = self.pane_resize.is_some_and(|state| state.handle == handle);
         div()
             .id(id)
+            .debug_selector(move || id.to_string())
             .group(id)
             .w(self.pane_resize_handle_width())
             .h_full()

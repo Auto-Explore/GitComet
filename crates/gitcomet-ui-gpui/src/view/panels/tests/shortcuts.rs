@@ -3407,6 +3407,38 @@ fn diff_view_toolbar_toggle_restores_diff_panel_focus(cx: &mut gpui::TestAppCont
         diff_panel_is_focused(cx, &view),
         "expected clicking Split to restore diff-panel focus"
     );
+
+    let toggle_bounds = cx
+        .debug_bounds("diff_view_toggle")
+        .expect("expected diff view toggle container");
+    let inline_bounds = cx
+        .debug_bounds("diff_inline")
+        .expect("expected inline diff toolbar button");
+    let split_bounds = cx
+        .debug_bounds("diff_split")
+        .expect("expected split diff toolbar button");
+    assert_eq!(inline_bounds.top(), toggle_bounds.top());
+    assert_eq!(inline_bounds.bottom(), toggle_bounds.bottom());
+    assert_eq!(split_bounds.top(), toggle_bounds.top());
+    assert_eq!(split_bounds.bottom(), toggle_bounds.bottom());
+
+    let file_header_bounds = cx
+        .debug_bounds("diff_file_header")
+        .expect("expected diff file header");
+    let body_bounds = cx
+        .debug_bounds("diff_body_container")
+        .expect("expected diff body container");
+    assert_eq!(body_bounds.left(), file_header_bounds.left());
+    assert_eq!(body_bounds.right(), file_header_bounds.right());
+
+    let details_bounds = cx
+        .debug_bounds("details_pane")
+        .expect("expected details pane");
+    let resize_bounds = cx
+        .debug_bounds("pane_resize_details")
+        .expect("expected overlaid details resize handle");
+    assert_eq!(file_header_bounds.right(), details_bounds.left());
+    assert_eq!(resize_bounds.center().x, details_bounds.left());
 }
 
 #[gpui::test]

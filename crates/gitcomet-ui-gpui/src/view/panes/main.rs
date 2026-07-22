@@ -30,10 +30,11 @@ const FOCUSED_MERGETOOL_EXIT_ERROR: i32 = 2;
 pub(in crate::view) fn pane_non_main_width_for_layout(
     sidebar_w: Pixels,
     details_w: Pixels,
-    sidebar_collapsed: bool,
-    details_collapsed: bool,
+    _sidebar_collapsed: bool,
+    _details_collapsed: bool,
 ) -> Pixels {
-    sidebar_w + details_w + pane_resize_handles_width(sidebar_collapsed, details_collapsed)
+    // Resize handles overlay pane boundaries and therefore consume no layout width.
+    sidebar_w + details_w
 }
 
 #[inline]
