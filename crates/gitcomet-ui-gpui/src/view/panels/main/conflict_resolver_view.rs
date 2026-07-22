@@ -6,9 +6,25 @@
 
 use super::*;
 
-/// Blank rows appended below the last line of the resolver lists so the tail
-/// of the file can be scrolled up into a comfortable reading position.
+/// Blank rows appended below the last line of the source diff lists so the
+/// tail of the file can be scrolled up into a comfortable reading position.
 pub(super) const CONFLICT_BOTTOM_OVERSCROLL_ROWS: usize = 10;
+
+fn conflict_output_wheel_requires_notify(delta_y: Pixels, horizontal_changed: bool) -> bool {
+    delta_y != px(0.0) || horizontal_changed
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_output_vertical_wheel_keeps_gutter_sync_render_scheduled() {
+        assert!(conflict_output_wheel_requires_notify(px(-1.0), false));
+        assert!(conflict_output_wheel_requires_notify(px(0.0), true));
+        assert!(!conflict_output_wheel_requires_notify(px(0.0), false));
+    }
+}
 
 impl MainPaneView {
     /// Toolbar controls for simple conflict strategies (binary, keep/delete,
@@ -550,10 +566,10 @@ impl MainPaneView {
                                     self.conflict_resolver.two_way_visible_len()
                                 }
                             };
-                            // Bottom overscroll: a few empty rows below the last
-                            // line so it can be scrolled up for comfortable
-                            // reading. Renderers treat past-the-end rows as
-                            // blank spacers.
+                            // Keep intentional reading space below the source
+                            // diffs. Resolved output has its own shorter range;
+                            // scroll synchronization preserves a clamped
+                            // follower without re-electing it as the master.
                             let diff_list_len = if diff_len > 0 {
                                 diff_len + CONFLICT_BOTTOM_OVERSCROLL_ROWS
                             } else {
@@ -1082,7 +1098,17 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(&self.conflict_resolver_diff_scroll);
+                                        .track_scroll(&self.conflict_resolver_diff_scroll)
+                                        .on_scroll_wheel(cx.listener(
+                                            |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                                                if e.delta.pixel_delta(window.line_height()).y
+                                                    != px(0.0)
+                                                {
+                                                    this.record_conflict_vertical_wheel_master(0);
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ));
 
                                         let ours_list = uniform_list(
                                             "conflict_three_way_ours_list",
@@ -1100,7 +1126,17 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(&self.conflict_preview_ours_scroll);
+                                        .track_scroll(&self.conflict_preview_ours_scroll)
+                                        .on_scroll_wheel(cx.listener(
+                                            |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                                                if e.delta.pixel_delta(window.line_height()).y
+                                                    != px(0.0)
+                                                {
+                                                    this.record_conflict_vertical_wheel_master(1);
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ));
 
                                         let theirs_list = uniform_list(
                                             "conflict_three_way_theirs_list",
@@ -1118,7 +1154,17 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(&self.conflict_preview_theirs_scroll);
+                                        .track_scroll(&self.conflict_preview_theirs_scroll)
+                                        .on_scroll_wheel(cx.listener(
+                                            |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                                                if e.delta.pixel_delta(window.line_height()).y
+                                                    != px(0.0)
+                                                {
+                                                    this.record_conflict_vertical_wheel_master(2);
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ));
 
                                         let shared_scrollbar_gutter =
                                             if vertical_sync_enabled {
@@ -1308,7 +1354,17 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(&self.conflict_resolver_diff_scroll);
+                                        .track_scroll(&self.conflict_resolver_diff_scroll)
+                                        .on_scroll_wheel(cx.listener(
+                                            |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                                                if e.delta.pixel_delta(window.line_height()).y
+                                                    != px(0.0)
+                                                {
+                                                    this.record_conflict_vertical_wheel_master(0);
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ));
 
                                         let right_list = uniform_list(
                                             "conflict_diff_right_list",
@@ -1326,7 +1382,17 @@ impl MainPaneView {
                                         .with_horizontal_sizing_behavior(
                                             gpui::ListHorizontalSizingBehavior::Unconstrained,
                                         )
-                                        .track_scroll(&self.conflict_preview_theirs_scroll);
+                                        .track_scroll(&self.conflict_preview_theirs_scroll)
+                                        .on_scroll_wheel(cx.listener(
+                                            |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                                                if e.delta.pixel_delta(window.line_height()).y
+                                                    != px(0.0)
+                                                {
+                                                    this.record_conflict_vertical_wheel_master(2);
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ));
 
                                         let shared_scrollbar_gutter =
                                             if vertical_sync_enabled {
@@ -1601,7 +1667,7 @@ impl MainPaneView {
                                 })
                                 .child({
                                     self.prepare_conflict_resolved_output_editor(cx);
-                                    self.rebuild_resolved_output_visible_projection();
+                                    self.ensure_resolved_output_visible_projection();
                                     self.sync_conflict_resolved_output_gutter_scroll();
                                     let mut bottom_section =
                                         div()
@@ -1618,16 +1684,12 @@ impl MainPaneView {
                                                 {
                                                     // Fold-projected row count in collapsed
                                                     // context mode; plain line count otherwise.
+                                                    // Resolved output stops at its final real line;
+                                                    // only source diffs get comfort overscroll. Keep
+                                                    // the code and numbered gutter on exactly the
+                                                    // same output range.
                                                     let outline_len =
                                                         self.resolved_output_visible_len();
-                                                    // Match the source columns' bottom overscroll
-                                                    // so the shared scroll sync can reach it.
-                                                    let outline_len = if outline_len > 0 {
-                                                        outline_len
-                                                            + CONFLICT_BOTTOM_OVERSCROLL_ROWS
-                                                    } else {
-                                                        0
-                                                    };
                                                     let outline_list = uniform_list(
                                                         "conflict_resolved_preview_gutter_list",
                                                         outline_len,
@@ -1647,13 +1709,6 @@ impl MainPaneView {
                                                     // free-text `TextInput`.
                                                     let streamed =
                                                         self.conflict_resolved_output_is_streamed();
-                                                    let overscroll_spacer_h =
-                                                        crate::ui_scale::design_px_from_percent(
-                                                            20.0,
-                                                            ui_scale_percent,
-                                                        )
-                                                            * CONFLICT_BOTTOM_OVERSCROLL_ROWS as f32;
-
                                                     div()
                                                         .id("conflict_resolver_output_body")
                                                         .relative()
@@ -1667,6 +1722,36 @@ impl MainPaneView {
                                                                 .min_h(px(0.0))
                                                                 .p_2()
                                                                 .font_family(editor_font_family.clone())
+                                                                // Forward horizontal wheel input to the narrower diff
+                                                                // columns immediately; the normal bidirectional sync also
+                                                                // keeps the output's content-width handle aligned.
+                                                                .on_scroll_wheel(cx.listener(
+                                                                    |this,
+                                                                     e: &gpui::ScrollWheelEvent,
+                                                                    window,
+                                                                     cx| {
+                                                                        let delta = e.delta.pixel_delta(window.line_height());
+                                                                        if delta.y != px(0.0) {
+                                                                            this.record_conflict_vertical_wheel_master(3);
+                                                                        }
+                                                                        let horizontal_changed = this
+                                                                            .forward_conflict_output_horizontal_wheel(
+                                                                                e, window,
+                                                                            );
+                                                                        // Vertical output scrolling is native to the editor,
+                                                                        // but the separate virtualized line-number gutter is
+                                                                        // synchronized from the parent render pass. Keep that
+                                                                        // pass scheduled for real vertical gestures; otherwise
+                                                                        // the gutter can update only when scrolling reaches a
+                                                                        // boundary and another render happens to occur.
+                                                                        if conflict_output_wheel_requires_notify(
+                                                                            delta.y,
+                                                                            horizontal_changed,
+                                                                        ) {
+                                                                            cx.notify();
+                                                                        }
+                                                                    },
+                                                                ))
                                                                 .when(
                                                                     !self
                                                                         .conflict_resolved_output_is_streamed(),
@@ -1719,15 +1804,15 @@ impl MainPaneView {
                                                                         .child(
                                                                             div()
                                                                                 .id("conflict_resolver_output_gutter")
-                                                                                // shown = hidden (54) + line-number cell (38)
-                                                                                // + the half gap before the badge (4), so the
-                                                                                // badge keeps the same spacing off the divider
-                                                                                // in both modes.
-                                                                                .w(if self.mergetool_show_line_numbers {
-                                                                                    px(96.0)
-                                                                                } else {
-                                                                                    px(54.0)
-                                                                                })
+                                                                                // Hug the gutter content (marker + digit-sized
+                                                                                // line-number cell + badge) so the marker stays
+                                                                                // pinned far-left and the badge/divider sit right
+                                                                                // against the code; the width tracks the file's
+                                                                                // line-number digit count.
+                                                                                .w(crate::view::rows::resolved_output_gutter_width(
+                                                                                    self.conflict_resolved_preview_line_count,
+                                                                                    self.mergetool_show_line_numbers,
+                                                                                ))
                                                                                 .h_full()
                                                                                 .min_h(px(0.0))
                                                                                 .flex_shrink_0()
@@ -1799,12 +1884,6 @@ impl MainPaneView {
                                                                                             &self.conflict_resolved_output_editor_scroll,
                                                                                         )
                                                                                         .child(self.conflict_resolver_input.clone())
-                                                                                        // Bottom overscroll: mirror the gutter
-                                                                                        // list's CONFLICT_BOTTOM_OVERSCROLL_ROWS
-                                                                                        // trailing blanks as a spacer so the text
-                                                                                        // side's scrollable height matches and the
-                                                                                        // shared scroll sync can reach the bottom.
-                                                                                        .child(div().h(overscroll_spacer_h))
                                                                                         .into_any_element()
                                                                                 }),
                                                                         ),

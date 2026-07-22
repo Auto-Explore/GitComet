@@ -161,7 +161,6 @@ impl GitCometView {
                         let (
                             mergetool_auto_advance,
                             mergetool_collapse_unchanged,
-                            mergetool_vertical_split,
                             mergetool_output_scroll_sync,
                             mergetool_show_line_numbers,
                         ) = this.main_pane.read(cx).mergetool_preferences();
@@ -206,7 +205,6 @@ impl GitCometView {
                             diff_show_line_numbers: Some(this.diff_show_line_numbers),
                             mergetool_auto_advance: Some(mergetool_auto_advance),
                             mergetool_collapse_unchanged: Some(mergetool_collapse_unchanged),
-                            mergetool_vertical_split: Some(mergetool_vertical_split),
                             mergetool_output_scroll_sync: Some(mergetool_output_scroll_sync),
                             mergetool_show_line_numbers: Some(mergetool_show_line_numbers),
                             mergetool_view_three_way: Some(mergetool_view_three_way),

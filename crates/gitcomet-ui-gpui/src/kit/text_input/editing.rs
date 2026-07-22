@@ -33,6 +33,7 @@ impl TextInput {
             highlight: HighlightState::new(),
             layout: LayoutState::new(),
             wrap: WrapState::new(),
+            content_width_cache: None,
             selection: SelectionState::new(),
             interaction: InteractionState::new(),
         }
@@ -144,6 +145,7 @@ impl TextInput {
             return;
         }
         self.content.set_text(text.as_ref());
+        self.rebuild_content_width_cache_if_present();
         self.selection.range = self.content.len()..self.content.len();
         self.selection.reversed = false;
         self.selection.undo_stack.clear();
@@ -346,7 +348,114 @@ impl TextInput {
     /// width so an outer `overflow_scroll` container can scroll it horizontally
     /// and drive a real horizontal `max_offset` on the shared scroll handle.
     pub fn set_content_width_layout(&mut self, enabled: bool) {
+        if enabled && self.content_width_cache.is_none() {
+            self.rebuild_content_width_cache();
+        }
         self.interaction.content_width_layout = enabled;
+    }
+
+    fn content_width_line_units(text: &str, line_starts: &[usize], line_ix: usize) -> usize {
+        let start = line_starts.get(line_ix).copied().unwrap_or_default();
+        let end = line_starts
+            .get(line_ix.saturating_add(1))
+            .copied()
+            .unwrap_or(text.len())
+            .min(text.len());
+        let line = text.get(start.min(end)..end).unwrap_or_default();
+        line.len().max(line_display_columns(line))
+    }
+
+    fn content_width_affected_lines(
+        line_starts: &[usize],
+        text_len: usize,
+        byte_range: Range<usize>,
+    ) -> Range<usize> {
+        let line_count = line_starts.len().max(1);
+        let line_for_offset = |offset: usize| {
+            line_starts
+                .partition_point(|&start| start <= offset.min(text_len))
+                .saturating_sub(1)
+                .min(line_count.saturating_sub(1))
+        };
+        let start = line_for_offset(byte_range.start);
+        let end = line_for_offset(byte_range.end);
+        start..end.saturating_add(1).min(line_count)
+    }
+
+    fn rebuild_content_width_cache(&mut self) {
+        let text = self.content.as_str();
+        let starts = self.content.line_starts();
+        let mut cache = ContentWidthCache::default();
+        cache.line_units.reserve(starts.len().max(1));
+        for line_ix in 0..starts.len().max(1) {
+            let units = Self::content_width_line_units(text, starts, line_ix);
+            cache.line_units.push(units);
+            *cache.unit_counts.entry(units).or_default() += 1;
+        }
+        self.content_width_cache = Some(cache);
+    }
+
+    fn rebuild_content_width_cache_if_present(&mut self) {
+        if self.content_width_cache.is_some() {
+            self.rebuild_content_width_cache();
+        }
+    }
+
+    fn replace_content_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
+        let old_affected = self.content_width_cache.as_ref().map(|_| {
+            Self::content_width_affected_lines(
+                self.content.line_starts(),
+                self.content.len(),
+                range.clone(),
+            )
+        });
+        let inserted = self.content.replace_range(range, new_text);
+        let Some(old_affected) = old_affected else {
+            return inserted;
+        };
+
+        let new_affected = Self::content_width_affected_lines(
+            self.content.line_starts(),
+            self.content.len(),
+            inserted.clone(),
+        );
+        let text = self.content.as_str();
+        let starts = self.content.line_starts();
+        let replacement_units = new_affected
+            .clone()
+            .map(|line_ix| Self::content_width_line_units(text, starts, line_ix))
+            .collect::<Vec<_>>();
+        let cache = self
+            .content_width_cache
+            .as_mut()
+            .expect("content-width cache was present before edit");
+        for &units in cache
+            .line_units
+            .get(old_affected.clone())
+            .unwrap_or_default()
+        {
+            if let Some(count) = cache.unit_counts.get_mut(&units) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    cache.unit_counts.remove(&units);
+                }
+            }
+        }
+        cache
+            .line_units
+            .splice(old_affected, replacement_units.iter().copied());
+        for units in replacement_units {
+            *cache.unit_counts.entry(units).or_default() += 1;
+        }
+        debug_assert_eq!(cache.line_units.len(), starts.len().max(1));
+        inserted
+    }
+
+    pub(super) fn content_width_max_units(&self) -> usize {
+        self.content_width_cache
+            .as_ref()
+            .map(ContentWidthCache::max_units)
+            .unwrap_or_default()
     }
 
     pub(super) fn queue_cursor_autoscroll(&mut self) {
@@ -1560,7 +1669,7 @@ impl TextInput {
     ) -> Range<usize> {
         let undo_snapshot = self.current_undo_snapshot();
         let range = self.normalized_utf8_range(range);
-        let inserted = self.content.replace_range(range.clone(), new_text);
+        let inserted = self.replace_content_range(range.clone(), new_text);
         self.push_undo_snapshot(undo_snapshot);
         self.selection.redo_stack.clear();
         self.selection.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
@@ -1732,6 +1841,7 @@ impl TextInput {
 
     pub(super) fn restore_undo_snapshot(&mut self, snapshot: UndoSnapshot, cx: &mut Context<Self>) {
         self.content = snapshot.content.into();
+        self.rebuild_content_width_cache_if_present();
         self.selection.range = snapshot.selected_range;
         self.selection.reversed = snapshot.selection_reversed;
         self.selection.marked_range = None;
@@ -2575,7 +2685,7 @@ impl EntityInputHandler for TextInput {
             .or(self.selection.marked_range.clone())
             .unwrap_or(self.selection.range.clone());
 
-        let inserted = self.content.replace_range(range.clone(), new_text.as_str());
+        let inserted = self.replace_content_range(range.clone(), new_text.as_str());
         self.selection.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
         self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
@@ -2612,7 +2722,7 @@ impl EntityInputHandler for TextInput {
             .or(self.selection.marked_range.clone())
             .unwrap_or(self.selection.range.clone());
 
-        let inserted = self.content.replace_range(range.clone(), new_text.as_str());
+        let inserted = self.replace_content_range(range.clone(), new_text.as_str());
         self.selection.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
         self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);

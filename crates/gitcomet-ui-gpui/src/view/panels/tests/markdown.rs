@@ -1853,7 +1853,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).width > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).width > px(120.0)
                 && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).width
-                    > px(120.0)
+                    > px(80.0)
                 && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_ours_scroll).height > px(120.0)
                 && uniform_list_max_offset(&pane.conflict_preview_theirs_scroll).height > px(120.0)
@@ -1960,7 +1960,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                 );
             });
 
-            let base_offset = axis.offset(px(96.0));
+            let base_offset = axis.offset(px(80.0));
             reset_offsets(cx, &view);
             cx.update(|_window, app| {
                 view.update(app, |this, cx| {

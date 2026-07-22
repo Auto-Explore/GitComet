@@ -505,6 +505,24 @@ impl InteractionState {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ContentWidthCache {
+    /// Mirrors the text model's line index so an edit can replace just its
+    /// affected line range. The multiset keeps maximum lookup logarithmic
+    /// without rescanning every line during layout.
+    pub(super) line_units: Vec<usize>,
+    pub(super) unit_counts: BTreeMap<usize, usize>,
+}
+
+impl ContentWidthCache {
+    pub(super) fn max_units(&self) -> usize {
+        self.unit_counts
+            .last_key_value()
+            .map(|(&units, _)| units)
+            .unwrap_or_default()
+    }
+}
+
 pub struct TextInput {
     pub(super) focus_handle: FocusHandle,
     pub(super) content: TextModel,
@@ -523,6 +541,7 @@ pub struct TextInput {
     pub(super) highlight: HighlightState,
     pub(super) layout: LayoutState,
     pub(super) wrap: WrapState,
+    pub(super) content_width_cache: Option<ContentWidthCache>,
     pub(super) selection: SelectionState,
     pub(super) interaction: InteractionState,
 }

@@ -1280,8 +1280,9 @@ pub(super) struct ConflictResolverUiState {
         std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// section 30 collapsed context mode for the resolved output pane: fold
     /// projection in output line space. `None` ⇒ pass-through (one row per
-    /// line). Rebuilt each render from the outline markers.
+    /// line). Rebuilt lazily after its inputs change.
     pub(super) resolved_output_visible: Option<conflict_resolver::ThreeWayVisibleProjection>,
+    pub(super) resolved_output_visible_dirty: bool,
     /// Per-fold reveal state for resolved-output folds (output-line fold ids).
     pub(super) output_context_fold_reveals:
         std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
@@ -1331,6 +1332,9 @@ pub(super) struct ConflictResolverUiState {
     /// precomputed once per rebuild and shared by both diff columns.
     pub(super) two_way_aligned_word_highlights:
         FxHashMap<usize, conflict_resolver::TwoWayWordHighlightPair>,
+    /// Bounded on-demand word highlights for giant block-local two-way rows.
+    pub(super) two_way_split_word_highlight_cache:
+        conflict_resolver::ConflictSplitWordHighlightCache,
     pub(super) nav_anchor: Option<usize>,
     pub(super) hide_resolved: bool,
     /// True when any conflict side contains non-UTF8 binary data.
@@ -1361,6 +1365,10 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached per-line gutter render state for resolved-output preview rows.
     pub(super) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
+    /// Conflict-to-output anchors used by scroll sync. Rebuilt lazily after
+    /// either the source projection or resolved outline changes.
+    pub(super) conflict_output_row_anchors: Arc<[(f32, f32)]>,
+    pub(super) conflict_output_row_anchors_dirty: bool,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -1402,6 +1410,7 @@ impl Default for ConflictResolverUiState {
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights: ThreeWaySides::default(),
             two_way_aligned_word_highlights: FxHashMap::default(),
+            two_way_split_word_highlight_cache: Default::default(),
             nav_anchor: None,
             hide_resolved: false,
             is_binary_conflict: false,
@@ -1416,7 +1425,10 @@ impl Default for ConflictResolverUiState {
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),
             resolved_output_visible: None,
+            resolved_output_visible_dirty: true,
             output_context_fold_reveals: std::collections::HashMap::default(),
+            conflict_output_row_anchors: Arc::from([(0.0, 0.0)]),
+            conflict_output_row_anchors_dirty: true,
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -2248,13 +2260,34 @@ impl ConflictResolverUiState {
     }
 
     /// Pre-computed word highlights for a source row in the two-way split view.
-    /// Returns `None` in giant mode (word highlights are computed on-the-fly
-    /// via `compute_word_highlights_for_row` at render time instead).
+    /// Return an already-computed giant-mode word highlight pair.
     pub(super) fn two_way_split_word_highlight(
         &self,
-        _row_ix: usize,
-    ) -> Option<&conflict_resolver::TwoWayWordHighlightPair> {
-        None
+        row_ix: usize,
+    ) -> Option<Arc<conflict_resolver::TwoWayWordHighlightPair>> {
+        self.two_way_split_word_highlight_cache.get(row_ix)
+    }
+
+    /// Cache a giant-mode word highlight pair so the other split column and
+    /// later frames reuse the same word diff.
+    pub(super) fn cache_two_way_split_word_highlight(
+        &mut self,
+        row_ix: usize,
+        highlights: conflict_resolver::TwoWayWordHighlightPair,
+    ) -> Arc<conflict_resolver::TwoWayWordHighlightPair> {
+        self.two_way_split_word_highlight_cache
+            .insert(row_ix, highlights)
+    }
+
+    pub(super) fn two_way_split_word_highlight_for_row(
+        &mut self,
+        row_ix: usize,
+        row: &gitcomet_core::file_diff::FileDiffRow,
+    ) -> Option<Arc<conflict_resolver::TwoWayWordHighlightPair>> {
+        self.two_way_split_word_highlight(row_ix).or_else(|| {
+            conflict_resolver::compute_word_highlights_for_row(row)
+                .map(|highlights| self.cache_two_way_split_word_highlight(row_ix, highlights))
+        })
     }
 
     /// Rebuild three-way visible state (conflict maps + visible map/projection)
@@ -2327,6 +2360,7 @@ impl ConflictResolverUiState {
             }
         }
         self.three_way_visible_state_ready = true;
+        self.conflict_output_row_anchors_dirty = true;
         self.refresh_three_way_horizontal_measure_rows();
     }
 
@@ -2334,6 +2368,7 @@ impl ConflictResolverUiState {
     /// Rebuilds the streamed split row index and projection.
     pub(super) fn rebuild_two_way_visible_state(&mut self) {
         self.two_way_split_visual_kind_cache.clear();
+        self.two_way_split_word_highlight_cache.clear();
         let ConflictModeState::Streamed(s) = &mut self.mode_state;
         s.split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
             &self.marker_segments,
@@ -2353,6 +2388,7 @@ impl ConflictResolverUiState {
                 );
             }
         }
+        self.conflict_output_row_anchors_dirty = true;
         self.debug_assert_rendering_mode_invariants();
         self.refresh_two_way_horizontal_measure_rows();
     }
@@ -2611,6 +2647,29 @@ mod conflict_resolver_ui_state_tests {
             state.two_way_split_visual_kind_cache.get(&1).copied(),
             Some(RK::Context)
         );
+    }
+
+    #[test]
+    fn giant_two_way_word_highlights_are_shared_between_column_renders() {
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "let local_name = value;\n".into(),
+            theirs: "let remote_name = value;\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        state.rebuild_two_way_visible_state();
+        let row = state.two_way_split_row_by_source(0).unwrap();
+
+        let left = state
+            .two_way_split_word_highlight_for_row(0, &row)
+            .expect("modified row should have word highlights");
+        let right = state
+            .two_way_split_word_highlight_for_row(0, &row)
+            .expect("second column should reuse word highlights");
+
+        assert!(std::sync::Arc::ptr_eq(&left, &right));
     }
 
     #[test]

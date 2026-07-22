@@ -1018,6 +1018,33 @@ fn conflict_resolver_output_gutter_tracks_output_scroll_when_diff_sync_is_disabl
         );
     });
 
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let editor_max =
+                    scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height;
+                set_scroll_handle_offset(
+                    &pane.conflict_resolved_output_editor_scroll,
+                    point(px(0.0), -editor_max),
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let editor_offset = scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).y;
+        let gutter_offset = uniform_list_offset(&pane.conflict_resolved_preview_gutter_scroll).y;
+        assert_eq!(
+            gutter_offset, editor_offset,
+            "line-number gutter should stop at the editor's bottom boundary; editor_max={:?} gutter_max={:?}",
+            scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
+            uniform_list_max_offset(&pane.conflict_resolved_preview_gutter_scroll),
+        );
+    });
+
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver output gutter fixture");
 }
 
@@ -1172,7 +1199,8 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
             cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let expected = if axis.includes(mode) {
+                let output_coupled = axis.includes(mode);
+                let expected = if output_coupled {
                     axis.component(output_offset)
                 } else {
                     px(0.0)
@@ -1190,7 +1218,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
                     expected,
                     "three-way base pane should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    if output_coupled { "sync" } else { "not sync" },
                     axis.label(),
                     mode,
                 );
@@ -1198,7 +1226,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
                     expected,
                     "three-way ours pane should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    if output_coupled { "sync" } else { "not sync" },
                     axis.label(),
                     mode,
                 );
@@ -1206,7 +1234,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
                     expected,
                     "three-way theirs pane should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    if output_coupled { "sync" } else { "not sync" },
                     axis.label(),
                     mode,
                 );
@@ -1226,7 +1254,12 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
             cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let expected = if axis.includes(mode) {
+                let columns_expected = if axis.includes(mode) {
+                    axis.component(base_offset)
+                } else {
+                    px(0.0)
+                };
+                let output_expected = if axis.includes(mode) {
                     axis.component(base_offset)
                 } else {
                     px(0.0)
@@ -1240,7 +1273,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 );
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_preview_ours_scroll)),
-                    expected,
+                    columns_expected,
                     "three-way ours pane should {} {} scrolling from the base pane in {:?} mode",
                     if axis.includes(mode) {
                         "sync"
@@ -1252,7 +1285,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 );
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_preview_theirs_scroll)),
-                    expected,
+                    columns_expected,
                     "three-way theirs pane should {} {} scrolling from the base pane in {:?} mode",
                     if axis.includes(mode) {
                         "sync"
@@ -1266,7 +1299,7 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.component(scroll_handle_offset(
                         &pane.conflict_resolved_output_editor_scroll,
                     )),
-                    expected,
+                    output_expected,
                     "resolved output should {} {} scrolling from the base pane in {:?} mode",
                     if axis.includes(mode) {
                         "sync"
@@ -1417,6 +1450,8 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
             for axis in ScrollSyncAxis::ALL {
                 let coupled = axis.includes(mode);
+                // The editable resolved output has a content-width horizontal
+                // range, so it participates in both axes when output sync is on.
                 let output_coupled = coupled && output_sync_on;
 
                 let output_offset = axis.offset(px(72.0));
@@ -1524,6 +1559,78 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
             }
         }
     }
+
+    // Exercise the real wheel path at EOF. The two-way source lists include
+    // comfort overscroll while resolved output has a shorter maximum. Reaching
+    // the source maximum must remain stable across subsequent render/sync
+    // passes instead of letting the clamped output pull the sources backward.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.mergetool_output_scroll_sync = true;
+                reset_conflict_scroll_matrix_offsets(pane);
+                cx.notify();
+            });
+        });
+    });
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::Vertical);
+    draw_and_drain_test_window(cx);
+
+    let (right_max, right_bounds) = cx.update(|window, app| {
+        let _ = window.draw(app);
+        let pane = view.read(app).main_pane.read(app);
+        let handle = pane.conflict_preview_theirs_scroll.0.borrow();
+        (
+            handle.base_handle.max_offset().y.max(px(0.0)),
+            handle.base_handle.bounds(),
+        )
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_uniform_list_offset(
+                    &pane.conflict_preview_theirs_scroll,
+                    point(px(0.0), -(right_max - px(40.0)).max(px(0.0))),
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: right_bounds.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-160.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    let after_wheel = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
+            uniform_list_offset(&pane.conflict_preview_theirs_scroll).y,
+            scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).y,
+        )
+    });
+    draw_and_drain_test_window(cx);
+    let after_idle_render = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
+            uniform_list_offset(&pane.conflict_preview_theirs_scroll).y,
+            scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).y,
+        )
+    });
+    assert_eq!(
+        after_wheel, after_idle_render,
+        "two-way EOF offsets must remain stable after output clamps; right_max={right_max:?}",
+    );
+    assert_eq!(
+        after_wheel.1, -right_max,
+        "two-way right pane should retain its comfort-overscroll EOF position",
+    );
 
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver two-way matrix fixture");
 }
@@ -4085,11 +4192,11 @@ fn structured_conflict_edit_reuses_stashed_outline_base_while_background_recompu
                 .map(|marker| (marker.conflict_ix, marker.unresolved, marker.is_start))
                 .collect();
             format!(
-                "meta={} markers={} stash={} first_markers={first_markers:?} preview_hash={:?}",
+                "meta={} markers={} stash={} first_markers={first_markers:?} preview_revision={:?}",
                 pane.conflict_resolver.resolved_outline.meta.len(),
                 pane.conflict_resolver.resolved_outline.markers.len(),
                 pane.conflict_resolved_outline_stash.is_some(),
-                pane.conflict_resolved_preview_source_hash,
+                pane.conflict_resolved_preview_source_revision,
             )
         },
     );
@@ -4617,12 +4724,12 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         |pane| pane.conflict_resolver.path.as_ref() == Some(&file_rel),
         |pane| {
             format!(
-                "path={:?} line_count={} syntax_language={:?} prepared_document={:?} source_hash={:?}",
+                "path={:?} line_count={} syntax_language={:?} prepared_document={:?} source_revision={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolved_preview_line_count,
                 pane.conflict_resolved_preview_syntax_language,
                 pane.conflict_resolved_preview_prepared_syntax_document,
-                pane.conflict_resolved_preview_source_hash,
+                pane.conflict_resolved_preview_source_revision,
             )
         },
     );
@@ -4835,11 +4942,11 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
         |pane| pane.conflict_resolver.path.as_ref() == Some(&file_rel),
         |pane| {
             format!(
-                "path={:?} line_count={} prepared_document={:?} source_hash={:?}",
+                "path={:?} line_count={} prepared_document={:?} source_revision={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolved_preview_line_count,
                 pane.conflict_resolved_preview_prepared_syntax_document,
-                pane.conflict_resolved_preview_source_hash,
+                pane.conflict_resolved_preview_source_revision,
             )
         },
     );

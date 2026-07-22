@@ -1,9 +1,10 @@
 use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
     ClearDiffSelectionAction, RenderableConflictFile, ResolvedOutputConflictMarker,
-    VersionedCachedDiffStyledText, apply_conflict_choice_provenance_hints,
-    apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
-    build_line_starts, build_resolved_output_conflict_markers,
+    ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
+    apply_conflict_choice_provenance_hints, apply_three_way_empty_base_provenance_hints,
+    build_focused_mergetool_save_payload, build_line_starts,
+    build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges,
     build_resolved_output_syntax_state_for_snapshot,
     build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
@@ -395,7 +396,22 @@ fn resolved_outline_delta_for_snapshot_transition_prefers_recent_edit_delta() {
 }
 
 #[test]
-fn resolved_outline_delta_for_snapshot_transition_falls_back_after_multiple_revisions() {
+fn resolved_output_source_revision_tracks_edits_and_document_replacement() {
+    let mut model = TextModel::from("alpha");
+    let initial = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
+
+    model.replace_range(5..5, " beta");
+    let edited = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
+    assert_eq!(edited.model_id, initial.model_id);
+    assert!(edited.revision > initial.revision);
+
+    model.set_text("replacement");
+    let replaced = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
+    assert_ne!(replaced.model_id, edited.model_id);
+}
+
+#[test]
+fn resolved_outline_delta_for_snapshot_transition_defers_after_multiple_revisions() {
     let mut model = TextModel::from("abcdef");
     let old_snapshot = model.snapshot();
     let _first = model.replace_range(1..2, "B");
@@ -406,11 +422,9 @@ fn resolved_outline_delta_for_snapshot_transition_falls_back_after_multiple_revi
         &old_snapshot,
         &new_snapshot,
         Some((4..5, latest)),
-    )
-    .expect("delta");
+    );
 
-    assert_eq!(delta.old_range, 1..5);
-    assert_eq!(delta.new_range, 1..5);
+    assert_eq!(delta, None);
 }
 
 #[test]

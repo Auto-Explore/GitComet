@@ -13,6 +13,7 @@ pub use word_highlight::{TwoWayWordHighlights, compute_two_way_word_highlights};
 pub use word_highlight::{compute_word_highlights_for_row, compute_word_highlights_for_texts};
 
 use rustc_hash::FxHashMap;
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -54,9 +55,15 @@ struct ConflictSplitStyledTextCacheRow {
     theirs: Option<CachedDiffStyledText>,
 }
 
+const CONFLICT_SPLIT_STYLE_DENSE_ROWS: usize = 16_384;
+const CONFLICT_SPLIT_STYLE_PAGE_ROWS: usize = 256;
+const CONFLICT_SPLIT_STYLE_MAX_SPARSE_PAGES: usize = 16;
+
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct ConflictSplitStyledTextCache {
     rows: Vec<ConflictSplitStyledTextCacheRow>,
+    sparse_pages: FxHashMap<usize, Vec<ConflictSplitStyledTextCacheRow>>,
+    sparse_page_order: VecDeque<usize>,
     entries: usize,
 }
 
@@ -64,9 +71,10 @@ impl ConflictSplitStyledTextCache {
     #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn with_row_capacity(row_count: usize) -> Self {
         let mut cache = Self::default();
-        cache
-            .rows
-            .resize_with(row_count, ConflictSplitStyledTextCacheRow::default);
+        cache.rows.resize_with(
+            row_count.min(CONFLICT_SPLIT_STYLE_DENSE_ROWS),
+            ConflictSplitStyledTextCacheRow::default,
+        );
         cache
     }
 
@@ -90,12 +98,48 @@ impl ConflictSplitStyledTextCache {
         }
     }
 
+    fn sparse_page_key(row_ix: usize) -> usize {
+        (row_ix - CONFLICT_SPLIT_STYLE_DENSE_ROWS) / CONFLICT_SPLIT_STYLE_PAGE_ROWS
+    }
+
+    fn sparse_page_offset(row_ix: usize) -> usize {
+        (row_ix - CONFLICT_SPLIT_STYLE_DENSE_ROWS) % CONFLICT_SPLIT_STYLE_PAGE_ROWS
+    }
+
+    fn row_entry_count(row: &ConflictSplitStyledTextCacheRow) -> usize {
+        usize::from(row.ours.is_some()) + usize::from(row.theirs.is_some())
+    }
+
     fn ensure_row(&mut self, row_ix: usize) -> &mut ConflictSplitStyledTextCacheRow {
-        if row_ix >= self.rows.len() {
-            self.rows
-                .resize_with(row_ix + 1, ConflictSplitStyledTextCacheRow::default);
+        if row_ix < CONFLICT_SPLIT_STYLE_DENSE_ROWS {
+            if row_ix >= self.rows.len() {
+                self.rows
+                    .resize_with(row_ix + 1, ConflictSplitStyledTextCacheRow::default);
+            }
+            return &mut self.rows[row_ix];
         }
-        &mut self.rows[row_ix]
+
+        let page_key = Self::sparse_page_key(row_ix);
+        if !self.sparse_pages.contains_key(&page_key) {
+            while self.sparse_pages.len() >= CONFLICT_SPLIT_STYLE_MAX_SPARSE_PAGES {
+                let Some(evicted_key) = self.sparse_page_order.pop_front() else {
+                    break;
+                };
+                if let Some(evicted) = self.sparse_pages.remove(&evicted_key) {
+                    let evicted_entries = evicted.iter().map(Self::row_entry_count).sum::<usize>();
+                    self.entries = self.entries.saturating_sub(evicted_entries);
+                }
+            }
+            self.sparse_pages.insert(
+                page_key,
+                vec![ConflictSplitStyledTextCacheRow::default(); CONFLICT_SPLIT_STYLE_PAGE_ROWS],
+            );
+            self.sparse_page_order.push_back(page_key);
+        }
+        &mut self
+            .sparse_pages
+            .get_mut(&page_key)
+            .expect("inserted conflict style cache page")[Self::sparse_page_offset(row_ix)]
     }
 
     pub(in crate::view) fn get(
@@ -103,7 +147,13 @@ impl ConflictSplitStyledTextCache {
         key: &(usize, ConflictPickSide),
     ) -> Option<&CachedDiffStyledText> {
         let (row_ix, side) = *key;
-        let row = self.rows.get(row_ix)?;
+        let row = if row_ix < CONFLICT_SPLIT_STYLE_DENSE_ROWS {
+            self.rows.get(row_ix)?
+        } else {
+            self.sparse_pages
+                .get(&Self::sparse_page_key(row_ix))?
+                .get(Self::sparse_page_offset(row_ix))?
+        };
         Self::slot(row, side).as_ref()
     }
 
@@ -128,6 +178,8 @@ impl ConflictSplitStyledTextCache {
 
     pub(in crate::view) fn clear(&mut self) {
         self.rows.clear();
+        self.sparse_pages.clear();
+        self.sparse_page_order.clear();
         self.entries = 0;
     }
 
@@ -525,6 +577,48 @@ pub type TwoWayWordHighlightPair = (
     crate::view::word_diff::WordDiffRanges,
 );
 
+const CONFLICT_SPLIT_WORD_HIGHLIGHT_CACHE_ROWS: usize = 4_096;
+
+/// Bounded render cache for giant two-way conflicts. The same row is rendered
+/// independently by the left and right lists, so sharing the computed pair here
+/// avoids running the word diff twice per frame without retaining the whole file.
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct ConflictSplitWordHighlightCache {
+    rows: FxHashMap<usize, Arc<TwoWayWordHighlightPair>>,
+    insertion_order: VecDeque<usize>,
+}
+
+impl ConflictSplitWordHighlightCache {
+    pub(in crate::view) fn get(&self, row_ix: usize) -> Option<Arc<TwoWayWordHighlightPair>> {
+        self.rows.get(&row_ix).cloned()
+    }
+
+    pub(in crate::view) fn insert(
+        &mut self,
+        row_ix: usize,
+        highlights: TwoWayWordHighlightPair,
+    ) -> Arc<TwoWayWordHighlightPair> {
+        if let Some(existing) = self.rows.get(&row_ix) {
+            return Arc::clone(existing);
+        }
+        while self.rows.len() >= CONFLICT_SPLIT_WORD_HIGHLIGHT_CACHE_ROWS {
+            let Some(evicted) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.rows.remove(&evicted);
+        }
+        let highlights = Arc::new(highlights);
+        self.rows.insert(row_ix, Arc::clone(&highlights));
+        self.insertion_order.push_back(row_ix);
+        highlights
+    }
+
+    pub(in crate::view) fn clear(&mut self) {
+        self.rows.clear();
+        self.insertion_order.clear();
+    }
+}
+
 /// Shared context rows kept around each block-local two-way conflict diff.
 ///
 /// This preserves a small amount of unchanged surrounding code in the large-file
@@ -548,26 +642,39 @@ pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
 #[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES: usize = 4_000;
 
+/// Ordered pick choices for a view mode. Both the letter (`a/b/c/d`) and the
+/// `Ctrl+1/2/3` shortcuts index into this list, so the key→choice mapping lives
+/// in one place per mode. Note `Both` sits last, so `Ctrl+1/2/3` reaches it only
+/// in two-way mode (three-way exposes it via the `d` letter pick).
+fn conflict_pick_choices(view_mode: ConflictResolverViewMode) -> &'static [ConflictChoice] {
+    match view_mode {
+        ConflictResolverViewMode::ThreeWay => &[
+            ConflictChoice::Base,
+            ConflictChoice::Ours,
+            ConflictChoice::Theirs,
+            ConflictChoice::Both,
+        ],
+        ConflictResolverViewMode::TwoWayDiff => &[
+            ConflictChoice::Ours,
+            ConflictChoice::Theirs,
+            ConflictChoice::Both,
+        ],
+    }
+}
+
 /// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
 pub fn conflict_quick_pick_choice_for_key(
     key: &str,
     view_mode: ConflictResolverViewMode,
 ) -> Option<ConflictChoice> {
-    match view_mode {
-        ConflictResolverViewMode::ThreeWay => match key {
-            "a" => Some(ConflictChoice::Base),
-            "b" => Some(ConflictChoice::Ours),
-            "c" => Some(ConflictChoice::Theirs),
-            "d" => Some(ConflictChoice::Both),
-            _ => None,
-        },
-        ConflictResolverViewMode::TwoWayDiff => match key {
-            "a" => Some(ConflictChoice::Ours),
-            "b" => Some(ConflictChoice::Theirs),
-            "c" => Some(ConflictChoice::Both),
-            _ => None,
-        },
-    }
+    let index = match key {
+        "a" => 0,
+        "b" => 1,
+        "c" => 2,
+        "d" => 3,
+        _ => return None,
+    };
+    conflict_pick_choices(view_mode).get(index).copied()
 }
 
 /// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (section 30 keyboard model).
@@ -578,20 +685,13 @@ pub fn conflict_ctrl_pick_choice_for_key(
     key: &str,
     view_mode: ConflictResolverViewMode,
 ) -> Option<ConflictChoice> {
-    match view_mode {
-        ConflictResolverViewMode::ThreeWay => match key {
-            "1" => Some(ConflictChoice::Base),
-            "2" => Some(ConflictChoice::Ours),
-            "3" => Some(ConflictChoice::Theirs),
-            _ => None,
-        },
-        ConflictResolverViewMode::TwoWayDiff => match key {
-            "1" => Some(ConflictChoice::Ours),
-            "2" => Some(ConflictChoice::Theirs),
-            "3" => Some(ConflictChoice::Both),
-            _ => None,
-        },
-    }
+    let index = match key {
+        "1" => 0,
+        "2" => 1,
+        "3" => 2,
+        _ => return None,
+    };
+    conflict_pick_choices(view_mode).get(index).copied()
 }
 
 /// Resolve conflict navigation shortcuts (`F2`, `F3`, `F7`) to a direction.
@@ -1633,20 +1733,6 @@ impl ResolvedOutputFragmentLineIndex {
         }
     }
 
-    fn indexed_line_start_count(&self, line_count: usize, ends_with_newline: bool) -> usize {
-        match self {
-            Self::SingleLine => usize::from(line_count > 0) + usize::from(ends_with_newline),
-            Self::Dense(line_starts) => line_starts.len(),
-            Self::Sparse(_) => {
-                if line_count == 0 {
-                    0
-                } else {
-                    line_count.saturating_add(usize::from(ends_with_newline))
-                }
-            }
-        }
-    }
-
     #[cfg(all(test, feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         match self {
@@ -1730,11 +1816,6 @@ impl ResolvedOutputFragment {
         (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
     }
 
-    fn indexed_line_start_count(&self) -> usize {
-        self.line_index
-            .indexed_line_start_count(self.line_count, self.ends_with_newline)
-    }
-
     #[cfg(all(test, feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         self.line_index.metadata_byte_size()
@@ -1779,7 +1860,6 @@ pub struct ResolvedOutputProjection {
     conflict_line_ranges: Vec<std::ops::Range<usize>>,
     line_count: usize,
     widest_line_ix: usize,
-    output_hash: u64,
 }
 
 impl ResolvedOutputProjection {
@@ -1907,61 +1987,6 @@ impl ResolvedOutputProjection {
                 widest_line_ix,
                 widest_line_len,
             )
-        }
-
-        fn structural_output_hash(
-            fragments: &[ResolvedOutputFragment],
-            spans: &[ResolvedOutputSpan],
-            span_checkpoints: &[usize],
-            conflict_line_ranges: &[std::ops::Range<usize>],
-            line_count: usize,
-        ) -> u64 {
-            use std::hash::{Hash, Hasher};
-
-            let mut hasher = rustc_hash::FxHasher::default();
-            line_count.hash(&mut hasher);
-            fragments.len().hash(&mut hasher);
-            spans.len().hash(&mut hasher);
-            span_checkpoints.len().hash(&mut hasher);
-            conflict_line_ranges.len().hash(&mut hasher);
-            for fragment in fragments {
-                fragment.source.hash(&mut hasher);
-                fragment.indexed_line_start_count().hash(&mut hasher);
-                fragment.newline_count.hash(&mut hasher);
-                fragment.ends_with_newline.hash(&mut hasher);
-            }
-            for span in spans {
-                match span {
-                    ResolvedOutputSpan::SourceLines {
-                        visible_start,
-                        len,
-                        fragment_ix,
-                        fragment_line_start,
-                    } => {
-                        0u8.hash(&mut hasher);
-                        visible_start.hash(&mut hasher);
-                        len.hash(&mut hasher);
-                        fragment_ix.hash(&mut hasher);
-                        fragment_line_start.hash(&mut hasher);
-                    }
-                    ResolvedOutputSpan::MergedLine {
-                        visible_index,
-                        text,
-                    } => {
-                        1u8.hash(&mut hasher);
-                        visible_index.hash(&mut hasher);
-                        text.hash(&mut hasher);
-                    }
-                }
-            }
-            for &checkpoint in span_checkpoints {
-                checkpoint.hash(&mut hasher);
-            }
-            for range in conflict_line_ranges {
-                range.start.hash(&mut hasher);
-                range.end.hash(&mut hasher);
-            }
-            hasher.finish()
         }
 
         fn push_source_span(
@@ -2495,13 +2520,6 @@ impl ResolvedOutputProjection {
             .collect();
         let line_count = visible_line.max(1);
         let span_checkpoints = build_span_checkpoints(&spans, line_count);
-        let output_hash = structural_output_hash(
-            &fragments,
-            &spans,
-            &span_checkpoints,
-            conflict_line_ranges.as_slice(),
-            line_count,
-        );
 
         Self {
             fragments,
@@ -2510,16 +2528,11 @@ impl ResolvedOutputProjection {
             conflict_line_ranges,
             line_count,
             widest_line_ix: widest_visible_line.0,
-            output_hash,
         }
     }
 
     pub fn len(&self) -> usize {
         self.line_count
-    }
-
-    pub fn output_hash(&self) -> u64 {
-        self.output_hash
     }
 
     pub fn widest_line_ix(&self) -> usize {

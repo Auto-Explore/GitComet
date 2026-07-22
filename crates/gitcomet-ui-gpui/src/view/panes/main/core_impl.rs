@@ -557,16 +557,25 @@ fn preferred_scroll_master_index<const N: usize>(max_scrolls: [Pixels; N]) -> us
 
 fn clamp_raw_scroll_y(raw_y: Pixels, max_scroll: Pixels) -> Pixels {
     let max_scroll = max_scroll.max(px(0.0));
-    let magnitude = if raw_y < px(0.0) { -raw_y } else { raw_y };
-    let clamped = magnitude.min(max_scroll);
-    if raw_y < px(0.0) { -clamped } else { clamped }
+    raw_y.clamp(-max_scroll, px(0.0))
 }
 
+#[cfg(test)]
 fn compute_synced_scroll_offsets<const N: usize>(
     offsets: [Pixels; N],
     max_scrolls: [Pixels; N],
     last_synced: [Pixels; N],
     preferred_ix: usize,
+) -> [Pixels; N] {
+    compute_synced_scroll_offsets_with_master(offsets, max_scrolls, last_synced, preferred_ix, None)
+}
+
+fn compute_synced_scroll_offsets_with_master<const N: usize>(
+    offsets: [Pixels; N],
+    max_scrolls: [Pixels; N],
+    last_synced: [Pixels; N],
+    preferred_ix: usize,
+    explicit_master_ix: Option<usize>,
 ) -> [Pixels; N] {
     if N == 0 {
         return offsets;
@@ -582,7 +591,12 @@ fn compute_synced_scroll_offsets<const N: usize>(
     let mut largest_changed_ix = preferred_ix;
 
     for ix in 0..N {
-        if offsets[ix] == last_synced[ix] {
+        // GPUI clamps explicit offsets during paint, after this synchronizer
+        // runs. If a pane's maximum changed between frames, treat the painted
+        // clamp of our previous target as unchanged rather than fresh user
+        // input from that follower.
+        let last_at_current_max = clamp_raw_scroll_y(last_synced[ix], max_scrolls[ix]);
+        if offsets[ix] == last_at_current_max {
             continue;
         }
 
@@ -596,11 +610,26 @@ fn compute_synced_scroll_offsets<const N: usize>(
         changed_count += 1;
     }
 
-    let master_ix = match changed_count {
-        0 => preferred_ix,
-        1 => sole_changed_ix,
-        _ if preferred_changed => preferred_ix,
-        _ => largest_changed_ix,
+    let explicit_master_ix = explicit_master_ix.filter(|&ix| ix < N);
+    if changed_count == 0 && explicit_master_ix.is_none() {
+        // Nothing moved since the last sync — leave the offsets exactly as they
+        // are. Re-driving everyone onto `preferred_ix` here would let a
+        // transient flip in which handle is "widest" (the resolved output sizes
+        // itself from a monospace width estimate, the columns from measured
+        // rows) yank a clamped follower to a different offset with no user
+        // input, which reads as a horizontal snap-back. Realignment happens on
+        // the next real scroll instead.
+        return offsets;
+    }
+
+    let master_ix = if let Some(explicit_master_ix) = explicit_master_ix {
+        explicit_master_ix
+    } else if changed_count == 1 {
+        sole_changed_ix
+    } else if preferred_changed {
+        preferred_ix
+    } else {
+        largest_changed_ix
     };
     let master_y = offsets[master_ix];
 
@@ -676,7 +705,23 @@ fn sync_conflict_preview_axis(
     mode: DiffScrollSync,
     group: ConflictPreviewSyncGroup,
     anchors: &[(f32, f32)],
+    explicit_master_ix: Option<usize>,
 ) {
+    // An editable output lays out at content width and therefore has a real
+    // horizontal range. Keep it in the raw-pixel sync group so either side can
+    // drive the other. A streamed/short output can still have a zero range; in
+    // that case exclude it so its clamp at zero cannot pull overflowing source
+    // columns back to the start.
+    let output_has_horizontal_range = handles[3].max_offset().x > px(0.0);
+    let group = match (axis, group, output_has_horizontal_range) {
+        (SyncedScrollAxis::Horizontal, ConflictPreviewSyncGroup::ColumnsAndOutput, false) => {
+            ConflictPreviewSyncGroup::ColumnsOnly
+        }
+        (SyncedScrollAxis::Horizontal, ConflictPreviewSyncGroup::TwoWayPairAndOutput, false) => {
+            ConflictPreviewSyncGroup::TwoWayPair
+        }
+        (_, group, _) => group,
+    };
     match group {
         ConflictPreviewSyncGroup::ColumnsAndOutput => {
             maybe_sync_synced_scroll_offsets_with_output_anchor(
@@ -685,19 +730,37 @@ fn sync_conflict_preview_axis(
                 axis,
                 mode,
                 anchors,
+                explicit_master_ix,
             );
         }
         ConflictPreviewSyncGroup::ColumnsOnly => {
             let columns = [handles[0].clone(), handles[1].clone(), handles[2].clone()];
             let mut columns_last = [last_synced[0], last_synced[1], last_synced[2]];
-            maybe_sync_synced_scroll_offsets(&columns, &mut columns_last, axis, mode);
+            maybe_sync_synced_scroll_offsets_with_master(
+                &columns,
+                &mut columns_last,
+                axis,
+                mode,
+                explicit_master_ix.filter(|&ix| ix < 3),
+            );
             last_synced[..3].copy_from_slice(&columns_last);
             last_synced[3] = axis.offset_component(handles[3].offset());
         }
         ConflictPreviewSyncGroup::TwoWayPair => {
             let pair = [handles[0].clone(), handles[2].clone()];
             let mut pair_last = [last_synced[0], last_synced[2]];
-            maybe_sync_synced_scroll_offsets(&pair, &mut pair_last, axis, mode);
+            let pair_master = match explicit_master_ix {
+                Some(0) => Some(0),
+                Some(2) => Some(1),
+                _ => None,
+            };
+            maybe_sync_synced_scroll_offsets_with_master(
+                &pair,
+                &mut pair_last,
+                axis,
+                mode,
+                pair_master,
+            );
             last_synced[0] = pair_last[0];
             last_synced[2] = pair_last[1];
             last_synced[1] = axis.offset_component(handles[1].offset());
@@ -712,6 +775,12 @@ fn sync_conflict_preview_axis(
                 axis,
                 mode,
                 anchors,
+                match explicit_master_ix {
+                    Some(0) => Some(0),
+                    Some(2) => Some(1),
+                    Some(3) => Some(2),
+                    _ => None,
+                },
             );
             last_synced[0] = group_last[0];
             last_synced[2] = group_last[1];
@@ -733,17 +802,45 @@ fn sync_synced_scroll_offsets<const N: usize>(
     last_synced: &mut [Pixels; N],
     axis: SyncedScrollAxis,
 ) {
+    sync_synced_scroll_offsets_with_master(handles, last_synced, axis, None);
+}
+
+fn sync_synced_scroll_offsets_with_master<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+    explicit_master_ix: Option<usize>,
+) {
     let offsets: [Point<Pixels>; N] = std::array::from_fn(|ix| handles[ix].offset());
     let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
         axis.max_scroll_component(handles[ix].max_offset().into())
             .max(px(0.0))
     });
-    let targets = compute_synced_scroll_offsets(
-        std::array::from_fn(|ix| axis.offset_component(offsets[ix])),
+    let offset_components: [Pixels; N] =
+        std::array::from_fn(|ix| axis.offset_component(offsets[ix]));
+    let targets = compute_synced_scroll_offsets_with_master(
+        offset_components,
         max_scrolls,
         *last_synced,
         preferred_scroll_master_index(max_scrolls),
+        explicit_master_ix,
     );
+
+    if axis == SyncedScrollAxis::Horizontal && std::env::var_os("GC_SCROLL_DEBUG").is_some() {
+        let f = |arr: &[Pixels; N]| {
+            arr.iter()
+                .map(|p| format!("{:.0}", f32::from(*p)))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        eprintln!(
+            "[hsync] off=[{}] max=[{}] last=[{}] -> tgt=[{}]",
+            f(&offset_components),
+            f(&max_scrolls),
+            f(last_synced),
+            f(&targets),
+        );
+    }
 
     for ix in 0..N {
         if axis.offset_component(offsets[ix]) != targets[ix] {
@@ -759,8 +856,18 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
     axis: SyncedScrollAxis,
     mode: DiffScrollSync,
 ) {
+    maybe_sync_synced_scroll_offsets_with_master(handles, last_synced, axis, mode, None);
+}
+
+fn maybe_sync_synced_scroll_offsets_with_master<const N: usize>(
+    handles: &[ScrollHandle; N],
+    last_synced: &mut [Pixels; N],
+    axis: SyncedScrollAxis,
+    mode: DiffScrollSync,
+    explicit_master_ix: Option<usize>,
+) {
     if axis.includes(mode) {
-        sync_synced_scroll_offsets(handles, last_synced, axis);
+        sync_synced_scroll_offsets_with_master(handles, last_synced, axis, explicit_master_ix);
     } else {
         *last_synced = snapshot_synced_scroll_offsets(handles, axis);
     }
@@ -770,6 +877,80 @@ fn maybe_sync_synced_scroll_offsets<const N: usize>(
 /// preview/editor. Both render 20px rows, so column↔output sync is a pure
 /// row-index remap.
 const CONFLICT_PREVIEW_ROW_H: f32 = 20.0;
+
+#[cfg(test)]
+fn compute_anchored_vertical_scroll_offsets<const N: usize>(
+    offsets: [Pixels; N],
+    max_scrolls: [Pixels; N],
+    last_synced: [Pixels; N],
+    anchors: &[(f32, f32)],
+) -> [Pixels; N] {
+    compute_anchored_vertical_scroll_offsets_with_master(
+        offsets,
+        max_scrolls,
+        last_synced,
+        anchors,
+        None,
+    )
+}
+
+fn compute_anchored_vertical_scroll_offsets_with_master<const N: usize>(
+    offsets: [Pixels; N],
+    max_scrolls: [Pixels; N],
+    last_synced: [Pixels; N],
+    anchors: &[(f32, f32)],
+    explicit_master_ix: Option<usize>,
+) -> [Pixels; N] {
+    if N == 0 {
+        return offsets;
+    }
+
+    let row_h = px(CONFLICT_PREVIEW_ROW_H);
+    let output_ix = N - 1;
+    let to_rows = |off: Pixels| -> f32 {
+        let mag = if off < px(0.0) { -off } else { off };
+        (mag / row_h).max(0.0)
+    };
+
+    // Prefer output if it moved; otherwise the first moved source column is
+    // the master. If nobody moved, preserve the current (possibly clamped)
+    // offsets. Re-electing output in that case pulls longer source panes out
+    // of their intentional EOF overscroll and creates a scroll/reset loop.
+    let changed = |ix: usize| offsets[ix] != clamp_raw_scroll_y(last_synced[ix], max_scrolls[ix]);
+    let output_changed = changed(output_ix);
+    let master_column = (0..output_ix).find(|&ix| changed(ix));
+    let explicit_master_ix = explicit_master_ix.filter(|&ix| ix < N);
+    if explicit_master_ix.is_none() && !output_changed && master_column.is_none() {
+        return offsets;
+    }
+
+    let mut targets = offsets;
+    if explicit_master_ix == Some(output_ix) || (explicit_master_ix.is_none() && output_changed) {
+        // Output drives the columns.
+        let output_offset = clamp_raw_scroll_y(offsets[output_ix], max_scrolls[output_ix]);
+        targets[output_ix] = output_offset;
+        let out_row = to_rows(output_offset);
+        let col_row = (out_row + interpolated_anchor_shift(anchors, out_row, false)).max(0.0);
+        for ix in 0..output_ix {
+            targets[ix] = clamp_raw_scroll_y(-(row_h * col_row), max_scrolls[ix]);
+        }
+    } else {
+        // A column drives the output; the other columns follow it 1:1.
+        let master = explicit_master_ix
+            .filter(|&ix| ix < output_ix)
+            .or(master_column)
+            .expect("changed column present");
+        let master_offset = clamp_raw_scroll_y(offsets[master], max_scrolls[master]);
+        let al_row = to_rows(master_offset);
+        let out_row = (al_row + interpolated_anchor_shift(anchors, al_row, true)).max(0.0);
+        targets[output_ix] = clamp_raw_scroll_y(-(row_h * out_row), max_scrolls[output_ix]);
+        for ix in 0..output_ix {
+            targets[ix] = clamp_raw_scroll_y(master_offset, max_scrolls[ix]);
+        }
+    }
+
+    targets
+}
 
 /// Sync a group that includes the resolved output. The aligned columns carry
 /// padding rows (one-sided insertions/deletions) the merged output does not, so
@@ -786,6 +967,7 @@ fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
     axis: SyncedScrollAxis,
     mode: DiffScrollSync,
     anchors: &[(f32, f32)],
+    explicit_master_ix: Option<usize>,
 ) {
     if !axis.includes(mode) {
         *last_synced = snapshot_synced_scroll_offsets(handles, axis);
@@ -797,42 +979,19 @@ fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
         return;
     }
 
-    let row_h = px(CONFLICT_PREVIEW_ROW_H);
-    let output_ix = N - 1;
     let offsets: [Pixels; N] =
         std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()));
     let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
         axis.max_scroll_component(handles[ix].max_offset().into())
             .max(px(0.0))
     });
-    let to_rows = |off: Pixels| -> f32 {
-        let mag = if off < px(0.0) { -off } else { off };
-        (mag / row_h).max(0.0)
-    };
-
-    // Master = the handle the user moved since the last sync. Prefer the output
-    // when it changed; otherwise the first changed column drives the output.
-    let output_changed = offsets[output_ix] != last_synced[output_ix];
-    let master_column = (0..output_ix).find(|&ix| offsets[ix] != last_synced[ix]);
-
-    let mut targets = offsets;
-    if output_changed || master_column.is_none() {
-        // Output drives the columns.
-        let out_row = to_rows(offsets[output_ix]);
-        let col_row = (out_row + nearest_anchor_shift(anchors, out_row, false)).max(0.0);
-        for ix in 0..output_ix {
-            targets[ix] = clamp_raw_scroll_y(-(row_h * col_row), max_scrolls[ix]);
-        }
-    } else {
-        // A column drives the output; the other columns follow it 1:1.
-        let master = master_column.expect("changed column present");
-        let al_row = to_rows(offsets[master]);
-        let out_row = (al_row + nearest_anchor_shift(anchors, al_row, true)).max(0.0);
-        targets[output_ix] = clamp_raw_scroll_y(-(row_h * out_row), max_scrolls[output_ix]);
-        for ix in 0..output_ix {
-            targets[ix] = clamp_raw_scroll_y(offsets[master], max_scrolls[ix]);
-        }
-    }
+    let targets = compute_anchored_vertical_scroll_offsets_with_master(
+        offsets,
+        max_scrolls,
+        *last_synced,
+        anchors,
+        explicit_master_ix,
+    );
 
     for ix in 0..N {
         if offsets[ix] != targets[ix] {
@@ -842,25 +1001,40 @@ fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
     *last_synced = targets;
 }
 
-/// Row shift `follower_row - master_row` at the conflict anchor nearest `pos`.
-/// `by_aligned` selects whether `pos`/matching is in aligned-row space (a column
-/// is the master → follower is the output) or output-row space (vice versa).
-fn nearest_anchor_shift(anchors: &[(f32, f32)], pos: f32, by_aligned: bool) -> f32 {
-    let mut best_shift = 0.0f32;
-    let mut best_dist = f32::INFINITY;
+/// Continuous row shift `follower_row - master_row` between conflict anchors.
+/// `by_aligned` selects whether `pos` is in aligned-column space (a column is
+/// master) or output space. Outside the anchor range the nearest endpoint's
+/// shift is extended with slope 1, including source comfort overscroll at EOF.
+///
+/// Using the nearest anchor directly is discontinuous: when consecutive
+/// conflicts have different cumulative padding, crossing their midpoint can
+/// send the follower backward by many rows even while the user scrolls down.
+fn interpolated_anchor_shift(anchors: &[(f32, f32)], pos: f32, by_aligned: bool) -> f32 {
+    let mut previous: Option<(f32, f32)> = None;
     for &(aligned, output) in anchors {
-        let (coord, shift) = if by_aligned {
-            (aligned, output - aligned)
+        let (coord, follower) = if by_aligned {
+            (aligned, output)
         } else {
-            (output, aligned - output)
+            (output, aligned)
         };
-        let dist = (coord - pos).abs();
-        if dist < best_dist {
-            best_dist = dist;
-            best_shift = shift;
+        if pos <= coord {
+            let Some((previous_coord, previous_follower)) = previous else {
+                return follower - coord;
+            };
+            let span = coord - previous_coord;
+            if span <= f32::EPSILON {
+                return follower - coord;
+            }
+            let progress = ((pos - previous_coord) / span).clamp(0.0, 1.0);
+            let mapped = previous_follower + (follower - previous_follower) * progress;
+            return mapped - pos;
         }
+        previous = Some((coord, follower));
     }
-    best_shift
+
+    previous
+        .map(|(coord, follower)| follower - coord)
+        .unwrap_or(0.0)
 }
 
 /// Resolve the file path and blame source for a diff target, or `None` for
@@ -1346,7 +1520,7 @@ impl MainPaneView {
                 let (output_snapshot, edit_delta) = input.update(cx, |input, _| {
                     (input.text_snapshot(), input.take_recent_utf8_edit_delta())
                 });
-                let output_hash = hash_text_bytes(output_snapshot.as_ref());
+                let source_revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
                 let outline_delta = resolved_outline_delta_for_snapshot_transition(
                     &this.conflict_resolved_preview_text,
                     &output_snapshot,
@@ -1355,16 +1529,16 @@ impl MainPaneView {
 
                 let path = this.conflict_resolver.path.clone();
                 let needs_update = this.conflict_resolved_preview_path.as_ref() != path.as_ref()
-                    || this.conflict_resolved_preview_source_hash != Some(output_hash);
+                    || this.conflict_resolved_preview_source_revision != Some(source_revision);
                 if !needs_update {
                     return;
                 }
 
                 this.conflict_resolved_preview_path = path.clone();
-                this.conflict_resolved_preview_source_hash = Some(output_hash);
+                this.conflict_resolved_preview_source_revision = Some(source_revision);
                 this.schedule_conflict_resolved_outline_recompute(
                     path,
-                    output_hash,
+                    source_revision,
                     outline_delta,
                     cx,
                 );
@@ -1472,7 +1646,6 @@ impl MainPaneView {
             reveal_whitespace_chars: diff_reveal_whitespace_chars,
             mergetool_auto_advance: true,
             mergetool_collapse_unchanged: false,
-            mergetool_vertical_split: false,
             mergetool_output_scroll_sync: true,
             mergetool_show_line_numbers: true,
             mergetool_view_three_way: true,
@@ -1660,7 +1833,7 @@ impl MainPaneView {
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
             conflict_three_way_syntax_inflight: ThreeWaySides::default(),
             conflict_resolved_preview_path: None,
-            conflict_resolved_preview_source_hash: None,
+            conflict_resolved_preview_source_revision: None,
             conflict_resolved_output_projection: None,
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
@@ -1683,6 +1856,8 @@ impl MainPaneView {
             conflict_preview_theirs_scroll: UniformListScrollHandle::default(),
             conflict_preview_last_synced_x: [px(0.0); 4],
             conflict_preview_last_synced_y: [px(0.0); 4],
+            conflict_preview_vertical_wheel_master: None,
+            conflict_output_gutter_wheel_sync_pending: false,
             conflict_resolved_preview_scroll: UniformListScrollHandle::default(),
             conflict_resolved_output_editor_scroll: ScrollHandle::new(),
             conflict_resolved_preview_gutter_scroll: UniformListScrollHandle::default(),
@@ -1880,7 +2055,7 @@ impl MainPaneView {
     ) {
         self.conflict_resolved_output_projection = Some(projection.clone());
         self.conflict_resolved_preview_path = path.cloned();
-        self.conflict_resolved_preview_source_hash = Some(projection.output_hash());
+        self.conflict_resolved_preview_source_revision = None;
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
@@ -1891,6 +2066,8 @@ impl MainPaneView {
         self.conflict_resolved_output_measure_row = projection.widest_line_ix();
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolved_preview_segments_cache.clear();
+        self.conflict_resolver.resolved_output_visible_dirty = true;
+        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
     }
 
     pub(in crate::view) fn refresh_streamed_resolved_output_preview_from_projection(
@@ -1946,18 +2123,20 @@ impl MainPaneView {
 
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
-        let output_hash = hash_text_bytes(&resolved);
         let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
         let theme = self.theme;
         let path = self.conflict_resolver.path.clone();
         self.conflict_resolved_output_projection = None;
         self.conflict_resolved_preview_path = path.clone();
-        self.conflict_resolved_preview_source_hash = Some(output_hash);
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(resolved.clone(), cx);
         });
+        self.conflict_resolved_preview_source_revision =
+            Some(self.conflict_resolver_input.read_with(cx, |input, _| {
+                ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
+            }));
         self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
     }
 
@@ -2119,14 +2298,9 @@ impl MainPaneView {
         );
         let background_key = if syntax_state.needs_background_prepare {
             self.conflict_resolved_preview_syntax_language
-                .map(|language| {
-                    let source_hash = self
-                        .conflict_resolved_preview_source_hash
-                        .unwrap_or_else(|| hash_text_bytes(output_snapshot.as_ref()));
-                    ResolvedOutputSyntaxBackgroundKey {
-                        source_hash,
-                        language,
-                    }
+                .map(|language| ResolvedOutputSyntaxBackgroundKey {
+                    source_revision: ResolvedOutputSourceRevision::from_snapshot(output_snapshot),
+                    language,
                 })
         } else {
             None
@@ -2211,7 +2385,8 @@ impl MainPaneView {
                     if this.conflict_resolved_preview_syntax_inflight != Some(request_key) {
                         return;
                     }
-                    if this.conflict_resolved_preview_source_hash != Some(request_key.source_hash)
+                    if this.conflict_resolved_preview_source_revision
+                        != Some(request_key.source_revision)
                         || this.conflict_resolved_preview_syntax_language
                             != Some(request_key.language)
                     {
@@ -2380,7 +2555,7 @@ impl MainPaneView {
             .resolver_pending_recompute_seq
             .wrapping_add(1);
         self.conflict_resolved_preview_path = None;
-        self.conflict_resolved_preview_source_hash = None;
+        self.conflict_resolved_preview_source_revision = None;
         self.conflict_resolved_output_projection = None;
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language = None;
@@ -2395,6 +2570,8 @@ impl MainPaneView {
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
         self.conflict_three_way_segments_cache.clear();
         self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
+        self.conflict_resolver.resolved_output_visible_dirty = true;
+        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
     }
 
     pub(super) fn recompute_conflict_resolved_outline_and_provenance(
@@ -2533,6 +2710,8 @@ impl MainPaneView {
         if clear_outline {
             self.stash_current_conflict_resolved_outline_state();
         }
+        self.conflict_resolved_preview_source_revision =
+            Some(ResolvedOutputSourceRevision::from_snapshot(output_snapshot));
         self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
@@ -2548,6 +2727,8 @@ impl MainPaneView {
 
         if clear_outline {
             self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
+            self.conflict_resolver.resolved_output_visible_dirty = true;
+            self.conflict_resolver.conflict_output_row_anchors_dirty = true;
             self.conflict_resolver.resolved_outline_gutter_rows.clear();
         }
     }
@@ -2560,6 +2741,8 @@ impl MainPaneView {
     ) {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = computed.outline;
+        self.conflict_resolver.resolved_output_visible_dirty = true;
+        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
         self.conflict_resolver.resolved_outline_gutter_rows.clear();
         record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
     }
@@ -2892,6 +3075,9 @@ impl MainPaneView {
 
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
+        self.conflict_resolved_preview_source_revision = Some(
+            ResolvedOutputSourceRevision::from_snapshot(&output_snapshot),
+        );
         self.conflict_resolved_preview_line_count = new_line_count;
         self.conflict_resolved_preview_line_starts = new_line_starts;
         self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
@@ -2915,6 +3101,8 @@ impl MainPaneView {
             markers: next_markers,
             sources_index: next_sources_index,
         };
+        self.conflict_resolver.resolved_output_visible_dirty = true;
+        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
         self.conflict_resolver.resolved_outline_gutter_rows.clear();
         self.conflict_resolved_preview_text = output_snapshot;
         true
@@ -2956,12 +3144,12 @@ impl MainPaneView {
     pub(super) fn schedule_conflict_resolved_outline_recompute(
         &mut self,
         path: Option<std::path::PathBuf>,
-        output_hash: u64,
+        source_revision: ResolvedOutputSourceRevision,
         delta: Option<ResolvedOutlineDelta>,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.conflict_resolved_output_is_streamed() {
-            let _ = output_hash;
+            let _ = source_revision;
             let _ = delta;
             self.refresh_streamed_resolved_output_preview_from_markers(path.as_ref());
             cx.notify();
@@ -3006,7 +3194,7 @@ impl MainPaneView {
 
             if background_delay.is_zero()
                 && self.conflict_resolver.resolver_pending_recompute_seq == seq
-                && self.conflict_resolved_preview_source_hash == Some(output_hash)
+                && self.conflict_resolved_preview_source_revision == Some(source_revision)
                 && self.conflict_resolved_preview_path.as_ref() == path.as_ref()
             {
                 let computed = compute_resolved_outline_computation(
@@ -3033,7 +3221,7 @@ impl MainPaneView {
                         if this.conflict_resolver.resolver_pending_recompute_seq != seq {
                             return None;
                         }
-                        if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                        if this.conflict_resolved_preview_source_revision != Some(source_revision)
                             || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
                         {
                             return None;
@@ -3092,7 +3280,7 @@ impl MainPaneView {
                         if this.conflict_resolver.resolver_pending_recompute_seq != seq {
                             return;
                         }
-                        if this.conflict_resolved_preview_source_hash != Some(output_hash)
+                        if this.conflict_resolved_preview_source_revision != Some(source_revision)
                             || this.conflict_resolved_preview_path.as_ref() != path.as_ref()
                         {
                             return;
@@ -3782,13 +3970,12 @@ impl MainPaneView {
     }
 
     /// Persisted merge tool preferences: (auto-advance, collapse-unchanged
-    /// default, vertical split, output scroll sync, show line numbers). Read by
-    /// the root view's UI settings persist.
-    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool, bool, bool) {
+    /// default, output scroll sync, show line numbers). Read by the root view's
+    /// UI settings persist.
+    pub(in crate::view) fn mergetool_preferences(&self) -> (bool, bool, bool, bool) {
         (
             self.mergetool_auto_advance,
             self.mergetool_collapse_unchanged,
-            self.mergetool_vertical_split,
             self.mergetool_output_scroll_sync,
             self.mergetool_show_line_numbers,
         )
@@ -5342,6 +5529,49 @@ impl MainPaneView {
         ]
     }
 
+    /// Forward a horizontal wheel gesture over the resolved-output pane onto the
+    /// diff columns. Native scrolling moves the output's content-width handle;
+    /// forwarding the same delta lets the narrower columns respond immediately,
+    /// and the normal bidirectional sync reconciles their clamped offsets.
+    pub(in crate::view) fn forward_conflict_output_horizontal_wheel(
+        &self,
+        event: &gpui::ScrollWheelEvent,
+        window: &gpui::Window,
+    ) -> bool {
+        // Only when output/column sync and horizontal diff sync are enabled.
+        if !self.mergetool_output_scroll_sync || !self.diff_scroll_sync.includes_horizontal() {
+            return false;
+        }
+        let delta_x = event.delta.pixel_delta(window.line_height()).x;
+        if delta_x == px(0.0) {
+            return false;
+        }
+        let handles = self.conflict_preview_scroll_handles();
+        // Indices into `handles`: base/ours/theirs are the diff columns. Native
+        // overflow handling owns the output handle at index 3.
+        let columns: &[usize] = match self.conflict_resolver.view_mode {
+            ConflictResolverViewMode::ThreeWay => &[0, 1, 2],
+            ConflictResolverViewMode::TwoWayDiff => &[0, 2],
+        };
+        let mut changed = false;
+        for &ix in columns {
+            let handle = &handles[ix];
+            let max_x = handle.max_offset().x.max(px(0.0));
+            if max_x <= px(0.0) {
+                continue;
+            }
+            let cur = handle.offset();
+            // Mirrors gpui's own overflow-scroll wheel handling: add the raw
+            // delta, then clamp into the scrollable range [-max_x, 0].
+            let next_x = (cur.x + delta_x).clamp(-max_x, px(0.0));
+            if next_x != cur.x {
+                handle.set_offset(point(next_x, cur.y));
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub(in crate::view) fn sync_diff_split_scroll(&mut self) {
         let handles = self.diff_split_scroll_handles();
         maybe_sync_synced_scroll_offsets(
@@ -5358,10 +5588,24 @@ impl MainPaneView {
         );
     }
 
+    pub(in crate::view) fn record_conflict_vertical_wheel_master(&mut self, master_ix: usize) {
+        self.conflict_preview_vertical_wheel_master = Some(master_ix);
+        self.conflict_output_gutter_wheel_sync_pending = true;
+    }
+
     pub(in crate::view) fn sync_conflict_preview_scroll(&mut self) {
+        let vertical_wheel_master = self.conflict_preview_vertical_wheel_master.take();
         let handles = self.conflict_preview_scroll_handles();
         let group = self.conflict_preview_sync_group();
-        let anchors = self.conflict_output_row_anchors();
+        let anchors = if matches!(
+            group,
+            ConflictPreviewSyncGroup::ColumnsAndOutput
+                | ConflictPreviewSyncGroup::TwoWayPairAndOutput
+        ) {
+            self.conflict_output_row_anchors()
+        } else {
+            Arc::from([(0.0f32, 0.0f32)])
+        };
         for (axis, last_synced) in [
             (
                 SyncedScrollAxis::Vertical,
@@ -5378,7 +5622,12 @@ impl MainPaneView {
                 axis,
                 self.diff_scroll_sync,
                 group,
-                &anchors,
+                anchors.as_ref(),
+                if axis == SyncedScrollAxis::Vertical {
+                    vertical_wheel_master
+                } else {
+                    None
+                },
             );
         }
     }
@@ -5388,17 +5637,43 @@ impl MainPaneView {
     /// where each conflict starts. Seeded with `(0, 0)` so scrolling above the
     /// first conflict stays 1:1. Conflicts with no locatable output line (e.g.
     /// resolved, no marker) are skipped; the nearest remaining anchor is used.
-    fn conflict_output_row_anchors(&self) -> Vec<(f32, f32)> {
+    fn conflict_output_row_anchors(&mut self) -> Arc<[(f32, f32)]> {
+        if !self.conflict_resolver.conflict_output_row_anchors_dirty {
+            return Arc::clone(&self.conflict_resolver.conflict_output_row_anchors);
+        }
         let mut anchors = vec![(0.0f32, 0.0f32)];
         // The anchors map aligned diff rows to output lines. In markdown/image
         // preview the columns render rendered content, not the 20px aligned row
         // space, so the mapping is meaningless — keep only the `(0, 0)` seed,
         // which makes the sync degenerate to a raw 1:1 copy.
         if self.is_markdown_preview_active() {
-            return anchors;
+            return anchors.into();
         }
         let streamed = self.conflict_resolved_output_is_streamed();
-        for conflict_ix in 0..self.conflict_resolver_conflict_count() {
+        let conflict_count = self.conflict_resolver_conflict_count();
+        let output_lines = if streamed {
+            Vec::new()
+        } else {
+            let mut output_lines = vec![None; conflict_count];
+            for (line_ix, marker) in self
+                .conflict_resolver
+                .resolved_outline
+                .markers
+                .iter()
+                .enumerate()
+            {
+                let Some(marker) = marker.filter(|marker| marker.is_start) else {
+                    continue;
+                };
+                if let Some(slot) = output_lines.get_mut(marker.conflict_ix)
+                    && slot.is_none()
+                {
+                    *slot = Some(line_ix);
+                }
+            }
+            output_lines
+        };
+        for conflict_ix in 0..conflict_count {
             let Some(aligned) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) else {
                 continue;
             };
@@ -5408,10 +5683,7 @@ impl MainPaneView {
                     .and_then(|projection| projection.conflict_line_range(conflict_ix))
                     .map(|range| range.start)
             } else {
-                first_output_marker_line_for_conflict(
-                    &self.conflict_resolver.resolved_outline.markers,
-                    conflict_ix,
-                )
+                output_lines.get(conflict_ix).copied().flatten()
             };
             let Some(output) = output else {
                 continue;
@@ -5419,7 +5691,9 @@ impl MainPaneView {
             anchors.push((aligned as f32, output as f32));
         }
         anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
-        anchors
+        self.conflict_resolver.conflict_output_row_anchors = anchors.into();
+        self.conflict_resolver.conflict_output_row_anchors_dirty = false;
+        Arc::clone(&self.conflict_resolver.conflict_output_row_anchors)
     }
 
     /// Which conflict-preview lists share a row space and may be raw-offset
@@ -5460,10 +5734,13 @@ impl MainPaneView {
             uniform_list_base_handle(&self.conflict_resolved_preview_gutter_scroll),
             self.conflict_resolved_output_editor_scroll.clone(),
         ];
-        sync_synced_scroll_offsets(
+        let explicit_master_ix = self.conflict_output_gutter_wheel_sync_pending.then_some(1);
+        self.conflict_output_gutter_wheel_sync_pending = false;
+        sync_synced_scroll_offsets_with_master(
             &handles,
             &mut self.conflict_resolved_preview_gutter_last_synced_y,
             SyncedScrollAxis::Vertical,
+            explicit_master_ix,
         );
     }
 
@@ -5592,9 +5869,9 @@ mod tests {
     }
 
     #[test]
-    fn clamp_raw_scroll_y_limits_scroll_without_flipping_direction() {
+    fn clamp_raw_scroll_y_uses_gpui_negative_offset_range() {
         assert_eq!(clamp_raw_scroll_y(px(-180.0), px(120.0)), px(-120.0));
-        assert_eq!(clamp_raw_scroll_y(px(180.0), px(120.0)), px(120.0));
+        assert_eq!(clamp_raw_scroll_y(px(180.0), px(120.0)), px(0.0));
         assert_eq!(clamp_raw_scroll_y(px(-40.0), px(120.0)), px(-40.0));
     }
 
@@ -5635,23 +5912,162 @@ mod tests {
     }
 
     #[test]
-    fn nearest_anchor_shift_uses_closest_conflict_in_each_space() {
+    fn synced_scroll_offsets_hold_steady_when_nothing_changed() {
+        // A clamped follower (shorter pane, offset -100) sits alongside a master
+        // scrolled further (-320). Nothing moved since the last sync (offsets ==
+        // last_synced), so even though the offsets are unequal the follower must
+        // stay put — re-driving it onto the widest handle here is the idle-frame
+        // snap-back the horizontal output sync used to produce.
+        let steady = [px(-100.0), px(-320.0)];
+        let targets = compute_synced_scroll_offsets(steady, [px(100.0), px(500.0)], steady, 1);
+
+        assert_eq!(targets, steady);
+    }
+
+    #[test]
+    fn synced_scroll_offsets_do_not_promote_a_follower_clamped_during_paint() {
+        let steady = [px(-100.0), px(-500.0)];
+        let targets = compute_synced_scroll_offsets(
+            steady,
+            [px(100.0), px(500.0)],
+            // The previous render requested -120 for the shorter follower;
+            // GPUI painted it at its current -100 maximum afterward.
+            [px(-120.0), px(-500.0)],
+            1,
+        );
+
+        assert_eq!(targets, steady);
+    }
+
+    #[test]
+    fn explicit_wheel_master_wins_when_multiple_handles_changed() {
+        let targets = compute_synced_scroll_offsets_with_master(
+            [px(0.0), px(-100.0)],
+            [px(500.0), px(500.0)],
+            [px(-100.0), px(0.0)],
+            0,
+            Some(1),
+        );
+
+        assert_eq!(targets, [px(-100.0), px(-100.0)]);
+    }
+
+    #[test]
+    fn explicit_wheel_master_at_top_pulls_stale_follower_to_top() {
+        let targets = compute_synced_scroll_offsets_with_master(
+            [px(0.0), px(-100.0)],
+            [px(500.0), px(500.0)],
+            [px(0.0), px(-100.0)],
+            1,
+            Some(0),
+        );
+
+        assert_eq!(targets, [px(0.0), px(0.0)]);
+    }
+
+    #[test]
+    fn anchored_scroll_holds_diff_overscroll_after_output_clamps() {
+        // The source panes have ten comfort rows below EOF, while resolved
+        // output stops at its last real row. Once output clamps, an idle render
+        // must not promote that shorter follower and pull the sources back.
+        let steady = [px(-500.0), px(-500.0), px(-100.0)];
+        let targets = compute_anchored_vertical_scroll_offsets(
+            steady,
+            [px(500.0), px(500.0), px(100.0)],
+            // Output was requested beyond its range, then clamped during paint.
+            [px(-500.0), px(-500.0), px(-120.0)],
+            &[(0.0, 0.0)],
+        );
+
+        assert_eq!(targets, steady);
+    }
+
+    #[test]
+    fn anchored_scroll_clamps_output_without_clamping_diff_master() {
+        let targets = compute_anchored_vertical_scroll_offsets(
+            [px(-500.0), px(-480.0), px(-100.0)],
+            [px(500.0), px(500.0), px(100.0)],
+            [px(-480.0), px(-480.0), px(-100.0)],
+            &[(0.0, 0.0)],
+        );
+
+        assert_eq!(targets, [px(-500.0), px(-500.0), px(-100.0)]);
+    }
+
+    #[test]
+    fn anchored_scroll_honors_remote_wheel_over_stale_output_change() {
+        let targets = compute_anchored_vertical_scroll_offsets_with_master(
+            [px(-500.0), px(-500.0), px(0.0)],
+            [px(500.0), px(500.0), px(100.0)],
+            [px(-480.0), px(-480.0), px(-100.0)],
+            &[(0.0, 0.0)],
+            Some(1),
+        );
+
+        assert_eq!(targets, [px(-500.0), px(-500.0), px(-100.0)]);
+    }
+
+    #[test]
+    fn anchored_output_wheel_at_top_pulls_stale_sources_to_top() {
+        let targets = compute_anchored_vertical_scroll_offsets_with_master(
+            [px(-100.0), px(-100.0), px(0.0)],
+            [px(500.0), px(500.0), px(500.0)],
+            [px(-100.0), px(-100.0), px(0.0)],
+            &[(0.0, 0.0)],
+            Some(2),
+        );
+
+        assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
+    }
+
+    #[test]
+    fn anchored_output_top_overscroll_does_not_propagate_positive_offset() {
+        let targets = compute_anchored_vertical_scroll_offsets_with_master(
+            [px(0.0), px(0.0), px(24.0)],
+            [px(500.0), px(500.0), px(500.0)],
+            [px(0.0), px(0.0), px(0.0)],
+            &[(0.0, 0.0)],
+            Some(2),
+        );
+
+        assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
+    }
+
+    #[test]
+    fn interpolated_anchor_shift_is_continuous_and_maps_exact_anchors() {
         // Conflict 1: aligned row 10 / output row 8 (2 padding rows above it).
         // Conflict 2: aligned row 30 / output row 25 (5 padding rows above it).
         let anchors = [(0.0, 0.0), (10.0, 8.0), (30.0, 25.0)];
+        let mapped =
+            |pos: f32, by_aligned: bool| pos + interpolated_anchor_shift(&anchors, pos, by_aligned);
 
-        // A column drives the output (by_aligned=true): shift = output - aligned.
-        // Just past conflict 1, the nearest anchor is (10, 8) → shift -2, so an
-        // aligned row of 12 maps to output row 10.
-        assert_eq!(nearest_anchor_shift(&anchors, 12.0, true), -2.0);
-        // Near conflict 2, shift -5 (aligned 32 → output 27).
-        assert_eq!(nearest_anchor_shift(&anchors, 32.0, true), -5.0);
+        assert_eq!(mapped(10.0, true), 8.0);
+        assert_eq!(mapped(30.0, true), 25.0);
+        assert_eq!(mapped(8.0, false), 10.0);
+        assert_eq!(mapped(25.0, false), 30.0);
 
-        // The output drives the columns (by_aligned=false): shift = aligned - output.
-        // Output row 9 is nearest anchor (10, 8) → shift +2 (aligned row 11).
-        assert_eq!(nearest_anchor_shift(&anchors, 9.0, false), 2.0);
-        // Above the first conflict, the (0, 0) seed keeps it 1:1.
-        assert_eq!(nearest_anchor_shift(&anchors, 3.0, false), 0.0);
+        // Mapping must never jump backward at the midpoint between anchors.
+        assert!(mapped(20.01, true) >= mapped(19.99, true));
+        assert!(mapped(16.51, false) >= mapped(16.49, false));
+
+        // Past the last anchor, retain its shift with slope 1.
+        assert_eq!(mapped(32.0, true), 27.0);
+        assert_eq!(mapped(27.0, false), 32.0);
+    }
+
+    #[test]
+    fn interpolated_anchor_shift_does_not_reset_at_large_asymmetric_block() {
+        // Mirrors pipeline.rs: the later conflict begins 24 rows farther down
+        // in aligned source space than in resolved-output space.
+        let anchors = [(0.0, 0.0), (100.0, 100.0), (140.0, 116.0)];
+        let mapped = |row: f32| row + interpolated_anchor_shift(&anchors, row, true);
+
+        let before_midpoint = mapped(119.99);
+        let after_midpoint = mapped(120.01);
+        assert!(
+            after_midpoint >= before_midpoint,
+            "scrolling down must not map output backward: {before_midpoint} -> {after_midpoint}",
+        );
     }
 
     #[test]

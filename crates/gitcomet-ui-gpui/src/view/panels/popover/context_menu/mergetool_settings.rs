@@ -4,7 +4,7 @@ use super::*;
 /// resolver-specific view options that used to borrow the diff-actions menu.
 pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     let pane = host.main_pane.read(cx);
-    let (auto_advance, _collapse_default, _vertical_split, output_scroll_sync, show_line_numbers) =
+    let (auto_advance, _collapse_default, output_scroll_sync, show_line_numbers) =
         pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
     let three_way_view = pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
@@ -17,9 +17,6 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
     )
 }
 
-// NOTE: a "Stack columns vertically" entry backed by the persisted
-// `mergetool_vertical_split` setting is deliberately not offered yet — the
-// stacked column rendering is deferred.
 fn model_for_mergetool_settings(
     three_way_view: bool,
     auto_advance: bool,

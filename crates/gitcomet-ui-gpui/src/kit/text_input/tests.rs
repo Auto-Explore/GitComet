@@ -123,6 +123,119 @@ fn wrapped_line_index_for_y_handles_row_boundaries() {
 }
 
 #[test]
+fn line_display_columns_expands_tabs_to_tab_stops() {
+    // No tabs: display columns equal the char/byte count.
+    assert_eq!(line_display_columns(""), 0);
+    assert_eq!(line_display_columns("abcd"), 4);
+
+    // A leading tab advances to the first tab stop, not one column.
+    assert_eq!(line_display_columns("\t"), TEXT_INPUT_WRAP_TAB_STOP_COLUMNS);
+    // "ab\t" -> 2 columns, then advance to the next multiple of the tab stop.
+    assert_eq!(
+        line_display_columns("ab\t"),
+        TEXT_INPUT_WRAP_TAB_STOP_COLUMNS
+    );
+    // A tab landing exactly on a stop still advances a full tab width.
+    assert_eq!(
+        line_display_columns("abcd\t"),
+        TEXT_INPUT_WRAP_TAB_STOP_COLUMNS * 2
+    );
+    // Several leading tabs (common source indentation).
+    assert_eq!(
+        line_display_columns("\t\tx"),
+        TEXT_INPUT_WRAP_TAB_STOP_COLUMNS * 2 + 1
+    );
+
+    // ASCII fast path and the non-ASCII char scan agree on tab handling.
+    for sample in ["", "\t", "a\tb", "ab\tcd\tef", "\t\t\t", "trailing-tab\t"] {
+        let mut reference = 0usize;
+        for ch in sample.chars() {
+            if ch == '\t' {
+                reference += TEXT_INPUT_WRAP_TAB_STOP_COLUMNS
+                    - (reference % TEXT_INPUT_WRAP_TAB_STOP_COLUMNS);
+            } else {
+                reference += 1;
+            }
+        }
+        assert_eq!(line_display_columns(sample), reference, "sample={sample:?}");
+    }
+}
+
+#[gpui::test]
+fn content_width_cache_updates_only_edited_lines(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("short\nlongest-line\nmid", cx);
+            input.set_content_width_layout(true);
+            assert_eq!(input.content_width_max_units(), "longest-line\n".len());
+
+            input.replace_utf8_range(6..18, "x", cx);
+            assert_eq!(input.content_width_max_units(), "short\n".len());
+
+            input.replace_utf8_range(0..5, "\t\twide", cx);
+            assert_eq!(
+                input.content_width_max_units(),
+                TEXT_INPUT_WRAP_TAB_STOP_COLUMNS * 2 + "wide\n".len()
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn content_width_cache_tracks_line_splits_joins_and_undo(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_content_width_layout(true);
+            assert_eq!(
+                input.content_width_cache.as_ref().unwrap().line_units.len(),
+                2
+            );
+
+            input.replace_utf8_range(2..2, "\n", cx);
+            assert_eq!(
+                input.content_width_cache.as_ref().unwrap().line_units.len(),
+                3
+            );
+
+            input.replace_utf8_range(2..3, "", cx);
+            assert_eq!(
+                input.content_width_cache.as_ref().unwrap().line_units.len(),
+                2
+            );
+
+            input.undo(&Undo, window, cx);
+            assert_eq!(
+                input.content_width_cache.as_ref().unwrap().line_units.len(),
+                3
+            );
+        });
+    });
+}
+
+#[test]
 fn estimate_wrap_rows_for_line_handles_tabs_and_overflow() {
     assert_eq!(estimate_wrap_rows_for_line("abcd", 4), 1);
     assert_eq!(estimate_wrap_rows_for_line("abcde", 4), 2);

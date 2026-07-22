@@ -72,21 +72,17 @@ impl Element for TextElement {
         // Content-width layout (opt-in): size a non-wrapping multiline input to
         // its widest line so an outer `overflow_scroll` container can scroll it
         // horizontally and expose a real horizontal `max_offset`. Width is a
-        // monospace estimate (widest line length × char advance) — cheap, no
-        // per-line shaping — and only ever a scroll bound, so a slight
-        // overestimate from multi-byte chars/newlines is harmless.
+        // monospace estimate (widest line's display columns × char advance) —
+        // cheap, no per-line shaping. Tabs expand to the tab stop so tabbed
+        // lines aren't under-measured (which would clip horizontal scroll to
+        // the caret), while byte length stays a safe over-estimate for
+        // multi-byte glyphs. The estimate is only ever a scroll bound, so a
+        // slight overestimate is harmless.
         if input.multiline && input.interaction.content_width_layout && !input.soft_wrap {
-            let starts = input.content.line_starts();
-            let total = input.content.len();
-            let mut max_len = 0usize;
-            for ix in 0..starts.len() {
-                let start = starts[ix];
-                let end = starts.get(ix + 1).copied().unwrap_or(total);
-                max_len = max_len.max(end.saturating_sub(start));
-            }
+            let max_units = input.content_width_max_units();
             let font_px = window.text_style().font_size.to_pixels(window.rem_size());
             let advance_px = (f32::from(font_px) * TEXT_INPUT_WRAP_CHAR_ADVANCE_FACTOR).max(1.0);
-            let content_w = px(max_len as f32 * advance_px + 8.0);
+            let content_w = px(max_units as f32 * advance_px + 8.0);
             style.size.width = content_w.into();
             // Don't let the flex wrapper shrink the leaf back to the viewport.
             style.flex_shrink = 0.0;

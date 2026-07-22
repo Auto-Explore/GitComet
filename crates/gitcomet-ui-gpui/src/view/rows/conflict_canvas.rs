@@ -725,7 +725,7 @@ fn split_column_text_bounds(
 }
 
 fn conflict_line_no_width() -> Pixels {
-    px(38.0)
+    px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX)
 }
 
 /// Paint the vertical divider between the line-number gutter and the code,

@@ -1146,6 +1146,7 @@ impl MainPaneView {
                 std::collections::HashMap::default()
             },
             resolved_output_visible: None,
+            resolved_output_visible_dirty: true,
             output_context_fold_reveals: if is_same_conflict {
                 std::mem::take(&mut self.conflict_resolver.output_context_fold_reveals)
             } else {
@@ -1173,6 +1174,7 @@ impl MainPaneView {
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights,
             two_way_aligned_word_highlights,
+            two_way_split_word_highlight_cache: Default::default(),
             nav_anchor,
             hide_resolved,
             is_binary_conflict: false,
@@ -1186,6 +1188,8 @@ impl MainPaneView {
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),
+            conflict_output_row_anchors: Arc::from([(0.0, 0.0)]),
+            conflict_output_row_anchors_dirty: true,
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,
@@ -1224,7 +1228,6 @@ impl MainPaneView {
             self.conflict_resolved_output_projection = None;
             let line_ending = crate::kit::TextInput::detect_line_ending(resolved.as_str());
             let theme = self.theme;
-            let output_hash = hash_text_bytes(resolved.as_str());
             let input_set_text_started = Instant::now();
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
@@ -1244,10 +1247,13 @@ impl MainPaneView {
                     .with_resolved_output_line_count(resolved_line_count)
             });
             self.conflict_resolved_preview_path = output_path.clone();
-            self.conflict_resolved_preview_source_hash = Some(output_hash);
+            let source_revision = self.conflict_resolver_input.read_with(cx, |input, _| {
+                ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
+            });
+            self.conflict_resolved_preview_source_revision = Some(source_revision);
             self.schedule_conflict_resolved_outline_recompute(
                 output_path.clone(),
-                output_hash,
+                source_revision,
                 None,
                 cx,
             );
@@ -1472,15 +1478,22 @@ impl MainPaneView {
             self.conflict_resolved_output_projection = None;
             let line_ending = crate::kit::TextInput::detect_line_ending(resolved.as_str());
             let theme = self.theme;
-            let output_hash = hash_text_bytes(resolved.as_str());
             self.conflict_resolver_input.update(cx, |input, cx| {
                 input.set_theme(theme, cx);
                 input.set_line_ending(line_ending);
                 input.set_text(resolved.into_shared_string(), cx);
             });
             self.conflict_resolved_preview_path = output_path.clone();
-            self.conflict_resolved_preview_source_hash = Some(output_hash);
-            self.schedule_conflict_resolved_outline_recompute(output_path, output_hash, None, cx);
+            let source_revision = self.conflict_resolver_input.read_with(cx, |input, _| {
+                ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
+            });
+            self.conflict_resolved_preview_source_revision = Some(source_revision);
+            self.schedule_conflict_resolved_outline_recompute(
+                output_path,
+                source_revision,
+                None,
+                cx,
+            );
         }
 
         if self.diff_search_has_query() {
@@ -1635,6 +1648,7 @@ impl MainPaneView {
         }
         self.conflict_resolver.context_fold_reveals.clear();
         self.conflict_resolver.output_context_fold_reveals.clear();
+        self.conflict_resolver.resolved_output_visible_dirty = true;
         self.conflict_resolver_rebuild_visible_map();
         // Keep the active conflict in view across the row-space change.
         let active = self.conflict_resolver.active_conflict;
@@ -2604,12 +2618,16 @@ impl MainPaneView {
     /// Rebuild the resolved-output fold projection for collapsed context mode
     /// (section 30). Output line space; derived from the outline's conflict markers.
     /// Streamed outputs stay unfolded (their row space is already projected).
-    pub(in crate::view) fn rebuild_resolved_output_visible_projection(&mut self) {
+    pub(in crate::view) fn ensure_resolved_output_visible_projection(&mut self) {
+        if !self.conflict_resolver.resolved_output_visible_dirty {
+            return;
+        }
         let fold = self.conflict_resolver.collapse_context
             && !self.conflict_resolved_output_is_streamed()
             && self.conflict_resolved_preview_line_count > 0;
         if !fold {
             self.conflict_resolver.resolved_output_visible = None;
+            self.conflict_resolver.resolved_output_visible_dirty = false;
             return;
         }
 
@@ -2637,6 +2655,7 @@ impl MainPaneView {
             },
         );
         self.conflict_resolver.resolved_output_visible = Some(projection);
+        self.conflict_resolver.resolved_output_visible_dirty = false;
     }
 
     /// Row count of the resolved output lists (fold projection applied).
@@ -2681,6 +2700,7 @@ impl MainPaneView {
             .entry(fold_id)
             .or_default()
             .expand_all = true;
+        self.conflict_resolver.resolved_output_visible_dirty = true;
         cx.notify();
     }
 
@@ -2705,6 +2725,7 @@ impl MainPaneView {
                 .bottom
                 .saturating_add(conflict_resolver::CONFLICT_FOLD_REVEAL_STEP);
         }
+        self.conflict_resolver.resolved_output_visible_dirty = true;
         cx.notify();
     }
 

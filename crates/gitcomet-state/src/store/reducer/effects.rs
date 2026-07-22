@@ -7,9 +7,7 @@ use crate::model::{
     RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
-use gitcomet_core::conflict_session::{
-    ConflictPayload, ConflictResolverStrategy, ConflictSession,
-};
+use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy, ConflictSession};
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitId, FileEntry, FileSource, FileStatusKind, LogPage,
     RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry,

@@ -1780,7 +1780,6 @@ impl GitCometView {
             pane.mergetool_auto_advance = ui_session.mergetool_auto_advance.unwrap_or(true);
             pane.mergetool_collapse_unchanged =
                 ui_session.mergetool_collapse_unchanged.unwrap_or(false);
-            pane.mergetool_vertical_split = ui_session.mergetool_vertical_split.unwrap_or(false);
             pane.mergetool_output_scroll_sync =
                 ui_session.mergetool_output_scroll_sync.unwrap_or(true);
             pane.mergetool_show_line_numbers =

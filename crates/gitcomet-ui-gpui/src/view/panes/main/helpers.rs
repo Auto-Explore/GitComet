@@ -218,8 +218,23 @@ pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
-    pub(in crate::view) source_hash: u64,
+    pub(in crate::view) source_revision: ResolvedOutputSourceRevision,
     pub(in crate::view) language: rows::DiffSyntaxLanguage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputSourceRevision {
+    pub(in crate::view) model_id: u64,
+    pub(in crate::view) revision: u64,
+}
+
+impl ResolvedOutputSourceRevision {
+    pub(in crate::view) fn from_snapshot(snapshot: &TextModelSnapshot) -> Self {
+        Self {
+            model_id: snapshot.model_id(),
+            revision: snapshot.revision(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -333,15 +348,6 @@ pub(super) fn build_line_starts_with_count(text: &str) -> (Vec<usize>, usize) {
         line_starts.len()
     };
     (line_starts, line_count)
-}
-
-pub(super) fn hash_text_bytes(text: &str) -> u64 {
-    use std::hash::Hasher;
-
-    let mut hasher = rustc_hash::FxHasher::default();
-    hasher.write_usize(text.len());
-    hasher.write(text.as_bytes());
-    hasher.finish()
 }
 
 #[cfg(test)]
@@ -626,7 +632,10 @@ pub(super) fn resolved_outline_delta_for_snapshot_transition(
         });
     }
 
-    resolved_outline_delta_between_texts(old_snapshot.as_ref(), new_snapshot.as_ref())
+    // Do not materialize and compare both documents on the immediate input
+    // notification path. If observer delivery coalesced several revisions, the
+    // surviving debounced task will perform the full outline recompute instead.
+    None
 }
 
 fn line_index_for_byte_offset(line_starts: &[usize], byte_offset: usize) -> usize {
@@ -2389,9 +2398,6 @@ pub(crate) struct MainPaneView {
     /// section 30 merge tool: default for the collapse-unchanged-context mode when a
     /// conflicted file opens. Persisted UI setting (cog menu).
     pub(in crate::view) mergetool_collapse_unchanged: bool,
-    /// section 30 merge tool: stack the source columns vertically instead of
-    /// side-by-side. Persisted UI setting (cog menu).
-    pub(in crate::view) mergetool_vertical_split: bool,
     /// section 30 merge tool: sync the resolved output pane's scroll with the source
     /// columns (in modes where they share a row space). Persisted UI setting
     /// (cog menu). Merge-tool-specific rather than a general diff setting
@@ -2613,7 +2619,11 @@ pub(crate) struct MainPaneView {
     /// Per-side flag tracking whether a background syntax parse is in-flight.
     pub(in crate::view) conflict_three_way_syntax_inflight: ThreeWaySides<bool>,
     pub(in crate::view) conflict_resolved_preview_path: Option<std::path::PathBuf>,
-    pub(in crate::view) conflict_resolved_preview_source_hash: Option<u64>,
+    /// Latest editable-output revision observed by the input subscription. This
+    /// is intentionally independent of the content hash so a keypress can
+    /// supersede debounce work without materializing and scanning the document.
+    pub(in crate::view) conflict_resolved_preview_source_revision:
+        Option<ResolvedOutputSourceRevision>,
     pub(in crate::view) conflict_resolved_output_projection:
         Option<conflict_resolver::ResolvedOutputProjection>,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
@@ -2642,6 +2652,12 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_last_synced_x: [Pixels; 4],
     pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 4],
+    /// Source/output handle index that received the latest vertical wheel
+    /// gesture: base/left=0, ours=1, theirs/right=2, output=3.
+    pub(in crate::view) conflict_preview_vertical_wheel_master: Option<usize>,
+    /// The next output/gutter sync belongs to that wheel gesture, so output
+    /// must drive the pair instead of a stale gutter baseline.
+    pub(in crate::view) conflict_output_gutter_wheel_sync_pending: bool,
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
     /// Scroll handle for the editable resolved-output `TextInput`. The input lays
     /// out at full content height inside an `overflow_y_scroll` container that

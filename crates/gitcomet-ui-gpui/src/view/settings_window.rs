@@ -943,7 +943,6 @@ impl SettingsWindowView {
             // None never overwrites the stored values.
             mergetool_auto_advance: None,
             mergetool_collapse_unchanged: None,
-            mergetool_vertical_split: None,
             mergetool_output_scroll_sync: None,
             mergetool_show_line_numbers: None,
             mergetool_view_three_way: None,

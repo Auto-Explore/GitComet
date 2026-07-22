@@ -187,7 +187,7 @@ fn conflict_input_row_min_width(
     let pad = window.rem_size() * 0.5;
     let gap = pad;
     let line_no_width = if show_line_numbers {
-        px(38.0) + gap
+        px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX) + gap
     } else {
         px(0.0)
     };
@@ -209,6 +209,41 @@ fn conflict_resolved_output_row_min_width(
         + conflict_row_text_width(window, text, Some(editor_font_family))
         + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
     .round()
+}
+
+/// Width of the resolved-output line-number cell, sized to the file's digit
+/// count so a short number sits snug against the marker lane instead of floating
+/// across a cell wide enough for the largest line. The gutter container tracks
+/// this width, so the marker stays pinned at the far-left edge and only where the
+/// code column begins shifts a few px between files of very different line counts
+/// (the same way any editor's line-number gutter widens with the line total).
+pub(in crate::view) fn resolved_output_line_no_width(line_count: usize) -> Pixels {
+    let digits = line_count.max(1).to_string().len().max(2);
+    px(digits as f32 * 8.0)
+}
+
+/// Total width of the resolved-output gutter (marker lane + optional line-number
+/// cell + origin badge, plus the row's horizontal padding), so the container
+/// hugs its content and the badge/border sit right against the code.
+pub(in crate::view) fn resolved_output_gutter_width(
+    line_count: usize,
+    show_line_numbers: bool,
+) -> Pixels {
+    /// Marker lane: 12px marker + 4px `mr_1` gap.
+    const MARKER_LANE_PX: f32 = 12.0 + 4.0;
+    /// Origin badge width.
+    const BADGE_PX: f32 = 24.0;
+    /// Row horizontal padding: `px_2` on each side (8 + 8).
+    const ROW_PADDING_X_PX: f32 = 8.0 + 8.0;
+    /// `mr_1` gap after the line-number cell.
+    const LINE_NO_GAP_PX: f32 = 4.0;
+
+    let marker_and_badge = px(MARKER_LANE_PX + BADGE_PX + ROW_PADDING_X_PX);
+    if show_line_numbers {
+        marker_and_badge + resolved_output_line_no_width(line_count) + px(LINE_NO_GAP_PX)
+    } else {
+        marker_and_badge
+    }
 }
 
 fn render_conflict_markdown_preview_rows(
@@ -956,28 +991,25 @@ impl MainPaneView {
 
                 let text = SharedString::new(text_opt.map(AsRef::as_ref).unwrap_or_default());
                 let styling_enabled = this.conflict_row_styling_enabled();
-                let word_hl_computed = if styling_enabled
+                let word_hl = if styling_enabled
                     && !matches!(
                         visual_kind,
                         gitcomet_core::file_diff::FileDiffRowKind::Context
                     ) {
-                    conflict_resolver::compute_word_highlights_for_row(&row)
+                    this.conflict_resolver
+                        .two_way_split_word_highlight_for_row(row_ix, &row)
                 } else {
                     None
                 };
-                let word_hl_precomputed = if styling_enabled
-                    && !matches!(
-                        visual_kind,
-                        gitcomet_core::file_diff::FileDiffRowKind::Context
-                    ) {
-                    this.conflict_resolver.two_way_split_word_highlight(row_ix)
-                } else {
-                    None
-                };
-                let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
                 let word_ranges = match side {
-                    ConflictPickSide::Ours => word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]),
-                    ConflictPickSide::Theirs => word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]),
+                    ConflictPickSide::Ours => word_hl
+                        .as_ref()
+                        .map(|pair| pair.0.as_slice())
+                        .unwrap_or(&[]),
+                    ConflictPickSide::Theirs => word_hl
+                        .as_ref()
+                        .map(|pair| pair.1.as_slice())
+                        .unwrap_or(&[]),
                 };
                 let styled_result = Self::conflict_split_row_styled(
                     theme,
@@ -1746,6 +1778,9 @@ impl MainPaneView {
             theme.colors.text_muted,
             if theme.is_dark { 0.14 } else { 0.10 },
         );
+        // Line-number cell sized to this file's digit count so short numbers sit
+        // snug against the marker lane; the gutter container width tracks it.
+        let line_no_w = resolved_output_line_no_width(line_count);
         let elements: Vec<AnyElement> = range
             .map(|vi| {
                 // Collapsed context mode projects the output row space; map
@@ -1804,7 +1839,7 @@ impl MainPaneView {
                 };
                 let marker_lane = div()
                     .w(px(12.0))
-                    .mr_2()
+                    .mr_1()
                     .h_full()
                     .flex()
                     .items_center()
@@ -1864,7 +1899,7 @@ impl MainPaneView {
                         // leaving a wide empty stretch inside the cell.
                         d.child(
                             div()
-                                .w(px(38.0))
+                                .w(line_no_w)
                                 .mr_1()
                                 .flex()
                                 .justify_end()
@@ -2475,27 +2510,24 @@ impl MainPaneView {
         let styling_enabled = self.conflict_row_styling_enabled()
             && self.conflict_resolver.three_way_len
                 <= conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
-        let word_hl_computed = if styling_enabled
+        let word_hl = if styling_enabled
             && !matches!(
                 visual_kind,
                 gitcomet_core::file_diff::FileDiffRowKind::Context
             ) {
-            conflict_resolver::compute_word_highlights_for_row(&row)
+            self.conflict_resolver
+                .two_way_split_word_highlight_for_row(row_ix, &row)
         } else {
             None
         };
-        let word_hl_precomputed = if styling_enabled
-            && !matches!(
-                visual_kind,
-                gitcomet_core::file_diff::FileDiffRowKind::Context
-            ) {
-            self.conflict_resolver.two_way_split_word_highlight(row_ix)
-        } else {
-            None
-        };
-        let word_hl = word_hl_computed.as_ref().or(word_hl_precomputed);
-        let old_word_ranges = word_hl.map(|(o, _)| o.as_slice()).unwrap_or(&[]);
-        let new_word_ranges = word_hl.map(|(_, n)| n.as_slice()).unwrap_or(&[]);
+        let old_word_ranges = word_hl
+            .as_ref()
+            .map(|pair| pair.0.as_slice())
+            .unwrap_or(&[]);
+        let new_word_ranges = word_hl
+            .as_ref()
+            .map(|pair| pair.1.as_slice())
+            .unwrap_or(&[]);
         let query_text = self.conflict_diff_query_cache_query.clone();
         let query_options = self.conflict_diff_query_cache_options;
         let query = query_text.as_ref();
@@ -2671,7 +2703,7 @@ impl MainPaneView {
 /// matching the resolved-output gutter's separator.
 fn conflict_diff_line_number_cell(theme: AppTheme, line_no: SharedString) -> gpui::Div {
     div()
-        .w(px(38.0))
+        .w(px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX))
         .h_full()
         .flex()
         .items_center()

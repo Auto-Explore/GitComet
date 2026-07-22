@@ -40,7 +40,6 @@ pub struct UiSession {
     pub diff_show_line_numbers: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
-    pub mergetool_vertical_split: Option<bool>,
     pub mergetool_output_scroll_sync: Option<bool>,
     pub mergetool_show_line_numbers: Option<bool>,
     pub mergetool_view_three_way: Option<bool>,
@@ -175,7 +174,6 @@ struct UiSessionFile {
     diff_show_line_numbers: Option<bool>,
     mergetool_auto_advance: Option<bool>,
     mergetool_collapse_unchanged: Option<bool>,
-    mergetool_vertical_split: Option<bool>,
     mergetool_output_scroll_sync: Option<bool>,
     mergetool_show_line_numbers: Option<bool>,
     mergetool_view_three_way: Option<bool>,
@@ -287,7 +285,6 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_show_line_numbers: file.diff_show_line_numbers,
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,
-        mergetool_vertical_split: file.mergetool_vertical_split,
         mergetool_output_scroll_sync: file.mergetool_output_scroll_sync,
         mergetool_show_line_numbers: file.mergetool_show_line_numbers,
         mergetool_view_three_way: file.mergetool_view_three_way,
@@ -599,7 +596,6 @@ pub struct UiSettings {
     pub diff_show_line_numbers: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
-    pub mergetool_vertical_split: Option<bool>,
     pub mergetool_output_scroll_sync: Option<bool>,
     pub mergetool_show_line_numbers: Option<bool>,
     pub mergetool_view_three_way: Option<bool>,
@@ -698,9 +694,6 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.mergetool_collapse_unchanged {
             file.mergetool_collapse_unchanged = Some(value);
-        }
-        if let Some(value) = settings.mergetool_vertical_split {
-            file.mergetool_vertical_split = Some(value);
         }
         if let Some(value) = settings.mergetool_output_scroll_sync {
             file.mergetool_output_scroll_sync = Some(value);
