@@ -143,6 +143,16 @@ impl ConflictThreeWayScrollFixture {
                     conflict_ix.hash(&mut h);
                     continue;
                 }
+                ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                    fold_id,
+                } => {
+                    source_line_start.hash(&mut h);
+                    len.hash(&mut h);
+                    fold_id.hash(&mut h);
+                    continue;
+                }
             };
 
             for map in &self.line_conflict_maps {
@@ -202,6 +212,16 @@ impl ConflictThreeWayScrollFixture {
                 ThreeWayVisibleItem::Line(ix) => ix,
                 ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
                     conflict_ix.hash(&mut h);
+                    continue;
+                }
+                ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                    fold_id,
+                } => {
+                    source_line_start.hash(&mut h);
+                    len.hash(&mut h);
+                    fold_id.hash(&mut h);
                     continue;
                 }
             };
@@ -276,6 +296,16 @@ fn hash_three_way_visible_map_items(items: &[ThreeWayVisibleItem]) -> u64 {
         ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
             1u8.hash(&mut h);
             conflict_ix.hash(&mut h);
+        }
+        ThreeWayVisibleItem::CollapsedContext {
+            source_line_start,
+            len,
+            fold_id,
+        } => {
+            2u8.hash(&mut h);
+            source_line_start.hash(&mut h);
+            len.hash(&mut h);
+            fold_id.hash(&mut h);
         }
     };
 
@@ -2086,7 +2116,15 @@ impl ConflictStreamedResolvedOutputFixture {
         let projection = conflict_resolver::ResolvedOutputProjection::from_segments(&self.segments);
         let mut h = FxHasher::default();
         projection.len().hash(&mut h);
-        projection.output_hash().hash(&mut h);
+        projection.widest_line_ix().hash(&mut h);
+        for line_ix in sampled_indices(projection.len()) {
+            if let Some(line) = projection.line_text(&self.segments, line_ix) {
+                line_ix.hash(&mut h);
+                line.len().hash(&mut h);
+                line.as_bytes().first().copied().hash(&mut h);
+                line.as_bytes().last().copied().hash(&mut h);
+            }
+        }
         h.finish()
     }
 
@@ -2653,7 +2691,7 @@ fn hash_merge_open_bootstrap_state(
     match resolved_output {
         MergeOpenBootstrapResolvedOutput::Projection(projection) => {
             projection.len().hash(&mut h);
-            projection.output_hash().hash(&mut h);
+            projection.widest_line_ix().hash(&mut h);
         }
         MergeOpenBootstrapResolvedOutput::Text(text) => {
             let bytes = text.as_str().as_bytes();
@@ -2687,6 +2725,16 @@ fn hash_merge_open_bootstrap_state(
                 ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
                     1u8.hash(&mut h);
                     conflict_ix.hash(&mut h);
+                }
+                ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                    fold_id,
+                } => {
+                    2u8.hash(&mut h);
+                    source_line_start.hash(&mut h);
+                    len.hash(&mut h);
+                    fold_id.hash(&mut h);
                 }
             }
         }
