@@ -119,6 +119,11 @@ impl MainPaneView {
         let keep_path = path.clone();
         let delete_path = path.clone();
         let mergetool_path = path.clone();
+        let focused_mergetool = self.view_mode == GitCometViewMode::FocusedMergetool;
+        let keep_bytes = match spec.keep_side {
+            ConflictSide::Ours => conflict_side_output_bytes(file, ThreeWayColumn::Ours),
+            ConflictSide::Theirs => conflict_side_output_bytes(file, ThreeWayColumn::Theirs),
+        };
 
         let title: SharedString =
             format!("Resolve conflict: {}", self.cached_path_display(&path)).into();
@@ -128,26 +133,52 @@ impl MainPaneView {
             .items_center()
             .gap_2()
             .child(
-                components::Button::new("keep_delete_keep", spec.keep_label)
-                    .style(components::ButtonStyle::Filled)
-                    .disabled(!keep_available)
-                    .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        this.store.dispatch(Msg::CheckoutConflictSide {
-                            repo_id,
-                            path: keep_path.clone(),
-                            side: spec.keep_side,
-                        });
-                    }),
+                components::Button::new(
+                    "keep_delete_keep",
+                    if focused_mergetool {
+                        format!("{} & close", spec.keep_label)
+                    } else {
+                        spec.keep_label.to_string()
+                    },
+                )
+                .style(components::ButtonStyle::Filled)
+                .disabled(!keep_available)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    if focused_mergetool {
+                        if let Some(bytes) = keep_bytes.as_deref() {
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id, &keep_path, bytes, cx,
+                            );
+                        }
+                        return;
+                    }
+                    this.store.dispatch(Msg::CheckoutConflictSide {
+                        repo_id,
+                        path: keep_path.clone(),
+                        side: spec.keep_side,
+                    });
+                }),
             )
             .child(
-                components::Button::new("keep_delete_delete", spec.delete_label)
-                    .style(components::ButtonStyle::Outlined)
-                    .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        this.store.dispatch(Msg::AcceptConflictDeletion {
-                            repo_id,
-                            path: delete_path.clone(),
-                        });
-                    }),
+                components::Button::new(
+                    "keep_delete_delete",
+                    if focused_mergetool {
+                        format!("{} & close", spec.delete_label)
+                    } else {
+                        spec.delete_label.to_string()
+                    },
+                )
+                .style(components::ButtonStyle::Outlined)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    if focused_mergetool {
+                        this.focused_mergetool_delete_and_exit(repo_id, &delete_path, cx);
+                        return;
+                    }
+                    this.store.dispatch(Msg::AcceptConflictDeletion {
+                        repo_id,
+                        path: delete_path.clone(),
+                    });
+                }),
             )
             .when(show_external_mergetool_actions(self.view_mode), |d| {
                 d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))

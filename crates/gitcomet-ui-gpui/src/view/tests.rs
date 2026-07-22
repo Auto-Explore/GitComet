@@ -2032,6 +2032,21 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
 }
 
 #[test]
+fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette() {
+    assert!(titlebar_workspace_actions_enabled(
+        GitCometViewMode::FocusedMergetool,
+        true
+    ));
+    assert!(!show_titlebar_repo_tabs(GitCometViewMode::FocusedMergetool));
+    assert!(!command_palette_available(
+        GitCometViewMode::FocusedMergetool
+    ));
+
+    assert!(show_titlebar_repo_tabs(GitCometViewMode::Normal));
+    assert!(command_palette_available(GitCometViewMode::Normal));
+}
+
+#[test]
 fn ease_out_cubic_hits_expected_anchor_points() {
     assert_eq!(GitCometView::ease_out_cubic(0.0), 0.0);
     assert_eq!(GitCometView::ease_out_cubic(1.0), 1.0);

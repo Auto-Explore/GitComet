@@ -3900,6 +3900,10 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
+                if !command_palette_available(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
@@ -3918,10 +3922,18 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_text_input_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffNextFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_text_input_adjacent_diff_file_navigation(1, cx);
                 cx.stop_propagation();
             }))
@@ -3942,10 +3954,18 @@ impl Render for GitCometView {
                 },
             ))
             .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_adjacent_diff_file_navigation(1, cx);
                 cx.stop_propagation();
             }))

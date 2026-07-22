@@ -1,20 +1,20 @@
 use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
-    ClearDiffSelectionAction, RenderableConflictFile, ResolvedOutputConflictMarker,
-    ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
-    apply_conflict_choice_provenance_hints, apply_three_way_empty_base_provenance_hints,
-    build_focused_mergetool_save_payload, build_line_starts,
-    build_resolved_output_conflict_markers,
+    ClearDiffSelectionAction, FocusedMergetoolOutput, RenderableConflictFile,
+    ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
+    apply_conflict_choice_provenance_hints, apply_focused_mergetool_output,
+    apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
+    build_line_starts, build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges,
     build_resolved_output_syntax_state_for_snapshot,
     build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
     conflict_file_is_binary, conflict_marker_nav_entries_from_markers,
-    conflict_resolver_output_context_line, dirty_byte_range_to_line_range,
-    first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
-    output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
-    parse_conflict_canvas_rows_env, remap_line_keyed_cache_for_delta,
-    remap_resolved_output_conflict_block_ranges_for_delta, renderable_conflict_file,
-    replace_output_lines_in_range, resolved_outline_delta_between_texts,
+    conflict_resolver_output_context_line, conflict_strategy_needs_full_side_payloads,
+    dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
+    focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
+    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
+    remap_line_keyed_cache_for_delta, remap_resolved_output_conflict_block_ranges_for_delta,
+    renderable_conflict_file, replace_output_lines_in_range, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
     resolved_output_snapshot_is_modified, split_target_conflict_block_into_subchunks,
@@ -60,6 +60,62 @@ fn focused_mergetool_save_exit_code_is_success_when_all_resolved() {
 #[test]
 fn focused_mergetool_save_exit_code_is_canceled_when_unresolved_remain() {
     assert_eq!(focused_mergetool_save_exit_code(3, 2), 1);
+}
+
+#[test]
+fn specialized_conflict_strategies_require_full_side_payloads() {
+    use gitcomet_core::conflict_session::ConflictResolverStrategy;
+
+    for strategy in [
+        ConflictResolverStrategy::BinarySidePick,
+        ConflictResolverStrategy::TwoWayKeepDelete,
+        ConflictResolverStrategy::DecisionOnly,
+    ] {
+        assert!(conflict_strategy_needs_full_side_payloads(Some(strategy)));
+    }
+    assert!(!conflict_strategy_needs_full_side_payloads(Some(
+        ConflictResolverStrategy::FullTextResolver
+    )));
+    assert!(!conflict_strategy_needs_full_side_payloads(None));
+}
+
+#[test]
+fn focused_mergetool_output_writes_exact_binary_bytes_and_creates_parent() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let output = dir.path().join("nested/result.bin");
+    let bytes = b"\0ours\xffresult";
+
+    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Write(bytes))
+        .expect("write focused mergetool output");
+
+    assert_eq!(std::fs::read(output).expect("read output"), bytes);
+}
+
+#[test]
+fn focused_mergetool_delete_accepts_existing_and_missing_outputs() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let output = dir.path().join("result.txt");
+    std::fs::write(&output, "merged").expect("seed output");
+
+    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Delete)
+        .expect("delete focused mergetool output");
+    assert!(!output.exists());
+
+    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Delete)
+        .expect("missing output is already deleted");
+}
+
+#[test]
+fn focused_mergetool_output_reports_filesystem_failures() {
+    let dir = tempfile::tempdir().expect("temp dir");
+
+    let err = apply_focused_mergetool_output(
+        dir.path(),
+        FocusedMergetoolOutput::Write(b"cannot replace a directory"),
+    )
+    .expect_err("directory target must fail");
+
+    assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
 }
 
 fn focused_mergetool_marker_labels() -> gitcomet_core::conflict_output::ConflictMarkerLabels<'static>
@@ -113,6 +169,24 @@ fn binary_conflict_file(path: &Path) -> ConflictFile {
         theirs: None,
         current: None,
     }
+}
+
+#[test]
+fn current_only_non_utf8_payload_is_detected_as_binary() {
+    let path = PathBuf::from("asset.bin");
+    let file = ConflictFile {
+        path: path.into(),
+        base_bytes: None,
+        ours_bytes: None,
+        theirs_bytes: None,
+        current_bytes: Some(Arc::from(&b"\xff\xfe"[..])),
+        base: None,
+        ours: None,
+        theirs: None,
+        current: None,
+    };
+
+    assert!(conflict_file_is_binary(&file));
 }
 
 #[test]

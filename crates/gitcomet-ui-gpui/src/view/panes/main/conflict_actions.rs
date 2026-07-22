@@ -642,6 +642,12 @@ impl MainPaneView {
         self.conflict_diff_query_segments_cache_split.clear();
         self.conflict_diff_query_cache_query = SharedString::default();
 
+        // A CurrentOnly load intentionally omits all three immutable conflict
+        // sides. Specialized resolvers need those exact bytes before their
+        // completion actions can be enabled.
+        let needs_full_side_payloads =
+            file.base_bytes.is_none() && file.ours_bytes.is_none() && file.theirs_bytes.is_none();
+
         // Use the ConflictSession from state for strategy if available,
         // otherwise fall back to local computation.
         let (conflict_strategy, is_binary) = if let Some(session) =
@@ -651,13 +657,7 @@ impl MainPaneView {
                 session.base.is_binary() || session.ours.is_binary() || session.theirs.is_binary();
             (Some(session.strategy), binary)
         } else {
-            let has_non_text = |bytes: &Option<std::sync::Arc<[u8]>>,
-                                text: &Option<std::sync::Arc<str>>| {
-                bytes.is_some() && text.is_none()
-            };
-            let binary = has_non_text(&file.base_bytes, &file.base)
-                || has_non_text(&file.ours_bytes, &file.ours)
-                || has_non_text(&file.theirs_bytes, &file.theirs);
+            let binary = conflict_file_is_binary(file);
             (
                 Self::conflict_resolver_strategy(conflict_kind, binary),
                 binary,
@@ -690,6 +690,11 @@ impl MainPaneView {
                 ..ConflictResolverUiState::default()
             };
             self.conflict_resolver_invalidate_resolved_outline();
+            if needs_full_side_payloads {
+                let _ = self.request_conflict_file_load_mode(
+                    gitcomet_state::model::ConflictFileLoadMode::Full,
+                );
+            }
             return;
         }
 
@@ -1324,15 +1329,19 @@ impl MainPaneView {
         // bootstrap re-runs with the sides once it lands. Giant files stay
         // on the block-local rows (the alignment gates reject them anyway).
         const FULL_LOAD_UPGRADE_MAX_CURRENT_LINES: usize = 100_000;
+        let specialized_strategy_needs_full_sides =
+            conflict_strategy_needs_full_side_payloads(conflict_strategy);
         if !is_same_conflict
             && needs_full_side_texts
-            && matches!(
-                conflict_strategy,
-                Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
-            )
-            && current_text
-                .as_deref()
-                .is_some_and(|text| count_newlines(text) < FULL_LOAD_UPGRADE_MAX_CURRENT_LINES)
+            && (specialized_strategy_needs_full_sides
+                || matches!(
+                    conflict_strategy,
+                    Some(
+                        gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver
+                    )
+                ) && current_text
+                    .as_deref()
+                    .is_some_and(|text| count_newlines(text) < FULL_LOAD_UPGRADE_MAX_CURRENT_LINES))
         {
             let _ = self
                 .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full);

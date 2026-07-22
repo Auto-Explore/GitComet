@@ -141,6 +141,7 @@ pub(super) fn conflict_file_is_binary(file: &gitcomet_state::model::ConflictFile
     has_non_text(&file.base_bytes, &file.base)
         || has_non_text(&file.ours_bytes, &file.ours)
         || has_non_text(&file.theirs_bytes, &file.theirs)
+        || has_non_text(&file.current_bytes, &file.current)
 }
 
 pub(super) fn renderable_conflict_file(
@@ -4271,6 +4272,18 @@ pub(super) fn submodule_diff_bootstrap_action(
 }
 
 pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+}
+
+pub(super) fn show_diff_file_navigation(view_mode: GitCometViewMode) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+}
+
+pub(super) fn show_titlebar_repo_tabs(view_mode: GitCometViewMode) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+}
+
+pub(super) fn command_palette_available(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 

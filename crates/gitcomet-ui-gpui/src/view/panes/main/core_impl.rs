@@ -1387,35 +1387,78 @@ impl MainPaneView {
             },
         );
         let output = save_payload.output;
-
-        let full_path = repo.spec.workdir.join(&path);
-        if let Some(parent) = full_path.parent().filter(|p| !p.as_os_str().is_empty())
-            && let Err(err) = std::fs::create_dir_all(parent)
-        {
-            eprintln!(
-                "Failed to create parent directory for {}: {err}",
-                full_path.display()
-            );
-            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
-            cx.quit();
-            return;
-        }
-
-        if let Err(err) = std::fs::write(&full_path, output.as_bytes()) {
-            eprintln!(
-                "Failed to write merged output to {}: {err}",
-                full_path.display()
-            );
-            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
-            cx.quit();
-            return;
-        }
-
         let exit_code = focused_mergetool_save_exit_code(
             save_payload.total_conflicts,
             save_payload.resolved_conflicts,
         );
-        self.set_focused_mergetool_exit_code(exit_code);
+        let full_path = repo.spec.workdir.join(&path);
+        self.finish_focused_mergetool_output(
+            &full_path,
+            FocusedMergetoolOutput::Write(output.as_bytes()),
+            exit_code,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn focused_mergetool_write_side_and_exit(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        bytes: &[u8],
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+            cx.quit();
+            return;
+        };
+        let full_path = repo.spec.workdir.join(path);
+        self.finish_focused_mergetool_output(
+            &full_path,
+            FocusedMergetoolOutput::Write(bytes),
+            FOCUSED_MERGETOOL_EXIT_SUCCESS,
+            cx,
+        );
+    }
+
+    pub(in crate::view) fn focused_mergetool_delete_and_exit(
+        &self,
+        repo_id: RepoId,
+        path: &std::path::Path,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
+            self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+            cx.quit();
+            return;
+        };
+        let full_path = repo.spec.workdir.join(path);
+        self.finish_focused_mergetool_output(
+            &full_path,
+            FocusedMergetoolOutput::Delete,
+            FOCUSED_MERGETOOL_EXIT_SUCCESS,
+            cx,
+        );
+    }
+
+    fn finish_focused_mergetool_output(
+        &self,
+        path: &std::path::Path,
+        output: FocusedMergetoolOutput<'_>,
+        success_exit_code: i32,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match apply_focused_mergetool_output(path, output) {
+            Ok(()) => self.set_focused_mergetool_exit_code(success_exit_code),
+            Err(err) => {
+                let operation = match output {
+                    FocusedMergetoolOutput::Write(_) => "write merged output to",
+                    FocusedMergetoolOutput::Delete => "delete merged output",
+                };
+                eprintln!("Failed to {operation} {}: {err}", path.display());
+                self.set_focused_mergetool_exit_code(FOCUSED_MERGETOOL_EXIT_ERROR);
+            }
+        }
         cx.quit();
     }
 

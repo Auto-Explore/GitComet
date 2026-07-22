@@ -2149,6 +2149,47 @@ pub(super) fn focused_mergetool_save_exit_code(
     }
 }
 
+pub(super) fn conflict_strategy_needs_full_side_payloads(
+    strategy: Option<gitcomet_core::conflict_session::ConflictResolverStrategy>,
+) -> bool {
+    matches!(
+        strategy,
+        Some(
+            gitcomet_core::conflict_session::ConflictResolverStrategy::BinarySidePick
+                | gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete
+                | gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly
+        )
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FocusedMergetoolOutput<'a> {
+    Write(&'a [u8]),
+    Delete,
+}
+
+pub(super) fn apply_focused_mergetool_output(
+    path: &std::path::Path,
+    output: FocusedMergetoolOutput<'_>,
+) -> std::io::Result<()> {
+    match output {
+        FocusedMergetoolOutput::Write(bytes) => {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, bytes)
+        }
+        FocusedMergetoolOutput::Delete => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        },
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FocusedMergetoolSavePayload {
     pub(super) output: String,

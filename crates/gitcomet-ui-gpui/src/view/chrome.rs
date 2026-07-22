@@ -363,6 +363,11 @@ impl Render for TitleBarView {
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let is_macos = cfg!(target_os = "macos");
         let workspace_actions_enabled = self.workspace_actions_enabled;
+        let repo_tabs_enabled = workspace_actions_enabled
+            && self
+                .root_view
+                .upgrade()
+                .is_some_and(|root| show_titlebar_repo_tabs(root.read(cx).view_mode));
         let app_menu_open = self.app_menu_open;
         let app_menu_open_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.30 } else { 0.24 });
@@ -615,7 +620,7 @@ impl Render for TitleBarView {
         // Browser-style: when a workspace is open, the repo tabs live in the
         // title bar's middle. Keep a fixed draggable strip beside them so the
         // window can still be moved by the empty title-bar area.
-        let repo_tabs = if workspace_actions_enabled {
+        let repo_tabs = if repo_tabs_enabled {
             self.root_view
                 .upgrade()
                 .map(|root| root.read(cx).repo_tabs_bar.clone())
@@ -650,7 +655,7 @@ impl Render for TitleBarView {
             // The bar/content boundary line. Painted before the tabs so the
             // active tab (flush with the bar bottom, filled with the content
             // strip color) covers its segment and fuses into the action bar.
-            .when(workspace_actions_enabled, |d| {
+            .when(repo_tabs_enabled, |d| {
                 d.child(
                     div()
                         .absolute()

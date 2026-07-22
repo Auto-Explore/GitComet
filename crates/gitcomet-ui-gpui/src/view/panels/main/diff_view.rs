@@ -1966,8 +1966,11 @@ impl MainPaneView {
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
 
-        let (prev_file_btn, next_file_btn) =
-            self.diff_prev_next_file_buttons(repo_id, is_conflict_resolver, theme, cx);
+        let (prev_file_btn, next_file_btn) = if show_diff_file_navigation(self.view_mode) {
+            self.diff_prev_next_file_buttons(repo_id, is_conflict_resolver, theme, cx)
+        } else {
+            (None, None)
+        };
 
         let mut controls = div().flex().items_center().gap_1();
         if self.is_inline_submodule_diff_active()
