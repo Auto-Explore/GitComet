@@ -153,6 +153,9 @@ impl GitCometView {
         }
 
         self.state = next;
+        self.command_palette.update(cx, |palette, cx| {
+            palette.set_has_active_repo(self.state.active_repo.is_some(), cx);
+        });
         self.sync_terminal_sessions_with_state(cx);
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();

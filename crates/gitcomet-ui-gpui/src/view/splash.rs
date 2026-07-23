@@ -969,7 +969,7 @@ impl GitCometView {
     /// both the scrim and the main card, while staying below the context-menu layer.
     fn collapsed_sidebar_popover(
         &mut self,
-        section: CollapsedSidebarSection,
+        _section: CollapsedSidebarSection,
         theme: AppTheme,
         fade_in: bool,
         anim_seq: u64,
@@ -978,13 +978,9 @@ impl GitCometView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        // Files keeps its search + virtualized list, which needs a definite
-        // viewport height. Its embedded sidebar subtree supplies a content-driven
-        // height so directory expansion can relayout the panel directly.
-        let is_files = matches!(section, CollapsedSidebarSection::Files);
-
-        let mut panel = div()
+        let panel = div()
             .id("collapsed_sidebar_popover")
+            .debug_selector(|| "collapsed_sidebar_popover".to_string())
             .w_full()
             .flex()
             .flex_col()
@@ -997,18 +993,12 @@ impl GitCometView {
             // Claim clicks anywhere on the panel so its empty regions don't fall
             // through to the dismiss scrim underneath.
             .occlude()
-            .child(self.sidebar_pane.clone());
-        panel = if is_files {
-            panel
-                .min_h(gpui::relative(1.0 / 3.0))
-                .max_h(gpui::relative(1.0))
-                .overflow_hidden()
-        } else {
-            panel
-                .min_h(gpui::relative(1.0 / 3.0))
-                .max_h(gpui::relative(1.0))
-                .overflow_y_scroll()
-        };
+            .child(self.sidebar_pane.clone())
+            // Use the same preferred-size bounds for every collapsed-sidebar
+            // popover. Section content chooses the intrinsic height between them.
+            .min_h(gpui::relative(1.0 / 3.0))
+            .max_h(gpui::relative(1.0))
+            .overflow_hidden();
 
         // Full-height reference box: the panel's relative min/max resolve against
         // its (definite) height, and the panel is anchored to its top. Positioned

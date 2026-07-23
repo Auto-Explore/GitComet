@@ -554,6 +554,7 @@ impl Render for ActionBarView {
             with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
         let mut pull_main = components::Button::new("pull_main", "Pull")
             .borderless()
+            .rounded_left()
             .start_slot(if pull_loading {
                 spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
             } else {
@@ -578,6 +579,7 @@ impl Render for ActionBarView {
         };
         let pull_menu = components::Button::new("pull_menu", "")
             .borderless()
+            .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", pull_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
             .no_hover_border()
@@ -650,6 +652,7 @@ impl Render for ActionBarView {
             .gitcomet_tooltip(theme, terminal_tooltip);
         let mut push_main = components::Button::new("push_main", "Push")
             .borderless()
+            .rounded_left()
             .start_slot(if push_loading {
                 spinner(("push_spinner", active_repo_key), push_color).into_any_element()
             } else {
@@ -673,6 +676,7 @@ impl Render for ActionBarView {
         };
         let push_menu = components::Button::new("push_menu", "")
             .borderless()
+            .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", push_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
             .no_hover_border()

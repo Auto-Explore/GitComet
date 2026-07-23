@@ -570,175 +570,32 @@ impl GitCometView {
 
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.command_palette_open = true;
-        self.command_palette_subscription = None;
-        self.command_palette.restore_focus = window
+        let restore_focus = window
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
-
-        let theme = self.theme;
-        let query_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Type to search commands...".into(),
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
-            input.set_theme(theme, cx);
-            input
-        });
-
-        self.command_palette_subscription =
-            Some(
-                cx.observe_in(&query_input, window, move |this, input, window, cx| {
-                    if !this.command_palette_open {
-                        return;
-                    }
-                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
-                    if escape_pressed {
-                        this.close_command_palette(window, cx);
-                        return;
-                    }
-
-                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
-                    let has_repo = this.active_repo_id().is_some();
-                    let matches = this.command_palette.filtered_commands(has_repo, &query);
-
-                    let arrow_up = input.update(cx, |input, _| input.take_arrow_up_pressed());
-                    let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
-                    if arrow_up || shift_tab {
-                        if matches.is_empty() {
-                            this.command_palette.selected_index = None;
-                        } else {
-                            let len = matches.len();
-                            this.command_palette.selected_index =
-                                Some(match this.command_palette.selected_index {
-                                    Some(i) if i > 0 => i - 1,
-                                    _ => len - 1,
-                                });
-                        }
-                        if let Some(sel) = this.command_palette.selected_index {
-                            let mut headers_before = 0usize;
-                            let mut cur = None;
-                            for cmd in matches.iter().take(sel.saturating_add(1)) {
-                                if cur != Some(cmd.category) {
-                                    cur = Some(cmd.category);
-                                    headers_before += 1;
-                                }
-                            }
-                            this.command_palette
-                                .scroll_handle
-                                .scroll_to_item(sel + headers_before);
-                        }
-                        cx.notify();
-                        return;
-                    }
-
-                    let arrow_down = input.update(cx, |input, _| input.take_arrow_down_pressed());
-                    let tab = input.update(cx, |input, _| input.take_tab_pressed());
-                    if arrow_down || tab {
-                        if matches.is_empty() {
-                            this.command_palette.selected_index = None;
-                        } else {
-                            let len = matches.len();
-                            this.command_palette.selected_index =
-                                Some(match this.command_palette.selected_index {
-                                    Some(i) if i + 1 < len => i + 1,
-                                    _ => 0,
-                                });
-                        }
-                        if let Some(sel) = this.command_palette.selected_index {
-                            let mut headers_before = 0usize;
-                            let mut cur = None;
-                            for cmd in matches.iter().take(sel.saturating_add(1)) {
-                                if cur != Some(cmd.category) {
-                                    cur = Some(cmd.category);
-                                    headers_before += 1;
-                                }
-                            }
-                            this.command_palette
-                                .scroll_handle
-                                .scroll_to_item(sel + headers_before);
-                        }
-                        cx.notify();
-                        return;
-                    }
-
-                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                    if enter_pressed {
-                        let cmd_to_execute = this
-                            .command_palette
-                            .selected_index
-                            .and_then(|i| matches.get(i))
-                            .or_else(|| matches.first());
-                        if let Some(cmd) = cmd_to_execute {
-                            let command_id: SharedString = cmd.id.into();
-                            this.close_command_palette(window, cx);
-                            this.execute_command(&command_id, Some(window), cx);
-                        } else {
-                            cx.notify();
-                        }
-                        return;
-                    }
-
-                    if query != this.command_palette.previous_query.as_ref() {
-                        this.command_palette.selected_index =
-                            if matches.is_empty() { None } else { Some(0) };
-                        this.command_palette.previous_query = query.into();
-                        this.command_palette
-                            .scroll_handle
-                            .set_offset(point(px(0.0), px(0.0)));
-                    }
-                    cx.notify();
-                }),
-            );
-
-        self.command_palette.query_input = Some(query_input.clone());
-        self.command_palette.selected_index = None;
-        self.command_palette.previous_query = SharedString::default();
-        self.command_palette
-            .scroll_handle
-            .set_offset(point(px(0.0), px(0.0)));
-
-        let focus_handle = query_input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle, cx);
-        cx.notify();
-    }
-
-    fn restore_command_palette_focus(
-        &self,
-        restore_focus: Option<FocusHandle>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
         let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-        if let Some(focus) = restore_focus {
-            window.focus(&focus, cx);
-        } else {
-            window.focus(&fallback_focus, cx);
-        }
+        let has_active_repo = self.active_repo_id().is_some();
+        self.command_palette.update(cx, |palette, cx| {
+            palette.open(restore_focus, fallback_focus, has_active_repo, window, cx);
+        });
     }
 
     fn close_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let palette_focus = self
-            .command_palette
-            .query_input
-            .as_ref()
-            .map(|input| input.read(cx).focus_handle());
-        let mut restore_focus = self.command_palette.restore_focus.take();
-        if restore_focus
-            .as_ref()
-            .zip(palette_focus.as_ref())
-            .is_some_and(|(restore_focus, palette_focus)| restore_focus == palette_focus)
-        {
-            restore_focus = None;
-        }
         self.command_palette_open = false;
-        self.command_palette_subscription = None;
-        self.command_palette.query_input = None;
-        self.restore_command_palette_focus(restore_focus, window, cx);
-        cx.notify();
+        self.command_palette
+            .update(cx, |palette, cx| palette.close(window, cx));
+    }
+
+    fn command_palette_did_close(
+        &mut self,
+        command: Option<&str>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.command_palette_open = false;
+        if let Some(command) = command {
+            self.execute_command(command, Some(window), cx);
+        }
     }
 
     pub(crate) fn toggle_command_palette(
@@ -751,253 +608,6 @@ impl GitCometView {
         } else {
             self.open_command_palette(window, cx);
         }
-    }
-
-    fn render_command_palette(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        let Some(ref query_input) = self.command_palette.query_input else {
-            return div().into_any_element();
-        };
-        if !self.command_palette_open {
-            return div().into_any_element();
-        }
-        let ui_scale = ui_scale::UiScale::current(cx);
-        let scaled_px = |value: f32| ui_scale.px(value);
-        let palette_width = scaled_px(560.0);
-        let palette_max_height = scaled_px(400.0);
-        let top_offset = scaled_px(80.0);
-        let item_height = scaled_px(32.0);
-
-        let query = query_input.read_with(cx, |input, _| input.text().trim().to_string());
-        let has_repo = self.active_repo_id().is_some();
-        let commands = self.command_palette.filtered_commands(has_repo, &query);
-
-        let mut list = div()
-            .id("command_palette_list")
-            .flex()
-            .flex_col()
-            .max_h(palette_max_height - item_height)
-            .overflow_y_scroll()
-            .track_scroll(&self.command_palette.scroll_handle)
-            .gap(px(0.0))
-            .items_start();
-        list = restrict_scroll_to_vertical_axis(list);
-        let selected_index = self.command_palette.selected_index;
-
-        let render_label = |label_str: &str, positions: &[usize]| -> AnyElement {
-            let label = label_str.to_string();
-            let highlight = gpui::HighlightStyle {
-                color: Some(theme.colors.accent.into()),
-                font_weight: Some(FontWeight::BOLD),
-                ..gpui::HighlightStyle::default()
-            };
-            // Merge the fuzzy matcher's per-character hits into contiguous
-            // highlight ranges.
-            let mut ranges: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
-            for &pos in positions {
-                match ranges.last_mut() {
-                    Some((range, _)) if range.end == pos => range.end = pos + 1,
-                    _ => ranges.push((pos..pos + 1, highlight)),
-                }
-            }
-            let focus_range = ranges.first().map(|(range, _)| range.clone());
-            let mut text = components::TruncatedText::new(label)
-                .profile(components::TextTruncationProfile::End)
-                .text_color(theme.colors.text)
-                .text_sm();
-            if let Some(focus_range) = focus_range {
-                text = text.focus_range(Some(focus_range));
-            }
-            if ranges.is_empty() {
-                text = text.highlights([(0..0, highlight)]);
-            } else {
-                text = text.highlights(ranges);
-            }
-            text.render(cx).into_any_element()
-        };
-
-        let mut current_category = None;
-
-        for (i, cmd) in commands.iter().enumerate() {
-            if current_category != Some(cmd.category) {
-                current_category = Some(cmd.category);
-                list = list.child(
-                    div()
-                        .h(item_height)
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px_2()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.colors.text_muted)
-                        .child(cmd.category.to_string()),
-                );
-            }
-
-            // Text-alpha overlays keep the highlight visible on the elevated
-            // palette surface, unlike the canvas-tuned hover token.
-            let hover_overlay =
-                with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-            let selected_overlay =
-                with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
-            let label_row = div()
-                .h(item_height)
-                .w_full()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px_2()
-                .rounded(px(theme.radii.row))
-                .hover(move |s| s.bg(hover_overlay))
-                .cursor(CursorStyle::PointingHand);
-
-            let label_row = if selected_index == Some(i) {
-                label_row.bg(selected_overlay)
-            } else {
-                label_row
-            };
-
-            let cmd_id: SharedString = cmd.id.into();
-            let cmd_id_for_click = cmd_id.clone();
-
-            let label_row = if let Some(shortcut_text) = cmd.shortcut.label() {
-                label_row
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(4.0))
-                            .overflow_hidden()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .child(render_label(cmd.label, &cmd.positions)),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(shortcut_text),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                            this.close_command_palette(window, cx);
-                            this.execute_command(&cmd_id_for_click, Some(window), cx);
-                        }),
-                    )
-            } else {
-                label_row
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(render_label(cmd.label, &cmd.positions)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                            this.close_command_palette(window, cx);
-                            this.execute_command(&cmd_id, Some(window), cx);
-                        }),
-                    )
-            };
-
-            list = list.child(label_row);
-        }
-
-        if commands.is_empty() && !query.is_empty() {
-            list = list.child(
-                div()
-                    .h(item_height)
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .px_2()
-                    .text_sm()
-                    .text_color(theme.colors.text_muted)
-                    .child("No matching commands"),
-            );
-        }
-
-        let scrollbar_gutter = Scrollbar::visible_gutter(
-            self.command_palette.scroll_handle.clone(),
-            ScrollbarAxis::Vertical,
-        );
-        let list = list.pr(scrollbar_gutter);
-        let scrollbar = Scrollbar::new(
-            "command_palette_scrollbar",
-            self.command_palette.scroll_handle.clone(),
-        )
-        .render(theme);
-
-        let palette_body = div()
-            .rounded(px(theme.radii.popover))
-            .bg(theme.colors.surface_bg_elevated)
-            .border_1()
-            .border_color(theme.colors.border)
-            .shadow(crate::theme::shadow_modal(theme))
-            .overflow_hidden()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .border_b_1()
-                    .border_color(theme.colors.border_variant)
-                    .child(query_input.clone()),
-            )
-            .child(
-                div()
-                    .id("command_palette_list_container")
-                    .relative()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .child(list)
-                    .child(scrollbar),
-            );
-
-        let scrim = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(with_alpha(
-                theme.colors.shadow,
-                if theme.is_dark { 0.35 } else { 0.22 },
-            ))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                    this.close_command_palette(window, cx);
-                }),
-            );
-
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(scrim)
-            .child(
-                div()
-                    .absolute()
-                    .top(top_offset)
-                    .left_0()
-                    .w_full()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .w(palette_width)
-                            .max_w(palette_width)
-                            .child(palette_body),
-                    ),
-            )
-            .into_any_element()
     }
 
     fn execute_command(
@@ -1123,6 +733,28 @@ impl GitCometView {
                         PopoverKind::BranchPicker {
                             purpose: BranchPickerPurpose::Delete,
                         },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "rename-branch" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                    && let Some(name) = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .and_then(|repo| match &repo.head_branch {
+                            Loadable::Ready(name) if name != "HEAD" && !name.is_empty() => {
+                                Some(name.clone())
+                            }
+                            _ => None,
+                        })
+                {
+                    self.open_popover_centered(
+                        PopoverKind::RenameBranchPrompt { repo_id, name },
                         window,
                         cx,
                     );
@@ -1799,13 +1431,15 @@ impl GitCometView {
             )
         });
 
-        let command_palette = command_palette::CommandPaletteState {
-            query_input: None,
-            restore_focus: None,
-            scroll_handle: ScrollHandle::new(),
-            selected_index: None,
-            previous_query: SharedString::default(),
-        };
+        let command_palette = cx.new(|cx| {
+            command_palette::CommandPaletteView::new(
+                initial_theme,
+                initial_state.active_repo.is_some(),
+                weak_view.clone(),
+                window,
+                cx,
+            )
+        });
 
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -2003,7 +1637,6 @@ impl GitCometView {
             popover_host,
             command_palette,
             command_palette_open: false,
-            command_palette_subscription: None,
             pre_palette_focus: None,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
@@ -2135,9 +1768,8 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
-        if let Some(ref query_input) = self.command_palette.query_input {
-            query_input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
+        self.command_palette
+            .update(cx, |palette, cx| palette.set_theme(theme, cx));
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input
@@ -4162,7 +3794,7 @@ impl Render for GitCometView {
             .top_0()
             .left_0()
             .size_full()
-            .child(self.render_command_palette(cx))
+            .child(self.command_palette.clone())
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_overlay_view(self.toast_host.clone()))

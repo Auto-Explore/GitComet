@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_core::domain::{
-    Branch, CommitId, Remote, RemoteBranch, RepoSpec, StashEntry, Submodule, SubmoduleStatus,
-    Upstream, Worktree,
+    Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
+    Submodule, SubmoduleStatus, Upstream, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
@@ -132,11 +132,14 @@ fn command_palette_input_focus(
     view: &gpui::Entity<GitCometView>,
 ) -> Option<gpui::FocusHandle> {
     cx.update(|_window, app| {
-        view.read(app)
-            .command_palette
-            .query_input
-            .as_ref()
-            .map(|input| input.read(app).focus_handle())
+        Some(
+            view.read(app)
+                .command_palette
+                .read(app)
+                .query_input
+                .read(app)
+                .focus_handle(),
+        )
     })
 }
 
@@ -294,6 +297,37 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
+fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].head_branch = Loadable::Ready("feature/current".to_string());
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("rename-branch", Some(window), cx)
+        });
+    });
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert!(matches!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::RenameBranchPrompt {
+                repo_id: RepoId(1),
+                name,
+            }) if name == "feature/current"
+        ));
+    });
+}
+
+#[gpui::test]
 fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx: &mut gpui::TestAppContext,
 ) {
@@ -328,10 +362,13 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
         view.update(app, |this, cx| {
             let stale_focus = this
                 .command_palette
+                .read(cx)
                 .query_input
-                .as_ref()
-                .map(|input| input.read(cx).focus_handle());
-            this.command_palette.restore_focus = stale_focus;
+                .read(cx)
+                .focus_handle();
+            this.command_palette.update(cx, |palette, _cx| {
+                palette.restore_focus = Some(stale_focus);
+            });
         });
     });
 
@@ -1988,6 +2025,105 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
     cx.update(|_window, app| {
         assert!(!view.read(app).sidebar_collapsed);
     });
+}
+
+#[gpui::test]
+fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
+        (0..40)
+            .map(|ix| FileEntry {
+                name: format!("file_{ix}.txt"),
+                path: Arc::new(PathBuf::from(format!("file_{ix}.txt"))),
+                kind: FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    let panel = cx
+        .debug_bounds("collapsed_sidebar_popover")
+        .expect("expected collapsed Files popover");
+    assert!(
+        cx.debug_bounds("collapsed_file_browser_rows").is_some(),
+        "collapsed Files should eagerly render intrinsic rows like branch popovers"
+    );
+    assert!(
+        cx.debug_bounds("file_browser_scroll_container").is_none(),
+        "collapsed Files must not use the full-sidebar virtualized viewport"
+    );
+    let scroll = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .collapsed_popover_scroll
+            .clone()
+    });
+    assert!(
+        scroll.max_offset().y > px(0.0),
+        "collapsed popover scrollbar must observe overflowing rows"
+    );
+    assert!(
+        components::Scrollbar::thumb_visible_for_test(&scroll, panel.size.height),
+        "collapsed popover must render a scrollbar thumb for overflowing rows"
+    );
+    let surface = cx
+        .debug_bounds("collapsed_sidebar_popover_content")
+        .expect("expected collapsed popover scroll surface");
+    let scrollbar_before = cx
+        .debug_bounds("collapsed_sidebar_popover_scrollbar")
+        .expect("expected collapsed popover scrollbar");
+    assert_eq!(
+        (scrollbar_before.top(), scrollbar_before.bottom()),
+        (surface.top(), surface.bottom()),
+        "scrollbar track must be anchored to the visible surface"
+    );
+
+    let before = cx
+        .debug_bounds("file_browser_row_0")
+        .expect("expected first file row")
+        .top();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: panel.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
+        ..Default::default()
+    });
+    test_support::redraw(cx);
+    let after = cx
+        .debug_bounds("file_browser_row_0")
+        .expect("expected first file row after scroll")
+        .top();
+    let scrollbar_after = cx
+        .debug_bounds("collapsed_sidebar_popover_scrollbar")
+        .expect("expected collapsed popover scrollbar after scroll");
+    assert!(
+        after < before - px(1.0),
+        "mouse wheel must move collapsed file rows (before={before:?}, after={after:?})"
+    );
+    assert_eq!(
+        scrollbar_after, scrollbar_before,
+        "scrollbar track must stay fixed while its content scrolls"
+    );
 }
 
 #[gpui::test]

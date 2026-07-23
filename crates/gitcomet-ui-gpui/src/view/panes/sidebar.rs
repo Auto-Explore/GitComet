@@ -35,15 +35,6 @@ struct FileBrowserVisibleRow {
 }
 
 const FILE_BROWSER_ROW_HEIGHT_PX: f32 = 22.0;
-// Title, divider, search controls, list top inset, and the panel borders. The
-// row contribution is added separately so the collapsed Files popover can size
-// to the visible tree without giving up the bounded viewport its uniform list
-// requires.
-const COLLAPSED_FILES_POPOVER_CHROME_HEIGHT_PX: f32 = 76.0;
-
-fn collapsed_files_popover_design_height(visible_row_count: usize) -> f32 {
-    COLLAPSED_FILES_POPOVER_CHROME_HEIGHT_PX + FILE_BROWSER_ROW_HEIGHT_PX * visible_row_count as f32
-}
 
 /// A section of the sidebar that gets its own icon in the collapsed rail and,
 /// when clicked, opens in a floating popover without expanding the sidebar.
@@ -120,6 +111,7 @@ pub(in super::super) struct SidebarPaneView {
     _ui_model_subscription: gpui::Subscription,
     branches_scroll: UniformListScrollHandle,
     file_browser_scroll: UniformListScrollHandle,
+    pub(in super::super) collapsed_popover_scroll: gpui::ScrollHandle,
     file_browser_search_input: Entity<TextInput>,
     _search_input_subscription: gpui::Subscription,
     sidebar_presentation_cache: SidebarPresentationCache,
@@ -252,6 +244,7 @@ impl SidebarPaneView {
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
             file_browser_scroll: UniformListScrollHandle::default(),
+            collapsed_popover_scroll: gpui::ScrollHandle::new(),
             file_browser_search_input,
             _search_input_subscription: search_input_subscription,
             sidebar_presentation_cache: SidebarPresentationCache::default(),
@@ -509,15 +502,20 @@ impl SidebarPaneView {
             .w_full()
             .bg(theme.colors.border_variant);
 
-        // Files has its own search + virtualized list that need a bounded height,
-        // so it fills the panel. Branch sections render their rows at intrinsic
-        // height and let the panel size to content (and scroll) around them.
         let is_files = matches!(section, CollapsedSidebarSection::Files);
+        let collapsed_popover_scroll = self.collapsed_popover_scroll.clone();
 
-        let root = div()
+        let surface = div()
+            .id("collapsed_sidebar_popover_content")
+            .debug_selector(|| "collapsed_sidebar_popover_content".to_string())
             .flex()
             .flex_col()
+            .flex_1()
             .min_h(px(0.0))
+            // The rows are rendered by this entity, so scrolling must live here;
+            // an overflow container in the parent entity cannot measure them.
+            .overflow_y_scroll()
+            .track_scroll(&collapsed_popover_scroll)
             // Establish the base text color for the popover subtree. Rows that rely
             // on the ambient color (e.g. worktree path labels) would otherwise fall
             // back to the default text style across the panel/entity boundary and
@@ -526,27 +524,72 @@ impl SidebarPaneView {
             .child(title)
             .child(divider);
 
-        if is_files {
-            // Keep the content-driven height with the entity that owns the file
-            // rows. Expanding a directory re-renders this subtree, so the outer
-            // panel grows immediately without relying on its parent to rerender.
-            let content_height = scaled_px(collapsed_files_popover_design_height(
-                self.file_browser_visible_rows().len(),
-            ));
-            root.h(content_height)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .child(self.render_file_browser_content(theme, cx)),
-                )
-                .into_any()
+        let content = if is_files {
+            self.render_collapsed_popover_file_section(theme, window, cx)
         } else {
-            root.child(self.render_collapsed_popover_branch_section(section, window, cx))
-                .into_any()
-        }
+            self.render_collapsed_popover_branch_section(section, window, cx)
+        };
+        let scrollbar = components::Scrollbar::new(
+            "collapsed_sidebar_popover_scrollbar",
+            collapsed_popover_scroll,
+        );
+        #[cfg(test)]
+        let scrollbar = scrollbar.debug_selector("collapsed_sidebar_popover_scrollbar");
+
+        // Keep the scrollbar outside the moving surface. If it is a child of the
+        // surface, GPUI applies the content scroll offset to the track itself.
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            .text_color(theme.colors.text)
+            .child(surface.child(content))
+            .child(scrollbar.render(theme))
+            .into_any()
+    }
+
+    fn render_collapsed_popover_file_section(
+        &mut self,
+        theme: AppTheme,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let search_bar = self.render_file_browser_search_bar(theme, cx);
+        let visible_rows = self.file_browser_visible_rows();
+        let body: AnyElement = if visible_rows.is_empty() {
+            let message = match self.active_repo() {
+                None => "No repository selected.",
+                Some(repo) => match &repo.file_browser.entries {
+                    Loadable::NotLoaded | Loadable::Loading => "Loading files...",
+                    Loadable::Ready(entries) if entries.is_empty() => "Empty repository.",
+                    Loadable::Ready(_) => "No files visible.",
+                    Loadable::Error(_) => "Error loading files.",
+                },
+            };
+            components::empty_state(theme, "Files", message).into_any_element()
+        } else {
+            let rows = Self::render_file_browser_rows(self, 0..visible_rows.len(), window, cx);
+            // Match the branch-section popovers: intrinsic eager rows, with the
+            // enclosing popover panel owning the min/max bounds and scrolling.
+            div()
+                .debug_selector(|| "collapsed_file_browser_rows".to_string())
+                .flex()
+                .flex_col()
+                .pt(px(2.0))
+                .pb(px(6.0))
+                .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .children(rows)
+                .into_any_element()
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .child(search_bar)
+            .child(body)
+            .into_any_element()
     }
 
     fn render_collapsed_popover_branch_section(
@@ -826,11 +869,11 @@ impl SidebarPaneView {
             .into_any()
     }
 
-    fn render_file_browser_content(
+    fn render_file_browser_search_bar(
         &mut self,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
+    ) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let search_options = self.file_search_options;
@@ -843,7 +886,7 @@ impl SidebarPaneView {
             .any(|matcher| matcher.regex_error().is_some());
         let option_selected_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
-        let search_bar = div()
+        div()
             .px(scaled_px(8.0))
             .pt(scaled_px(8.0))
             .pb(scaled_px(6.0))
@@ -928,7 +971,15 @@ impl SidebarPaneView {
                                     .debug_selector(|| "file_search_regex".to_string()),
                             ),
                     ),
-            );
+            )
+    }
+
+    fn render_file_browser_content(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let search_bar = self.render_file_browser_search_bar(theme, cx);
 
         let visible_rows = self.file_browser_visible_rows();
 
@@ -966,6 +1017,7 @@ impl SidebarPaneView {
                 .child(list);
             div()
                 .id("file_browser_scroll_container")
+                .debug_selector(|| "file_browser_scroll_container".to_string())
                 .relative()
                 .flex()
                 .flex_col()
@@ -1215,6 +1267,7 @@ impl SidebarPaneView {
 
                 let mut row_div = div()
                     .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
+                    .debug_selector(move || format!("file_browser_row_{ix}"))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -1587,13 +1640,6 @@ mod file_search_tests {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn collapsed_files_popover_height_tracks_visible_rows() {
-        assert_eq!(collapsed_files_popover_design_height(0), 76.0);
-        assert_eq!(collapsed_files_popover_design_height(1), 98.0);
-        assert_eq!(collapsed_files_popover_design_height(10), 296.0);
-    }
 
     fn repo_state(id: RepoId, path: &str) -> RepoState {
         RepoState::new_opening(

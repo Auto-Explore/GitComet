@@ -1,7 +1,9 @@
 use super::super::path_display;
 use super::*;
 use rustc_hash::FxHasher;
+use std::cell::Cell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 pub(in super::super) struct RepoTabsBarView {
     store: Arc<AppStore>,
@@ -17,35 +19,171 @@ pub(in super::super) struct RepoTabsBarView {
     repo_tab_spinner_delay_seq: u64,
     notify_fingerprint: u64,
     title_drag_state: crate::view::chrome::TitleBarDragState,
+    repo_tab_drag_visual: Option<RepoTabDragVisual>,
 }
 
 #[derive(Clone, Debug)]
 struct RepoTabDrag {
     repo_id: RepoId,
-    label: SharedString,
+    cursor_offset_x: Rc<Cell<Pixels>>,
+    tab_width: Rc<Cell<Pixels>>,
+    last_center_x: Rc<Cell<Pixels>>,
+    direction: Rc<Cell<i8>>,
 }
 
-struct RepoTabDragGhost {
-    theme: AppTheme,
-    label: SharedString,
+impl RepoTabDrag {
+    fn center_x(&self, cursor_x: Pixels) -> Pixels {
+        let width = self.tab_width.get();
+        if width == px(0.0) {
+            cursor_x
+        } else {
+            cursor_x - self.cursor_offset_x.get() + width / 2.0
+        }
+    }
 }
 
-impl Render for RepoTabDragGhost {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let ui_scale_percent = ui_scale::current(cx).percent;
-        let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
-        div()
-            .px_2()
-            .h(scaled_px(28.0))
-            .flex()
-            .items_center()
-            .rounded(px(self.theme.radii.pill))
-            .bg(with_alpha(self.theme.colors.active_section, 0.92))
-            .border_1()
-            .border_color(with_alpha(self.theme.colors.border, 0.85))
-            .text_sm()
-            .text_color(self.theme.colors.text)
-            .child(self.label.clone())
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RepoTabDragVisual {
+    repo_id: RepoId,
+    left: Pixels,
+}
+
+struct RepoTabDragCarrier;
+
+impl Render for RepoTabDragCarrier {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        // GPUI's drag machinery requires a preview entity. Keep that carrier
+        // invisible: the real tab remains in the strip and is what reorders.
+        div().size(px(1.0)).opacity(0.0)
+    }
+}
+
+const REPO_TAB_SLIDE_DURATION: Duration = Duration::from_millis(100);
+const REPO_TAB_TAKEOVER_BIAS: f32 = 0.25;
+
+struct RepoTabSlide {
+    id: ElementId,
+    child: Option<AnyElement>,
+    drag_left: Option<Pixels>,
+}
+
+impl RepoTabSlide {
+    fn new(id: impl Into<ElementId>, child: impl IntoElement, drag_left: Option<Pixels>) -> Self {
+        Self {
+            id: id.into(),
+            child: Some(child.into_any_element()),
+            drag_left,
+        }
+    }
+}
+
+impl IntoElement for RepoTabSlide {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+struct RepoTabSlideState {
+    layout_x: Pixels,
+    from_offset_x: Pixels,
+    started_at: Instant,
+}
+
+impl RepoTabSlideState {
+    fn offset_at(&self, now: Instant) -> Pixels {
+        let delta = (now.duration_since(self.started_at).as_secs_f32()
+            / REPO_TAB_SLIDE_DURATION.as_secs_f32())
+        .min(1.0);
+        let eased = gpui::ease_out_quint()(delta);
+        self.from_offset_x * (1.0 - eased)
+    }
+}
+
+impl Element for RepoTabSlide {
+    type RequestLayoutState = AnyElement;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        Some(self.id.clone())
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut child = self.child.take().expect("repo tab slide child");
+        (child.request_layout(window, cx), child)
+    }
+
+    fn prepaint(
+        &mut self,
+        global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        child: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let now = Instant::now();
+        let offset_x = window.with_element_state(
+            global_id.expect("repo tab slide requires a stable element id"),
+            |state: Option<RepoTabSlideState>, window| {
+                let mut state = state.unwrap_or(RepoTabSlideState {
+                    layout_x: bounds.left(),
+                    from_offset_x: px(0.0),
+                    started_at: now - REPO_TAB_SLIDE_DURATION,
+                });
+
+                let offset_x = if let Some(drag_left) = self.drag_left {
+                    let offset_x = drag_left - bounds.left();
+                    state.layout_x = bounds.left();
+                    state.from_offset_x = offset_x;
+                    state.started_at = now;
+                    offset_x
+                } else if state.layout_x != bounds.left() {
+                    let current_offset_x = state.offset_at(now);
+                    let previous_visual_x = state.layout_x + current_offset_x;
+                    state.layout_x = bounds.left();
+                    state.from_offset_x = previous_visual_x - bounds.left();
+                    state.started_at = now;
+                    state.from_offset_x
+                } else {
+                    state.offset_at(now)
+                };
+
+                if self.drag_left.is_none() && offset_x != px(0.0) {
+                    window.request_animation_frame();
+                }
+
+                (offset_x, state)
+            },
+        );
+
+        window.with_element_offset(point(offset_x, px(0.0)), |window| {
+            child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        child: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        child.paint(window, cx);
     }
 }
 
@@ -166,6 +304,7 @@ impl RepoTabsBarView {
             repo_tab_spinner_delay_seq: 0,
             notify_fingerprint,
             title_drag_state: crate::view::chrome::TitleBarDragState::default(),
+            repo_tab_drag_visual: None,
         };
         this.update_repo_tab_spinner_delay(cx);
         this
@@ -201,6 +340,12 @@ impl RepoTabsBarView {
     }
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
+    }
+
+    fn clear_repo_tab_drag_visual(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.repo_tab_drag_visual.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn update_repo_tab_spinner_delay(&mut self, cx: &mut gpui::Context<Self>) {
@@ -274,6 +419,10 @@ impl RepoTabsBarView {
 
 impl Render for RepoTabsBarView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        if self.repo_tab_drag_visual.is_some() && !cx.has_active_drag() {
+            self.repo_tab_drag_visual = None;
+        }
+
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -299,7 +448,10 @@ impl Render for RepoTabsBarView {
             let context_menu_invoker_for_right_click = context_menu_invoker.clone();
             let show_close = self.hovered_repo_tab == Some(repo_id);
             let label = path_display::repo_path_name(&repo.spec.workdir);
-            let label_for_drag = label.clone();
+            let drag_left = self
+                .repo_tab_drag_visual
+                .filter(|drag| drag.repo_id == repo_id)
+                .map(|drag| drag.left);
 
             let tooltip = Self::repo_tab_tooltip(repo);
             let close_tooltip: SharedString = "Close repository".into();
@@ -392,41 +544,47 @@ impl Render for RepoTabsBarView {
                 .on_drag(
                     RepoTabDrag {
                         repo_id,
-                        label: label_for_drag,
+                        cursor_offset_x: Rc::new(Cell::new(px(0.0))),
+                        tab_width: Rc::new(Cell::new(px(0.0))),
+                        last_center_x: Rc::new(Cell::new(px(0.0))),
+                        direction: Rc::new(Cell::new(0)),
                     },
-                    move |drag, _offset, _window, cx| {
-                        cx.new(|_cx| RepoTabDragGhost {
-                            theme,
-                            label: drag.label.clone(),
-                        })
+                    move |drag, offset, window, cx| {
+                        drag.cursor_offset_x.set(offset.x);
+                        drag.last_center_x.set(window.mouse_position().x);
+                        cx.new(|_cx| RepoTabDragCarrier)
                     },
                 )
                 .can_drop(move |dragged, _window, _cx| {
                     dragged.downcast_ref::<RepoTabDrag>().is_some()
                 })
-                .drag_over::<RepoTabDrag>(move |s, drag, _window, _cx| {
-                    if drag.repo_id == repo_id {
-                        return s;
-                    }
-
-                    s.bg(with_alpha(
-                        theme.colors.accent,
-                        if theme.is_dark { 0.14 } else { 0.10 },
-                    ))
-                    .border_color(theme.colors.accent)
-                })
                 .on_drag_move(cx.listener(
                     move |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _w, cx| {
-                        let dragged_repo_id = e.drag(cx).repo_id;
+                        let drag = e.drag(cx);
+                        let dragged_repo_id = drag.repo_id;
                         if dragged_repo_id == repo_id {
+                            drag.tab_width.set(e.bounds.size.width);
                             return;
                         }
 
+                        let dragged_ix = this
+                            .state
+                            .repos
+                            .iter()
+                            .position(|repo| repo.id == dragged_repo_id);
+                        match (drag.direction.get(), dragged_ix) {
+                            (1, Some(dragged_ix)) if ix <= dragged_ix => return,
+                            (-1, Some(dragged_ix)) if ix >= dragged_ix => return,
+                            _ => {}
+                        }
+
+                        let drag_center_x = drag.center_x(e.event.position.x);
                         let Some(insert_before) = repo_tab_insert_before_for_drop(
                             repo_id,
                             next_repo_id,
-                            e.event.position,
+                            point(drag_center_x, e.event.position.y),
                             e.bounds,
+                            drag.direction.get(),
                         ) else {
                             return;
                         };
@@ -439,6 +597,7 @@ impl Render for RepoTabsBarView {
                 ))
                 .on_drop(cx.listener(move |this, _drag: &RepoTabDrag, _w, cx| {
                     this.hovered_repo_tab = None;
+                    this.clear_repo_tab_drag_visual(cx);
                     cx.notify();
                 }))
                 .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
@@ -484,7 +643,12 @@ impl Render for RepoTabsBarView {
                     this.close_repo_tab(repo_id, cx);
                 }));
 
-            bar = bar.tab(tab);
+            let sliding_tab = RepoTabSlide::new(("repo_tab_slide", repo_id.0), tab, drag_left);
+            if drag_left.is_some() {
+                bar = bar.tab(gpui::deferred(sliding_tab).with_priority(1));
+            } else {
+                bar = bar.tab(sliding_tab);
+            }
         }
 
         // A single interactive element: putting the hover style on an inner
@@ -558,6 +722,7 @@ impl Render for RepoTabsBarView {
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
                     this.title_drag_state.clear();
+                    this.clear_repo_tab_drag_visual(cx);
                     cx.notify();
                 }),
             )
@@ -565,6 +730,7 @@ impl Render for RepoTabsBarView {
                 MouseButton::Left,
                 cx.listener(|this, _e, _w, cx| {
                     this.title_drag_state.clear();
+                    this.clear_repo_tab_drag_visual(cx);
                     cx.notify();
                 }),
             )
@@ -572,7 +738,39 @@ impl Render for RepoTabsBarView {
                 if this.title_drag_state.take_move_request() {
                     crate::app::begin_window_move(window);
                 }
-            }));
+            }))
+            .on_drag_move(cx.listener(
+                |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _window, cx| {
+                    let (repo_id, cursor_offset_x, drag_center_x) = {
+                        let drag = e.drag(cx);
+                        let drag_center_x = drag.center_x(e.event.position.x);
+                        let previous_center_x = drag.last_center_x.replace(drag_center_x);
+                        if drag_center_x > previous_center_x {
+                            drag.direction.set(1);
+                        } else if drag_center_x < previous_center_x {
+                            drag.direction.set(-1);
+                        }
+                        (drag.repo_id, drag.cursor_offset_x.get(), drag_center_x)
+                    };
+                    let visual = RepoTabDragVisual {
+                        repo_id,
+                        left: e.event.position.x - cursor_offset_x,
+                    };
+                    if this.repo_tab_drag_visual != Some(visual) {
+                        this.repo_tab_drag_visual = Some(visual);
+                        cx.notify();
+                    }
+
+                    if drag_center_x < e.bounds.left() {
+                        return;
+                    }
+
+                    this.store.dispatch(Msg::ReorderRepoTabs {
+                        repo_id,
+                        insert_before: None,
+                    });
+                },
+            ));
 
         bar = bar.tab(add_repo);
         bar.filler(tab_strip_drag)
@@ -585,6 +783,7 @@ impl Render for RepoTabsBarView {
                     insert_before: None,
                 });
                 this.hovered_repo_tab = None;
+                this.clear_repo_tab_drag_visual(cx);
                 cx.notify();
             }))
     }
@@ -609,31 +808,35 @@ fn repo_tab_insert_before_for_drop(
     next_repo_id: Option<RepoId>,
     pos: Point<Pixels>,
     bounds: Bounds<Pixels>,
+    direction: i8,
 ) -> Option<Option<RepoId>> {
-    // Use exclusive right/bottom edges so adjacent tabs don't both match when the cursor is
-    // exactly on the boundary.
-    if pos.x < bounds.left()
-        || pos.x >= bounds.right()
-        || pos.y < bounds.top()
-        || pos.y >= bounds.bottom()
-    {
+    // Dragged tabs are constrained to the strip visually, so only the
+    // horizontal position participates in reordering. This keeps reordering
+    // responsive even if the physical pointer strays above or below the bar.
+    // Keep the right edge exclusive so adjacent tabs cannot both match.
+    if pos.x < bounds.left() || pos.x >= bounds.right() {
         return None;
     }
 
+    let takeover_x = f32::from(bounds.center().x)
+        - f32::from(bounds.size.width) * REPO_TAB_TAKEOVER_BIAS * f32::from(direction);
     Some(repo_tab_insert_before_for_drag_cursor(
         target_repo_id,
         next_repo_id,
         f32::from(pos.x),
-        f32::from(bounds.center().x),
+        takeover_x,
     ))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RepoTabsBarView, repo_tab_insert_before_for_drag_cursor};
+    use super::{
+        RepoTabsBarView, repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
+    };
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{RepoId, RepoState};
     use gitcomet_state::msg::Msg;
+    use gpui::{Bounds, point, px, size};
     use std::path::PathBuf;
 
     fn repo_state(path: &str) -> RepoState {
@@ -697,6 +900,58 @@ mod tests {
         assert_eq!(
             repo_tab_insert_before_for_drag_cursor(RepoId(5), None, 80.0, 60.0),
             None
+        );
+    }
+
+    #[test]
+    fn repo_tab_rail_drag_ignores_vertical_pointer_position() {
+        let bounds = Bounds::new(point(px(20.0), px(40.0)), size(px(100.0), px(34.0)));
+
+        assert_eq!(
+            repo_tab_insert_before_for_drop(
+                RepoId(5),
+                Some(RepoId(6)),
+                point(px(30.0), px(-500.0)),
+                bounds,
+                0,
+            ),
+            Some(Some(RepoId(5)))
+        );
+        assert_eq!(
+            repo_tab_insert_before_for_drop(
+                RepoId(5),
+                Some(RepoId(6)),
+                point(px(100.0), px(500.0)),
+                bounds,
+                0,
+            ),
+            Some(Some(RepoId(6)))
+        );
+    }
+
+    #[test]
+    fn repo_tab_takeover_zone_expands_in_the_drag_direction() {
+        let bounds = Bounds::new(point(px(20.0), px(40.0)), size(px(100.0), px(34.0)));
+
+        assert_eq!(
+            repo_tab_insert_before_for_drop(
+                RepoId(5),
+                Some(RepoId(6)),
+                point(px(66.0), px(50.0)),
+                bounds,
+                1,
+            ),
+            Some(Some(RepoId(6)))
+        );
+        assert_eq!(
+            repo_tab_insert_before_for_drop(
+                RepoId(5),
+                Some(RepoId(6)),
+                point(px(74.0), px(50.0)),
+                bounds,
+                -1,
+            ),
+            Some(Some(RepoId(5)))
         );
     }
 
