@@ -1569,6 +1569,44 @@ fn reduce_inner(
         Msg::ConflictResetResolutions { repo_id, path } => {
             conflict_interactions::reset_resolutions(state, repo_id, path)
         }
+        Msg::ConflictSplitRegion {
+            repo_id,
+            path,
+            region_index,
+            boundaries,
+            expected_conflict_rev,
+        } => {
+            let effects = conflict_interactions::split_region(
+                state,
+                repo_id,
+                path,
+                region_index,
+                boundaries,
+                expected_conflict_rev,
+            );
+            if !effects.is_empty() {
+                begin_local_action(state, repo_id);
+            }
+            effects
+        }
+        Msg::ConflictJoinRegions {
+            repo_id,
+            path,
+            region_index,
+            expected_conflict_rev,
+        } => {
+            let effects = conflict_interactions::join_regions(
+                state,
+                repo_id,
+                path,
+                region_index,
+                expected_conflict_rev,
+            );
+            if !effects.is_empty() {
+                begin_local_action(state, repo_id);
+            }
+            effects
+        }
         Msg::Stash {
             repo_id,
             message,

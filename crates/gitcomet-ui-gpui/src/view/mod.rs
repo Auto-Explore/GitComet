@@ -193,7 +193,9 @@ use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_t
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
 use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
-use diff_text_selection::{DiffTextSelectionOverlay, DiffTextSelectionTracker};
+use diff_text_selection::{
+    ConflictRowSelectionTracker, DiffTextSelectionOverlay, DiffTextSelectionTracker,
+};
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
     build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard,
@@ -410,6 +412,27 @@ pub(in crate::view) fn pane_resize_handles_width(
 ) -> Pixels {
     let visible_handles = u8::from(!sidebar_collapsed).saturating_add(u8::from(!details_collapsed));
     px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
+}
+
+fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
+    let repo_id = state.active_repo?;
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    Some((repo_id, repo.diff_state.diff_target.clone()?))
+}
+
+fn active_merge_view_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
+    let (repo_id, target) = active_diff_target(state)?;
+    let DiffTarget::WorkingTree { path, area } = &target else {
+        return None;
+    };
+    if *area != DiffArea::Unstaged {
+        return None;
+    }
+
+    let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
+    repo.status_entry_for_path(DiffArea::Unstaged, path)
+        .filter(|entry| entry.kind == FileStatusKind::Conflicted && entry.conflict.is_some())?;
+    Some((repo_id, target))
 }
 
 #[cfg(test)]
@@ -1753,6 +1776,16 @@ impl GitCometView {
                 cx,
             )
         });
+        main_pane.update(cx, |pane, _cx| {
+            pane.mergetool_auto_advance = ui_session.mergetool_auto_advance.unwrap_or(true);
+            pane.mergetool_collapse_unchanged =
+                ui_session.mergetool_collapse_unchanged.unwrap_or(false);
+            pane.mergetool_output_scroll_sync =
+                ui_session.mergetool_output_scroll_sync.unwrap_or(true);
+            pane.mergetool_show_line_numbers =
+                ui_session.mergetool_show_line_numbers.unwrap_or(true);
+            pane.mergetool_view_three_way = ui_session.mergetool_view_three_way.unwrap_or(true);
+        });
         let details_pane = cx.new(|cx| {
             DetailsPaneView::new(
                 Arc::clone(&store),
@@ -2037,6 +2070,7 @@ impl GitCometView {
             open_repo_input,
             hover_resize_edge: None,
             sidebar_collapsed: false,
+            sidebar_collapsed_before_merge_view: None,
             details_collapsed: false,
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,
@@ -3866,6 +3900,10 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
+                if !command_palette_available(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.toggle_command_palette(window, cx);
                 cx.stop_propagation();
             }))
@@ -3884,10 +3922,18 @@ impl Render for GitCometView {
                 }
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffPrevFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_text_input_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &TextInputDiffNextFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_text_input_adjacent_diff_file_navigation(1, cx);
                 cx.stop_propagation();
             }))
@@ -3908,10 +3954,18 @@ impl Render for GitCometView {
                 },
             ))
             .on_action(cx.listener(|this, _: &DiffPrevFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_adjacent_diff_file_navigation(-1, cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &DiffNextFile, _window, cx| {
+                if !show_diff_file_navigation(this.view_mode) {
+                    cx.stop_propagation();
+                    return;
+                }
                 this.defer_adjacent_diff_file_navigation(1, cx);
                 cx.stop_propagation();
             }))

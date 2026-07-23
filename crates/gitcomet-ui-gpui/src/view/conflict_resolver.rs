@@ -8,11 +8,12 @@ use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_S
 pub use split_row_index::{ConflictSplitRowIndex, TwoWaySplitProjection, TwoWaySplitVisibleRow};
 #[cfg(any(test, feature = "benchmarks"))]
 pub use word_highlight::compute_three_way_word_highlights;
-pub use word_highlight::compute_word_highlights_for_row;
 #[cfg(feature = "benchmarks")]
 pub use word_highlight::{TwoWayWordHighlights, compute_two_way_word_highlights};
+pub use word_highlight::{compute_word_highlights_for_row, compute_word_highlights_for_texts};
 
 use rustc_hash::FxHashMap;
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -54,9 +55,15 @@ struct ConflictSplitStyledTextCacheRow {
     theirs: Option<CachedDiffStyledText>,
 }
 
+const CONFLICT_SPLIT_STYLE_DENSE_ROWS: usize = 16_384;
+const CONFLICT_SPLIT_STYLE_PAGE_ROWS: usize = 256;
+const CONFLICT_SPLIT_STYLE_MAX_SPARSE_PAGES: usize = 16;
+
 #[derive(Clone, Debug, Default)]
 pub(in crate::view) struct ConflictSplitStyledTextCache {
     rows: Vec<ConflictSplitStyledTextCacheRow>,
+    sparse_pages: FxHashMap<usize, Vec<ConflictSplitStyledTextCacheRow>>,
+    sparse_page_order: VecDeque<usize>,
     entries: usize,
 }
 
@@ -64,9 +71,10 @@ impl ConflictSplitStyledTextCache {
     #[cfg(feature = "benchmarks")]
     pub(in crate::view) fn with_row_capacity(row_count: usize) -> Self {
         let mut cache = Self::default();
-        cache
-            .rows
-            .resize_with(row_count, ConflictSplitStyledTextCacheRow::default);
+        cache.rows.resize_with(
+            row_count.min(CONFLICT_SPLIT_STYLE_DENSE_ROWS),
+            ConflictSplitStyledTextCacheRow::default,
+        );
         cache
     }
 
@@ -90,12 +98,48 @@ impl ConflictSplitStyledTextCache {
         }
     }
 
+    fn sparse_page_key(row_ix: usize) -> usize {
+        (row_ix - CONFLICT_SPLIT_STYLE_DENSE_ROWS) / CONFLICT_SPLIT_STYLE_PAGE_ROWS
+    }
+
+    fn sparse_page_offset(row_ix: usize) -> usize {
+        (row_ix - CONFLICT_SPLIT_STYLE_DENSE_ROWS) % CONFLICT_SPLIT_STYLE_PAGE_ROWS
+    }
+
+    fn row_entry_count(row: &ConflictSplitStyledTextCacheRow) -> usize {
+        usize::from(row.ours.is_some()) + usize::from(row.theirs.is_some())
+    }
+
     fn ensure_row(&mut self, row_ix: usize) -> &mut ConflictSplitStyledTextCacheRow {
-        if row_ix >= self.rows.len() {
-            self.rows
-                .resize_with(row_ix + 1, ConflictSplitStyledTextCacheRow::default);
+        if row_ix < CONFLICT_SPLIT_STYLE_DENSE_ROWS {
+            if row_ix >= self.rows.len() {
+                self.rows
+                    .resize_with(row_ix + 1, ConflictSplitStyledTextCacheRow::default);
+            }
+            return &mut self.rows[row_ix];
         }
-        &mut self.rows[row_ix]
+
+        let page_key = Self::sparse_page_key(row_ix);
+        if !self.sparse_pages.contains_key(&page_key) {
+            while self.sparse_pages.len() >= CONFLICT_SPLIT_STYLE_MAX_SPARSE_PAGES {
+                let Some(evicted_key) = self.sparse_page_order.pop_front() else {
+                    break;
+                };
+                if let Some(evicted) = self.sparse_pages.remove(&evicted_key) {
+                    let evicted_entries = evicted.iter().map(Self::row_entry_count).sum::<usize>();
+                    self.entries = self.entries.saturating_sub(evicted_entries);
+                }
+            }
+            self.sparse_pages.insert(
+                page_key,
+                vec![ConflictSplitStyledTextCacheRow::default(); CONFLICT_SPLIT_STYLE_PAGE_ROWS],
+            );
+            self.sparse_page_order.push_back(page_key);
+        }
+        &mut self
+            .sparse_pages
+            .get_mut(&page_key)
+            .expect("inserted conflict style cache page")[Self::sparse_page_offset(row_ix)]
     }
 
     pub(in crate::view) fn get(
@@ -103,7 +147,13 @@ impl ConflictSplitStyledTextCache {
         key: &(usize, ConflictPickSide),
     ) -> Option<&CachedDiffStyledText> {
         let (row_ix, side) = *key;
-        let row = self.rows.get(row_ix)?;
+        let row = if row_ix < CONFLICT_SPLIT_STYLE_DENSE_ROWS {
+            self.rows.get(row_ix)?
+        } else {
+            self.sparse_pages
+                .get(&Self::sparse_page_key(row_ix))?
+                .get(Self::sparse_page_offset(row_ix))?
+        };
         Self::slot(row, side).as_ref()
     }
 
@@ -128,6 +178,8 @@ impl ConflictSplitStyledTextCache {
 
     pub(in crate::view) fn clear(&mut self) {
         self.rows.clear();
+        self.sparse_pages.clear();
+        self.sparse_page_order.clear();
         self.entries = 0;
     }
 
@@ -144,7 +196,8 @@ impl ConflictSplitStyledTextCache {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutosolveTraceMode {
-    Safe,
+    /// High+Medium tiers applied automatically when the file opened (section 30).
+    OnOpen,
     #[cfg(test)]
     History,
 }
@@ -524,6 +577,48 @@ pub type TwoWayWordHighlightPair = (
     crate::view::word_diff::WordDiffRanges,
 );
 
+const CONFLICT_SPLIT_WORD_HIGHLIGHT_CACHE_ROWS: usize = 4_096;
+
+/// Bounded render cache for giant two-way conflicts. The same row is rendered
+/// independently by the left and right lists, so sharing the computed pair here
+/// avoids running the word diff twice per frame without retaining the whole file.
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct ConflictSplitWordHighlightCache {
+    rows: FxHashMap<usize, Arc<TwoWayWordHighlightPair>>,
+    insertion_order: VecDeque<usize>,
+}
+
+impl ConflictSplitWordHighlightCache {
+    pub(in crate::view) fn get(&self, row_ix: usize) -> Option<Arc<TwoWayWordHighlightPair>> {
+        self.rows.get(&row_ix).cloned()
+    }
+
+    pub(in crate::view) fn insert(
+        &mut self,
+        row_ix: usize,
+        highlights: TwoWayWordHighlightPair,
+    ) -> Arc<TwoWayWordHighlightPair> {
+        if let Some(existing) = self.rows.get(&row_ix) {
+            return Arc::clone(existing);
+        }
+        while self.rows.len() >= CONFLICT_SPLIT_WORD_HIGHLIGHT_CACHE_ROWS {
+            let Some(evicted) = self.insertion_order.pop_front() else {
+                break;
+            };
+            self.rows.remove(&evicted);
+        }
+        let highlights = Arc::new(highlights);
+        self.rows.insert(row_ix, Arc::clone(&highlights));
+        self.insertion_order.push_back(row_ix);
+        highlights
+    }
+
+    pub(in crate::view) fn clear(&mut self) {
+        self.rows.clear();
+        self.insertion_order.clear();
+    }
+}
+
 /// Shared context rows kept around each block-local two-way conflict diff.
 ///
 /// This preserves a small amount of unchanged surrounding code in the large-file
@@ -533,6 +628,13 @@ pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
 pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
+/// Above this merged-output line count the resolved output stays in read-only
+/// streamed mode instead of materializing the whole text into the editable
+/// `TextInput` buffer — the perf guard for whole-file conflicts. Sits above
+/// [`LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES`] (a large-but-editable output still
+/// materializes) and below the whole-file streamed fixtures at `+ 1_000`.
+pub(crate) const RESOLVED_OUTPUT_EDITABLE_MAX_LINES: usize =
+    LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 500;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
 #[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
@@ -540,15 +642,56 @@ pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
 #[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_WORD_HIGHLIGHT_MAX_LINES: usize = 4_000;
 
-/// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
-pub fn conflict_quick_pick_choice_for_key(key: &str) -> Option<ConflictChoice> {
-    match key {
-        "a" => Some(ConflictChoice::Base),
-        "b" => Some(ConflictChoice::Ours),
-        "c" => Some(ConflictChoice::Theirs),
-        "d" => Some(ConflictChoice::Both),
-        _ => None,
+/// Ordered pick choices for a view mode. Both the letter (`a/b/c/d`) and the
+/// `Ctrl+1/2/3` shortcuts index into this list, so the key→choice mapping lives
+/// in one place per mode. Note `Both` sits last, so `Ctrl+1/2/3` reaches it only
+/// in two-way mode (three-way exposes it via the `d` letter pick).
+fn conflict_pick_choices(view_mode: ConflictResolverViewMode) -> &'static [ConflictChoice] {
+    match view_mode {
+        ConflictResolverViewMode::ThreeWay => &[
+            ConflictChoice::Base,
+            ConflictChoice::Ours,
+            ConflictChoice::Theirs,
+            ConflictChoice::Both,
+        ],
+        ConflictResolverViewMode::TwoWayDiff => &[
+            ConflictChoice::Ours,
+            ConflictChoice::Theirs,
+            ConflictChoice::Both,
+        ],
     }
+}
+
+/// Resolve conflict quick-pick keyboard shortcuts to a concrete choice.
+pub fn conflict_quick_pick_choice_for_key(
+    key: &str,
+    view_mode: ConflictResolverViewMode,
+) -> Option<ConflictChoice> {
+    let index = match key {
+        "a" => 0,
+        "b" => 1,
+        "c" => 2,
+        "d" => 3,
+        _ => return None,
+    };
+    conflict_pick_choices(view_mode).get(index).copied()
+}
+
+/// Resolve kdiff3-compatible `Ctrl+1/2/3` pick aliases (section 30 keyboard model).
+///
+/// Unlike the single-letter picks these also work while the output editor is
+/// focused, since they cannot collide with text input.
+pub fn conflict_ctrl_pick_choice_for_key(
+    key: &str,
+    view_mode: ConflictResolverViewMode,
+) -> Option<ConflictChoice> {
+    let index = match key {
+        "1" => 0,
+        "2" => 1,
+        "3" => 2,
+        _ => return None,
+    };
+    conflict_pick_choices(view_mode).get(index).copied()
 }
 
 /// Resolve conflict navigation shortcuts (`F2`, `F3`, `F7`) to a direction.
@@ -576,13 +719,9 @@ pub fn format_autosolve_trace_summary(
     let resolved = unresolved_before.saturating_sub(unresolved_after);
     let blocks_word = if resolved == 1 { "block" } else { "blocks" };
     match mode {
-        AutosolveTraceMode::Safe => format!(
-            "Last autosolve (safe): resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, pass1-after-split {}).",
-            unresolved_before,
-            unresolved_after,
-            stats.pass1,
-            stats.pass2_split,
-            stats.pass1_after_split
+        AutosolveTraceMode::OnOpen => format!(
+            "Auto-solved on open: resolved {resolved} {blocks_word}, unresolved {} -> {} (pass1 {}, split {}, regex {}).",
+            unresolved_before, unresolved_after, stats.pass1, stats.pass2_split, stats.regex
         ),
         #[cfg(test)]
         AutosolveTraceMode::History => format!(
@@ -592,6 +731,93 @@ pub fn format_autosolve_trace_summary(
     }
 }
 
+/// Build the one-shot toast message pushed when a conflict file's resolver
+/// opens fresh (kdiff3-style open summary: total / auto-solved / remaining).
+pub fn format_open_summary_toast(
+    total: usize,
+    auto_solved: usize,
+    resolved: usize,
+) -> Option<String> {
+    if total == 0 {
+        return None;
+    }
+    let auto_solved = auto_solved.min(total);
+    let resolved = resolved.min(total);
+    let remaining = total.saturating_sub(resolved);
+    let noun = if total == 1 { "conflict" } else { "conflicts" };
+    Some(format!(
+        "{total} {noun}: {auto_solved} auto-solved, {remaining} remaining"
+    ))
+}
+
+/// Total, auto-solved, and resolved region counts for the open summary.
+/// Counts come from the session rather than rendered blocks because a custom
+/// manual/auto result may materialize as plain text and disappear from the
+/// block projection.
+pub fn conflict_session_summary_counts(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+) -> (usize, usize, usize) {
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    let auto_solved = session
+        .regions
+        .iter()
+        .filter(|region| {
+            matches!(
+                &region.resolution,
+                ConflictRegionResolution::AutoResolved { .. }
+            )
+        })
+        .count();
+    (session.total_regions(), auto_solved, session.solved_count())
+}
+
+/// Summarize the on-open autosolve pass from session region resolutions.
+///
+/// On a fresh open every resolved region is an [`AutoResolved`] one (user
+/// picks cannot exist yet), so the confidence-tier breakdown can be
+/// reconstructed from the applied rules. Returns `None` when nothing was
+/// auto-resolved.
+///
+/// [`AutoResolved`]: gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved
+pub fn on_open_autosolve_summary(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+) -> Option<String> {
+    use gitcomet_core::conflict_session::{AutosolveRule, ConflictRegionResolution};
+
+    let mut stats = gitcomet_state::msg::ConflictAutosolveStats::default();
+    for region in &session.regions {
+        let ConflictRegionResolution::AutoResolved { rule, .. } = &region.resolution else {
+            continue;
+        };
+        match rule {
+            AutosolveRule::IdenticalSides
+            | AutosolveRule::OnlyOursChanged
+            | AutosolveRule::OnlyTheirsChanged
+            | AutosolveRule::WhitespaceOnly => stats.pass1 += 1,
+            AutosolveRule::SubchunkFullyMerged => stats.pass2_split += 1,
+            AutosolveRule::RegexEquivalentSides
+            | AutosolveRule::RegexOnlyTheirsChanged
+            | AutosolveRule::RegexOnlyOursChanged => stats.regex += 1,
+            AutosolveRule::HistoryMerged => stats.history += 1,
+        }
+    }
+
+    let resolved = stats.total_resolved();
+    if resolved == 0 {
+        return None;
+    }
+    let unresolved_after = session.unsolved_count();
+    Some(format_autosolve_trace_summary(
+        AutosolveTraceMode::OnOpen,
+        unresolved_after + resolved,
+        unresolved_after,
+        &stats,
+    ))
+}
+
+/// Count conflict blocks whose backing session regions were auto-resolved when
+/// the resolver opened.
 /// Build a per-conflict autosolve trace label for the active conflict.
 ///
 /// Returns `None` when the active conflict does not map to an auto-resolved
@@ -1136,6 +1362,11 @@ pub fn auto_resolve_segments(segments: &mut [ConflictSegment]) -> usize {
 }
 
 /// Like [`auto_resolve_segments`] but with an optional whitespace-normalization toggle.
+///
+/// Segment-based autosolve is now test-only: the live on-open path uses the
+/// session-based `apply_autosolve_to_session` in gitcomet-state, and the
+/// manual re-trigger button was removed.
+#[cfg(test)]
 pub fn auto_resolve_segments_with_options(
     segments: &mut [ConflictSegment],
     whitespace_normalize: bool,
@@ -1290,6 +1521,7 @@ pub fn auto_resolve_segments_pass2(segments: &mut Vec<ConflictSegment>) -> usize
 }
 
 /// Like [`auto_resolve_segments_pass2`] but keeps block->region mappings in sync.
+#[cfg(test)]
 pub fn auto_resolve_segments_pass2_with_region_indices(
     segments: &mut Vec<ConflictSegment>,
     block_region_indices: &mut Vec<usize>,
@@ -1501,20 +1733,6 @@ impl ResolvedOutputFragmentLineIndex {
         }
     }
 
-    fn indexed_line_start_count(&self, line_count: usize, ends_with_newline: bool) -> usize {
-        match self {
-            Self::SingleLine => usize::from(line_count > 0) + usize::from(ends_with_newline),
-            Self::Dense(line_starts) => line_starts.len(),
-            Self::Sparse(_) => {
-                if line_count == 0 {
-                    0
-                } else {
-                    line_count.saturating_add(usize::from(ends_with_newline))
-                }
-            }
-        }
-    }
-
     #[cfg(all(test, feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         match self {
@@ -1598,11 +1816,6 @@ impl ResolvedOutputFragment {
         (self.line_count > 0).then_some((self.widest_line_ix, self.widest_line_len))
     }
 
-    fn indexed_line_start_count(&self) -> usize {
-        self.line_index
-            .indexed_line_start_count(self.line_count, self.ends_with_newline)
-    }
-
     #[cfg(all(test, feature = "benchmarks"))]
     fn metadata_byte_size(&self) -> usize {
         self.line_index.metadata_byte_size()
@@ -1647,7 +1860,6 @@ pub struct ResolvedOutputProjection {
     conflict_line_ranges: Vec<std::ops::Range<usize>>,
     line_count: usize,
     widest_line_ix: usize,
-    output_hash: u64,
 }
 
 impl ResolvedOutputProjection {
@@ -1775,61 +1987,6 @@ impl ResolvedOutputProjection {
                 widest_line_ix,
                 widest_line_len,
             )
-        }
-
-        fn structural_output_hash(
-            fragments: &[ResolvedOutputFragment],
-            spans: &[ResolvedOutputSpan],
-            span_checkpoints: &[usize],
-            conflict_line_ranges: &[std::ops::Range<usize>],
-            line_count: usize,
-        ) -> u64 {
-            use std::hash::{Hash, Hasher};
-
-            let mut hasher = rustc_hash::FxHasher::default();
-            line_count.hash(&mut hasher);
-            fragments.len().hash(&mut hasher);
-            spans.len().hash(&mut hasher);
-            span_checkpoints.len().hash(&mut hasher);
-            conflict_line_ranges.len().hash(&mut hasher);
-            for fragment in fragments {
-                fragment.source.hash(&mut hasher);
-                fragment.indexed_line_start_count().hash(&mut hasher);
-                fragment.newline_count.hash(&mut hasher);
-                fragment.ends_with_newline.hash(&mut hasher);
-            }
-            for span in spans {
-                match span {
-                    ResolvedOutputSpan::SourceLines {
-                        visible_start,
-                        len,
-                        fragment_ix,
-                        fragment_line_start,
-                    } => {
-                        0u8.hash(&mut hasher);
-                        visible_start.hash(&mut hasher);
-                        len.hash(&mut hasher);
-                        fragment_ix.hash(&mut hasher);
-                        fragment_line_start.hash(&mut hasher);
-                    }
-                    ResolvedOutputSpan::MergedLine {
-                        visible_index,
-                        text,
-                    } => {
-                        1u8.hash(&mut hasher);
-                        visible_index.hash(&mut hasher);
-                        text.hash(&mut hasher);
-                    }
-                }
-            }
-            for &checkpoint in span_checkpoints {
-                checkpoint.hash(&mut hasher);
-            }
-            for range in conflict_line_ranges {
-                range.start.hash(&mut hasher);
-                range.end.hash(&mut hasher);
-            }
-            hasher.finish()
         }
 
         fn push_source_span(
@@ -2363,13 +2520,6 @@ impl ResolvedOutputProjection {
             .collect();
         let line_count = visible_line.max(1);
         let span_checkpoints = build_span_checkpoints(&spans, line_count);
-        let output_hash = structural_output_hash(
-            &fragments,
-            &spans,
-            &span_checkpoints,
-            conflict_line_ranges.as_slice(),
-            line_count,
-        );
 
         Self {
             fragments,
@@ -2378,16 +2528,11 @@ impl ResolvedOutputProjection {
             conflict_line_ranges,
             line_count,
             widest_line_ix: widest_visible_line.0,
-            output_hash,
         }
     }
 
     pub fn len(&self) -> usize {
         self.line_count
-    }
-
-    pub fn output_hash(&self) -> u64 {
-        self.output_hash
     }
 
     pub fn widest_line_ix(&self) -> usize {
@@ -2614,6 +2759,68 @@ pub(super) fn block_max_line_count(block: &ConflictBlock) -> usize {
 #[cfg(any(test, feature = "benchmarks"))]
 fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
     block_max_line_count(block) > LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES
+}
+
+/// Whether computing the three-way alignment is practical for these sides
+/// (section 30 aligned row space).
+///
+/// The alignment diff is O(size × dissimilarity): a whole-file conflict on a
+/// large file makes Myers effectively quadratic. Small files always align;
+/// large ones only when each side still shares a reasonable fraction of its
+/// lines with base.
+pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) -> bool {
+    const ALWAYS_ALIGN_TOTAL_LINES: usize = 2_000;
+    const MAX_TOTAL_LINES: usize = 100_000;
+
+    let base_count = base.lines().count();
+    let ours_count = ours.lines().count();
+    let theirs_count = theirs.lines().count();
+    let total = base_count + ours_count + theirs_count;
+    if total > MAX_TOTAL_LINES {
+        return false;
+    }
+    if total <= ALWAYS_ALIGN_TOTAL_LINES {
+        return true;
+    }
+
+    let base_set: std::collections::HashSet<&str> = base.lines().collect();
+    let shared_enough = |side: &str, side_count: usize| {
+        if side_count == 0 {
+            return true;
+        }
+        let common = side.lines().filter(|line| base_set.contains(line)).count();
+        common.saturating_mul(4) >= side_count
+    };
+    shared_enough(ours, ours_count) && shared_enough(theirs, theirs_count)
+}
+
+/// Whether computing the direct two-way alignment is practical (section 30 aligned
+/// row space, no-base fallback). Same rationale as
+/// [`three_way_alignment_is_practical`], with ours standing in for the base
+/// as the similarity anchor.
+pub fn two_way_alignment_is_practical(ours: &str, theirs: &str) -> bool {
+    const ALWAYS_ALIGN_TOTAL_LINES: usize = 2_000;
+    const MAX_TOTAL_LINES: usize = 100_000;
+
+    let ours_count = ours.lines().count();
+    let theirs_count = theirs.lines().count();
+    let total = ours_count + theirs_count;
+    if total > MAX_TOTAL_LINES {
+        return false;
+    }
+    if total <= ALWAYS_ALIGN_TOTAL_LINES {
+        return true;
+    }
+
+    if theirs_count == 0 {
+        return true;
+    }
+    let ours_set: std::collections::HashSet<&str> = ours.lines().collect();
+    let common = theirs
+        .lines()
+        .filter(|line| ours_set.contains(line))
+        .count();
+    common.saturating_mul(4) >= theirs_count
 }
 
 pub fn select_conflict_rendering_mode(
@@ -3657,6 +3864,279 @@ pub enum ThreeWayVisibleItem {
     Line(usize),
     /// A collapsed summary row for a resolved conflict block (by conflict index).
     CollapsedBlock(usize),
+    /// A folded run of unchanged context lines (section 30 collapsed context mode).
+    CollapsedContext {
+        source_line_start: usize,
+        len: usize,
+        /// Stable fold identity (the fold's start line before any reveals),
+        /// used to key partial-reveal state.
+        fold_id: usize,
+    },
+}
+
+/// kdiff3-style aligned row space over base/ours/theirs (section 30).
+///
+/// Maps between visual rows (shared by all columns) and per-side line
+/// indices. Sides shorter than a run are padded: their rows map to `None`.
+/// The default value is an unbounded identity map (row == line on every
+/// side), which is also the fallback when alignment is unavailable
+/// (missing/binary sides, giant files).
+#[derive(Clone, Debug, Default)]
+pub struct ThreeWayAlignedMap {
+    runs: Vec<AlignedMapRun>,
+    aligned_len: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AlignedMapRun {
+    aligned_start: usize,
+    rows: usize,
+    starts: [usize; 3],
+    lens: [usize; 3],
+}
+
+impl ThreeWayAlignedMap {
+    /// Build from the merge engine's alignment runs.
+    pub fn from_alignment(alignment: &[gitcomet_core::merge::AlignedRun]) -> Self {
+        let mut runs = Vec::with_capacity(alignment.len());
+        let mut aligned_start = 0usize;
+        for run in alignment {
+            let rows = run.visual_rows();
+            runs.push(AlignedMapRun {
+                aligned_start,
+                rows,
+                starts: [run.base.start, run.ours.start, run.theirs.start],
+                lens: [run.base.len(), run.ours.len(), run.theirs.len()],
+            });
+            aligned_start += rows;
+        }
+        Self {
+            runs,
+            aligned_len: aligned_start,
+        }
+    }
+
+    /// The identity map behaves as if every side had `row == line`.
+    pub fn is_identity(&self) -> bool {
+        self.runs.is_empty()
+    }
+
+    /// Total aligned rows. Zero for the identity map (callers keep their own
+    /// length in that case).
+    pub fn aligned_len(&self) -> usize {
+        self.aligned_len
+    }
+
+    fn run_for_row(&self, row: usize) -> Option<&AlignedMapRun> {
+        if row >= self.aligned_len {
+            return None;
+        }
+        let ix = self
+            .runs
+            .partition_point(|run| run.aligned_start + run.rows <= row);
+        self.runs.get(ix)
+    }
+
+    /// The side line rendered at `row`, or `None` for padding rows (and rows
+    /// past the aligned end).
+    pub fn side_line_for_row(&self, side: usize, row: usize) -> Option<usize> {
+        if self.is_identity() {
+            return Some(row);
+        }
+        let run = self.run_for_row(row)?;
+        let offset = row - run.aligned_start;
+        (offset < run.lens[side]).then(|| run.starts[side] + offset)
+    }
+
+    /// The row at which a side line renders. Lines past the side's end clamp
+    /// to the end of the aligned space.
+    pub fn row_for_side_line(&self, side: usize, line: usize) -> usize {
+        if self.is_identity() {
+            return line;
+        }
+        let ix = self
+            .runs
+            .partition_point(|run| run.starts[side] + run.lens[side] <= line);
+        match self.runs.get(ix) {
+            Some(run) => run.aligned_start + line.saturating_sub(run.starts[side]),
+            None => self.aligned_len,
+        }
+    }
+
+    /// section 30 split: the side line index a split boundary at aligned `row` maps
+    /// to — i.e. the first side line at or after `row` (padding rows round up
+    /// to the next real line; rows past the aligned end clamp to the side
+    /// length). Use with `row` and `row_end + 1` to bracket a selection.
+    pub fn side_line_lower_bound(&self, side: usize, row: usize) -> usize {
+        if self.is_identity() {
+            return row;
+        }
+        match self.run_for_row(row) {
+            Some(run) => {
+                let offset = row - run.aligned_start;
+                run.starts[side] + offset.min(run.lens[side])
+            }
+            None => self
+                .runs
+                .last()
+                .map(|run| run.starts[side] + run.lens[side])
+                .unwrap_or(0),
+        }
+    }
+
+    /// Map a per-side line range to the aligned row range covering it.
+    pub fn aligned_range_for_side_range(
+        &self,
+        side: usize,
+        range: std::ops::Range<usize>,
+    ) -> std::ops::Range<usize> {
+        if self.is_identity() {
+            return range;
+        }
+        if range.is_empty() {
+            let boundary = self.row_for_side_line(side, range.start);
+            return boundary..boundary;
+        }
+        let start = self.row_for_side_line(side, range.start);
+        let end = self.row_for_side_line(side, range.end.saturating_sub(1)) + 1;
+        start..end.max(start)
+    }
+}
+
+/// section 30 R11: cap on aligned rows that receive word-level highlights, bounding
+/// the per-row word-diff work on files with huge change counts.
+pub const ALIGNED_WORD_HIGHLIGHT_MAX_ROWS: usize = 4_000;
+
+fn merge_word_highlight_ranges(
+    highlights: &mut WordHighlights,
+    line_ix: usize,
+    ranges: Vec<Range<usize>>,
+) {
+    if ranges.is_empty() {
+        return;
+    }
+    let entry = highlights.entry(line_ix).or_default();
+    entry.extend(ranges);
+    entry.sort_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(entry.len());
+    for r in entry.drain(..) {
+        if let Some(last) = merged.last_mut().filter(|l| r.start <= l.end) {
+            last.end = last.end.max(r.end);
+            continue;
+        }
+        merged.push(r);
+    }
+    *entry = merged;
+}
+
+/// section 30 R11 (kdiff3 change colours): word highlights over the aligned row
+/// space. For each aligned row where a side's line differs from the base line
+/// paired at the same row, word-diff the pair and record ranges keyed by each
+/// side's own line index (the renderer's cache key space). Padding rows
+/// (added/removed lines) get no word ranges — the per-side row tint already
+/// marks them whole. Requires a real base; both-added (two-way) maps use the
+/// two-way highlight path instead.
+pub fn compute_aligned_three_way_word_highlights(
+    aligned: &ThreeWayAlignedMap,
+    base_text: &str,
+    base_line_starts: &[usize],
+    ours_text: &str,
+    ours_line_starts: &[usize],
+    theirs_text: &str,
+    theirs_line_starts: &[usize],
+) -> (WordHighlights, WordHighlights, WordHighlights) {
+    let mut wh_base = WordHighlights::default();
+    let mut wh_ours = WordHighlights::default();
+    let mut wh_theirs = WordHighlights::default();
+    if aligned.is_identity() || base_text.is_empty() {
+        return (wh_base, wh_ours, wh_theirs);
+    }
+
+    let mut budget = ALIGNED_WORD_HIGHLIGHT_MAX_ROWS;
+    for row in 0..aligned.aligned_len() {
+        if budget == 0 {
+            break;
+        }
+        let Some(base_ix) = aligned.side_line_for_row(0, row) else {
+            continue;
+        };
+        let Some(base_line) = indexed_line_text(base_text, base_line_starts, base_ix) else {
+            continue;
+        };
+        let mut row_diffed = false;
+        for (side, side_text, side_starts, side_highlights) in [
+            (1usize, ours_text, ours_line_starts, &mut wh_ours),
+            (2usize, theirs_text, theirs_line_starts, &mut wh_theirs),
+        ] {
+            let Some(side_ix) = aligned.side_line_for_row(side, row) else {
+                continue;
+            };
+            let Some(side_line) = indexed_line_text(side_text, side_starts, side_ix) else {
+                continue;
+            };
+            if side_line == base_line {
+                continue;
+            }
+            let (base_ranges, side_ranges) =
+                crate::view::word_diff::capped_word_diff_ranges(base_line, side_line);
+            merge_word_highlight_ranges(&mut wh_base, base_ix, base_ranges);
+            merge_word_highlight_ranges(side_highlights, side_ix, side_ranges);
+            row_diffed = true;
+        }
+        if row_diffed {
+            budget -= 1;
+        }
+    }
+
+    (wh_base, wh_ours, wh_theirs)
+}
+
+/// section 30 R11: aligned two-way (ours↔theirs) word highlights, precomputed
+/// once per conflict-source rebuild and shared by both diff columns (Ours and
+/// Theirs). Keyed by aligned row — the renderer's row space. Only rows where
+/// both sides have a line and the two lines differ byte-wise get an entry; the
+/// render-time whitespace mode still decides whether to *apply* them
+/// (whitespace-equal rows render as context), so this stays independent of that
+/// toggle. Replaces the previous per-render, per-column inline word diff.
+pub fn compute_aligned_two_way_word_highlights(
+    aligned: &ThreeWayAlignedMap,
+    ours_text: &str,
+    ours_line_starts: &[usize],
+    theirs_text: &str,
+    theirs_line_starts: &[usize],
+) -> FxHashMap<usize, TwoWayWordHighlightPair> {
+    let mut highlights = FxHashMap::default();
+    if aligned.is_identity() {
+        return highlights;
+    }
+
+    let mut budget = ALIGNED_WORD_HIGHLIGHT_MAX_ROWS;
+    for row in 0..aligned.aligned_len() {
+        if budget == 0 {
+            break;
+        }
+        let (Some(ours_ix), Some(theirs_ix)) = (
+            aligned.side_line_for_row(1, row),
+            aligned.side_line_for_row(2, row),
+        ) else {
+            continue;
+        };
+        let (Some(ours_line), Some(theirs_line)) = (
+            indexed_line_text(ours_text, ours_line_starts, ours_ix),
+            indexed_line_text(theirs_text, theirs_line_starts, theirs_ix),
+        ) else {
+            continue;
+        };
+        if ours_line == theirs_line {
+            continue;
+        }
+        if let Some(pair) = compute_word_highlights_for_texts(ours_line, theirs_line) {
+            highlights.insert(row, pair);
+            budget -= 1;
+        }
+    }
+
+    highlights
 }
 
 /// Span-based replacement for `Vec<ThreeWayVisibleItem>` that uses O(spans) memory
@@ -3675,6 +4155,14 @@ pub enum ThreeWayVisibleSpan {
         visible_index: usize,
         conflict_ix: usize,
     },
+    /// A single fold row hiding `len` unchanged context lines.
+    CollapsedContext {
+        visible_index: usize,
+        source_line_start: usize,
+        len: usize,
+        /// Stable fold identity (start line before any reveals).
+        fold_id: usize,
+    },
 }
 
 impl ThreeWayVisibleSpan {
@@ -3682,13 +4170,14 @@ impl ThreeWayVisibleSpan {
         match *self {
             Self::Lines { visible_start, .. } => visible_start,
             Self::CollapsedResolvedBlock { visible_index, .. } => visible_index,
+            Self::CollapsedContext { visible_index, .. } => visible_index,
         }
     }
 
     fn visible_len(&self) -> usize {
         match *self {
             Self::Lines { len, .. } => len,
-            Self::CollapsedResolvedBlock { .. } => 1,
+            Self::CollapsedResolvedBlock { .. } | Self::CollapsedContext { .. } => 1,
         }
     }
 }
@@ -3808,6 +4297,21 @@ impl ThreeWayVisibleProjection {
                 }
                 Some(ThreeWayVisibleItem::CollapsedBlock(conflict_ix))
             }
+            ThreeWayVisibleSpan::CollapsedContext {
+                visible_index,
+                source_line_start,
+                len,
+                fold_id,
+            } => {
+                if visible_ix != visible_index {
+                    return None;
+                }
+                Some(ThreeWayVisibleItem::CollapsedContext {
+                    source_line_start,
+                    len,
+                    fold_id,
+                })
+            }
         }
     }
 
@@ -3848,6 +4352,36 @@ impl ThreeWayVisibleProjection {
     pub fn spans(&self) -> &[ThreeWayVisibleSpan] {
         &self.spans
     }
+
+    /// Find the visible index showing the given source line. Lines hidden
+    /// inside a collapsed context fold map to the fold's row.
+    pub fn visible_index_for_source_line(&self, line: usize) -> Option<usize> {
+        for span in &self.spans {
+            match *span {
+                ThreeWayVisibleSpan::Lines {
+                    visible_start,
+                    source_line_start,
+                    len,
+                } => {
+                    if line >= source_line_start && line < source_line_start + len {
+                        return Some(visible_start + (line - source_line_start));
+                    }
+                }
+                ThreeWayVisibleSpan::CollapsedContext {
+                    visible_index,
+                    source_line_start,
+                    len,
+                    ..
+                } => {
+                    if line >= source_line_start && line < source_line_start + len {
+                        return Some(visible_index);
+                    }
+                }
+                ThreeWayVisibleSpan::CollapsedResolvedBlock { .. } => {}
+            }
+        }
+        None
+    }
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -3865,6 +4399,173 @@ fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bo
 ///
 /// All lines in every conflict block are included (no preview gaps).
 /// Resolved blocks collapse to a single summary row when `hide_resolved` is true.
+/// Context lines kept visible on each side of a conflict when collapsed
+/// context mode is active (section 30).
+pub(crate) const CONFLICT_COLLAPSED_CONTEXT_LINES: usize = 3;
+
+/// Runs shorter than this stay expanded — a fold row would not be
+/// meaningfully shorter than the lines it hides.
+const MIN_CONTEXT_FOLD_LINES: usize = 2;
+
+/// Lines revealed per click of a fold's reveal arrows (matches the diff
+/// view's collapsed-hunk reveal step).
+pub(crate) const CONFLICT_FOLD_REVEAL_STEP: usize = 20;
+
+/// Per-fold partial-reveal state, keyed by the fold's stable identity.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct ConflictFoldReveal {
+    /// Lines revealed from the top edge of the fold.
+    pub top: usize,
+    /// Lines revealed from the bottom edge of the fold.
+    pub bottom: usize,
+    /// The user expanded the whole fold.
+    pub expand_all: bool,
+}
+
+/// Visibility options for the three-way projection.
+#[derive(Clone, Copy, Default)]
+pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
+    pub hide_resolved: bool,
+    /// section 30 collapsed context mode: fold unchanged runs beyond
+    /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
+    pub collapse_context: bool,
+    /// Per-fold reveal state, keyed by fold identity (pre-reveal start line).
+    pub context_fold_reveals: Option<&'a std::collections::HashMap<usize, ConflictFoldReveal>>,
+}
+
+/// Build the three-way visible projection with hide-resolved and collapsed
+/// context folding applied.
+pub(in crate::view) fn build_three_way_visible_projection_with_options(
+    total_lines: usize,
+    conflict_ranges: &[std::ops::Range<usize>],
+    conflict_resolved: &[bool],
+    options: ThreeWayVisibleOptions<'_>,
+) -> ThreeWayVisibleProjection {
+    if !options.collapse_context || conflict_ranges.is_empty() {
+        return build_three_way_visible_projection_with_resolved_flags(
+            total_lines,
+            conflict_ranges,
+            conflict_resolved,
+            options.hide_resolved,
+        );
+    }
+    if total_lines == 0 {
+        return ThreeWayVisibleProjection::default();
+    }
+
+    let fold_reveal = |fold_id: usize| {
+        options
+            .context_fold_reveals
+            .and_then(|reveals| reveals.get(&fold_id).copied())
+            .unwrap_or_default()
+    };
+
+    let mut spans: Vec<ThreeWayVisibleSpan> = Vec::new();
+    let mut visible_ix = 0usize;
+    let push_lines =
+        |spans: &mut Vec<ThreeWayVisibleSpan>, visible_ix: &mut usize, start: usize, len: usize| {
+            if len == 0 {
+                return;
+            }
+            spans.push(ThreeWayVisibleSpan::Lines {
+                visible_start: *visible_ix,
+                source_line_start: start,
+                len,
+            });
+            *visible_ix += len;
+        };
+    // Emit an unchanged gap, keeping `leading_keep` lines adjacent to the
+    // previous conflict and `trailing_keep` lines before the next one;
+    // anything beyond that folds unless the user expanded it.
+    let push_gap = |spans: &mut Vec<ThreeWayVisibleSpan>,
+                    visible_ix: &mut usize,
+                    start: usize,
+                    end: usize,
+                    leading_keep: usize,
+                    trailing_keep: usize| {
+        let len = end.saturating_sub(start);
+        if len == 0 {
+            return;
+        }
+        let keep = leading_keep.saturating_add(trailing_keep);
+        let fold_len = len.saturating_sub(keep);
+        let fold_start = start + leading_keep;
+        // The fold identity is its pre-reveal start line, so partial reveals
+        // keep addressing the same fold.
+        let fold_id = fold_start;
+        let reveal = fold_reveal(fold_id);
+        let revealed_top = reveal.top.min(fold_len);
+        let revealed_bottom = reveal.bottom.min(fold_len.saturating_sub(revealed_top));
+        let remaining = fold_len - revealed_top - revealed_bottom;
+        if reveal.expand_all
+            || fold_len < MIN_CONTEXT_FOLD_LINES
+            || remaining < MIN_CONTEXT_FOLD_LINES
+        {
+            push_lines(spans, visible_ix, start, len);
+            return;
+        }
+        push_lines(spans, visible_ix, start, leading_keep + revealed_top);
+        spans.push(ThreeWayVisibleSpan::CollapsedContext {
+            visible_index: *visible_ix,
+            source_line_start: fold_start + revealed_top,
+            len: remaining,
+            fold_id,
+        });
+        *visible_ix += 1;
+        push_lines(
+            spans,
+            visible_ix,
+            fold_start + revealed_top + remaining,
+            revealed_bottom + trailing_keep,
+        );
+    };
+
+    let ctx = CONFLICT_COLLAPSED_CONTEXT_LINES;
+    let mut line_ix = 0usize;
+    for (range_ix, range) in conflict_ranges.iter().enumerate() {
+        if line_ix >= total_lines {
+            break;
+        }
+        let range_start = range.start.min(total_lines).max(line_ix);
+        let range_end = range.end.min(total_lines).max(range_start);
+
+        let leading_keep = if range_ix == 0 { 0 } else { ctx };
+        push_gap(
+            &mut spans,
+            &mut visible_ix,
+            line_ix,
+            range_start,
+            leading_keep,
+            ctx,
+        );
+
+        let resolved = conflict_resolved.get(range_ix).copied().unwrap_or(false);
+        if options.hide_resolved && resolved && range_start < range_end {
+            spans.push(ThreeWayVisibleSpan::CollapsedResolvedBlock {
+                visible_index: visible_ix,
+                conflict_ix: range_ix,
+            });
+            visible_ix += 1;
+        } else {
+            push_lines(
+                &mut spans,
+                &mut visible_ix,
+                range_start,
+                range_end - range_start,
+            );
+        }
+        line_ix = range_end;
+    }
+    if line_ix < total_lines {
+        push_gap(&mut spans, &mut visible_ix, line_ix, total_lines, ctx, 0);
+    }
+
+    ThreeWayVisibleProjection {
+        spans,
+        visible_len: visible_ix,
+    }
+}
+
 pub(in crate::view) fn build_three_way_visible_projection_with_resolved_flags(
     total_lines: usize,
     conflict_ranges: &[std::ops::Range<usize>],
@@ -4022,6 +4723,7 @@ pub fn visible_index_for_conflict(
     visible_map.iter().position(|item| match item {
         ThreeWayVisibleItem::Line(ix) => range.contains(ix),
         ThreeWayVisibleItem::CollapsedBlock(ci) => *ci == range_ix,
+        ThreeWayVisibleItem::CollapsedContext { .. } => false,
     })
 }
 

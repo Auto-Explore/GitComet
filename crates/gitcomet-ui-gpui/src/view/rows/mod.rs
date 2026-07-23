@@ -6,6 +6,11 @@ use std::num::NonZeroUsize;
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 
+/// Fixed width of a conflict diff-column line-number cell, shared by the div
+/// path (`conflict_diff_line_number_cell`, `conflict_input_row_min_width`) and
+/// the canvas path (`conflict_line_no_width`) so the gutter stays aligned.
+pub(in crate::view) const CONFLICT_DIFF_LINE_NO_WIDTH_PX: f32 = 38.0;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct LruCacheMetrics {
     pub(in crate::view) hits: u64,
@@ -361,6 +366,7 @@ mod status;
 #[cfg(feature = "benchmarks")]
 pub(crate) mod benchmarks;
 
+pub(in crate::view) use self::conflict_resolver::resolved_output_gutter_width;
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 

@@ -97,6 +97,91 @@ impl Element for DiffTextSelectionTracker {
     }
 }
 
+/// section 30 split: zero-size element that ends a conflict row-drag on mouse-up
+/// anywhere in the window (per-row handlers cover extend inside the columns).
+pub(super) struct ConflictRowSelectionTracker {
+    pub(super) view: Entity<MainPaneView>,
+}
+
+impl IntoElement for ConflictRowSelectionTracker {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for ConflictRowSelectionTracker {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = px(0.0).into();
+        style.size.height = px(0.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let selecting = self
+            .view
+            .read(cx)
+            .conflict_resolver
+            .row_selection
+            .is_some_and(|selection| selection.selecting);
+        if !selecting {
+            return;
+        }
+
+        let view_for_up = self.view.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+            if phase != gpui::DispatchPhase::Bubble {
+                return;
+            }
+            if event.button != MouseButton::Left {
+                return;
+            }
+            view_for_up.update(cx, |this, cx| {
+                this.conflict_resolver_end_row_selection(cx);
+            });
+        });
+    }
+}
+
 pub(super) struct DiffTextSelectionOverlay {
     pub(super) view: Entity<MainPaneView>,
     pub(super) visible_ix: usize,

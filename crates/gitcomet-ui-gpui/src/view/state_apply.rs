@@ -13,6 +13,7 @@ impl GitCometView {
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
         let next_banner_error = next.banner_error.clone();
+        let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
         let mut follow_up_msgs = Vec::new();
 
         let old_notification_len = self.state.notifications.len();
@@ -153,6 +154,17 @@ impl GitCometView {
         }
 
         self.state = next;
+        match (self.sidebar_collapsed_before_merge_view, merge_view_active) {
+            (None, true) => {
+                self.sidebar_collapsed_before_merge_view = Some(self.sidebar_collapsed);
+                self.set_sidebar_collapsed(true, cx);
+            }
+            (Some(collapsed_before_merge_view), false) => {
+                self.sidebar_collapsed_before_merge_view = None;
+                self.set_sidebar_collapsed(collapsed_before_merge_view, cx);
+            }
+            _ => {}
+        }
         self.sync_terminal_sessions_with_state(cx);
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();

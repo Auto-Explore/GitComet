@@ -1926,6 +1926,76 @@ fn focused_mergetool_mode_hides_full_chrome() {
     assert!(!renders_full_chrome(GitCometViewMode::FocusedMergetool));
 }
 
+fn state_with_active_diff(path: &str, kind: FileStatusKind) -> AppState {
+    let repo_id = RepoId(1);
+    let path = PathBuf::from(path);
+    let mut repo = open_repo_state_with_workdir("/repo");
+    repo.worktree_status = Loadable::Ready(Arc::new(vec![FileStatus {
+        path: path.clone(),
+        kind,
+        conflict: (kind == FileStatusKind::Conflicted)
+            .then_some(gitcomet_core::domain::FileConflictKind::BothModified),
+    }]));
+    repo.diff_state.diff_target = Some(DiffTarget::WorkingTree {
+        path,
+        area: DiffArea::Unstaged,
+    });
+    AppState {
+        active_repo: Some(repo_id),
+        repos: vec![repo],
+        ..AppState::default()
+    }
+}
+
+#[test]
+fn merge_view_target_requires_an_unstaged_conflict() {
+    let normal = state_with_active_diff("src/normal.rs", FileStatusKind::Modified);
+    let merge = state_with_active_diff("src/conflict.rs", FileStatusKind::Conflicted);
+
+    assert!(active_merge_view_target(&normal).is_none());
+    assert!(active_merge_view_target(&merge).is_some());
+}
+
+#[gpui::test]
+fn merge_view_temporarily_collapses_and_restores_sidebar(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(state_with_active_diff(
+        "src/conflict.rs",
+        FileStatusKind::Conflicted,
+    )));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| assert!(view.read(app).sidebar_collapsed));
+
+    store.replace_snapshot_for_test(Arc::new(state_with_active_diff(
+        "src/normal.rs",
+        FileStatusKind::Modified,
+    )));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| assert!(!view.read(app).sidebar_collapsed));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| this.set_sidebar_collapsed(true, cx));
+    });
+    store.replace_snapshot_for_test(Arc::new(state_with_active_diff(
+        "src/conflict.rs",
+        FileStatusKind::Conflicted,
+    )));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| assert!(view.read(app).sidebar_collapsed));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| this.set_sidebar_collapsed(false, cx));
+    });
+    store.replace_snapshot_for_test(Arc::new(state_with_active_diff(
+        "src/normal.rs",
+        FileStatusKind::Modified,
+    )));
+    sync_view_snapshot(cx, &view);
+    cx.update(|_window, app| assert!(view.read(app).sidebar_collapsed));
+}
+
 #[test]
 fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
     assert!(repository_entry_interstitial_active(
@@ -1959,6 +2029,21 @@ fn repository_entry_interstitial_helpers_distinguish_loading_and_splash() {
         GitCometViewMode::Normal,
         false
     ));
+}
+
+#[test]
+fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette() {
+    assert!(titlebar_workspace_actions_enabled(
+        GitCometViewMode::FocusedMergetool,
+        true
+    ));
+    assert!(!show_titlebar_repo_tabs(GitCometViewMode::FocusedMergetool));
+    assert!(!command_palette_available(
+        GitCometViewMode::FocusedMergetool
+    ));
+
+    assert!(show_titlebar_repo_tabs(GitCometViewMode::Normal));
+    assert!(command_palette_available(GitCometViewMode::Normal));
 }
 
 #[test]

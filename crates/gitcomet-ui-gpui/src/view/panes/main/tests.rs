@@ -1,21 +1,24 @@
 use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
-    ClearDiffSelectionAction, RenderableConflictFile, ResolvedOutputConflictMarker,
-    VersionedCachedDiffStyledText, apply_conflict_choice_provenance_hints,
+    ClearDiffSelectionAction, FocusedMergetoolOutput, RenderableConflictFile,
+    ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
+    apply_conflict_choice_provenance_hints, apply_focused_mergetool_output,
     apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
     build_line_starts, build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges,
     build_resolved_output_syntax_state_for_snapshot,
     build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
     conflict_file_is_binary, conflict_marker_nav_entries_from_markers,
-    conflict_resolver_output_context_line, dirty_byte_range_to_line_range,
-    first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
-    output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
-    parse_conflict_canvas_rows_env, remap_line_keyed_cache_for_delta, renderable_conflict_file,
-    replace_output_lines_in_range, resolved_outline_delta_between_texts,
+    conflict_resolver_output_context_line, conflict_strategy_needs_full_side_payloads,
+    dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
+    focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
+    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
+    remap_line_keyed_cache_for_delta, remap_resolved_output_conflict_block_ranges_for_delta,
+    renderable_conflict_file, replace_output_lines_in_range, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
-    split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
+    resolved_output_snapshot_is_modified, split_target_conflict_block_into_subchunks,
+    versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current,
 };
 use crate::kit::text_model::TextModel;
@@ -57,6 +60,62 @@ fn focused_mergetool_save_exit_code_is_success_when_all_resolved() {
 #[test]
 fn focused_mergetool_save_exit_code_is_canceled_when_unresolved_remain() {
     assert_eq!(focused_mergetool_save_exit_code(3, 2), 1);
+}
+
+#[test]
+fn specialized_conflict_strategies_require_full_side_payloads() {
+    use gitcomet_core::conflict_session::ConflictResolverStrategy;
+
+    for strategy in [
+        ConflictResolverStrategy::BinarySidePick,
+        ConflictResolverStrategy::TwoWayKeepDelete,
+        ConflictResolverStrategy::DecisionOnly,
+    ] {
+        assert!(conflict_strategy_needs_full_side_payloads(Some(strategy)));
+    }
+    assert!(!conflict_strategy_needs_full_side_payloads(Some(
+        ConflictResolverStrategy::FullTextResolver
+    )));
+    assert!(!conflict_strategy_needs_full_side_payloads(None));
+}
+
+#[test]
+fn focused_mergetool_output_writes_exact_binary_bytes_and_creates_parent() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let output = dir.path().join("nested/result.bin");
+    let bytes = b"\0ours\xffresult";
+
+    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Write(bytes))
+        .expect("write focused mergetool output");
+
+    assert_eq!(std::fs::read(output).expect("read output"), bytes);
+}
+
+#[test]
+fn focused_mergetool_delete_accepts_existing_and_missing_outputs() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let output = dir.path().join("result.txt");
+    std::fs::write(&output, "merged").expect("seed output");
+
+    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Delete)
+        .expect("delete focused mergetool output");
+    assert!(!output.exists());
+
+    apply_focused_mergetool_output(&output, FocusedMergetoolOutput::Delete)
+        .expect("missing output is already deleted");
+}
+
+#[test]
+fn focused_mergetool_output_reports_filesystem_failures() {
+    let dir = tempfile::tempdir().expect("temp dir");
+
+    let err = apply_focused_mergetool_output(
+        dir.path(),
+        FocusedMergetoolOutput::Write(b"cannot replace a directory"),
+    )
+    .expect_err("directory target must fail");
+
+    assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
 }
 
 fn focused_mergetool_marker_labels() -> gitcomet_core::conflict_output::ConflictMarkerLabels<'static>
@@ -110,6 +169,24 @@ fn binary_conflict_file(path: &Path) -> ConflictFile {
         theirs: None,
         current: None,
     }
+}
+
+#[test]
+fn current_only_non_utf8_payload_is_detected_as_binary() {
+    let path = PathBuf::from("asset.bin");
+    let file = ConflictFile {
+        path: path.into(),
+        base_bytes: None,
+        ours_bytes: None,
+        theirs_bytes: None,
+        current_bytes: Some(Arc::from(&b"\xff\xfe"[..])),
+        base: None,
+        ours: None,
+        theirs: None,
+        current: None,
+    };
+
+    assert!(conflict_file_is_binary(&file));
 }
 
 #[test]
@@ -394,7 +471,42 @@ fn resolved_outline_delta_for_snapshot_transition_prefers_recent_edit_delta() {
 }
 
 #[test]
-fn resolved_outline_delta_for_snapshot_transition_falls_back_after_multiple_revisions() {
+fn resolved_output_source_revision_tracks_edits_and_document_replacement() {
+    let mut model = TextModel::from("alpha");
+    let initial = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
+
+    model.replace_range(5..5, " beta");
+    let edited = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
+    assert_eq!(edited.model_id, initial.model_id);
+    assert!(edited.revision > initial.revision);
+
+    model.set_text("replacement");
+    let replaced = ResolvedOutputSourceRevision::from_snapshot(&model.snapshot());
+    assert_ne!(replaced.model_id, edited.model_id);
+}
+
+#[test]
+fn resolved_output_modified_state_tracks_saved_snapshot_and_undo() {
+    let mut model = TextModel::from("saved output");
+    let saved = model.snapshot();
+    assert!(!resolved_output_snapshot_is_modified(None, &saved));
+    assert!(!resolved_output_snapshot_is_modified(Some(&saved), &saved));
+
+    model.replace_range(6..12, "result");
+    assert!(resolved_output_snapshot_is_modified(
+        Some(&saved),
+        &model.snapshot(),
+    ));
+
+    model = saved.clone().into();
+    assert!(!resolved_output_snapshot_is_modified(
+        Some(&saved),
+        &model.snapshot(),
+    ));
+}
+
+#[test]
+fn resolved_outline_delta_for_snapshot_transition_defers_after_multiple_revisions() {
     let mut model = TextModel::from("abcdef");
     let old_snapshot = model.snapshot();
     let _first = model.replace_range(1..2, "B");
@@ -405,11 +517,9 @@ fn resolved_outline_delta_for_snapshot_transition_falls_back_after_multiple_revi
         &old_snapshot,
         &new_snapshot,
         Some((4..5, latest)),
-    )
-    .expect("delta");
+    );
 
-    assert_eq!(delta.old_range, 1..5);
-    assert_eq!(delta.new_range, 1..5);
+    assert_eq!(delta, None);
 }
 
 #[test]
@@ -756,6 +866,45 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
             unresolved: true,
         })
     );
+}
+
+#[test]
+fn remap_resolved_output_conflict_block_ranges_expands_edited_block() {
+    let old_ranges = vec![1..3, 5..6];
+    let new_ranges =
+        remap_resolved_output_conflict_block_ranges_for_delta(&old_ranges, 2..3, 2..4, 7);
+
+    assert_eq!(new_ranges, vec![1..4, 6..7]);
+}
+
+#[test]
+fn remapped_resolved_output_conflict_markers_cover_inserted_rows() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".to_string().into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a\nb\n".to_string().into(),
+            theirs: "x\n".to_string().into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+        }),
+        ConflictSegment::Text("tail\n".to_string().into()),
+    ];
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    let old_ranges =
+        resolved_output_conflict_block_ranges_in_text(&segments, &output).expect("block ranges");
+    let new_ranges =
+        remap_resolved_output_conflict_block_ranges_for_delta(&old_ranges, 2..3, 2..4, 5);
+    let markers = build_resolved_output_conflict_markers_from_block_ranges(
+        &segments,
+        new_ranges.as_slice(),
+        5,
+    );
+
+    assert!(markers[1].is_some());
+    assert!(markers[2].is_some(), "inserted row should keep its marker");
+    assert!(markers[3].is_some());
+    assert_eq!(markers[4], None);
 }
 
 #[test]
@@ -1647,6 +1796,44 @@ fn resolved_output_syntax_state_requests_background_prepare_for_large_documents(
         syntax_state.highlights.is_empty(),
         "pending document syntax should paint plain text instead of materializing a full fallback highlight vector"
     );
+}
+
+#[test]
+fn resolved_output_syntax_state_retains_old_document_while_background_prepare_is_pending() {
+    let theme = AppTheme::gitcomet_dark();
+    let old_output = TextModel::from("fn existing() -> usize { 1 }\n");
+    let old_state = build_resolved_output_syntax_state_for_snapshot(
+        theme,
+        &old_output.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+    );
+    let old_document = old_state
+        .prepared_document
+        .expect("initial resolved output should prepare syntax");
+
+    let large_output =
+        "let value = Some(42);\n".repeat(rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1);
+    let large_model = TextModel::from(large_output);
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
+        theme,
+        &large_model.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        Some(old_document),
+        None,
+        rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::ZERO,
+        },
+    );
+
+    assert!(syntax_state.needs_background_prepare);
+    assert_eq!(syntax_state.prepared_document, Some(old_document));
+    assert!(
+        syntax_state.highlight_provider.is_some(),
+        "pending background syntax should keep the previous provider instead of flashing to plain text"
+    );
+    assert!(syntax_state.highlights.is_empty());
 }
 
 #[test]

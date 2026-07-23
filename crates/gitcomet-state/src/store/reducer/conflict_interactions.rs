@@ -1,10 +1,12 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{
-    ConflictAutosolveMode, ConflictBulkChoice, ConflictRegionChoice,
+    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictRegionChoice,
     ConflictRegionResolutionUpdate, Effect, RepoPath,
 };
 use gitcomet_core::conflict_session::{
-    ConflictRegionResolution, HistoryAutosolveOptions, RegexAutosolveOptions,
+    ConflictPayload, ConflictRegionEditOutcome, ConflictRegionResolution,
+    ConflictRegionSplitBoundaries, ConflictResolverStrategy, HistoryAutosolveOptions,
+    RegexAutosolveOptions, join_conflict_regions_text, split_conflict_region_text,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -104,6 +106,156 @@ pub(super) fn set_region_choice_inline(
     }
 }
 
+#[derive(Clone, Copy)]
+enum ConflictRegionEdit {
+    Split(ConflictRegionSplitBoundaries),
+    Join,
+}
+
+/// section 30 split: rewrite conflict block `region_index` into 2–3 blocks at the
+/// given block-local boundaries; the split parts open Unresolved and every
+/// other region keeps its resolution (indices shift past the split).
+pub(super) fn split_region(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    boundaries: ConflictRegionSplitBoundaries,
+    expected_conflict_rev: u64,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if repo_state.conflict_state.conflict_rev != expected_conflict_rev {
+        return Vec::new();
+    }
+    edit_regions(
+        state,
+        repo_id,
+        path,
+        region_index,
+        ConflictRegionEdit::Split(boundaries),
+    )
+}
+
+/// section 30 join: merge conflict blocks `region_index` and `region_index + 1`
+/// (context between them is absorbed into every side); the joined region
+/// opens Unresolved and later regions shift down by one.
+pub(super) fn join_regions(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    expected_conflict_rev: u64,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if repo_state.conflict_state.conflict_rev != expected_conflict_rev {
+        return Vec::new();
+    }
+    edit_regions(state, repo_id, path, region_index, ConflictRegionEdit::Join)
+}
+
+fn edit_regions(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    edit: ConflictRegionEdit,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path.as_path() {
+        return Vec::new();
+    }
+    if session.strategy != ConflictResolverStrategy::FullTextResolver {
+        return Vec::new();
+    }
+    let Some(ConflictPayload::Text(current)) = session.current.as_ref() else {
+        return Vec::new();
+    };
+
+    let Some(ConflictRegionEditOutcome { new_text, parts }) = (match edit {
+        ConflictRegionEdit::Split(boundaries) => {
+            split_conflict_region_text(current, region_index, boundaries)
+        }
+        ConflictRegionEdit::Join => join_conflict_regions_text(current, region_index),
+    }) else {
+        return Vec::new();
+    };
+
+    // Explicit resolution carry-over: the edited region(s) open Unresolved,
+    // everything else keeps its resolution at its shifted index. The reload
+    // restore path is content-based and would drop nothing here either, but
+    // doing it inline keeps the reducer deterministic and reload-free.
+    let old: Vec<ConflictRegionResolution> = session
+        .regions
+        .iter()
+        .map(|region| region.resolution.clone())
+        .collect();
+    let shared: std::sync::Arc<str> = std::sync::Arc::from(new_text.as_str());
+    session.current = Some(ConflictPayload::Text(std::sync::Arc::clone(&shared)));
+    session.parse_regions_from_shared_text(std::sync::Arc::clone(&shared));
+    for (ix, region) in session.regions.iter_mut().enumerate() {
+        region.resolution = if ix < region_index {
+            old.get(ix)
+                .cloned()
+                .unwrap_or(ConflictRegionResolution::Unresolved)
+        } else if ix < region_index + parts {
+            ConflictRegionResolution::Unresolved
+        } else {
+            // Split consumed 1 old region for `parts` new ones; join consumed
+            // 2 old regions for 1 new one.
+            let consumed = match edit {
+                ConflictRegionEdit::Split(_) => 1,
+                ConflictRegionEdit::Join => 2,
+            };
+            old.get(ix - parts + consumed)
+                .cloned()
+                .unwrap_or(ConflictRegionResolution::Unresolved)
+        };
+    }
+
+    // Keep the loaded conflict file's current text in step so the view's
+    // source hash changes and it rebuilds from the new segmentation. Mutate
+    // the file in place — rebuilding from the session would clobber side
+    // texts under CurrentOnly load mode.
+    let loaded_file_updated = if let crate::model::Loadable::Ready(Some(file)) =
+        &repo_state.conflict_state.conflict_file
+        && file.path.as_path() == path.as_path()
+    {
+        let mut file = file.clone();
+        file.current = Some(std::sync::Arc::clone(&shared));
+        file.current_bytes = None;
+        repo_state.set_conflict_file(crate::model::Loadable::Ready(Some(file)));
+        true
+    } else {
+        false
+    };
+    // `set_conflict_file` already publishes the session edit. If there was no
+    // matching loaded file to update, publish the session mutation directly.
+    if !loaded_file_updated {
+        repo_state.bump_conflict_rev();
+    }
+
+    // Persist the rewritten marker text; resolved regions stay markers on
+    // disk — Save remains the materialization point for resolutions.
+    vec![Effect::SaveWorktreeFile {
+        repo_id,
+        path: path.to_path_buf(),
+        contents: new_text,
+        stage: false,
+    }]
+}
+
 pub(super) fn sync_region_resolutions(
     state: &mut AppState,
     repo_id: RepoId,
@@ -171,8 +323,8 @@ pub(super) fn apply_autosolve(
         return Vec::new();
     }
 
-    let resolved = apply_autosolve_to_session(session, mode, whitespace_normalize);
-    if resolved > 0 {
+    let stats = apply_autosolve_to_session(session, mode, whitespace_normalize);
+    if stats.total_resolved() > 0 {
         repo_state.bump_conflict_rev();
     }
     Vec::new()
@@ -245,38 +397,30 @@ fn apply_bulk_choice_to_session(
     applied
 }
 
-fn apply_autosolve_to_session(
+pub(super) fn apply_autosolve_to_session(
     session: &mut gitcomet_core::conflict_session::ConflictSession,
     mode: ConflictAutosolveMode,
     whitespace_normalize: bool,
-) -> usize {
+) -> ConflictAutosolveStats {
+    let mut stats = ConflictAutosolveStats::default();
     match mode {
-        ConflictAutosolveMode::Safe => {
-            let pass1 = session.auto_resolve_safe_with_options(whitespace_normalize);
-            let pass2 = session.auto_resolve_pass2();
-            let pass1_after_split = if pass2 > 0 {
-                session.auto_resolve_safe_with_options(whitespace_normalize)
-            } else {
-                0
-            };
-            pass1 + pass2 + pass1_after_split
-        }
-        ConflictAutosolveMode::Regex => {
-            let pass1 = session.auto_resolve_safe_with_options(whitespace_normalize);
-            let pass2 = session.auto_resolve_pass2();
-            let pass1_after_split = if pass2 > 0 {
-                session.auto_resolve_safe_with_options(whitespace_normalize)
-            } else {
-                0
-            };
-            let regex =
-                session.auto_resolve_regex(&RegexAutosolveOptions::whitespace_insensitive());
-            pass1 + pass2 + pass1_after_split + regex
+        ConflictAutosolveMode::Safe | ConflictAutosolveMode::Regex => {
+            stats.pass1 = session.auto_resolve_safe_with_options(whitespace_normalize);
+            stats.pass2_split = session.auto_resolve_pass2();
+            if stats.pass2_split > 0 {
+                stats.pass1_after_split =
+                    session.auto_resolve_safe_with_options(whitespace_normalize);
+            }
+            if mode == ConflictAutosolveMode::Regex {
+                stats.regex =
+                    session.auto_resolve_regex(&RegexAutosolveOptions::whitespace_insensitive());
+            }
         }
         ConflictAutosolveMode::History => {
-            session.auto_resolve_history(&HistoryAutosolveOptions::bullet_list())
+            stats.history = session.auto_resolve_history(&HistoryAutosolveOptions::bullet_list());
         }
     }
+    stats
 }
 
 fn reset_session_resolutions(

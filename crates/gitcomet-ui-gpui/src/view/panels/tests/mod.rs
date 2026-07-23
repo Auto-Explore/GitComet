@@ -1,12 +1,13 @@
 #![allow(clippy::type_complexity)]
 
 pub(super) use super::main::{
-    next_conflict_diff_split_ratio, show_conflict_save_stage_action,
+    conflict_side_output_bytes, next_conflict_diff_split_ratio, show_conflict_save_stage_action,
     show_external_mergetool_actions,
 };
 pub(super) use super::*;
 pub(super) use crate::test_support::{lock_clipboard_test, lock_visual_test};
 pub(super) use crate::view::panes::main::PreparedSyntaxViewMode;
+pub(super) use crate::view::show_diff_file_navigation;
 pub(super) use gitcomet_core::error::{Error, ErrorKind};
 pub(super) use gitcomet_core::services::{GitBackend, GitRepository, Result};
 pub(super) use gitcomet_state::store::AppStore;
@@ -115,6 +116,42 @@ fn shows_save_stage_action_only_in_normal_mode() {
     assert!(!show_conflict_save_stage_action(
         GitCometViewMode::FocusedMergetool
     ));
+}
+
+#[test]
+fn shows_diff_file_navigation_only_in_normal_mode() {
+    assert!(show_diff_file_navigation(GitCometViewMode::Normal));
+    assert!(!show_diff_file_navigation(
+        GitCometViewMode::FocusedMergetool
+    ));
+}
+
+#[test]
+fn conflict_side_output_bytes_prefers_original_bytes_and_falls_back_to_text() {
+    let file = gitcomet_state::model::ConflictFile {
+        path: std::path::PathBuf::from("conflict.txt").into(),
+        base_bytes: Some(Arc::from(&b"base-bytes"[..])),
+        ours_bytes: None,
+        theirs_bytes: None,
+        current_bytes: None,
+        base: Some(Arc::from("ignored base text")),
+        ours: Some(Arc::from("ours text")),
+        theirs: None,
+        current: None,
+    };
+
+    assert_eq!(
+        conflict_side_output_bytes(&file, ThreeWayColumn::Base).as_deref(),
+        Some(&b"base-bytes"[..])
+    );
+    assert_eq!(
+        conflict_side_output_bytes(&file, ThreeWayColumn::Ours).as_deref(),
+        Some(&b"ours text"[..])
+    );
+    assert_eq!(
+        conflict_side_output_bytes(&file, ThreeWayColumn::Theirs),
+        None
+    );
 }
 
 #[test]
@@ -586,6 +623,18 @@ pub(super) fn reset_uniform_list_offsets(handles: &[&gpui::UniformListScrollHand
     for handle in handles {
         set_uniform_list_offset(handle, point(px(0.0), px(0.0)));
     }
+}
+
+pub(super) fn scroll_handle_offset(handle: &gpui::ScrollHandle) -> gpui::Point<Pixels> {
+    handle.offset()
+}
+
+pub(super) fn scroll_handle_max_offset(handle: &gpui::ScrollHandle) -> gpui::Size<Pixels> {
+    handle.max_offset().into()
+}
+
+pub(super) fn set_scroll_handle_offset(handle: &gpui::ScrollHandle, offset: gpui::Point<Pixels>) {
+    handle.set_offset(offset);
 }
 
 pub(super) fn set_diff_scroll_sync_for_test(

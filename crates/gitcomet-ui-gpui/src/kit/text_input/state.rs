@@ -459,6 +459,11 @@ pub(super) struct InteractionState {
     pub(super) context_menu: Option<TextInputContextMenuState>,
     pub(super) vertical_motion_x: Option<Pixels>,
     pub(super) vertical_scroll_handle: Option<ScrollHandle>,
+    /// When set, a multiline input lays out at its content (widest-line) width
+    /// instead of filling its container, so an outer `overflow_scroll` container
+    /// can scroll it horizontally and expose a real horizontal `max_offset` on
+    /// the shared scroll handle (used for column↔output scroll sync).
+    pub(super) content_width_layout: bool,
     pub(super) pending_cursor_autoscroll: bool,
     /// Set after a stale-max_offset retry so the next attempt always clears the flag,
     /// preventing an infinite notify loop when cursor_bottom sits at the viewport edge.
@@ -483,6 +488,7 @@ impl InteractionState {
             context_menu: None,
             vertical_motion_x: None,
             vertical_scroll_handle: None,
+            content_width_layout: false,
             pending_cursor_autoscroll: false,
             cursor_autoscroll_retry_exhausted: false,
             has_focus: false,
@@ -496,6 +502,24 @@ impl InteractionState {
             shift_tab_pressed: false,
             submit_on_enter: false,
         }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ContentWidthCache {
+    /// Mirrors the text model's line index so an edit can replace just its
+    /// affected line range. The multiset keeps maximum lookup logarithmic
+    /// without rescanning every line during layout.
+    pub(super) line_units: Vec<usize>,
+    pub(super) unit_counts: BTreeMap<usize, usize>,
+}
+
+impl ContentWidthCache {
+    pub(super) fn max_units(&self) -> usize {
+        self.unit_counts
+            .last_key_value()
+            .map(|(&units, _)| units)
+            .unwrap_or_default()
     }
 }
 
@@ -517,6 +541,7 @@ pub struct TextInput {
     pub(super) highlight: HighlightState,
     pub(super) layout: LayoutState,
     pub(super) wrap: WrapState,
+    pub(super) content_width_cache: Option<ContentWidthCache>,
     pub(super) selection: SelectionState,
     pub(super) interaction: InteractionState,
 }

@@ -15,6 +15,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let active_repo_id = this.active_repo().map(|r| r.id);
     let active_repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
     let external_editor_configured = crate::external_editor::configured_setting().is_some();
+    let show_command_palette = this
+        .root_view
+        .upgrade()
+        .is_some_and(|root| command_palette_available(root.read(cx).view_mode));
 
     let separator = || {
         div()
@@ -93,18 +97,20 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex_col()
         .min_w(scaled_px(200.0))
         .child(section_label("app_menu_app_section", "Application"))
-        .child(
-            entry(
-                "app_menu_command_palette",
-                "Command Palette".into(),
-                Some(secondary_shortcut("P").into()),
-                false,
+        .when(show_command_palette, |menu| {
+            menu.child(
+                entry(
+                    "app_menu_command_palette",
+                    "Command Palette".into(),
+                    Some(secondary_shortcut("P").into()),
+                    false,
+                )
+                .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                    this.close_popover(cx);
+                    window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+                })),
             )
-            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
-                this.close_popover(cx);
-                window.dispatch_action(Box::new(ToggleCommandPalette), cx);
-            })),
-        )
+        })
         .child(
             entry(
                 "app_menu_settings",

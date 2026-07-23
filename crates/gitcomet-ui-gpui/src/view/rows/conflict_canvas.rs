@@ -3,8 +3,8 @@ use super::canvas::keyed_canvas;
 use super::diff_text::{whitespace_visible_line_styled_text_for_raw, whitespace_visible_line_text};
 use super::*;
 use gpui::{
-    App, Bounds, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle, Window, fill,
-    point, px, size,
+    App, Bounds, ContentMask, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle,
+    Window, fill, point, px, size,
 };
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
@@ -41,6 +41,7 @@ pub(super) fn split_conflict_row_canvas(
     min_width: Pixels,
     left_target_width: Pixels,
     right_target_width: Pixels,
+    show_line_numbers: bool,
     left_line_no: SharedString,
     right_line_no: SharedString,
     left_bg: gpui::Rgba,
@@ -80,6 +81,9 @@ pub(super) fn split_conflict_row_canvas(
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
+            let clip_bounds = window.content_mask().bounds;
+            let left_gutter = sticky_gutter_bounds(prepaint.left_col, clip_bounds, pad, gap);
+            let right_gutter = sticky_gutter_bounds(prepaint.right_col, clip_bounds, pad, gap);
 
             window.paint_quad(fill(prepaint.left_col, left_bg));
             window.paint_quad(fill(prepaint.right_col, right_bg));
@@ -94,61 +98,113 @@ pub(super) fn split_conflict_row_canvas(
                 theme.colors.border,
             ));
 
-            paint_gutter_text(
-                &left_line_no,
-                prepaint.left_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-            paint_gutter_text(
-                &right_line_no,
-                prepaint.right_col.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
-            );
-
-            let left_text_bounds = split_column_text_bounds(prepaint.left_col, pad, gap);
-            let right_text_bounds = split_column_text_bounds(prepaint.right_col, pad, gap);
-
-            window.paint_layer(left_text_bounds, |window| {
-                paint_conflict_text(
-                    left_text_bounds,
-                    left_fg,
-                    y,
-                    line_metrics,
-                    &left_prepared,
-                    window,
-                    cx,
+            if show_line_numbers {
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: left_gutter,
+                    }),
+                    |window| {
+                        paint_gutter_text(
+                            &left_line_no,
+                            left_gutter.left() + pad,
+                            y,
+                            theme.colors.text_muted,
+                            line_metrics,
+                            window,
+                            cx,
+                        );
+                    },
                 );
-            });
-            window.paint_layer(right_text_bounds, |window| {
-                paint_conflict_text(
-                    right_text_bounds,
-                    right_fg,
-                    y,
-                    line_metrics,
-                    &right_prepared,
-                    window,
-                    cx,
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: right_gutter,
+                    }),
+                    |window| {
+                        paint_gutter_text(
+                            &right_line_no,
+                            right_gutter.left() + pad,
+                            y,
+                            theme.colors.text_muted,
+                            line_metrics,
+                            window,
+                            cx,
+                        );
+                    },
                 );
-            });
+                paint_gutter_divider(left_gutter, pad, theme.colors.border, window);
+                paint_gutter_divider(right_gutter, pad, theme.colors.border, window);
+            }
+
+            let left_text_bounds =
+                split_column_text_bounds(prepaint.left_col, pad, gap, show_line_numbers);
+            let right_text_bounds =
+                split_column_text_bounds(prepaint.right_col, pad, gap, show_line_numbers);
+            let left_text_clip = if show_line_numbers {
+                text_clip_bounds_behind_gutter(left_text_bounds, left_gutter)
+            } else {
+                left_text_bounds
+            };
+            let right_text_clip = if show_line_numbers {
+                text_clip_bounds_behind_gutter(right_text_bounds, right_gutter)
+            } else {
+                right_text_bounds
+            };
+
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: left_text_clip,
+                }),
+                |window| {
+                    paint_conflict_text(
+                        left_text_bounds,
+                        left_fg,
+                        y,
+                        line_metrics,
+                        &left_prepared,
+                        window,
+                        cx,
+                    );
+                },
+            );
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: right_text_clip,
+                }),
+                |window| {
+                    paint_conflict_text(
+                        right_text_bounds,
+                        right_fg,
+                        y,
+                        line_metrics,
+                        &right_prepared,
+                        window,
+                        cx,
+                    );
+                },
+            );
 
             if let Some(chunk_context) = chunk_context.clone() {
-                let clip_bounds = window.content_mask().bounds;
                 let visible_left = prepaint.left_col.intersect(&clip_bounds);
                 let visible_right = prepaint.right_col.intersect(&clip_bounds);
                 window.on_mouse_event({
                     let view = view.clone();
                     move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble
-                            || event.button != gpui::MouseButton::Right
-                        {
+                        if phase != DispatchPhase::Bubble {
+                            return;
+                        }
+                        if event.button == gpui::MouseButton::Left {
+                            if visible_left.contains(&event.position)
+                                || visible_right.contains(&event.position)
+                            {
+                                // section 30: clicking a conflict block body selects it.
+                                let conflict_ix = chunk_context.conflict_ix;
+                                view.update(cx, |this, cx| {
+                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
+                                });
+                            }
+                            return;
+                        }
+                        if event.button != gpui::MouseButton::Right {
                             return;
                         }
 
@@ -216,6 +272,7 @@ pub(super) fn single_column_conflict_canvas(
     visible_row_ix: usize,
     row_ix: usize,
     min_width: Pixels,
+    show_line_numbers: bool,
     line_no: SharedString,
     bg: gpui::Rgba,
     fg: gpui::Rgba,
@@ -225,8 +282,13 @@ pub(super) fn single_column_conflict_canvas(
     chunk_context: Option<ConflictChunkContext>,
     chunk_menu_prefix: &'static str,
     is_three_way: bool,
+    active_conflict_marker: bool,
+    // section 30 split: `Some(selected)` enables drag selection on this row
+    // (`selected` paints the highlight); `None` disables it.
+    row_selection: Option<bool>,
 ) -> AnyElement {
     let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
+    let row_selected = row_selection == Some(true);
 
     keyed_canvas(
         (id_prefix, visible_row_ix),
@@ -236,36 +298,133 @@ pub(super) fn single_column_conflict_canvas(
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
+            let clip_bounds = window.content_mask().bounds;
+            let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap);
 
             window.paint_quad(fill(bounds, bg));
 
-            paint_gutter_text(
-                &line_no,
-                bounds.left() + pad,
-                y,
-                theme.colors.text_muted,
-                line_metrics,
-                window,
-                cx,
+            // section 30 split: highlight rows in the drag selection.
+            if row_selected {
+                window.paint_quad(fill(
+                    bounds,
+                    with_alpha(theme.colors.accent, if theme.is_dark { 0.20 } else { 0.14 }),
+                ));
+            }
+
+            // section 30: mark the active conflict's rows with an accent bar so a
+            // click/keyboard selection is visible in the source columns.
+            if active_conflict_marker {
+                let bar = gpui::Bounds::new(
+                    point(
+                        if show_line_numbers {
+                            gutter_bounds.left()
+                        } else {
+                            bounds.left()
+                        },
+                        bounds.top(),
+                    ),
+                    gpui::size(px(3.0), bounds.size.height),
+                );
+                window.paint_quad(fill(bar, theme.colors.accent));
+            }
+
+            if show_line_numbers {
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: gutter_bounds,
+                    }),
+                    |window| {
+                        paint_gutter_text(
+                            &line_no,
+                            gutter_bounds.left() + pad,
+                            y,
+                            theme.colors.text_muted,
+                            line_metrics,
+                            window,
+                            cx,
+                        );
+                    },
+                );
+                paint_gutter_divider(gutter_bounds, pad, theme.colors.border, window);
+            }
+
+            let text_bounds = split_column_text_bounds(bounds, pad, gap, show_line_numbers);
+            let text_clip_bounds = if show_line_numbers {
+                text_clip_bounds_behind_gutter(text_bounds, gutter_bounds)
+            } else {
+                text_bounds
+            };
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: text_clip_bounds,
+                }),
+                |window| {
+                    paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx);
+                },
             );
 
-            let text_bounds = split_column_text_bounds(bounds, pad, gap);
-            window.paint_layer(text_bounds, |window| {
-                paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx);
-            });
-
             if let Some(chunk_context) = chunk_context.clone() {
-                let clip_bounds = window.content_mask().bounds;
                 let visible = bounds.intersect(&clip_bounds);
+                if row_selection.is_some() {
+                    // section 30 split: extend the drag as the cursor passes over
+                    // this row (begin happens on left-down below).
+                    let view = view.clone();
+                    let conflict_ix = chunk_context.conflict_ix;
+                    window.on_mouse_event(
+                        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+                            if phase != DispatchPhase::Bubble {
+                                return;
+                            }
+                            if !visible.contains(&event.position) {
+                                return;
+                            }
+                            view.update(cx, |this, cx| {
+                                this.conflict_resolver_extend_row_selection(
+                                    conflict_ix,
+                                    row_ix,
+                                    cx,
+                                );
+                            });
+                        },
+                    );
+                }
                 window.on_mouse_event({
                     let view = view.clone();
                     move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                        if phase != DispatchPhase::Bubble
-                            || event.button != gpui::MouseButton::Right
-                        {
+                        if phase != DispatchPhase::Bubble {
                             return;
                         }
                         if !visible.contains(&event.position) {
+                            return;
+                        }
+                        if event.button == gpui::MouseButton::Left {
+                            let conflict_ix = chunk_context.conflict_ix;
+                            view.update(cx, |this, cx| {
+                                if row_selection.is_some() {
+                                    if event.modifiers.shift || event.modifiers.control {
+                                        this.conflict_resolver_click_row_selection(
+                                            conflict_ix,
+                                            row_ix,
+                                            event.modifiers,
+                                            cx,
+                                        );
+                                    } else {
+                                        // section 30 split: begin a drag selection (also
+                                        // selects the block).
+                                        this.conflict_resolver_begin_row_selection(
+                                            conflict_ix,
+                                            row_ix,
+                                            cx,
+                                        );
+                                    }
+                                } else {
+                                    // section 30: clicking a conflict block body selects it.
+                                    this.conflict_resolver_select_conflict(conflict_ix, cx);
+                                }
+                            });
+                            return;
+                        }
+                        if event.button != gpui::MouseButton::Right {
                             return;
                         }
                         let invoker: SharedString = format!(
@@ -549,15 +708,78 @@ fn three_way_columns_with_widths(
     (base_col, first_handle, ours_col, second_handle, theirs_col)
 }
 
-fn split_column_text_bounds(col: Bounds<Pixels>, pad: Pixels, gap: Pixels) -> Bounds<Pixels> {
-    let line_no_width = conflict_line_no_width();
-    let left = col.left() + pad + line_no_width + gap;
-    let width = (col.size.width - pad * 2.0 - line_no_width - gap).max(px(0.0));
+fn split_column_text_bounds(
+    col: Bounds<Pixels>,
+    pad: Pixels,
+    gap: Pixels,
+    show_line_numbers: bool,
+) -> Bounds<Pixels> {
+    let gutter_width = if show_line_numbers {
+        conflict_line_no_width() + gap
+    } else {
+        px(0.0)
+    };
+    let left = col.left() + pad + gutter_width;
+    let width = (col.size.width - pad * 2.0 - gutter_width).max(px(0.0));
     Bounds::new(point(left, col.top()), size(width, col.size.height))
 }
 
 fn conflict_line_no_width() -> Pixels {
-    px(38.0)
+    px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX)
+}
+
+/// Paint the vertical divider between the line-number gutter and the code,
+/// matching the div path's `conflict_diff_line_number_cell` right border. Sits
+/// at the right edge of the number cell (before the gap), so it stays pinned
+/// with the sticky gutter as the column scrolls horizontally.
+fn paint_gutter_divider(
+    gutter_bounds: Bounds<Pixels>,
+    pad: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    let x = gutter_bounds.left() + pad + conflict_line_no_width();
+    window.paint_quad(fill(
+        Bounds::new(
+            point(x, gutter_bounds.top()),
+            size(px(1.0), gutter_bounds.size.height),
+        ),
+        color,
+    ));
+}
+
+/// Keep the line-number gutter at the visible edge of a horizontally scrolled
+/// column. The row itself still moves so its measured width and scrollbar range
+/// remain unchanged.
+fn sticky_gutter_bounds(
+    column_bounds: Bounds<Pixels>,
+    clip_bounds: Bounds<Pixels>,
+    pad: Pixels,
+    gap: Pixels,
+) -> Bounds<Pixels> {
+    let visible_column = column_bounds.intersect(&clip_bounds);
+    let width = (pad + conflict_line_no_width() + gap).min(visible_column.size.width);
+    Bounds::new(
+        point(visible_column.left(), column_bounds.top()),
+        size(width.max(px(0.0)), column_bounds.size.height),
+    )
+}
+
+/// Clip the moving source text at the pinned gutter without changing the
+/// text's paint origin. This makes content pass behind the gutter instead of
+/// shifting as the horizontal offset changes.
+fn text_clip_bounds_behind_gutter(
+    text_bounds: Bounds<Pixels>,
+    gutter_bounds: Bounds<Pixels>,
+) -> Bounds<Pixels> {
+    let left = text_bounds.left().max(gutter_bounds.right());
+    Bounds::new(
+        point(left, text_bounds.top()),
+        size(
+            (text_bounds.right() - left).max(px(0.0)),
+            text_bounds.size.height,
+        ),
+    )
 }
 
 fn paint_gutter_text(
@@ -797,6 +1019,29 @@ mod tests {
             left.size.width + handle.size.width + right.size.width,
             bounds.size.width
         );
+    }
+
+    #[test]
+    fn line_number_gutter_stays_at_clip_edge_during_horizontal_scroll() {
+        let column = Bounds::new(point(px(-120.0), px(10.0)), size(px(500.0), px(20.0)));
+        let clip = Bounds::new(point(px(0.0), px(0.0)), size(px(300.0), px(200.0)));
+
+        let gutter = sticky_gutter_bounds(column, clip, px(8.0), px(8.0));
+
+        assert_eq!(gutter.left(), clip.left());
+        assert_eq!(gutter.size.width, px(54.0));
+        assert_eq!(gutter.top(), column.top());
+    }
+
+    #[test]
+    fn moving_text_is_clipped_behind_sticky_line_number_gutter() {
+        let text = Bounds::new(point(px(-66.0), px(10.0)), size(px(430.0), px(20.0)));
+        let gutter = Bounds::new(point(px(0.0), px(10.0)), size(px(54.0), px(20.0)));
+
+        let text_clip = text_clip_bounds_behind_gutter(text, gutter);
+
+        assert_eq!(text_clip.left(), gutter.right());
+        assert_eq!(text_clip.right(), text.right());
     }
 
     #[test]

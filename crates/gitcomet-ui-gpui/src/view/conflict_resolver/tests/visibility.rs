@@ -1348,3 +1348,389 @@ fn two_way_conflict_index_for_visible_row_maps_back_to_conflict() {
         None
     );
 }
+
+#[test]
+fn collapsed_context_folds_runs_beyond_context_window() {
+    // 30 lines, one conflict at 12..15. With 3 context lines kept around the
+    // conflict: head 0..9 folds, 9..12 context, 12..15 conflict, 15..18
+    // context, 18..30 folds.
+    let conflict_ranges = [12..15];
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: None,
+        },
+    );
+
+    assert_eq!(projection.len(), 1 + 3 + 3 + 3 + 1);
+    assert_eq!(
+        projection.get(0),
+        Some(ThreeWayVisibleItem::CollapsedContext {
+            source_line_start: 0,
+            len: 9,
+            fold_id: 0,
+        })
+    );
+    assert_eq!(projection.get(1), Some(ThreeWayVisibleItem::Line(9)));
+    assert_eq!(projection.get(4), Some(ThreeWayVisibleItem::Line(12)));
+    assert_eq!(
+        projection.visible_index_for_conflict(&conflict_ranges, 0),
+        Some(4),
+    );
+    assert_eq!(projection.get(7), Some(ThreeWayVisibleItem::Line(15)));
+    assert_eq!(
+        projection.get(10),
+        Some(ThreeWayVisibleItem::CollapsedContext {
+            source_line_start: 18,
+            len: 12,
+            fold_id: 18,
+        })
+    );
+    assert_eq!(projection.get(11), None);
+}
+
+#[test]
+fn visible_index_for_source_line_maps_lines_and_folds() {
+    // Same shape as above: head fold 0..9, context 9..12, conflict 12..15,
+    // context 15..18, tail fold 18..30.
+    let conflict_ranges = [12..15];
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: None,
+        },
+    );
+
+    // Folded lines address the fold row itself.
+    assert_eq!(projection.visible_index_for_source_line(0), Some(0));
+    assert_eq!(projection.visible_index_for_source_line(8), Some(0));
+    // Visible lines map to their own row.
+    assert_eq!(projection.visible_index_for_source_line(9), Some(1));
+    assert_eq!(projection.visible_index_for_source_line(12), Some(4));
+    assert_eq!(projection.visible_index_for_source_line(17), Some(9));
+    // Tail fold.
+    assert_eq!(projection.visible_index_for_source_line(25), Some(10));
+    assert_eq!(projection.visible_index_for_source_line(30), None);
+}
+
+#[test]
+fn collapsed_context_respects_expanded_folds_and_short_gaps() {
+    let conflict_ranges = [12..15];
+    let expanded: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+        18usize,
+        ConflictFoldReveal {
+            expand_all: true,
+            ..Default::default()
+        },
+    )]
+    .into_iter()
+    .collect();
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: Some(&expanded),
+        },
+    );
+    // Tail fold (start 18) expanded back into lines; head still folded.
+    assert_eq!(projection.len(), 1 + 3 + 3 + 15);
+    assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
+    assert_eq!(projection.get(21), Some(ThreeWayVisibleItem::Line(29)));
+
+    // A gap only one line beyond the context window stays fully visible.
+    let conflict_ranges = [4..6];
+    let projection = build_three_way_visible_projection_with_options(
+        10,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: None,
+        },
+    );
+    // Head gap 0..4: trailing keep 3, fold 0..1 is below the minimum → visible.
+    // Tail gap 6..10: leading keep 3, fold 9..10 below minimum → visible.
+    assert_eq!(projection.len(), 10);
+    assert_eq!(projection.get(0), Some(ThreeWayVisibleItem::Line(0)));
+    assert_eq!(projection.get(9), Some(ThreeWayVisibleItem::Line(9)));
+}
+
+#[test]
+fn collapsed_context_combines_with_hide_resolved() {
+    // Resolved conflict at 12..15 collapses to a summary row while the
+    // surrounding context still folds.
+    let conflict_ranges = [12..15];
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[true],
+        ThreeWayVisibleOptions {
+            hide_resolved: true,
+            collapse_context: true,
+            context_fold_reveals: None,
+        },
+    );
+    // fold(0..9) + ctx(9..12) + collapsed block + ctx(15..18) + fold(18..30)
+    assert_eq!(projection.len(), 1 + 3 + 1 + 3 + 1);
+    assert_eq!(
+        projection.get(4),
+        Some(ThreeWayVisibleItem::CollapsedBlock(0))
+    );
+    assert_eq!(
+        projection.visible_index_for_conflict(&conflict_ranges, 0),
+        Some(4),
+    );
+}
+
+#[test]
+fn collapsed_context_off_or_no_conflicts_keeps_everything_visible() {
+    let projection = build_three_way_visible_projection_with_options(
+        20,
+        &[],
+        &[],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: None,
+        },
+    );
+    assert_eq!(projection.len(), 20);
+
+    let projection = build_three_way_visible_projection_with_options(
+        20,
+        &[5..8],
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: false,
+            context_fold_reveals: None,
+        },
+    );
+    assert_eq!(projection.len(), 20);
+}
+
+#[test]
+fn collapsed_context_partial_reveals_shrink_the_fold_from_either_edge() {
+    let conflict_ranges = [12..15];
+    // Tail fold identity is 18 (lines 18..30 hidden). Reveal 20 from the top:
+    // more than the fold holds, so it fully expands (remaining < minimum).
+    let reveals: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+        18usize,
+        ConflictFoldReveal {
+            top: CONFLICT_FOLD_REVEAL_STEP,
+            ..Default::default()
+        },
+    )]
+    .into_iter()
+    .collect();
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: Some(&reveals),
+        },
+    );
+    assert_eq!(projection.len(), 1 + 3 + 3 + 15);
+    assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
+
+    // A small reveal from each edge keeps a shrunken fold with the same id.
+    let reveals: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+        18usize,
+        ConflictFoldReveal {
+            top: 3,
+            bottom: 4,
+            expand_all: false,
+        },
+    )]
+    .into_iter()
+    .collect();
+    let projection = build_three_way_visible_projection_with_options(
+        30,
+        &conflict_ranges,
+        &[false],
+        ThreeWayVisibleOptions {
+            hide_resolved: false,
+            collapse_context: true,
+            context_fold_reveals: Some(&reveals),
+        },
+    );
+    // head fold + ctx(3) + conflict(3) + ctx(3) + revealed top(3) + fold + revealed bottom(4)
+    assert_eq!(projection.len(), 1 + 3 + 3 + 3 + 3 + 1 + 4);
+    assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
+    assert_eq!(
+        projection.get(13),
+        Some(ThreeWayVisibleItem::CollapsedContext {
+            source_line_start: 21,
+            len: 5,
+            fold_id: 18,
+        })
+    );
+    assert_eq!(projection.get(14), Some(ThreeWayVisibleItem::Line(26)));
+    assert_eq!(projection.get(17), Some(ThreeWayVisibleItem::Line(29)));
+}
+
+#[test]
+fn aligned_map_identity_passes_rows_through() {
+    let map = ThreeWayAlignedMap::default();
+    assert!(map.is_identity());
+    assert_eq!(map.side_line_for_row(0, 7), Some(7));
+    assert_eq!(map.row_for_side_line(2, 41), 41);
+    assert_eq!(map.aligned_range_for_side_range(1, 3..9), 3..9);
+}
+
+#[test]
+fn aligned_map_pads_short_sides_and_maps_both_directions() {
+    use gitcomet_core::merge::{AlignedRun, AlignedRunKind};
+    // Run 0: unchanged, 2 lines everywhere.
+    // Run 1: conflict, base 1 line, ours 3 lines, theirs 2 lines -> 3 rows.
+    // Run 2: unchanged, 1 line everywhere.
+    let runs = vec![
+        AlignedRun {
+            base: 0..2,
+            ours: 0..2,
+            theirs: 0..2,
+            kind: AlignedRunKind::Unchanged,
+        },
+        AlignedRun {
+            base: 2..3,
+            ours: 2..5,
+            theirs: 2..4,
+            kind: AlignedRunKind::Conflict,
+        },
+        AlignedRun {
+            base: 3..4,
+            ours: 5..6,
+            theirs: 4..5,
+            kind: AlignedRunKind::Unchanged,
+        },
+    ];
+    let map = ThreeWayAlignedMap::from_alignment(&runs);
+    assert!(!map.is_identity());
+    assert_eq!(map.aligned_len(), 2 + 3 + 1);
+
+    // Rows 0-1: all sides line 0-1.
+    assert_eq!(map.side_line_for_row(0, 1), Some(1));
+    // Row 2: base line 2, ours line 2, theirs line 2.
+    assert_eq!(map.side_line_for_row(0, 2), Some(2));
+    // Row 3: base padded out (only 1 line in run), ours line 3, theirs line 3.
+    assert_eq!(map.side_line_for_row(0, 3), None);
+    assert_eq!(map.side_line_for_row(1, 3), Some(3));
+    assert_eq!(map.side_line_for_row(2, 3), Some(3));
+    // Row 4: only ours has content (line 4).
+    assert_eq!(map.side_line_for_row(0, 4), None);
+    assert_eq!(map.side_line_for_row(1, 4), Some(4));
+    assert_eq!(map.side_line_for_row(2, 4), None);
+    // Row 5: the tail line on every side, with differing side line numbers.
+    assert_eq!(map.side_line_for_row(0, 5), Some(3));
+    assert_eq!(map.side_line_for_row(1, 5), Some(5));
+    assert_eq!(map.side_line_for_row(2, 5), Some(4));
+    // Past the end.
+    assert_eq!(map.side_line_for_row(1, 6), None);
+
+    // Reverse mapping.
+    assert_eq!(map.row_for_side_line(0, 3), 5);
+    assert_eq!(map.row_for_side_line(1, 4), 4);
+    assert_eq!(map.row_for_side_line(2, 4), 5);
+    // Past a side's end clamps to the aligned end.
+    assert_eq!(map.row_for_side_line(0, 99), 6);
+
+    // Range mapping: ours conflict lines 2..5 cover rows 2..5.
+    assert_eq!(map.aligned_range_for_side_range(1, 2..5), 2..5);
+    // Base conflict line 2..3 covers row 2..3.
+    assert_eq!(map.aligned_range_for_side_range(0, 2..3), 2..3);
+    // Empty deletion-side ranges map to their aligned boundary rather than
+    // leaking a side-line offset into aligned row space.
+    assert_eq!(map.aligned_range_for_side_range(0, 3..3), 5..5);
+    assert_eq!(map.aligned_range_for_side_range(1, 4..4), 4..4);
+
+    // section 30 split boundaries: a boundary at a real row maps to that side line;
+    // a padding row rounds up to the next real line on that side.
+    assert_eq!(map.side_line_lower_bound(1, 2), 2); // ours line 2 at row 2
+    assert_eq!(map.side_line_lower_bound(0, 2), 2); // base line 2 at row 2
+    // Rows 3-4 are base padding -> round up to base line 3 (start of run 2).
+    assert_eq!(map.side_line_lower_bound(0, 3), 3);
+    assert_eq!(map.side_line_lower_bound(0, 4), 3);
+    // theirs padding at row 4 -> theirs line 4 (start of run 2).
+    assert_eq!(map.side_line_lower_bound(2, 4), 4);
+    assert_eq!(map.side_line_lower_bound(2, 3), 3); // theirs line 3 at row 3
+    // Past the end clamps to each side's line count.
+    assert_eq!(map.side_line_lower_bound(0, 99), 4);
+    assert_eq!(map.side_line_lower_bound(1, 99), 6);
+    assert_eq!(map.side_line_lower_bound(2, 99), 5);
+    // Identity map is the row itself.
+    assert_eq!(ThreeWayAlignedMap::default().side_line_lower_bound(1, 7), 7);
+}
+
+#[test]
+fn aligned_map_round_trips_through_core_alignment() {
+    let base = "a\nb\nc\nd\n";
+    let ours = "a\nB1\nB2\nc\nd\n";
+    let theirs = "a\nb\nc\nD-theirs\n";
+    let runs = gitcomet_core::merge::align_three_way(
+        base,
+        ours,
+        theirs,
+        gitcomet_core::merge::DiffAlgorithm::Myers,
+    );
+    let map = ThreeWayAlignedMap::from_alignment(&runs);
+
+    // Every side line must appear at exactly one row, in order.
+    for (side, len) in [(0usize, 4usize), (1, 5), (2, 4)] {
+        let mut prev_row = None;
+        for line in 0..len {
+            let row = map.row_for_side_line(side, line);
+            assert_eq!(
+                map.side_line_for_row(side, row),
+                Some(line),
+                "side {side} line {line} should round-trip via row {row}",
+            );
+            if let Some(prev) = prev_row {
+                assert!(row > prev, "rows must be strictly increasing per side");
+            }
+            prev_row = Some(row);
+        }
+    }
+}
+
+#[test]
+fn alignment_practicality_gates_large_dissimilar_sides() {
+    // Small files always align, no matter how different.
+    assert!(three_way_alignment_is_practical(
+        "a\nb\n",
+        "x\ny\nz\n",
+        "p\nq\n"
+    ));
+
+    // Large files whose sides still share most lines with base align.
+    let base: String = (0..3000).map(|i| format!("line {i}\n")).collect();
+    let mut ours = base.clone();
+    ours.push_str("ours tail\n");
+    let mut theirs = String::from("theirs head\n");
+    theirs.push_str(&base);
+    assert!(three_way_alignment_is_practical(&base, &ours, &theirs));
+
+    // A large whole-file conflict (sides share nothing with base) is the
+    // quadratic worst case and must fall back to the identity map.
+    let ours_rewrite: String = (0..3000).map(|i| format!("ours {i}\n")).collect();
+    let theirs_rewrite: String = (0..3000).map(|i| format!("theirs {i}\n")).collect();
+    assert!(!three_way_alignment_is_practical(
+        &base,
+        &ours_rewrite,
+        &theirs_rewrite
+    ));
+}

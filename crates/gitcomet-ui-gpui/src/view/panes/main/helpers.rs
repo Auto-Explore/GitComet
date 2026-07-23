@@ -89,6 +89,23 @@ fn resolved_output_highlight_provider(
     )
 }
 
+fn pending_resolved_output_syntax_state(
+    theme: AppTheme,
+    output_text: SharedString,
+    line_starts: Arc<[usize]>,
+    language: rows::DiffSyntaxLanguage,
+    old_document: Option<rows::PreparedDiffSyntaxDocument>,
+) -> ResolvedOutputSyntaxState {
+    ResolvedOutputSyntaxState {
+        highlights: Vec::new(),
+        prepared_document: old_document,
+        highlight_provider: old_document.map(|document| {
+            resolved_output_highlight_provider(theme, output_text, line_starts, language, document)
+        }),
+        needs_background_prepare: true,
+    }
+}
+
 fn build_resolved_output_syntax_state_with_source(
     theme: AppTheme,
     output_text: SharedString,
@@ -103,6 +120,20 @@ fn build_resolved_output_syntax_state_with_source(
     };
     if output_text.is_empty() {
         return ResolvedOutputSyntaxState::default();
+    }
+
+    // Large outputs skip foreground syntax entirely — render plain, then let the
+    // background pass upgrade — matching the streamed path and the diff view's
+    // `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING` gate. Without this a big editable
+    // output could shape syntax on the UI thread during a recompute.
+    if line_starts.len() > rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
+        return pending_resolved_output_syntax_state(
+            theme,
+            output_text,
+            line_starts,
+            language,
+            old_document,
+        );
     }
 
     match rows::prepare_diff_syntax_document_with_budget_reuse_text(
@@ -126,12 +157,13 @@ fn build_resolved_output_syntax_state_with_source(
             )),
             needs_background_prepare: false,
         },
-        rows::PrepareDiffSyntaxDocumentResult::TimedOut => ResolvedOutputSyntaxState {
-            highlights: Vec::new(),
-            prepared_document: None,
-            highlight_provider: None,
-            needs_background_prepare: true,
-        },
+        rows::PrepareDiffSyntaxDocumentResult::TimedOut => pending_resolved_output_syntax_state(
+            theme,
+            output_text,
+            line_starts,
+            language,
+            old_document,
+        ),
         rows::PrepareDiffSyntaxDocumentResult::Unsupported => ResolvedOutputSyntaxState {
             highlights: build_resolved_output_syntax_fallback_highlights(
                 theme,
@@ -186,8 +218,30 @@ pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
-    pub(in crate::view) source_hash: u64,
+    pub(in crate::view) source_revision: ResolvedOutputSourceRevision,
     pub(in crate::view) language: rows::DiffSyntaxLanguage,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputSourceRevision {
+    pub(in crate::view) model_id: u64,
+    pub(in crate::view) revision: u64,
+}
+
+impl ResolvedOutputSourceRevision {
+    pub(in crate::view) fn from_snapshot(snapshot: &TextModelSnapshot) -> Self {
+        Self {
+            model_id: snapshot.model_id(),
+            revision: snapshot.revision(),
+        }
+    }
+}
+
+pub(super) fn resolved_output_snapshot_is_modified(
+    saved: Option<&TextModelSnapshot>,
+    current: &TextModelSnapshot,
+) -> bool {
+    saved.is_some_and(|saved| current != saved)
 }
 
 #[derive(Clone, Debug)]
@@ -301,15 +355,6 @@ pub(super) fn build_line_starts_with_count(text: &str) -> (Vec<usize>, usize) {
         line_starts.len()
     };
     (line_starts, line_count)
-}
-
-pub(super) fn hash_text_bytes(text: &str) -> u64 {
-    use std::hash::Hasher;
-
-    let mut hasher = rustc_hash::FxHasher::default();
-    hasher.write_usize(text.len());
-    hasher.write(text.as_bytes());
-    hasher.finish()
 }
 
 #[cfg(test)]
@@ -594,7 +639,10 @@ pub(super) fn resolved_outline_delta_for_snapshot_transition(
         });
     }
 
-    resolved_outline_delta_between_texts(old_snapshot.as_ref(), new_snapshot.as_ref())
+    // Do not materialize and compare both documents on the immediate input
+    // notification path. If observer delivery coalesced several revisions, the
+    // surviving debounced task will perform the full outline recompute instead.
+    None
 }
 
 fn line_index_for_byte_offset(line_starts: &[usize], byte_offset: usize) -> usize {
@@ -648,6 +696,40 @@ pub(super) fn remap_line_keyed_cache_for_delta<T>(
             cache.insert(shifted_line_index(line_ix, shift), value);
         }
     }
+}
+
+pub(super) fn remap_resolved_output_conflict_block_ranges_for_delta(
+    old_block_ranges: &[Range<usize>],
+    old_range: Range<usize>,
+    new_range: Range<usize>,
+    new_line_count: usize,
+) -> Vec<Range<usize>> {
+    let line_delta = new_range.len() as isize - old_range.len() as isize;
+    old_block_ranges
+        .iter()
+        .map(|range| {
+            let remapped = if range.end <= old_range.start {
+                range.clone()
+            } else if range.start >= old_range.end {
+                shifted_line_index(range.start, line_delta)
+                    ..shifted_line_index(range.end, line_delta)
+            } else {
+                let start = if old_range.start <= range.start {
+                    new_range.start
+                } else {
+                    range.start
+                };
+                let end = if range.end <= old_range.end {
+                    new_range.end
+                } else {
+                    shifted_line_index(range.end, line_delta)
+                };
+                start..end
+            };
+            remapped.start.min(new_line_count)..remapped.end.min(new_line_count)
+        })
+        .map(|range| range.start..range.end.max(range.start))
+        .collect()
 }
 
 pub(super) fn resolved_output_conflict_block_ranges_in_text(
@@ -1661,33 +1743,6 @@ pub(super) fn append_choice_after_conflict_block(
     inserted_conflict_ix
 }
 
-pub(super) fn scroll_conflict_resolved_output_to_line(
-    scroll_handle: &UniformListScrollHandle,
-    target_line_ix: usize,
-    line_count: usize,
-) {
-    if line_count == 0 {
-        return;
-    }
-
-    let base_handle = scroll_handle.0.borrow().base_handle.clone();
-    let viewport_h = base_handle.bounds().size.height.max(px(0.0));
-    if viewport_h <= px(0.0) {
-        return;
-    }
-
-    let line_h = px(CONFLICT_RESOLVED_OUTPUT_ROW_HEIGHT_PX);
-    let total_h = line_h * line_count as f32;
-    let max_scroll = (total_h - viewport_h).max(px(0.0));
-    let target_line = target_line_ix.min(line_count.saturating_sub(1));
-    let target_center = line_h * target_line as f32 + line_h * 0.5;
-    let target_scroll_top = (target_center - viewport_h * 0.5)
-        .max(px(0.0))
-        .min(max_scroll);
-    let current = base_handle.offset();
-    base_handle.set_offset(point(current.x, -target_scroll_top));
-}
-
 #[cfg(test)]
 pub(super) fn apply_three_way_empty_base_provenance_hints(
     meta: &mut [conflict_resolver::ResolvedLineMeta],
@@ -2094,6 +2149,47 @@ pub(super) fn focused_mergetool_save_exit_code(
     }
 }
 
+pub(super) fn conflict_strategy_needs_full_side_payloads(
+    strategy: Option<gitcomet_core::conflict_session::ConflictResolverStrategy>,
+) -> bool {
+    matches!(
+        strategy,
+        Some(
+            gitcomet_core::conflict_session::ConflictResolverStrategy::BinarySidePick
+                | gitcomet_core::conflict_session::ConflictResolverStrategy::TwoWayKeepDelete
+                | gitcomet_core::conflict_session::ConflictResolverStrategy::DecisionOnly
+        )
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FocusedMergetoolOutput<'a> {
+    Write(&'a [u8]),
+    Delete,
+}
+
+pub(super) fn apply_focused_mergetool_output(
+    path: &std::path::Path,
+    output: FocusedMergetoolOutput<'_>,
+) -> std::io::Result<()> {
+    match output {
+        FocusedMergetoolOutput::Write(bytes) => {
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(path, bytes)
+        }
+        FocusedMergetoolOutput::Delete => match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        },
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct FocusedMergetoolSavePayload {
     pub(super) output: String,
@@ -2344,6 +2440,23 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) layout_details_collapsed: bool,
 
     pub(in crate::view) reveal_whitespace_chars: bool,
+    /// section 30 merge tool: auto-advance to the next unresolved conflict after a
+    /// source pick. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_auto_advance: bool,
+    /// section 30 merge tool: default for the collapse-unchanged-context mode when a
+    /// conflicted file opens. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_collapse_unchanged: bool,
+    /// section 30 merge tool: sync the resolved output pane's scroll with the source
+    /// columns (in modes where they share a row space). Persisted UI setting
+    /// (cog menu). Merge-tool-specific rather than a general diff setting
+    /// because the resolver ships as a standalone tool.
+    pub(in crate::view) mergetool_output_scroll_sync: bool,
+    /// section 30 merge tool: show per-column and resolved-output line number
+    /// gutters. Persisted UI setting (cog menu).
+    pub(in crate::view) mergetool_show_line_numbers: bool,
+    /// section 30 merge tool: last-used view mode (true = 3-way). Fresh opens of
+    /// base-present conflicts default to this; toolbar toggle persists it.
+    pub(in crate::view) mergetool_view_three_way: bool,
     pub(in crate::view) diff_view: DiffViewMode,
     pub(in crate::view) annotate_enabled: bool,
     /// Width (design px) of the annotate column; user-resizable, session-local.
@@ -2529,6 +2642,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in crate::view) conflict_resolver: ConflictResolverUiState,
+    pub(in crate::view) conflict_open_summary_toasted_files: HashSet<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) conflict_resolver_vsplit_ratio: f32,
     pub(in crate::view) conflict_resolver_vsplit_resize: Option<ConflictVSplitResizeState>,
     pub(in crate::view) conflict_three_way_col_ratios: [f32; 2],
@@ -2553,7 +2667,16 @@ pub(crate) struct MainPaneView {
     /// Per-side flag tracking whether a background syntax parse is in-flight.
     pub(in crate::view) conflict_three_way_syntax_inflight: ThreeWaySides<bool>,
     pub(in crate::view) conflict_resolved_preview_path: Option<std::path::PathBuf>,
-    pub(in crate::view) conflict_resolved_preview_source_hash: Option<u64>,
+    /// Latest editable-output revision observed by the input subscription. This
+    /// is intentionally independent of the content hash so a keypress can
+    /// supersede debounce work without materializing and scanning the document.
+    pub(in crate::view) conflict_resolved_preview_source_revision:
+        Option<ResolvedOutputSourceRevision>,
+    /// Editable-output snapshot at the last file load/save refresh. Snapshot
+    /// equality is O(1), and undo restores the matching snapshot, so this can
+    /// drive the user-facing Modified state without hashing the whole output.
+    pub(in crate::view) conflict_resolved_output_saved_snapshot: Option<TextModelSnapshot>,
+    pub(in crate::view) conflict_resolved_output_modified: bool,
     pub(in crate::view) conflict_resolved_output_projection:
         Option<conflict_resolver::ResolvedOutputProjection>,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
@@ -2582,7 +2705,20 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_preview_theirs_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_preview_last_synced_x: [Pixels; 4],
     pub(in crate::view) conflict_preview_last_synced_y: [Pixels; 4],
+    /// Source/output handle index that received the latest vertical wheel
+    /// gesture: base/left=0, ours=1, theirs/right=2, output=3.
+    pub(in crate::view) conflict_preview_vertical_wheel_master: Option<usize>,
+    /// The next output/gutter sync belongs to that wheel gesture, so output
+    /// must drive the pair instead of a stale gutter baseline.
+    pub(in crate::view) conflict_output_gutter_wheel_sync_pending: bool,
     pub(in crate::view) conflict_resolved_preview_scroll: UniformListScrollHandle,
+    /// Scroll handle for the editable resolved-output `TextInput`. The input lays
+    /// out at full content height inside an `overflow_y_scroll` container that
+    /// tracks this handle, and the input reads the same handle to window its line
+    /// shaping. It is also the output member (index 3) of the conflict-preview
+    /// scroll-sync group, so it stands in for `conflict_resolved_preview_scroll`
+    /// (which now only backs the read-only projection paths).
+    pub(in crate::view) conflict_resolved_output_editor_scroll: ScrollHandle,
     pub(in crate::view) conflict_resolved_preview_gutter_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_resolved_preview_gutter_last_synced_y: [Pixels; 2],
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,

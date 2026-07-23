@@ -186,6 +186,40 @@ pub(super) fn wrap_columns_for_width(wrap_width: Pixels, font_size: Pixels) -> u
     (width_px / advance_px).floor().max(1.0) as usize
 }
 
+/// Display-column width of a single line with tabs expanded to the standard
+/// tab stop, without wrapping. Used to size content-width layout so the
+/// horizontal scroll bound reflects rendered tab expansion instead of raw byte
+/// length (a tab is one byte but advances to the next tab stop when rendered).
+#[inline]
+pub(super) fn line_display_columns(line_text: &str) -> usize {
+    let bytes = line_text.as_bytes();
+    let tab_stop = TEXT_INPUT_WRAP_TAB_STOP_COLUMNS;
+
+    // ASCII fast path: jump between tabs and advance whole segments at once.
+    if line_text.is_ascii() {
+        let mut column = 0usize;
+        let mut pos = 0usize;
+        for tab_pos in memchr::memchr_iter(b'\t', bytes) {
+            column += tab_pos - pos;
+            column += tab_stop - (column % tab_stop);
+            pos = tab_pos + 1;
+        }
+        return column + (bytes.len() - pos);
+    }
+
+    // Non-ASCII fallback: count each char as one column (a safe under-bound the
+    // caller pairs with byte length, which over-counts multi-byte glyphs).
+    let mut column = 0usize;
+    for ch in line_text.chars() {
+        if ch == '\t' {
+            column += tab_stop - (column % tab_stop);
+        } else {
+            column += 1;
+        }
+    }
+    column
+}
+
 pub(super) fn estimate_wrap_rows_for_text(text: &str, wrap_columns: usize) -> Vec<usize> {
     let line_starts = compute_line_starts(text);
     let mut rows = Vec::with_capacity(line_starts.len().max(1));
