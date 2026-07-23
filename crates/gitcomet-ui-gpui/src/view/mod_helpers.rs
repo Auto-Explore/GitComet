@@ -2511,6 +2511,7 @@ pub(super) enum PopoverKind {
     RenameBranchPrompt {
         repo_id: RepoId,
         name: String,
+        is_current_branch: bool,
     },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,

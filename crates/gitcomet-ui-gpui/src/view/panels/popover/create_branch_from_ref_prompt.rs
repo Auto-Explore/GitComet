@@ -72,22 +72,13 @@ pub(super) fn panel(
         let is_focused = search
             .read_with(cx, |input, _| input.focus_handle())
             .is_focused(window);
+        search.update(cx, |input, cx| {
+            input.set_chromeless(is_focused, cx);
+            input.set_leading_icon(is_focused.then_some("icons/git_branch.svg"), cx);
+        });
 
         if is_focused {
-            let branches: Vec<String> = this
-                .active_repo()
-                .map(|repo| {
-                    let mut names: Vec<String> = vec!["HEAD".to_string()];
-                    if let Loadable::Ready(branches) = &repo.branches {
-                        names.extend(branches.iter().map(|b| b.name.clone()));
-                    }
-                    if let Loadable::Ready(tags) = &repo.tags {
-                        names.extend(tags.iter().map(|t| t.name.clone()));
-                    }
-                    names
-                })
-                .unwrap_or_default();
-            let items: Vec<SharedString> = branches.iter().map(|n| n.clone().into()).collect();
+            let refs = this.active_branch_ref_picker_items(true, true);
 
             div()
                 .flex()
@@ -102,18 +93,25 @@ pub(super) fn panel(
                 )
                 .child(
                     div().px_2().pb_1().w_full().min_w(px(0.0)).child(
-                        components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-                            .items(items)
-                            .tooltip_host(this.tooltip_host.clone())
-                            .empty_text("No matches")
-                            .max_height(scaled_px(240.0))
-                            .selected_index(this.branch_picker_selected_index)
-                            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
-                                if let Some(name) = branches.get(ix).cloned() {
-                                    let repo_id = this.active_repo_id().unwrap_or(RepoId(0));
-                                    this.handle_inline_branch_picker_select(name, repo_id, cx);
-                                }
-                            }),
+                        components::BranchRefPicker::new(
+                            search,
+                            this.picker_prompt_scroll.clone(),
+                            refs,
+                        )
+                        .tooltip_host(this.tooltip_host.clone())
+                        .empty_text("No matches")
+                        .max_height(scaled_px(240.0))
+                        .selected_index(this.branch_picker_selected_index)
+                        .select_on_mouse_down()
+                        .render(
+                            theme,
+                            ui_scale_percent,
+                            cx,
+                            move |this, name, _e, window, cx| {
+                                let repo_id = this.active_repo_id().unwrap_or(RepoId(0));
+                                this.handle_inline_branch_picker_select(name, repo_id, window, cx);
+                            },
+                        ),
                     ),
                 )
         } else {

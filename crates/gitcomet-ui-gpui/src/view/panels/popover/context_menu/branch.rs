@@ -97,6 +97,7 @@ pub(super) fn model(
                 kind: PopoverKind::RenameBranchPrompt {
                     repo_id,
                     name: name.clone(),
+                    is_current_branch: false,
                 },
             }),
         });

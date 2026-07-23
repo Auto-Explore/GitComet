@@ -203,6 +203,10 @@ fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui:
         command_palette_is_open(cx, &view),
         "expected secondary-p from detached focus to open the command palette"
     );
+    assert!(
+        cx.debug_bounds("modal_scrim").is_some(),
+        "expected command palette to use the shared modal scrim"
+    );
     let input_focus = command_palette_input_focus(cx, &view)
         .expect("expected command palette input to exist after opening");
     cx.update(|window, app| {
@@ -294,6 +298,10 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
             "expected Commit Changes to remain selectable for a clean repo"
         );
     });
+    assert!(
+        cx.debug_bounds("modal_scrim").is_some(),
+        "expected command-palette dialogs to use the shared modal scrim"
+    );
 }
 
 #[gpui::test]
@@ -322,6 +330,7 @@ fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::
             Some(PopoverKind::RenameBranchPrompt {
                 repo_id: RepoId(1),
                 name,
+                is_current_branch: true,
             }) if name == "feature/current"
         ));
     });

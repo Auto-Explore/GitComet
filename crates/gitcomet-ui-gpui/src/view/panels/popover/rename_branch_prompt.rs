@@ -4,6 +4,7 @@ pub(super) fn panel(
     this: &mut PopoverHost,
     _repo_id: RepoId,
     name: String,
+    is_current_branch: bool,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -15,7 +16,11 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(540.0))
-        .child(popover_title("Rename branch"))
+        .child(popover_title(if is_current_branch {
+            "Rename current branch"
+        } else {
+            "Rename branch"
+        }))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()

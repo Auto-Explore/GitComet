@@ -134,6 +134,24 @@ impl TextInput {
         cx.notify();
     }
 
+    pub fn set_chromeless(&mut self, chromeless: bool, cx: &mut Context<Self>) {
+        if self.chromeless == chromeless {
+            return;
+        }
+        self.chromeless = chromeless;
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
+    pub fn set_leading_icon(&mut self, leading_icon: Option<&'static str>, cx: &mut Context<Self>) {
+        if self.leading_icon == leading_icon {
+            return;
+        }
+        self.leading_icon = leading_icon;
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
     #[cfg(test)]
     pub(crate) fn debug_text_color(&self) -> gpui::Hsla {
         self.style.text

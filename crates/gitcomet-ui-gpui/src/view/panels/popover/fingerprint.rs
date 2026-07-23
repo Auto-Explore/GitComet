@@ -385,10 +385,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             target.hash(hasher);
             source_selectable.hash(hasher);
         }
-        PopoverKind::RenameBranchPrompt { repo_id, name } => {
+        PopoverKind::RenameBranchPrompt {
+            repo_id,
+            name,
+            is_current_branch,
+        } => {
             80u8.hash(hasher);
             repo_id.hash(hasher);
             name.hash(hasher);
+            is_current_branch.hash(hasher);
         }
         PopoverKind::CheckoutRemoteBranchPrompt {
             repo_id,

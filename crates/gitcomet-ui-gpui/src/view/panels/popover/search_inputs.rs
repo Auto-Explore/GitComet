@@ -198,6 +198,10 @@ impl PopoverHost {
             window,
             cx,
         );
+        input.update(cx, |input, cx| {
+            input.set_chromeless(false, cx);
+            input.set_leading_icon(None, cx);
+        });
         if self._branch_picker_search_input_subscription.is_none() {
             self._branch_picker_search_input_subscription = Some(Self::picker_search_subscription(
                 &input,
@@ -241,17 +245,26 @@ impl PopoverHost {
                 },
                 |this, cx| this.handle_inline_branch_picker_escape(cx),
                 Self::scroll_picker_prompt_to_item,
-                |this, payload, query, _window, cx| {
+                |this, payload, query, window, cx| {
                     let Some(repo_id) = this.active_repo().map(|repo| repo.id) else {
                         return;
                     };
                     if branch_picker_offers_refs(this) {
                         let name = payload.unwrap_or(query);
                         if !name.is_empty() {
-                            this.handle_inline_branch_picker_select(name, repo_id, cx);
+                            if matches!(
+                                this.popover,
+                                Some(PopoverKind::Repo {
+                                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                                    ..
+                                })
+                            ) {
+                                this.suppress_worktree_submit_after_ref_enter = true;
+                            }
+                            this.handle_inline_branch_picker_select(name, repo_id, window, cx);
                         }
                     } else if let Some(name) = payload {
-                        this.handle_inline_branch_picker_select(name, repo_id, cx);
+                        this.handle_inline_branch_picker_select(name, repo_id, window, cx);
                     }
                 },
             ));

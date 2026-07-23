@@ -6,8 +6,8 @@ use crate::view::restrict_scroll_to_vertical_axis;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, ScrollHandle, SharedString,
-    WeakEntity, Window, div, px,
+    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -23,6 +23,11 @@ pub struct PickerPrompt {
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     selected_index: Option<usize>,
     marked_index: Option<usize>,
+    leading_icon: Option<&'static str>,
+    selected_hint: Option<SharedString>,
+    accent_selection: bool,
+    attached_list_surface: bool,
+    select_on_mouse_down: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +35,7 @@ pub struct PickerPromptItem {
     display_text: SharedString,
     match_text: SharedString,
     parts: Vec<PickerPromptItemPart>,
+    icon: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +61,11 @@ impl PickerPrompt {
             tooltip_host: None,
             selected_index: None,
             marked_index: None,
+            leading_icon: None,
+            selected_hint: None,
+            accent_selection: false,
+            attached_list_surface: false,
+            select_on_mouse_down: false,
         }
     }
 
@@ -94,6 +105,31 @@ impl PickerPrompt {
         self
     }
 
+    pub fn leading_icon(mut self, icon: &'static str) -> Self {
+        self.leading_icon = Some(icon);
+        self
+    }
+
+    pub fn selected_hint(mut self, hint: impl Into<SharedString>) -> Self {
+        self.selected_hint = Some(hint.into());
+        self
+    }
+
+    pub fn accent_selection(mut self) -> Self {
+        self.accent_selection = true;
+        self
+    }
+
+    pub fn attached_list_surface(mut self) -> Self {
+        self.attached_list_surface = true;
+        self
+    }
+
+    pub fn select_on_mouse_down(mut self) -> Self {
+        self.select_on_mouse_down = true;
+        self
+    }
+
     pub fn render<V: 'static>(
         self,
         theme: AppTheme,
@@ -103,6 +139,11 @@ impl PickerPrompt {
     ) -> Div {
         let on_select: Arc<OnSelectFn<V>> = Arc::new(on_select);
         let scroll_handle = self.scroll_handle;
+        let leading_icon = self.leading_icon;
+        let selected_hint = self.selected_hint;
+        let accent_selection = self.accent_selection;
+        let attached_list_surface = self.attached_list_surface;
+        let select_on_mouse_down = self.select_on_mouse_down;
         let ui_scale = ui_scale.into();
         let scaled_px = |value| ui_scale.px(value);
 
@@ -123,14 +164,32 @@ impl PickerPrompt {
             .flex()
             .flex_col()
             .w_full()
+            .when(attached_list_surface, |surface| {
+                surface
+                    .border_1()
+                    .border_color(theme.colors.border_variant)
+                    .rounded(px(theme.radii.control))
+                    .bg(theme.colors.surface_bg_elevated)
+                    .overflow_hidden()
+            })
             .child(
                 div()
                     .flex()
                     .w_full()
                     .min_w(px(0.0))
+                    .when(attached_list_surface, |query_row| {
+                        query_row
+                            .h(control_height_md(ui_scale))
+                            .items_center()
+                            .px(scaled_px(10.0))
+                    })
                     .child(self.query_input.clone()),
             )
-            .child(div().border_t_1().border_color(theme.colors.border_variant));
+            .child(div().h(px(1.0)).w_full().bg(if attached_list_surface {
+                theme.colors.border
+            } else {
+                theme.colors.border_variant
+            }));
 
         let mut list = div()
             .id("picker_prompt_list")
@@ -165,6 +224,7 @@ impl PickerPrompt {
                 );
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
+                let row_icon = self.items[original_index].icon.or(leading_icon);
                 let is_selected = selected_index == Some(display_ix);
                 let is_marked = self.marked_index == Some(original_index);
                 let mut row = div()
@@ -172,12 +232,25 @@ impl PickerPrompt {
                     .debug_selector(move || format!("picker_prompt_item_{original_index}"))
                     .h(control_height_md(ui_scale))
                     .w_full()
+                    .relative()
                     .flex()
                     .items_center()
+                    .gap(scaled_px(7.0))
                     .px(scaled_px(8.0))
                     .rounded(px(theme.radii.row))
                     .cursor(CursorStyle::PointingHand)
-                    .child(label)
+                    .when_some(row_icon, |row, icon| {
+                        row.child(crate::view::icons::svg_icon(
+                            icon,
+                            if is_selected {
+                                theme.colors.accent
+                            } else {
+                                theme.colors.text_muted
+                            },
+                            scaled_px(14.0),
+                        ))
+                    })
+                    .child(div().flex_1().min_w(px(0.0)).child(label))
                     .when(is_marked, |row| {
                         row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
                             crate::view::icons::svg_icon(
@@ -187,9 +260,44 @@ impl PickerPrompt {
                             ),
                         ))
                     })
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    .when(is_selected, |row| {
+                        row.when_some(selected_hint.clone(), |row, hint| {
+                            row.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_w(scaled_px(34.0))
+                                    .h(scaled_px(22.0))
+                                    .px(scaled_px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(scaled_px(4.0))
+                                    .bg(with_alpha(
+                                        theme.colors.text,
+                                        if theme.is_dark { 0.06 } else { 0.035 },
+                                    ))
+                                    .font_family(
+                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                    )
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(hint),
+                            )
+                        })
+                    });
+                if select_on_mouse_down {
+                    row = row.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            (on_select)(this, original_index, &ClickEvent::default(), window, cx);
+                        }),
+                    );
+                } else {
+                    row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         (on_select)(this, original_index, event, window, cx);
                     }));
+                }
                 // Text-alpha overlays keep the highlight visible on the
                 // elevated popover surface, unlike the canvas-tuned tokens.
                 let hover_overlay =
@@ -197,7 +305,19 @@ impl PickerPrompt {
                 let active_overlay =
                     with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
                 if is_selected {
-                    row = row.bg(hover_overlay);
+                    row = row.bg(active_overlay).when(accent_selection, |row| {
+                        row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(scaled_px(3.0))
+                                .rounded_tr(px(theme.radii.row))
+                                .rounded_br(px(theme.radii.row))
+                                .bg(theme.colors.accent),
+                        )
+                    });
                 }
                 row = row
                     .hover(move |s| s.bg(hover_overlay))
@@ -261,7 +381,13 @@ impl PickerPromptItem {
             display_text: display_text.into(),
             match_text: match_text.into(),
             parts: built_parts,
+            icon: None,
         }
+    }
+
+    pub fn icon(mut self, icon: &'static str) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     fn display_text(&self) -> &str {

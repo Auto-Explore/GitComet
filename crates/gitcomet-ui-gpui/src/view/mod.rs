@@ -754,7 +754,11 @@ impl GitCometView {
                         })
                 {
                     self.open_popover_centered(
-                        PopoverKind::RenameBranchPrompt { repo_id, name },
+                        PopoverKind::RenameBranchPrompt {
+                            repo_id,
+                            name,
+                            is_current_branch: true,
+                        },
                         window,
                         cx,
                     );

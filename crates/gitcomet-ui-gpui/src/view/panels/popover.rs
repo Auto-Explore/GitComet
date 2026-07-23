@@ -214,6 +214,7 @@ pub(in super::super) struct PopoverHost {
     create_branch_checkout_enabled: bool,
     create_branch_source_target: String,
     worktree_ref_source_target: String,
+    suppress_worktree_submit_after_ref_enter: bool,
     create_branch_from_ref_checkout_focus_handle: FocusHandle,
     create_branch_from_ref_focus: DialogFocus,
     create_tag_annotated: bool,
@@ -1502,6 +1503,7 @@ impl PopoverHost {
             create_branch_checkout_enabled: true,
             create_branch_source_target: String::new(),
             worktree_ref_source_target: String::new(),
+            suppress_worktree_submit_after_ref_enter: false,
             create_branch_from_ref_checkout_focus_handle,
             create_branch_from_ref_focus,
             create_tag_annotated: false,
@@ -1858,6 +1860,7 @@ impl PopoverHost {
         }
         match self.popover.as_ref() {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+            | Some(PopoverKind::RenameBranchPrompt { .. })
             | Some(PopoverKind::StashPrompt)
             | Some(PopoverKind::CommitPrompt { .. })
             | Some(PopoverKind::StashPickerPrompt { .. })
@@ -2053,6 +2056,34 @@ impl PopoverHost {
         )
     }
 
+    fn active_branch_ref_picker_items(
+        &self,
+        include_head: bool,
+        include_tags: bool,
+    ) -> Vec<components::BranchRefPickerItem> {
+        let Some(repo) = self.active_repo() else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        if include_head {
+            items.push(components::BranchRefPickerItem::head());
+        }
+        if let Loadable::Ready(branches) = &repo.branches {
+            items.extend(
+                branches
+                    .iter()
+                    .map(|branch| components::BranchRefPickerItem::branch(branch.name.clone())),
+            );
+        }
+        if include_tags && let Loadable::Ready(tags) = &repo.tags {
+            items.extend(
+                tags.iter()
+                    .map(|tag| components::BranchRefPickerItem::tag(tag.name.clone())),
+            );
+        }
+        items
+    }
+
     fn handle_inline_branch_picker_escape(&mut self, cx: &mut gpui::Context<Self>) {
         match &self.popover {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
@@ -2096,6 +2127,7 @@ impl PopoverHost {
         &mut self,
         name: String,
         repo_id: RepoId,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match &self.popover {
@@ -2111,6 +2143,18 @@ impl PopoverHost {
                     });
                 }
                 self.branch_picker_selected_index = None;
+                cx.defer_in(window, |this, window, cx| {
+                    if matches!(
+                        this.popover,
+                        Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                    ) {
+                        let focus = this
+                            .create_branch_input
+                            .read_with(cx, |input, _| input.focus_handle());
+                        window.focus(&focus, cx);
+                        cx.notify();
+                    }
+                });
                 cx.notify();
             }
             Some(PopoverKind::Repo {
@@ -2128,6 +2172,30 @@ impl PopoverHost {
                     });
                 }
                 self.branch_picker_selected_index = None;
+                cx.on_next_frame(window, |_this, window, cx| {
+                    cx.on_next_frame(window, |this, window, cx| {
+                        if matches!(
+                            this.popover,
+                            Some(PopoverKind::Repo {
+                                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                                ..
+                            })
+                        ) {
+                            let focus = if this.can_submit_worktree_add(cx) {
+                                this.worktree_focus.submit.clone()
+                            } else {
+                                this.worktree_path_input
+                                    .read_with(cx, |input, _| input.focus_handle())
+                            };
+                            window.focus(&focus, cx);
+                            cx.notify();
+                        }
+                        cx.on_next_frame(window, |this, _window, cx| {
+                            this.suppress_worktree_submit_after_ref_enter = false;
+                            cx.notify();
+                        });
+                    });
+                });
                 cx.notify();
             }
             Some(PopoverKind::BranchPicker {
@@ -2220,7 +2288,8 @@ impl PopoverHost {
     }
 
     fn submit_rename_branch(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let Some(PopoverKind::RenameBranchPrompt { repo_id, name }) = self.popover.clone() else {
+        let Some(PopoverKind::RenameBranchPrompt { repo_id, name, .. }) = self.popover.clone()
+        else {
             return;
         };
         let new_name = self
@@ -2462,6 +2531,9 @@ impl PopoverHost {
     }
 
     pub(super) fn submit_worktree_add(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.suppress_worktree_submit_after_ref_enter {
+            return;
+        }
         let Some(PopoverKind::Repo {
             repo_id,
             kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
@@ -2871,6 +2943,7 @@ impl PopoverHost {
                         cx.notify();
                     });
                     self.worktree_ref_source_target = String::new();
+                    self.suppress_worktree_submit_after_ref_enter = false;
                     let _ = self.ensure_branch_picker_search_input(window, cx);
                     let focus = self
                         .worktree_path_input
@@ -3369,9 +3442,11 @@ impl PopoverHost {
                 window,
                 cx,
             ),
-            PopoverKind::RenameBranchPrompt { repo_id, name } => {
-                rename_branch_prompt::panel(self, repo_id, name, cx)
-            }
+            PopoverKind::RenameBranchPrompt {
+                repo_id,
+                name,
+                is_current_branch,
+            } => rename_branch_prompt::panel(self, repo_id, name, is_current_branch, cx),
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
                 remote,
@@ -3937,22 +4012,22 @@ impl PopoverHost {
         // Centered prompts are modal dialogs; anchored popovers (menus,
         // pickers) float just above the content and take the lighter lift.
         let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
-        let popover_shadow = if is_centered {
-            crate::theme::shadow_modal(theme)
+        let popover_surface = if is_centered {
+            components::modal_surface(theme)
         } else {
-            crate::theme::shadow_popover(theme)
+            div()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_1()
+                .border_color(popover_border_color)
+                .rounded(px(theme.radii.popover))
+                .shadow(crate::theme::shadow_popover(theme))
+                .overflow_hidden()
         };
-        let mut popover_container = div()
+        let mut popover_container = popover_surface
             .id("app_popover")
             .debug_selector(|| "app_popover".to_string())
             .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
             .occlude()
-            .bg(theme.colors.surface_bg_elevated)
-            .border_1()
-            .border_color(popover_border_color)
-            .rounded(px(theme.radii.popover))
-            .shadow(popover_shadow)
-            .overflow_hidden()
             .p_1()
             .child(panel);
 
@@ -3966,7 +4041,6 @@ impl PopoverHost {
 
         if is_centered {
             let top_offset = scaled_px(80.0);
-            let scrim_bg = with_alpha(theme.colors.shadow, if theme.is_dark { 0.35 } else { 0.22 });
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
                 this.close_popover_and_restore_focus(window, cx);
             });
@@ -3975,16 +4049,7 @@ impl PopoverHost {
                 .top_0()
                 .left_0()
                 .size_full()
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .bg(scrim_bg)
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, scrim_close),
-                )
+                .child(components::modal_scrim(theme).on_mouse_down(MouseButton::Left, scrim_close))
                 .child(
                     div()
                         .absolute()

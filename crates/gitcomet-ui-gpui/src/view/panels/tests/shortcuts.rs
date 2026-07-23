@@ -1085,7 +1085,11 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
                     && matches!(
                         action.as_ref(),
                         ContextMenuAction::OpenPopover {
-                            kind: PopoverKind::RenameBranchPrompt { repo_id: rid, name }
+                            kind: PopoverKind::RenameBranchPrompt {
+                                repo_id: rid,
+                                name,
+                                is_current_branch: false,
+                            }
                         } if *rid == repo_id && name == "feature"
                     )
         )

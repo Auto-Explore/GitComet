@@ -776,23 +776,26 @@ impl CommandPaletteView {
         range
             .filter_map(|row_index| {
                 let row = *self.rows.get(row_index)?;
-                let element = match row {
-                    PaletteRow::Header(title) => div()
-                        .h(row_height)
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px(scaled_px(14.0))
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.colors.text_muted)
-                        .child(title)
-                        .into_any_element(),
+                let (element, selected) = match row {
+                    PaletteRow::Header(title) => (
+                        div()
+                            .h(row_height)
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .px(scaled_px(14.0))
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.colors.text_muted)
+                            .child(title)
+                            .into_any_element(),
+                        false,
+                    ),
                     PaletteRow::Command(command_index) => {
                         let command = self.matches.get(command_index)?;
                         let command_id: SharedString = command.id.into();
                         let command_id_for_click = command_id.clone();
-                        let mut command_row = div()
+                        let command_row = div()
                             .h(row_height)
                             .w_full()
                             .flex()
@@ -802,9 +805,6 @@ impl CommandPaletteView {
                             .rounded(px(theme.radii.row))
                             .hover(move |style| style.bg(hover_overlay))
                             .cursor(CursorStyle::PointingHand);
-                        if self.selected_index == Some(command_index) {
-                            command_row = command_row.bg(selected_overlay);
-                        }
 
                         let label = div()
                             .flex()
@@ -847,23 +847,50 @@ impl CommandPaletteView {
                             );
                         }
 
-                        content
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(
-                                    move |this, _: &MouseDownEvent, window, cx| {
-                                        this.close_and_notify_root(
-                                            Some(command_id_for_click.clone()),
-                                            window,
-                                            cx,
-                                        );
-                                    },
-                                ),
-                            )
-                            .into_any_element()
+                        (
+                            content
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        move |this, _: &MouseDownEvent, window, cx| {
+                                            this.close_and_notify_root(
+                                                Some(command_id_for_click.clone()),
+                                                window,
+                                                cx,
+                                            );
+                                        },
+                                    ),
+                                )
+                                .into_any_element(),
+                            self.selected_index == Some(command_index),
+                        )
                     }
                 };
-                Some(div().h(row_height).px(scaled_px(6.0)).child(element).into_any_element())
+                Some(
+                    div()
+                        .relative()
+                        .h(row_height)
+                        .w_full()
+                        .when(selected, |row| {
+                            row.rounded_tr(px(theme.radii.row))
+                                .rounded_br(px(theme.radii.row))
+                                .bg(selected_overlay)
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(scaled_px(3.0))
+                                        .rounded_tr(px(theme.radii.row))
+                                        .rounded_br(px(theme.radii.row))
+                                        .bg(theme.colors.accent),
+                                )
+                        })
+                        .px(scaled_px(6.0))
+                        .child(element)
+                        .into_any_element(),
+                )
             })
             .collect()
     }
@@ -925,13 +952,7 @@ impl Render for CommandPaletteView {
                 .into_any_element()
         };
 
-        let palette_body = div()
-            .rounded(px(theme.radii.popover))
-            .bg(theme.colors.surface_bg_elevated)
-            .border_1()
-            .border_color(theme.colors.border)
-            .shadow(crate::theme::shadow_modal(theme))
-            .overflow_hidden()
+        let palette_body = components::modal_surface(theme)
             .child(
                 div()
                     .w_full()
@@ -945,23 +966,12 @@ impl Render for CommandPaletteView {
             )
             .child(list_body);
 
-        let scrim = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .rounded(px(theme.radii.window))
-            .bg(with_alpha(
-                theme.colors.shadow,
-                if theme.is_dark { 0.35 } else { 0.22 },
-            ))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                    this.close_and_notify_root(None, window, cx);
-                }),
-            );
+        let scrim = components::modal_scrim(theme).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                this.close_and_notify_root(None, window, cx);
+            }),
+        );
 
         div()
             .absolute()
