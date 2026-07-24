@@ -204,7 +204,7 @@ impl GixRepo {
         let mut remotes = Vec::new();
 
         for name in repo.remote_names() {
-            let remote = repo.find_remote(name.as_ref()).map_err(|e| {
+            let remote = repo.find_remote(&name).map_err(|e| {
                 Error::new(ErrorKind::Backend(format!(
                     "gix find_remote {}: {e}",
                     name.to_str_lossy()
