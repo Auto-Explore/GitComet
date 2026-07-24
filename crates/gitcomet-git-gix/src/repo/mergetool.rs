@@ -652,7 +652,7 @@ fn git_config_get_with_scope(
     };
 
     Ok(value.and_then(|value| {
-        let value = bytes_to_text_preserving_utf8(value.as_ref().as_ref());
+        let value = bytes_to_text_preserving_utf8(&value);
         (!value.is_empty()).then_some(value)
     }))
 }
@@ -679,14 +679,15 @@ fn git_config_get_bool_with_scope(
     };
 
     match value.transpose() {
-        Ok(value) => Ok(value),
-        Err(err) => {
+        Some(Ok(value)) => Ok(Some(value)),
+        Some(Err(err)) => {
             let value = bytes_to_text_preserving_utf8(err.input.as_ref());
             Err(Error::new(ErrorKind::Backend(format!(
                 "Invalid boolean value for git config {key}: {:?}. Expected true/false, yes/no, on/off, or 1/0.",
                 value
             ))))
         }
+        None => Ok(None),
     }
 }
 

@@ -809,9 +809,11 @@ where
         gix::status::plumbing::index_as_worktree_with_renames::Options {
             sorting: None,
             object_hash: repo.object_hash(),
+            fscache: false,
             tracked_file_modifications: gix::status::plumbing::index_as_worktree::Options {
                 fs: fs_caps,
                 thread_limit: None,
+                fscache: false,
                 stat: repo.stat_options().map_err(|e| {
                     Error::new(ErrorKind::Backend(format!("gix status stat options: {e}")))
                 })?,
