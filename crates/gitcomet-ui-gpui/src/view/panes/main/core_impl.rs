@@ -2466,8 +2466,7 @@ impl MainPaneView {
                     if let Some(parsed_document) = parsed_document {
                         let document =
                             rows::inject_background_prepared_diff_syntax_document(parsed_document);
-                        this.conflict_resolved_preview_prepared_syntax_document =
-                            Some(document);
+                        this.conflict_resolved_preview_prepared_syntax_document = Some(document);
                     }
                     let current_output_snapshot = this
                         .conflict_resolver_input

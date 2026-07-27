@@ -4771,7 +4771,8 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
             "resolved output should be materialized for this fixture size"
         );
         assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document.is_some(),
+            pane.conflict_resolved_preview_prepared_syntax_document
+                .is_some(),
             "prepared syntax document should be available from the background parse"
         );
         assert_eq!(
@@ -4825,7 +4826,8 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
             "materialized resolved output should still keep the path-derived syntax language"
         );
         assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document.is_some(),
+            pane.conflict_resolved_preview_prepared_syntax_document
+                .is_some(),
             "prepared syntax document should survive across draws"
         );
     });
