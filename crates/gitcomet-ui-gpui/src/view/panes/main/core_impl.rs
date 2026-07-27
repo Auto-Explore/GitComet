@@ -2476,6 +2476,13 @@ impl MainPaneView {
                         None,
                         cx,
                     );
+                    // Clear the in-flight marker only *after* the re-entrant
+                    // refresh returns. The refresh recomputes the same
+                    // background key for this (unchanged) source revision; with
+                    // the marker still set, `ensure_..._background_syntax_prepare`
+                    // short-circuits instead of spawning another parse. Clearing
+                    // before the refresh (as before) let the re-entrant call
+                    // spawn again, looping forever under `run_until_parked`.
                     this.conflict_resolved_preview_syntax_inflight = None;
                 });
             },
@@ -2792,6 +2799,17 @@ impl MainPaneView {
             output_snapshot.as_str(),
             self.conflict_resolved_preview_line_starts.as_ref(),
         );
+        // A fresh, non-incremental recompute (no edit hint) drops any
+        // previously prepared syntax document so a large output re-renders as
+        // plain text until its background parse re-establishes syntax. An
+        // incremental edit (edit hint present) instead keeps the prior document
+        // as a stale approximation, so it does not flash to plain on every
+        // keystroke. The background-parse completion path re-enters
+        // `refresh_conflict_resolved_output_syntax` directly (bypassing this
+        // method), so the document it just parsed and stored is preserved.
+        if syntax_edit.is_none() {
+            self.conflict_resolved_preview_prepared_syntax_document = None;
+        }
         self.conflict_resolved_preview_segments_cache.clear();
         self.refresh_conflict_resolved_output_syntax(output_snapshot, syntax_edit, cx);
         self.conflict_resolved_preview_text = output_snapshot.clone();
