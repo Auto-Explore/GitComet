@@ -80,22 +80,44 @@ fn adjacent_repo_tab_id(
 }
 
 impl GitCometView {
-    pub(crate) fn open_recent_repository_picker(
+    /// Keyboard/menu entry point for the repository switcher: it toggles, and
+    /// anchors to the same titlebar chevron the mouse uses. Only the command
+    /// palette opens the picker centred, via
+    /// [`Self::open_repository_switcher_centered`].
+    pub(crate) fn toggle_repository_switcher(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        let window_bounds = window.window_bounds().get_bounds();
-        let preferred_width = px(480.0);
-        let margin = px(24.0);
-        let anchor_x = ((window_bounds.size.width - preferred_width) * 0.5).max(margin);
-        let anchor_y = px(72.0);
-        self.open_popover_at(
-            PopoverKind::RecentRepositoryPicker,
-            point(anchor_x, anchor_y),
-            window,
-            cx,
-        );
+        if self
+            .popover_host
+            .read(cx)
+            .is_kind_open(&PopoverKind::RepoPicker)
+        {
+            self.popover_host.update(cx, |host, cx| {
+                host.close_popover_and_restore_focus(window, cx)
+            });
+            return;
+        }
+
+        // The chevron has no painted bounds yet in a window that has not drawn
+        // its titlebar (the "open a new window, then show the switcher" path),
+        // so fall back to the centred placement there.
+        let Some(anchor) = self.title_bar.read(cx).repo_picker_toggle_bounds() else {
+            self.open_repository_switcher_centered(window, cx);
+            return;
+        };
+        self.open_popover_for_bounds(PopoverKind::RepoPicker, anchor, window, cx);
+    }
+
+    /// Command-palette entry point: the palette itself is centred, so the
+    /// picker that replaces it is too.
+    pub(crate) fn open_repository_switcher_centered(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover_centered(PopoverKind::RepoPicker, window, cx);
     }
 
     pub(crate) fn show_open_repo_panel_fallback(

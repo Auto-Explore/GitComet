@@ -1,6 +1,5 @@
 use crate::app::{
-    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRecentPicker, OpenRepository,
-    ResetUiScale,
+    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRepository, ResetUiScale,
 };
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
@@ -640,7 +639,11 @@ impl GitCometView {
             "reset-ui-scale" => cx.defer(|cx| cx.dispatch_action(&ResetUiScale)),
             "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
             "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
-            "open-recent" => cx.defer(|cx| cx.dispatch_action(&OpenRecentPicker)),
+            "switch-repository" => {
+                if let Some(window) = window {
+                    self.open_repository_switcher_centered(window, cx);
+                }
+            }
             "clone-repository" => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
@@ -1348,6 +1351,7 @@ impl GitCometView {
                 ui_model.clone(),
                 initial_theme,
                 ui_session.repo_sidebar_collapsed_items.clone(),
+                ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 cx,
@@ -3129,6 +3133,12 @@ impl GitCometView {
     #[allow(dead_code)]
     pub(crate) fn is_popover_open(&self, app: &App) -> bool {
         self.popover_host.read(app).is_open()
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn tooltip_host_for_test(&self) -> Entity<TooltipHost> {
+        self.tooltip_host.clone()
     }
 
     #[cfg(test)]

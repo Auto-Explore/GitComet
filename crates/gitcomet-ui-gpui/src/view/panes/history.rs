@@ -3593,7 +3593,7 @@ mod tests {
                 Some(PopoverKind::BranchMenu {
                     repo_id,
                     section: BranchSection::Local,
-                    name: "feature".to_string()
+                    name: "feature".to_string(),
                 })
             );
         });
@@ -3675,7 +3675,7 @@ mod tests {
                 Some(PopoverKind::BranchMenu {
                     repo_id,
                     section: BranchSection::Local,
-                    name: "feature".to_string()
+                    name: "feature".to_string(),
                 })
             );
         });
@@ -3811,7 +3811,7 @@ mod tests {
                     Some(PopoverKind::BranchMenu {
                         repo_id,
                         section: BranchSection::Local,
-                        name: "feature".to_string()
+                        name: "feature".to_string(),
                     })
                 );
                 assert_eq!(
@@ -3843,7 +3843,7 @@ mod tests {
                 Some(PopoverKind::BranchMenu {
                     repo_id,
                     section: BranchSection::Local,
-                    name: "feature".to_string()
+                    name: "feature".to_string(),
                 })
             );
             assert_eq!(
@@ -4336,7 +4336,7 @@ mod tests {
                 Some(PopoverKind::BranchMenu {
                     repo_id,
                     section: BranchSection::Local,
-                    name: "feature".to_string()
+                    name: "feature".to_string(),
                 })
             );
             assert!(crate::view::test_support::history_refs_hover_is_open(
@@ -4494,7 +4494,7 @@ mod tests {
                 Some(PopoverKind::BranchMenu {
                     repo_id,
                     section: BranchSection::Local,
-                    name: "feature".to_string()
+                    name: "feature".to_string(),
                 })
             );
         });

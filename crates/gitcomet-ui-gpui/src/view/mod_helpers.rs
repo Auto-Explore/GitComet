@@ -2499,7 +2499,6 @@ impl AutosquashMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
-    RecentRepositoryPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,
     },

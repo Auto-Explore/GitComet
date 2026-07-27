@@ -89,7 +89,7 @@ pub(super) fn model(
     });
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Entry {
-            label: "Rename branch…".into(),
+            label: "Rename branch".into(),
             icon: Some("icons/pencil.svg".into()),
             shortcut: None,
             disabled: false,

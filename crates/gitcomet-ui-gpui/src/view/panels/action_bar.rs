@@ -1,4 +1,3 @@
-use super::super::path_display;
 use super::*;
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -225,8 +224,6 @@ impl Render for ActionBarView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        let hover_bg = theme.hover_overlay();
-        let active_bg = theme.active_overlay();
         let icon_primary = theme.colors.accent;
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
@@ -240,34 +237,6 @@ impl Render for ActionBarView {
                 .child(count.to_string())
                 .into_any_element()
         };
-
-        let repo_title: SharedString = self
-            .active_repo()
-            .map(|r| path_display::path_display_shared(&r.spec.workdir))
-            .unwrap_or_else(|| "No repository".into());
-        // The toolbar shows just the directory name; the full path lives in the
-        // tooltip so it doesn't compete with the controls around it.
-        let repo_name: SharedString = self
-            .active_repo()
-            .map(|r| {
-                r.spec
-                    .workdir
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path_display::path_display_shared(&r.spec.workdir).into())
-            })
-            .unwrap_or_else(|| "No repository".to_string())
-            .into();
-
-        let branch: SharedString = self
-            .active_repo()
-            .map(|r| match &r.head_branch {
-                Loadable::Ready(name) => name.clone().into(),
-                Loadable::Loading => "".into(),
-                Loadable::Error(_) => "error".into(),
-                Loadable::NotLoaded => "—".into(),
-            })
-            .unwrap_or_else(|| "—".into());
 
         // Badge shown next to the selectors when the file directory is pinned to
         // a historical commit (not the live state). Click → back to live.
@@ -388,14 +357,6 @@ impl Render for ActionBarView {
             })
             .unwrap_or(false);
 
-        let repo_busy = self.active_repo().is_some_and(|repo| {
-            matches!(repo.open, Loadable::Loading)
-                || repo.loads_in_flight.any_in_flight()
-                || repo.local_actions_in_flight > 0
-                || repo.pull_in_flight > 0
-                || repo.push_in_flight > 0
-        });
-
         // Global back/forward navigation, mirroring the mouse side-buttons and
         // Alt+Left / Alt+Right (Option on macOS). Sits at the very start of the action bar.
         let (nav_can_back, nav_can_forward) = self
@@ -458,92 +419,6 @@ impl Render for ActionBarView {
             .flex_none()
             .child(nav_back)
             .child(nav_forward);
-
-        let repo_picker = div()
-            .id("repo_picker")
-            .debug_selector(|| "repo_picker".to_string())
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            .max_w(scaled_px(280.0))
-            .rounded(px(theme.radii.row))
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
-            .active(move |s| s.bg(active_bg))
-            .child(icon("icons/folder.svg", icon_muted))
-            .child(
-                div()
-                    .min_w(px(0.0))
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .line_clamp(1)
-                    .whitespace_nowrap()
-                    .child(repo_name),
-            )
-            .child(
-                div()
-                    .w(px(14.0))
-                    .h(px(14.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(if repo_busy {
-                        spinner(
-                            ("repo_busy_spinner", active_repo_key),
-                            with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 }),
-                        )
-                        .into_any_element()
-                    } else {
-                        svg_icon("icons/chevron_down.svg", icon_muted, scaled_px(12.0))
-                            .into_any_element()
-                    }),
-            )
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);
-            }))
-            .gitcomet_tooltip(theme, format!("{repo_title}\nSwitch repository").into());
-
-        let branch_picker = div()
-            .id("branch_picker")
-            .flex()
-            .items_center()
-            .gap_1()
-            .px_2()
-            .py_1()
-            .max_w(scaled_px(260.0))
-            .rounded(px(theme.radii.row))
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
-            .active(move |s| s.bg(active_bg))
-            .child(icon("icons/git_branch.svg", icon_muted))
-            .child(
-                div()
-                    .min_w(px(0.0))
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .line_clamp(1)
-                    .whitespace_nowrap()
-                    .child(branch),
-            )
-            .child(svg_icon(
-                "icons/chevron_down.svg",
-                icon_muted,
-                scaled_px(12.0),
-            ))
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                this.open_popover_at(
-                    PopoverKind::BranchPicker {
-                        purpose: BranchPickerPurpose::Checkout,
-                    },
-                    e.position(),
-                    window,
-                    cx,
-                );
-            }))
-            .gitcomet_tooltip(theme, "Switch branch".into());
 
         let pull_color = if pull_count > 0 {
             theme.colors.warning
@@ -841,8 +716,6 @@ impl Render for ActionBarView {
                     .gap_2()
                     .flex_1()
                     .child(global_nav)
-                    .child(repo_picker)
-                    .child(branch_picker)
                     .children(historical_badge)
                     .when(is_merging, |d| {
                         d.child(

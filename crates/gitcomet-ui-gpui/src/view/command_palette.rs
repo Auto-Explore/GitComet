@@ -17,6 +17,9 @@ pub(crate) struct CommandEntry {
     pub(crate) shortcut: Shortcut,
     pub(crate) category: &'static str,
     pub(crate) requires_repo: bool,
+    /// Extra search terms, matched after the label so wording the user
+    /// remembers still finds a command the label no longer spells out.
+    pub(crate) keywords: &'static str,
 }
 
 pub(crate) const COMMANDS: &[CommandEntry] = &[
@@ -25,6 +28,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Commit Changes",
         shortcut: Shortcut::None,
         category: "Commit",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -32,6 +36,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Stage All Changes",
         shortcut: Shortcut::None,
         category: "Working Copy",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -39,6 +44,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Unstage All Changes",
         shortcut: Shortcut::None,
         category: "Working Copy",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -46,6 +52,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Create Branch",
         shortcut: Shortcut::None,
         category: "Branch",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -53,6 +60,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Checkout Branch",
         shortcut: Shortcut::None,
         category: "Branch",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -60,6 +68,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Delete Branch",
         shortcut: Shortcut::None,
         category: "Branch",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -67,6 +76,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Rename Branch",
         shortcut: Shortcut::None,
         category: "Branch",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -74,6 +84,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Pull",
         shortcut: Shortcut::None,
         category: "Sync",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -81,6 +92,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Push",
         shortcut: Shortcut::None,
         category: "Sync",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -88,6 +100,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Force Push",
         shortcut: Shortcut::None,
         category: "Sync",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -95,6 +108,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Stash Changes",
         shortcut: Shortcut::None,
         category: "Stash",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -102,6 +116,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Pop Stash",
         shortcut: Shortcut::None,
         category: "Stash",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -109,6 +124,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Apply Stash",
         shortcut: Shortcut::None,
         category: "Stash",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -116,6 +132,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Drop Stash",
         shortcut: Shortcut::None,
         category: "Stash",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -123,16 +140,18 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Open Repository",
         shortcut: Shortcut::Secondary("O"),
         category: "Repository",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
-        id: "open-recent",
-        label: "Open Recent Repository",
+        id: "switch-repository",
+        label: "Switch Repository",
         shortcut: Shortcut::Platform {
             macos: "Option+Cmd+O",
             other: "Ctrl+Shift+O",
         },
         category: "Repository",
+        keywords: "recent reopen",
         requires_repo: false,
     },
     CommandEntry {
@@ -140,6 +159,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Clone Repository",
         shortcut: Shortcut::None,
         category: "Repository",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -147,6 +167,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Close Repository Tab",
         shortcut: Shortcut::Secondary("W"),
         category: "Repository",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -154,6 +175,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Reload Repository",
         shortcut: Shortcut::None,
         category: "Repository",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -161,6 +183,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Fetch All",
         shortcut: Shortcut::None,
         category: "Repository",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -168,6 +191,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Toggle Sidebar",
         shortcut: Shortcut::None,
         category: "View",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -175,6 +199,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Toggle Details Pane",
         shortcut: Shortcut::None,
         category: "View",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -182,6 +207,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Toggle Diff View (Split/Inline)",
         shortcut: Shortcut::None,
         category: "View",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -189,6 +215,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Toggle Diff Word Wrap",
         shortcut: Shortcut::None,
         category: "View",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -196,6 +223,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Toggle Diff Line Numbers",
         shortcut: Shortcut::None,
         category: "View",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -203,6 +231,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Toggle Whitespace Characters",
         shortcut: Shortcut::None,
         category: "View",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -213,6 +242,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
             other: "Ctrl+Shift+Tab",
         },
         category: "Navigation",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -223,6 +253,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
             other: "Ctrl+Tab",
         },
         category: "Navigation",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -230,6 +261,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Search in Current View",
         shortcut: Shortcut::Secondary("F"),
         category: "Navigation",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -237,6 +269,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Create Tag",
         shortcut: Shortcut::None,
         category: "Tags",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -244,6 +277,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "New Window",
         shortcut: Shortcut::Secondary("N"),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -251,6 +285,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Open Settings",
         shortcut: Shortcut::Secondary(","),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -258,6 +293,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Quit GitComet",
         shortcut: Shortcut::Secondary("Q"),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -265,6 +301,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Minimize Window",
         shortcut: Shortcut::MacOs("Cmd+M"),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -272,6 +309,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Zoom Window",
         shortcut: Shortcut::None,
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -282,6 +320,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
             other: "F11",
         },
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -289,6 +328,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Increase UI Scale",
         shortcut: Shortcut::Secondary("="),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -296,6 +336,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Decrease UI Scale",
         shortcut: Shortcut::Secondary("-"),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -303,6 +344,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Reset UI Scale",
         shortcut: Shortcut::Secondary("0"),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -310,6 +352,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Close Window",
         shortcut: Shortcut::Secondary("Shift+W"),
         category: "Window",
+        keywords: "",
         requires_repo: false,
     },
     CommandEntry {
@@ -317,6 +360,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Add Remote",
         shortcut: Shortcut::None,
         category: "Remotes",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -324,6 +368,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Add Submodule",
         shortcut: Shortcut::None,
         category: "Submodules",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -331,6 +376,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Update Submodules",
         shortcut: Shortcut::None,
         category: "Submodules",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -338,6 +384,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Add Worktree",
         shortcut: Shortcut::None,
         category: "Worktrees",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -345,6 +392,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Blame / Annotate",
         shortcut: Shortcut::Alt("B"),
         category: "History",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -352,6 +400,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Navigate Back",
         shortcut: Shortcut::Alt("Left"),
         category: "Navigation",
+        keywords: "",
         requires_repo: true,
     },
     CommandEntry {
@@ -359,6 +408,7 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         label: "Navigate Forward",
         shortcut: Shortcut::Alt("Right"),
         category: "Navigation",
+        keywords: "",
         requires_repo: true,
     },
     // TODO: "undo"              - Undo (Edit)
@@ -395,6 +445,10 @@ impl std::ops::Deref for CommandMatch {
     }
 }
 
+/// Keeps keyword matches below every label match in the ranking, whatever the
+/// two raw scores are.
+const KEYWORD_MATCH_PENALTY: i32 = 100_000;
+
 pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<CommandMatch> {
     let available = COMMANDS
         .iter()
@@ -414,6 +468,20 @@ pub(crate) fn filtered_commands(has_active_repo: bool, query: &str) -> Vec<Comma
         .filter_map(|(order, entry)| {
             fuzzy_subsequence_match(entry.label, query)
                 .map(|(score, positions)| (score, order, CommandMatch { entry, positions }))
+                .or_else(|| {
+                    // Keyword hits carry no highlight positions and sort behind
+                    // every label hit.
+                    fuzzy_subsequence_match(entry.keywords, query).map(|(score, _)| {
+                        (
+                            score + KEYWORD_MATCH_PENALTY,
+                            order,
+                            CommandMatch {
+                                entry,
+                                positions: Vec::new(),
+                            },
+                        )
+                    })
+                })
         })
         .collect();
 
@@ -1036,6 +1104,37 @@ fn fuzzy_subsequence_match(label: &str, query: &str) -> Option<(i32, Vec<usize>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keyword_matches_find_commands_their_label_no_longer_spells_out() {
+        let matches = filtered_commands(true, "recent");
+
+        let ids = matches.iter().map(|m| m.id).collect::<Vec<_>>();
+        assert!(
+            ids.contains(&"switch-repository"),
+            "expected the repository switcher to stay reachable by its old wording, got {ids:?}"
+        );
+        let switcher = matches
+            .iter()
+            .find(|m| m.id == "switch-repository")
+            .expect("switcher match");
+        assert!(
+            switcher.positions.is_empty(),
+            "keyword hits must not highlight unrelated label bytes"
+        );
+    }
+
+    #[test]
+    fn label_matches_outrank_keyword_matches() {
+        let matches = filtered_commands(true, "re");
+        let first = matches.first().expect("at least one match");
+
+        assert!(
+            !first.positions.is_empty(),
+            "expected a label match to lead, got the keyword hit {}",
+            first.label
+        );
+    }
 
     #[test]
     fn fuzzy_match_finds_subsequences_across_words() {

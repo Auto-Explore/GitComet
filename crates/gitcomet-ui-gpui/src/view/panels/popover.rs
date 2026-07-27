@@ -24,7 +24,6 @@ mod picker_nav;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_onto_confirm;
-mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
@@ -104,7 +103,6 @@ const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.
 const CONFLICT_OUTPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 300.0);
 const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 360.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
-const RECENT_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(480.0, 480.0, 860.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
 const DIALOG_320_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
 const DIALOG_360_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
@@ -150,7 +148,6 @@ pub(in super::super) struct PopoverHost {
     _ui_model_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
-    _recent_repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
@@ -174,15 +171,17 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     repo_picker_selected_index: Option<usize>,
-    recent_repo_picker_selected_index: Option<usize>,
-    recent_repo_picker_cached_repos: Vec<std::path::PathBuf>,
+    /// Session recent repositories snapshotted when a repository picker opens,
+    /// so the list can't shift under the user mid-interaction.
+    cached_recent_repos: Vec<std::path::PathBuf>,
+    repo_picker_sort: repo_picker::RepoPickerSort,
+    repo_picker_sort_menu_open: bool,
     branch_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
-    recent_repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
     file_history_search_input: Option<Entity<components::TextInput>>,
@@ -669,7 +668,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
         PopoverKind::RepoPicker | PopoverKind::BranchPicker { .. } => Some(PICKER_WIDTH),
-        PopoverKind::RecentRepositoryPicker => Some(RECENT_PICKER_WIDTH),
         PopoverKind::StashPrompt
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
@@ -842,10 +840,12 @@ impl PopoverHost {
     fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
+        let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker));
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.title_bar.update(cx, |title_bar, cx| {
                     title_bar.set_app_menu_open(app_menu_open, cx);
+                    title_bar.set_repo_picker_open(repo_picker_open, cx);
                 });
             });
         });
@@ -1451,7 +1451,6 @@ impl PopoverHost {
             _ui_model_subscription: subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
-            _recent_repo_picker_search_input_subscription: None,
             _worktree_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
@@ -1472,14 +1471,14 @@ impl PopoverHost {
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_selected_index: None,
-            recent_repo_picker_selected_index: None,
-            recent_repo_picker_cached_repos: Vec::new(),
+            cached_recent_repos: Vec::new(),
+            repo_picker_sort: repo_picker::RepoPickerSort::default(),
+            repo_picker_sort_menu_open: false,
             branch_picker_selected_index: None,
             worktree_picker_selected_index: None,
             submodule_picker_selected_index: None,
             file_history_selected_index: None,
             repo_picker_search_input: None,
-            recent_repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
@@ -1579,7 +1578,6 @@ impl PopoverHost {
         .chain(
             [
                 &self.repo_picker_search_input,
-                &self.recent_repo_picker_search_input,
                 &self.branch_picker_search_input,
                 &self.remote_picker_search_input,
                 &self.file_history_search_input,
@@ -1601,6 +1599,10 @@ impl PopoverHost {
         }
 
         cx.notify();
+    }
+
+    pub(in super::super) fn is_kind_open(&self, kind: &PopoverKind) -> bool {
+        self.popover.as_ref() == Some(kind)
     }
 
     #[cfg(test)]
@@ -1869,7 +1871,6 @@ impl PopoverHost {
                 ..
             }) => self.dismiss_inline_popover(window, cx),
             Some(PopoverKind::CloneRepo)
-            | Some(PopoverKind::RecentRepositoryPicker)
             | Some(PopoverKind::CreateTagPrompt { .. })
             | Some(PopoverKind::SquashPrompt { .. })
             | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
@@ -2702,7 +2703,6 @@ impl PopoverHost {
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
         self.repo_picker_selected_index = None;
-        self.recent_repo_picker_selected_index = None;
         self.branch_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
@@ -2718,11 +2718,11 @@ impl PopoverHost {
         } else {
             match &kind {
                 PopoverKind::RepoPicker => {
+                    let ui_session = session::load();
+                    self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);
+                    self.cached_recent_repos = ui_session.recent_repos;
+                    self.repo_picker_sort_menu_open = false;
                     let _ = self.ensure_repo_picker_search_input(window, cx);
-                }
-                PopoverKind::RecentRepositoryPicker => {
-                    self.recent_repo_picker_cached_repos = session::load().recent_repos;
-                    let _ = self.ensure_recent_repo_picker_search_input(window, cx);
                 }
                 PopoverKind::BranchPicker { .. } => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
@@ -3428,7 +3428,6 @@ impl PopoverHost {
 
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
-            PopoverKind::RecentRepositoryPicker => recent_repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::CreateBranchFromRefPrompt {
                 repo_id,
@@ -4027,6 +4026,15 @@ impl PopoverHost {
             .id("app_popover")
             .debug_selector(|| "app_popover".to_string())
             .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+            // `occlude` keeps the root view's mouse-move listener from firing
+            // over the popover, so the tooltip host would otherwise anchor
+            // truncated-text tooltips to wherever the pointer was before the
+            // popover opened. Feed it positions from inside the popover.
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
+                let _ = this
+                    .tooltip_host
+                    .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
+            }))
             .occlude()
             .p_1()
             .child(panel);

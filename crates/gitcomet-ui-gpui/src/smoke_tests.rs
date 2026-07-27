@@ -2170,18 +2170,26 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
         cx.debug_bounds(menu_selector).is_none(),
         "expected branch hamburger menu indicator to be removed"
     );
-    let edge_gap = row_bounds.right() - badge_bounds.right();
-    assert!(
-        edge_gap >= px(0.0) && edge_gap <= px(1.0),
-        "expected branch worktree badge to sit flush with the row edge"
-    );
 
     let row_center = row_bounds.center();
     cx.simulate_mouse_move(row_center, None, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
-    cx.simulate_mouse_down(row_center, MouseButton::Right, Modifiers::default());
+    // The trailing menu-dots slot is reserved in the row layout, so the worktree
+    // badge sits to its left rather than overlapping it.
+    let dots_bounds = cx
+        .debug_bounds(debug_selector("branch_dots", badge_ix))
+        .expect("expected the reserved branch menu dots slot");
+    assert!(
+        badge_bounds.right() <= dots_bounds.left(),
+        "expected branch worktree badge to sit left of the menu dots slot"
+    );
+
+    // Right-click over the label (near the leading edge) rather than the center:
+    // the trailing area holds the worktree badge and menu-dots slot.
+    let row_label_point = gpui::point(row_bounds.left() + px(48.0), row_center.y);
+    cx.simulate_mouse_down(row_label_point, MouseButton::Right, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
@@ -3125,8 +3133,8 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 
     // Open the repo picker dropdown in the action bar, which should overlay the rest of the UI.
     let picker_bounds = cx
-        .debug_bounds("repo_picker")
-        .expect("expected repo_picker in debug bounds");
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected repo_picker_toggle in debug bounds");
     cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
     cx.simulate_mouse_down(
         picker_bounds.center(),
@@ -3185,8 +3193,8 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     );
 
     let picker_bounds = cx
-        .debug_bounds("repo_picker")
-        .expect("expected repo_picker in debug bounds");
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected repo_picker_toggle in debug bounds");
     cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
     cx.simulate_mouse_down(
         picker_bounds.center(),

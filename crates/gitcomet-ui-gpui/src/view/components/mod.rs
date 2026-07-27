@@ -31,7 +31,9 @@ pub use context_menu::{
 };
 pub use diff_stat::diff_stat;
 pub use modal::{modal_scrim, modal_surface};
-pub use picker_prompt::{PickerPrompt, PickerPromptItem, PickerPromptItemPart};
+pub use picker_prompt::{
+    PickerPrompt, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,
+};
 pub use resize_grip::{ResizeGripAxis, resize_grip};
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;

@@ -1,5 +1,7 @@
 use super::*;
 use crate::ui_scale;
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
 pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 38.0;
@@ -24,7 +26,11 @@ pub(super) struct TitleBarView {
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
+    repo_picker_open: bool,
     workspace_actions_enabled: bool,
+    /// Painted bounds of the repository switcher chevron, so opening the picker
+    /// from the keyboard can anchor to the same control the mouse uses.
+    repo_picker_toggle_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -311,8 +317,14 @@ impl TitleBarView {
             root_view,
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
+            repo_picker_open: false,
             workspace_actions_enabled,
+            repo_picker_toggle_bounds: Rc::new(Cell::new(None)),
         }
+    }
+
+    pub(super) fn repo_picker_toggle_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.repo_picker_toggle_bounds.get()
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -328,6 +340,14 @@ impl TitleBarView {
         cx.notify();
     }
 
+    pub(super) fn set_repo_picker_open(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
+        if self.repo_picker_open == open {
+            return;
+        }
+        self.repo_picker_open = open;
+        cx.notify();
+    }
+
     pub(super) fn set_workspace_actions_enabled(
         &mut self,
         enabled: bool,
@@ -339,6 +359,7 @@ impl TitleBarView {
         self.workspace_actions_enabled = enabled;
         if !enabled {
             self.app_menu_open = false;
+            self.repo_picker_open = false;
         }
         cx.notify();
     }
@@ -428,6 +449,60 @@ impl Render for TitleBarView {
                     show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             );
+
+        // Browser-style repository switcher: a bare chevron beside the app menu
+        // (and the repo tabs) that opens the repository picker. Replaces the old
+        // labelled "Repositories" button that used to sit in the action bar.
+        let repo_picker_open = self.repo_picker_open;
+        let repo_picker_toggle_bounds = Rc::clone(&self.repo_picker_toggle_bounds);
+        let repo_picker_toggle = div()
+            .id("repo_picker_toggle")
+            .debug_selector(|| "repo_picker_toggle".to_string())
+            .h_full()
+            .flex()
+            .items_center()
+            .cursor(CursorStyle::PointingHand)
+            .child(
+                div()
+                    .id("repo_picker_btn")
+                    .h(scaled_px(26.0))
+                    .w(scaled_px(26.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(theme.radii.pill))
+                    // Stay lit in the pressed/open color while the picker popover
+                    // is open, mirroring the app-menu button.
+                    .when(repo_picker_open, move |s| s.bg(app_menu_open_bg))
+                    .hover(move |s| {
+                        if repo_picker_open {
+                            s.bg(app_menu_open_bg)
+                        } else {
+                            s.bg(app_menu_hover_bg)
+                        }
+                    })
+                    .active(move |s| {
+                        if repo_picker_open {
+                            s.bg(app_menu_open_active_bg)
+                        } else {
+                            s.bg(app_menu_active_bg)
+                        }
+                    })
+                    .child(svg_icon(
+                        "icons/chevron_down.svg",
+                        theme.colors.text,
+                        scaled_px(14.0),
+                    )),
+            )
+            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);
+            }))
+            .gitcomet_tooltip(theme, "Switch repository".into());
+        let repo_picker_toggle = div()
+            .on_children_prepainted(move |children_bounds, _window, _cx| {
+                repo_picker_toggle_bounds.set(children_bounds.first().copied());
+            })
+            .child(repo_picker_toggle);
 
         let drag_region = div()
             .id("title_drag")
@@ -610,7 +685,8 @@ impl Render for TitleBarView {
             })
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle)
-            });
+            })
+            .when(workspace_actions_enabled, |d| d.child(repo_picker_toggle));
 
         // Browser-style: when a workspace is open, the repo tabs live in the
         // title bar's middle. Keep a fixed draggable strip beside them so the

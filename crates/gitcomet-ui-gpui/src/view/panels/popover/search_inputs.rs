@@ -122,66 +122,38 @@ impl PopoverHost {
                 cx,
                 |this| matches!(this.popover, Some(PopoverKind::RepoPicker)),
                 |this| &mut this.repo_picker_selected_index,
-                |this, query, _cx| {
-                    Some(filter_by_query(
-                        this.state
-                            .repos
-                            .iter()
-                            .map(|r| (r.id, r.spec.workdir.display().to_string())),
-                        query,
-                    ))
+                // Navigation walks the same filtered order the picker renders,
+                // so Enter can't land on a different repository than the
+                // highlighted row — including across the two sections. While
+                // the sort menu covers the list, it walks the sort options
+                // instead.
+                |this, query, _cx| Some(repo_picker::nav_targets(this, query)),
+                repo_picker::dismiss,
+                |this, sel, cx| {
+                    if this.repo_picker_sort_menu_open {
+                        return;
+                    }
+                    let query = this
+                        .repo_picker_search_input
+                        .as_ref()
+                        .map(|input| input.read(cx).text().trim().to_string())
+                        .unwrap_or_default();
+                    // Section headers occupy scroll children too, so scroll to
+                    // the row's child slot rather than its selection index.
+                    let child_ix = repo_picker::filtered_layout(this, &query)
+                        .1
+                        .child_indices
+                        .get(sel)
+                        .copied()
+                        .unwrap_or(sel);
+                    this.picker_prompt_scroll.scroll_to_item(child_ix);
                 },
-                |this, cx| this.close_popover(cx),
-                Self::scroll_picker_prompt_to_item,
                 |this, payload, _query, _window, cx| {
-                    if let Some(repo_id) = payload {
-                        this.store.dispatch(Msg::SetActiveRepo { repo_id });
-                        this.close_popover(cx);
+                    if let Some(target) = payload {
+                        repo_picker::activate_nav_target(this, target, cx);
                     }
                 },
             ));
-        }
-        self.reset_picker_search_input(&input, window, cx);
-        input
-    }
-
-    pub(super) fn ensure_recent_repo_picker_search_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Entity<components::TextInput> {
-        let input = Self::ensure_search_input_entity(
-            &mut self.recent_repo_picker_search_input,
-            "Filter recent repositories",
-            window,
-            cx,
-        );
-        if self._recent_repo_picker_search_input_subscription.is_none() {
-            self._recent_repo_picker_search_input_subscription =
-                Some(Self::picker_search_subscription(
-                    &input,
-                    window,
-                    cx,
-                    |this| matches!(this.popover, Some(PopoverKind::RecentRepositoryPicker)),
-                    |this| &mut this.recent_repo_picker_selected_index,
-                    |this, query, _cx| {
-                        Some(filter_by_query(
-                            this.recent_repo_picker_cached_repos
-                                .iter()
-                                .map(|p| (p.clone(), recent_repo_display_text(p))),
-                            query,
-                        ))
-                    },
-                    |this, cx| this.close_popover(cx),
-                    |this, sel, cx| {
-                        scroll_recent_repo_picker_to_selected(sel, &this.picker_prompt_scroll, cx);
-                    },
-                    |this, payload, _query, _window, cx| {
-                        if let Some(path) = payload {
-                            recent_repo_picker::select_recent_repository(this, path, cx);
-                        }
-                    },
-                ));
         }
         self.reset_picker_search_input(&input, window, cx);
         input
@@ -579,16 +551,6 @@ fn submodule_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
     }
 }
 
-fn recent_repo_display_text(path: &std::path::Path) -> String {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return path.display().to_string();
-    };
-    let Some(parent) = path.parent() else {
-        return name.to_owned();
-    };
-    format!("{} - {}", name, parent.display())
-}
-
 fn file_history_match_text(commit: &gitcomet_core::domain::Commit) -> String {
     let sha = commit.id.as_ref();
     let short = sha.get(0..8).unwrap_or(sha);
@@ -604,19 +566,6 @@ fn filter_by_query<T>(items: impl IntoIterator<Item = (T, String)>, query: &str)
         .filter(|(_, text)| q.is_empty() || text.to_ascii_lowercase().contains(&q))
         .map(|(item, _)| item)
         .collect()
-}
-
-fn scroll_recent_repo_picker_to_selected(
-    sel: usize,
-    scroll_handle: &ScrollHandle,
-    cx: &mut impl BorrowAppContext,
-) {
-    let ui_scale = ui_scale::UiScale::current(cx);
-    let item_h = ui_scale.px(32.0);
-    let item_y = item_h * sel as f32;
-    let viewport_h = ui_scale.px(320.0) - item_h;
-    let target = (item_y - viewport_h * 0.5).max(px(0.0));
-    scroll_handle.set_offset(point(px(0.0), target));
 }
 
 fn match_branches(branches: &[String], query: &str) -> Vec<String> {

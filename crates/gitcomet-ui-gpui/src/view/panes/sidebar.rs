@@ -114,9 +114,16 @@ pub(in super::super) struct SidebarPaneView {
     pub(in super::super) collapsed_popover_scroll: gpui::ScrollHandle,
     file_browser_search_input: Entity<TextInput>,
     _search_input_subscription: gpui::Subscription,
+    /// Live filter for the branch sidebar (Local/Remote/pinned sections). The
+    /// input entity owns the text; `branch_filter_query` mirrors it for the row
+    /// builder, kept in sync by `_branch_filter_subscription`.
+    branch_filter_input: Entity<TextInput>,
+    pub(in super::super) branch_filter_query: String,
+    _branch_filter_subscription: gpui::Subscription,
     sidebar_presentation_cache: SidebarPresentationCache,
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
+    sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
@@ -178,6 +185,7 @@ impl SidebarPaneView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
+        sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
@@ -237,6 +245,30 @@ impl SidebarPaneView {
                 cx.notify();
             });
 
+        let branch_filter_input = cx.new(|cx| {
+            TextInput::new_inert(
+                TextInputOptions {
+                    placeholder: "Filter branches...".into(),
+                    leading_icon: Some("icons/git_branch.svg"),
+                    chromeless: true,
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        let branch_filter_subscription =
+            cx.observe(&branch_filter_input, move |this, input, cx| {
+                // The input owns its text (uncontrolled); mirror it into the
+                // local query used by the row builder, never writing back.
+                let text = input.read(cx).text().to_string();
+                if this.branch_filter_query != text {
+                    this.branch_filter_query = text;
+                    this.branches_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    cx.notify();
+                }
+            });
+
         let mut this = Self {
             store,
             state,
@@ -247,9 +279,13 @@ impl SidebarPaneView {
             collapsed_popover_scroll: gpui::ScrollHandle::new(),
             file_browser_search_input,
             _search_input_subscription: search_input_subscription,
+            branch_filter_input,
+            branch_filter_query: String::new(),
+            _branch_filter_subscription: branch_filter_subscription,
             sidebar_presentation_cache: SidebarPresentationCache::default(),
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
+            sidebar_pinned_branches_by_repo,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -376,6 +412,60 @@ impl SidebarPaneView {
             .collect()
     }
 
+    pub(in super::super) fn saved_sidebar_pinned_branches(
+        &self,
+    ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
+        self.sidebar_pinned_branches_by_repo
+            .iter()
+            .filter(|&(_repo, items)| !items.is_empty())
+            .map(|(repo, items)| (repo.clone(), items.clone()))
+            .collect()
+    }
+
+    pub(in super::super) fn is_branch_pinned(
+        &self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+    ) -> bool {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return false;
+        };
+        let key = branch_sidebar::branch_pin_storage_key(section, name);
+        self.sidebar_pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .is_some_and(|items| items.contains(&key))
+    }
+
+    pub(in super::super) fn toggle_pinned_branch(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return;
+        };
+        let repo_path = repo.spec.workdir.clone();
+        let key = branch_sidebar::branch_pin_storage_key(section, name);
+
+        let items = self
+            .sidebar_pinned_branches_by_repo
+            .entry(repo_path.clone())
+            .or_default();
+        if !items.insert(key.clone()) {
+            items.remove(&key);
+        }
+        if items.is_empty() {
+            self.sidebar_pinned_branches_by_repo.remove(&repo_path);
+        }
+
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        self.schedule_ui_settings_persist(cx);
+        cx.notify();
+    }
+
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.schedule_ui_settings_persist(cx);
@@ -451,6 +541,8 @@ impl SidebarPaneView {
             &mut self.sidebar_presentation_cache,
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
+            &self.sidebar_pinned_branches_by_repo,
+            &self.branch_filter_query,
         )
     }
 
@@ -649,7 +741,25 @@ impl SidebarPaneView {
         {
             branch_sidebar::toggle_collapse_state(&mut collapsed, key);
         }
-        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed);
+        // Each branch popover surfaces its matching Pinned section, so keep that
+        // one expanded regardless of the persisted collapse state.
+        let pinned_section = match section {
+            CollapsedSidebarSection::Local => Some(BranchSection::Local),
+            CollapsedSidebarSection::Remote => Some(BranchSection::Remote),
+            _ => None,
+        };
+        if let Some(pinned_section) = pinned_section {
+            let pinned_key = branch_sidebar::pinned_section_storage_key(pinned_section);
+            if branch_sidebar::is_collapsed(&collapsed, pinned_key) {
+                branch_sidebar::toggle_collapse_state(&mut collapsed, pinned_key);
+            }
+        }
+        let pinned = self
+            .sidebar_pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .cloned()
+            .unwrap_or_default();
+        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, &pinned, "");
         let scoped = section_content_rows(&full, section);
         Some(SidebarPresentation {
             rows: scoped.into(),
@@ -802,6 +912,70 @@ impl SidebarPaneView {
             .child(files_tab)
     }
 
+    /// A slim always-visible filter field pinned above the branch tree. It
+    /// narrows the Local/Remote (and pinned) sections live; a query force-expands
+    /// those sections so matches are always visible.
+    fn render_branch_filter_bar(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let has_query = !self.branch_filter_query.trim().is_empty();
+        div()
+            .px(scaled_px(8.0))
+            .pt(scaled_px(8.0))
+            .pb(scaled_px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .min_h(scaled_px(28.0))
+                    .pl(scaled_px(8.0))
+                    .pr(scaled_px(2.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.surface_bg_elevated)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .py(scaled_px(4.0))
+                            .child(self.branch_filter_input.clone()),
+                    )
+                    .when(has_query, |row| {
+                        row.child(
+                            components::Button::new("branch_filter_clear", "")
+                                .borderless()
+                                .style(components::ButtonStyle::Subtle)
+                                .start_slot(crate::view::icons::svg_icon(
+                                    "icons/generic_close.svg",
+                                    theme.colors.text_muted,
+                                    scaled_px(12.0),
+                                ))
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    this.clear_branch_filter(cx);
+                                })
+                                .w(scaled_px(24.0))
+                                .h(scaled_px(24.0))
+                                .gitcomet_tooltip(theme, "Clear filter".into())
+                                .debug_selector(|| "branch_filter_clear".to_string()),
+                        )
+                    }),
+            )
+    }
+
+    fn clear_branch_filter(&mut self, cx: &mut gpui::Context<Self>) {
+        self.branch_filter_input.update(cx, |input, cx| {
+            input.set_text("", cx);
+        });
+        self.branch_filter_query.clear();
+        cx.notify();
+    }
+
     fn render_branches_content(
         &mut self,
         theme: AppTheme,
@@ -809,12 +983,14 @@ impl SidebarPaneView {
     ) -> AnyElement {
         const SIDEBAR_TOP_INSET_PX: f32 = 2.0;
 
+        let filter_bar = self.render_branch_filter_bar(theme, cx);
         let Some(presentation) = self.branch_sidebar_presentation_cached() else {
             return div()
                 .flex()
                 .flex_col()
                 .h_full()
                 .min_h(px(0.0))
+                .child(filter_bar)
                 .child(components::empty_state(
                     theme,
                     "Branches",
@@ -865,6 +1041,7 @@ impl SidebarPaneView {
             .flex_col()
             .h_full()
             .min_h(px(0.0))
+            .child(filter_bar)
             .child(panel_body)
             .into_any()
     }
@@ -1425,11 +1602,39 @@ impl Render for SidebarPaneView {
 fn is_section_header(row: &BranchSidebarRow) -> bool {
     matches!(
         row,
-        BranchSidebarRow::SectionHeader { .. }
+        BranchSidebarRow::PinnedHeader { .. }
+            | BranchSidebarRow::SectionHeader { .. }
             | BranchSidebarRow::WorktreesHeader { .. }
             | BranchSidebarRow::SubmodulesHeader { .. }
             | BranchSidebarRow::StashHeader { .. }
     )
+}
+
+/// The rows of a single pinned section (header + pinned branches) for the given
+/// branch section, used to surface pins at the top of the matching branch
+/// popover in the collapsed sidebar.
+fn pinned_section_rows(
+    rows: &[BranchSidebarRow],
+    branch_section: BranchSection,
+) -> Vec<BranchSidebarRow> {
+    let Some(start) = rows.iter().position(|r| {
+        matches!(
+            r,
+            BranchSidebarRow::PinnedHeader { section, .. } if *section == branch_section
+        )
+    }) else {
+        return Vec::new();
+    };
+    let end = rows[start + 1..]
+        .iter()
+        .position(is_section_header)
+        .map(|pos| start + 1 + pos)
+        .unwrap_or(rows.len());
+    rows[start..end]
+        .iter()
+        .filter(|r| !matches!(r, BranchSidebarRow::SectionSpacer))
+        .cloned()
+        .collect()
 }
 
 fn matches_section_header(row: &BranchSidebarRow, section: CollapsedSidebarSection) -> bool {
@@ -1467,19 +1672,29 @@ fn section_content_rows(
     rows: &[BranchSidebarRow],
     section: CollapsedSidebarSection,
 ) -> Vec<BranchSidebarRow> {
+    // Each branch popover additionally surfaces its matching Pinned section at
+    // the top.
+    let mut out = match section {
+        CollapsedSidebarSection::Local => pinned_section_rows(rows, BranchSection::Local),
+        CollapsedSidebarSection::Remote => pinned_section_rows(rows, BranchSection::Remote),
+        _ => Vec::new(),
+    };
+
     let Some(start) = rows.iter().position(|r| matches_section_header(r, section)) else {
-        return Vec::new();
+        return out;
     };
     let end = rows[start + 1..]
         .iter()
         .position(is_section_header)
         .map(|pos| start + 1 + pos)
         .unwrap_or(rows.len());
-    rows[start + 1..end]
-        .iter()
-        .filter(|r| !matches!(r, BranchSidebarRow::SectionSpacer))
-        .cloned()
-        .collect()
+    out.extend(
+        rows[start + 1..end]
+            .iter()
+            .filter(|r| !matches!(r, BranchSidebarRow::SectionSpacer))
+            .cloned(),
+    );
+    out
 }
 
 fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {

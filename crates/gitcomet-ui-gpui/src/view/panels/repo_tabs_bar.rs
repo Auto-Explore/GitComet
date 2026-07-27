@@ -462,6 +462,11 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .items_center()
                 .justify_center()
+                // The row centers on the label's line box, which sits slightly
+                // above the text's optical center (ascender space). Nudge the
+                // close glyph down so it aligns with the visible label text.
+                .relative()
+                .top(scaled_px(1.5))
                 .size(scaled_px(14.0))
                 .rounded(px(theme.radii.row))
                 .cursor_pointer()

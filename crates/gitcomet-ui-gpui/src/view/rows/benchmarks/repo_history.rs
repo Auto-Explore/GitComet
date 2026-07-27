@@ -549,6 +549,9 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 message.len().hash(&mut h);
                 tooltip.len().hash(&mut h);
             }
+            BranchSidebarRow::PinnedHeader { collapsed, .. } => {
+                collapsed.hash(&mut h);
+            }
             BranchSidebarRow::SectionSpacer
             | BranchSidebarRow::WorktreesHeader { .. }
             | BranchSidebarRow::WorktreePlaceholder { .. }
@@ -820,8 +823,13 @@ impl BranchSidebarCacheFixture {
 
         // Cache miss — full rebuild.
         self.metrics.cache_misses += 1;
-        let rows: Rc<[BranchSidebarRow]> =
-            branch_sidebar::branch_sidebar_rows(&self.repo, &self.collapsed_items).into();
+        let rows: Rc<[BranchSidebarRow]> = branch_sidebar::branch_sidebar_rows(
+            &self.repo,
+            &self.collapsed_items,
+            &std::collections::BTreeSet::new(),
+            "",
+        )
+        .into();
         self.metrics.rows_count = rows.len();
 
         let mut h = FxHasher::default();

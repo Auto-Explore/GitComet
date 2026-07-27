@@ -28,7 +28,9 @@ fn normalize_existing_path(path: std::path::PathBuf) -> std::path::PathBuf {
 }
 
 #[gpui::test]
-fn recent_repository_picker_opens_and_initializes_search_input(cx: &mut gpui::TestAppContext) {
+fn repository_switcher_opens_the_repo_picker_with_a_fresh_search_input(
+    cx: &mut gpui::TestAppContext,
+) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
@@ -36,7 +38,7 @@ fn recent_repository_picker_opens_and_initializes_search_input(cx: &mut gpui::Te
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.open_recent_repository_picker(window, cx);
+            this.toggle_repository_switcher(window, cx);
         });
     });
 
@@ -53,28 +55,25 @@ fn recent_repository_picker_opens_and_initializes_search_input(cx: &mut gpui::Te
         ));
 
         let host = popover_host.read(app);
-        assert!(matches!(
-            host.popover,
-            Some(PopoverKind::RecentRepositoryPicker)
-        ));
+        assert!(matches!(host.popover, Some(PopoverKind::RepoPicker)));
 
         let input = host
-            .recent_repo_picker_search_input
+            .repo_picker_search_input
             .clone()
-            .expect("recent repository picker should create a search input");
+            .expect("repository switcher should create a search input");
         assert_eq!(input.read(app).text().to_string(), "");
     });
 }
 
 #[gpui::test]
-fn recent_repository_picker_reopen_clears_previous_search_text(cx: &mut gpui::TestAppContext) {
+fn repository_switcher_reopen_clears_previous_search_text(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.open_recent_repository_picker(window, cx);
+            this.toggle_repository_switcher(window, cx);
         });
     });
 
@@ -82,15 +81,17 @@ fn recent_repository_picker_reopen_clears_previous_search_text(cx: &mut gpui::Te
         let popover_host = { view.read(app).popover_host.clone() };
         let input = popover_host
             .read(app)
-            .recent_repo_picker_search_input
+            .repo_picker_search_input
             .clone()
-            .expect("recent repository picker should create a search input");
+            .expect("repository switcher should create a search input");
         input.update(app, |input, cx| input.set_text("repo", cx));
     });
 
+    // The shortcut toggles, so reopening means closing first.
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.open_recent_repository_picker(window, cx);
+            this.toggle_repository_switcher(window, cx);
+            this.toggle_repository_switcher(window, cx);
         });
     });
 
@@ -98,15 +99,15 @@ fn recent_repository_picker_reopen_clears_previous_search_text(cx: &mut gpui::Te
         let popover_host = { view.read(app).popover_host.clone() };
         let input = popover_host
             .read(app)
-            .recent_repo_picker_search_input
+            .repo_picker_search_input
             .clone()
-            .expect("recent repository picker should reuse its search input");
+            .expect("repository switcher should reuse its search input");
         assert_eq!(input.read(app).text().to_string(), "");
     });
 }
 
 #[test]
-fn recent_repository_picker_selecting_recent_repo_does_not_panic_wrapper() {
+fn repository_switcher_selecting_recent_repo_opens_it_wrapper() {
     if std::env::var_os(SESSION_FILE_ENV).is_some() {
         return;
     }
@@ -120,7 +121,7 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_wrapper() {
 
     let current_exe = std::env::current_exe().expect("locate current test binary");
     let output = no_window_command(current_exe)
-        .arg("recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess")
+        .arg("repository_switcher_selecting_recent_repo_opens_it_subprocess")
         .arg("--nocapture")
         .env(SESSION_FILE_ENV, &session_file)
         .output()
@@ -134,9 +135,7 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_wrapper() {
 }
 
 #[gpui::test]
-fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
-    cx: &mut gpui::TestAppContext,
-) {
+fn repository_switcher_selecting_recent_repo_opens_it_subprocess(cx: &mut gpui::TestAppContext) {
     if std::env::var_os(SESSION_FILE_ENV).is_none() {
         return;
     }
@@ -156,7 +155,7 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
 
     cx.update(|window, app| {
         view.update(app, |this, cx| {
-            this.open_recent_repository_picker(window, cx);
+            this.toggle_repository_switcher(window, cx);
         });
         let _ = window.draw(app);
         window.activate_window();
@@ -185,14 +184,101 @@ fn recent_repository_picker_selecting_recent_repo_does_not_panic_subprocess(
     cx.update(|_window, app| {
         assert!(
             !crate::view::test_support::popover_is_open(view.read(app), app),
-            "expected recent repository picker to close after selection"
+            "expected the repository switcher to close after selection"
         );
     });
-    wait_until(cx, "selected recent repository to open", || {
+    wait_until(cx, "selected repository to open", || {
         store_for_assert
             .snapshot()
             .repos
             .iter()
             .any(|repo| repo.spec.workdir == expected_path)
     });
+}
+
+#[gpui::test]
+fn repository_switcher_shortcut_toggles_the_picker_closed(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let toggle = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.toggle_repository_switcher(window, cx);
+            });
+            let _ = window.draw(app);
+        });
+    };
+    let is_open = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| crate::view::test_support::popover_is_open(view.read(app), app))
+    };
+
+    toggle(cx);
+    assert!(is_open(cx), "expected the shortcut to open the picker");
+
+    toggle(cx);
+    assert!(
+        !is_open(cx),
+        "expected the shortcut to close the picker it opened"
+    );
+
+    toggle(cx);
+    assert!(is_open(cx), "expected the shortcut to reopen the picker");
+}
+
+/// The shortcut anchors to the titlebar chevron; only the command palette
+/// centres the picker.
+#[gpui::test]
+fn repository_switcher_anchors_to_the_toggle_but_the_palette_centres(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = super::branch::create_tracking_store("switcher-anchor");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    // Draw once so the titlebar chevron reports painted bounds.
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let toggle_bounds = cx
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected the titlebar repository switcher toggle");
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.toggle_repository_switcher(window, cx);
+        });
+        let _ = window.draw(app);
+    });
+    let shortcut_bounds = cx
+        .debug_bounds("app_popover")
+        .expect("expected the picker to open from the shortcut");
+    assert!(
+        (shortcut_bounds.origin.x - toggle_bounds.origin.x).abs() < gpui::px(40.0),
+        "expected the shortcut to anchor near the toggle at {:?}, got {:?}",
+        toggle_bounds.origin,
+        shortcut_bounds.origin
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+            this.open_repository_switcher_centered(window, cx);
+        });
+        let _ = window.draw(app);
+    });
+    let centered_bounds = cx
+        .debug_bounds("app_popover")
+        .expect("expected the picker to open from the palette");
+    assert!(
+        centered_bounds.origin.x > shortcut_bounds.origin.x,
+        "expected the palette to centre the picker (shortcut at {:?}, palette at {:?})",
+        shortcut_bounds.origin,
+        centered_bounds.origin
+    );
 }

@@ -1081,7 +1081,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
         matches!(
             item,
             ContextMenuItem::Entry { label, action, .. }
-                if label.as_ref() == "Rename branch…"
+                if label.as_ref() == "Rename branch"
                     && matches!(
                         action.as_ref(),
                         ContextMenuAction::OpenPopover {
@@ -1110,7 +1110,7 @@ fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::T
     assert!(!remote_branch_model.items.iter().any(|item| {
         matches!(
             item,
-            ContextMenuItem::Entry { label, .. } if label.as_ref() == "Rename branch…"
+            ContextMenuItem::Entry { label, .. } if label.as_ref() == "Rename branch"
         )
     }));
     assert_declared_shortcuts(&remote_branch_model, &["P", "M", "S", "B", "F"]);

@@ -143,6 +143,47 @@ fn worktree_branch_badge_label(
         .or_else(|| detached.then(|| "(detached)".into()))
 }
 
+/// Render a sidebar label, bold-accent highlighting the first case-insensitive
+/// occurrence of the branch filter `query` (already trimmed and lowercased).
+/// With no query or no match the plain label is returned so the unfiltered
+/// sidebar renders exactly as before.
+///
+/// `text_size`/`font_weight` must repeat what the surrounding row already sets:
+/// TruncatedText resolves unset text styles inside a deferred measure closure
+/// that doesn't see ancestor styling, so an unset size would fall back to the
+/// 1rem window default and the label would grow as soon as it matched.
+fn filtered_label_element<V: 'static>(
+    label: SharedString,
+    query: &str,
+    text_color: gpui::Rgba,
+    highlight_color: gpui::Rgba,
+    text_size: gpui::AbsoluteLength,
+    font_weight: FontWeight,
+    cx: &gpui::Context<V>,
+) -> AnyElement {
+    // `to_ascii_lowercase` preserves byte length, so the match offset is valid
+    // in the original (mixed-case) label.
+    if !query.is_empty()
+        && let Some(start) = label.to_ascii_lowercase().find(query)
+    {
+        let range = start..start + query.len();
+        let highlight = gpui::HighlightStyle {
+            color: Some(highlight_color.into()),
+            font_weight: Some(FontWeight::BOLD),
+            ..Default::default()
+        };
+        components::TruncatedText::new(label)
+            .text_color(text_color)
+            .text_size(text_size)
+            .font_weight(font_weight)
+            .highlights([(range, highlight)])
+            .render(cx)
+            .into_any_element()
+    } else {
+        label.into_any_element()
+    }
+}
+
 pub(in crate::view) fn active_workspace_paths_by_branch(
     repo: &RepoState,
     open_repos: &[RepoState],
@@ -285,6 +326,14 @@ impl SidebarPaneView {
         };
         // Prefer the transient section-scoped presentation set while rendering a
         // collapsed-sidebar popover; fall back to the full cached presentation.
+        // The branch filter only applies to the expanded sidebar, so its matched
+        // letters are only highlighted there (never in the collapsed popover).
+        let is_collapsed_popover = this.collapsed_popover_presentation.is_some();
+        let filter_query = if is_collapsed_popover {
+            String::new()
+        } else {
+            this.branch_filter_query.trim().to_ascii_lowercase()
+        };
         let Some(presentation) = this
             .collapsed_popover_presentation
             .clone()
@@ -368,9 +417,188 @@ impl SidebarPaneView {
                 .bg(color)
         };
 
+        // A `⋮` overflow button that mirrors the row's right-click context menu.
+        // It stays hidden until the row is hovered (or its menu is open), and is
+        // absolutely positioned at the trailing edge so it overlays any trailing
+        // badges without shifting the row layout.
+        let menu_dots_accessory = |ix: usize,
+                                   id: &'static str,
+                                   row_group: SharedString,
+                                   invoker: SharedString,
+                                   popover: PopoverKind,
+                                   menu_active: bool,
+                                   cx: &mut gpui::Context<Self>|
+         -> AnyElement {
+            // Muted at rest (or while its row is hovered); the primary text
+            // color when the button itself is hovered or its menu is open —
+            // which resolves to near-white on dark themes and near-black on
+            // light ones. The color must be set on the svg element directly:
+            // gpui only paints an svg when its own `text.color` is set, and it
+            // does not inherit the ambient text color from ancestors.
+            let rest_color = if menu_active {
+                theme.colors.text
+            } else {
+                theme.colors.text_muted
+            };
+            let btn_group: SharedString = format!("{id}_btn_{ix}").into();
+            let button = div()
+                .id((id, ix))
+                .debug_selector(move || format!("{id}_{ix}"))
+                .group(btn_group.clone())
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(scaled_px(20.0))
+                .cursor(CursorStyle::PointingHand)
+                .child(
+                    gpui::svg()
+                        .path("icons/more_vertical.svg")
+                        .w(scaled_px(16.0))
+                        .h(scaled_px(16.0))
+                        .flex_shrink_0()
+                        .text_color(rest_color)
+                        .group_hover(btn_group.clone(), move |s| s.text_color(theme.colors.text)),
+                )
+                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    this.activate_context_menu_invoker(invoker.clone(), cx);
+                    this.open_popover_at(popover.clone(), e.position(), window, cx);
+                    cx.notify();
+                }));
+
+            // A fixed-width trailing slot reserved in the row layout (rather than
+            // an absolute overlay), so the button sits to the right of any
+            // trailing badges instead of covering them. The slot keeps its width
+            // while hidden, so revealing the button on hover never shifts the row.
+            let mut slot = div()
+                .flex_none()
+                .w(scaled_px(24.0))
+                .flex()
+                .items_center()
+                .justify_center();
+            if !menu_active {
+                slot = slot.invisible().group_hover(row_group, |d| d.visible());
+            }
+            slot.child(button).into_any_element()
+        };
+
+        // A pin toggle that sits just left of the `⋮` overflow button on a
+        // branch row. A pinned branch shows the icon at rest (primary color) so
+        // its pinned state is visible and can be undone; an unpinned branch only
+        // reveals a muted icon while its row is hovered, mirroring the dots.
+        let pin_accessory = |ix: usize,
+                             repo_id: RepoId,
+                             section: BranchSection,
+                             name: SharedString,
+                             row_group: SharedString,
+                             pinned: bool,
+                             cx: &mut gpui::Context<Self>|
+         -> AnyElement {
+            let rest_color = if pinned {
+                theme.colors.text
+            } else {
+                theme.colors.text_muted
+            };
+            let btn_group: SharedString = format!("branch_pin_btn_{ix}").into();
+            let button = div()
+                .id(("branch_pin", ix))
+                .debug_selector(move || format!("branch_pin_{ix}"))
+                .group(btn_group.clone())
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(scaled_px(20.0))
+                .cursor(CursorStyle::PointingHand)
+                .child(
+                    gpui::svg()
+                        .path("icons/pin.svg")
+                        .w(scaled_px(14.0))
+                        .h(scaled_px(14.0))
+                        .flex_shrink_0()
+                        .text_color(rest_color)
+                        .group_hover(btn_group.clone(), move |s| s.text_color(theme.colors.text)),
+                )
+                .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    this.toggle_pinned_branch(repo_id, section, name.as_ref(), cx);
+                }))
+                .gitcomet_tooltip(
+                    theme,
+                    if pinned { "Unpin branch" } else { "Pin branch" }.into(),
+                );
+
+            // The pin only appears while the row is hovered, even for an
+            // already-pinned branch (its pinned state is still conveyed by the
+            // dedicated Pinned section and the filled icon color on hover).
+            let slot = div()
+                .flex_none()
+                .w(scaled_px(20.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .invisible()
+                .group_hover(row_group, |d| d.visible());
+            slot.child(button).into_any_element()
+        };
+
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
+                BranchSidebarRow::PinnedHeader {
+                    section,
+                    top_border,
+                    collapsed,
+                    collapse_key,
+                } => {
+                    let (label, selector_suffix): (SharedString, &'static str) = match section {
+                        BranchSection::Local => ("Pinned Local Branches".into(), "local"),
+                        BranchSection::Remote => ("Pinned Remote Branches".into(), "remote"),
+                    };
+                    div()
+                        .id(("pinned_section", ix))
+                        .debug_selector(move || format!("pinned_section_{selector_suffix}"))
+                        .relative()
+                        .h(scaled_px(24.0))
+                        .w_full()
+                        .pl(indent_px(0))
+                        .pr_2()
+                        .flex()
+                        .items_center()
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(move |s| s.bg(theme.colors.hover))
+                        .active(move |s| s.bg(theme.colors.active))
+                        .when(top_border, |d| {
+                            d.child(top_divider(theme.colors.border_variant))
+                        })
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/pin.svg", icon_primary, 13.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.text)
+                                .child(label.clone()),
+                        )
+                        .gitcomet_tooltip(theme, label)
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                        }))
+                        .into_any_element()
+                }
                 BranchSidebarRow::SectionHeader {
                     section,
                     top_border,
@@ -454,6 +682,15 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "branch_section_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::BranchSectionMenu { repo_id, section },
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SectionSpacer => div()
@@ -549,6 +786,15 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "stash_section_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::StashPrompt,
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
@@ -636,6 +882,19 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "stash_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::StashMenu {
+                                repo_id,
+                                index,
+                                message: stash_message_for_menu.clone(),
+                            },
+                            context_menu_active,
+                            cx,
+                        ))
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
@@ -746,6 +1005,15 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "worktrees_section_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
@@ -931,6 +1199,21 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "worktree_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::worktree(
+                                repo_id,
+                                WorktreePopoverKind::Menu {
+                                    path: path.clone(),
+                                    branch: branch.as_ref().map(|name| name.to_string()),
+                                },
+                            ),
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulesHeader {
@@ -1026,6 +1309,15 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "submodules_section_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
@@ -1229,6 +1521,18 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "submodule_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::submodule(
+                                repo_id,
+                                SubmodulePopoverKind::Menu { path: path.clone() },
+                            ),
+                            context_menu_active,
+                            cx,
+                        ))
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
@@ -1307,6 +1611,20 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "remote_header_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::remote(
+                                repo_id,
+                                RemotePopoverKind::Menu {
+                                    name: remote_name.clone(),
+                                },
+                            ),
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::GroupHeader {
@@ -1348,7 +1666,15 @@ impl SidebarPaneView {
                                 .min_w(px(0.0))
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .child(label),
+                                .child(filtered_label_element(
+                                    label,
+                                    &filter_query,
+                                    theme.colors.text_muted,
+                                    theme.colors.accent,
+                                    gpui::rems(0.75).into(),
+                                    FontWeight::SEMIBOLD,
+                                    cx,
+                                )),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
@@ -1372,6 +1698,8 @@ impl SidebarPaneView {
                     let full_name_for_reveal: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
+                    let branch_pinned =
+                        this.is_branch_pinned(repo_id, section, full_name_for_menu.as_ref());
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
@@ -1541,7 +1869,15 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .text_color(branch_selected_label_color)
-                                .child(label),
+                                .child(filtered_label_element(
+                                    label,
+                                    &filter_query,
+                                    branch_selected_label_color,
+                                    theme.colors.accent,
+                                    gpui::rems(0.875).into(),
+                                    FontWeight::NORMAL,
+                                    cx,
+                                )),
                         );
 
                     let show_branch_badges = divergence_behind.is_some()
@@ -1696,6 +2032,30 @@ impl SidebarPaneView {
                     if show_branch_badges {
                         row = row.child(end_accessories);
                     }
+
+                    row = row.child(pin_accessory(
+                        ix,
+                        repo_id,
+                        section,
+                        full_name_for_menu.clone(),
+                        row_group.clone(),
+                        branch_pinned,
+                        cx,
+                    ));
+
+                    row = row.child(menu_dots_accessory(
+                        ix,
+                        "branch_dots",
+                        row_group.clone(),
+                        context_menu_invoker.clone(),
+                        PopoverKind::BranchMenu {
+                            repo_id,
+                            section,
+                            name: full_name_for_menu.as_ref().to_owned(),
+                        },
+                        context_menu_active,
+                        cx,
+                    ));
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -2935,11 +3295,7 @@ mod tests {
             .debug_bounds(feature_row_selector)
             .expect("expected feature branch row");
         let feature_row_center = feature_row_bounds.center();
-        let feature_badge_edge_gap = feature_row_bounds.right() - feature_badge_before.right();
-        assert!(
-            feature_badge_edge_gap >= px(0.0) && feature_badge_edge_gap <= px(1.0),
-            "expected the worktree badge to sit flush with the row edge"
-        );
+        let feature_dots_selector = leak_selector(format!("branch_dots_{feature_ix}"));
         cx.simulate_mouse_move(feature_row_center, None, gpui::Modifiers::default());
         crate::view::test_support::redraw(cx);
         let feature_badge_after = cx
@@ -2951,6 +3307,15 @@ mod tests {
         let feature_push_badge_after = cx
             .debug_bounds(feature_push_badge_selector)
             .expect("expected push count badge after hover");
+        // The trailing menu-dots slot is reserved in the row layout, so the
+        // worktree badge sits to its left rather than overlapping it.
+        let feature_dots_after = cx
+            .debug_bounds(feature_dots_selector)
+            .expect("expected the reserved menu dots slot after hover");
+        assert!(
+            feature_badge_after.right() <= feature_dots_after.left(),
+            "expected the worktree badge to sit left of the menu dots slot, not overlap it"
+        );
         assert_eq!(
             feature_badge_before.left(),
             feature_badge_after.left(),
@@ -2971,8 +3336,13 @@ mod tests {
             feature_push_badge_after.left(),
             "expected the push badge to stay fixed on row hover"
         );
+        // Right-click over the label (near the row's leading edge) rather than
+        // the center: the trailing area now holds the worktree badge and the
+        // reserved menu-dots slot, which open their own menus.
+        let feature_row_label_point =
+            gpui::point(feature_row_bounds.left() + px(48.0), feature_row_center.y);
         cx.simulate_mouse_down(
-            feature_row_center,
+            feature_row_label_point,
             gpui::MouseButton::Right,
             gpui::Modifiers::default(),
         );
@@ -2990,6 +3360,7 @@ mod tests {
                     repo_id: opened_repo_id,
                     section: BranchSection::Local,
                     ref name,
+                    ..
                 }) if opened_repo_id == repo_id && name == "feature"
             ),
             "expected feature branch right-click to open the branch menu"
