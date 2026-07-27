@@ -6305,19 +6305,22 @@ fn assert_diff_horizontal_scrollbar_bounds_stable_across_unmeasured_render(
     wait_for_main_pane_condition(
         cx,
         view,
-        "diff horizontal and vertical overflow are available before geometry capture",
+        "diff horizontal overflow is available before geometry capture",
         |pane| {
-            let left_state = pane.diff_scroll.0.borrow();
-            let left_max = left_state.base_handle.max_offset();
-            let left_overflows = left_max.x > px(0.0) && left_max.y > px(0.0);
+            let left_max = pane.diff_scroll.0.borrow().base_handle.max_offset();
+            let left_overflows = left_max.x > px(0.0);
             if diff_view == DiffViewMode::Inline {
                 return left_overflows;
             }
-            drop(left_state);
-            let right_state = pane.diff_split_right_scroll.0.borrow();
-            let right_max = right_state.base_handle.max_offset();
-            let right_vertical_ready = sync_mode.includes_vertical() || right_max.y > px(0.0);
-            left_overflows && right_max.x > px(0.0) && right_vertical_ready
+            left_overflows
+                && pane
+                    .diff_split_right_scroll
+                    .0
+                    .borrow()
+                    .base_handle
+                    .max_offset()
+                    .x
+                    > px(0.0)
         },
         |pane| {
             format!(

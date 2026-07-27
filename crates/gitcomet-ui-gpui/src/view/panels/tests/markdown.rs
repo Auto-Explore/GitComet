@@ -1765,7 +1765,7 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
     let file_rel = std::path::PathBuf::from("conflict_scroll_sync_matrix.md");
     let abs_path = workdir.join(&file_rel);
     let build_markdown = |label: &str, fill: char| {
-        let long_code = fill.to_string().repeat(160);
+        let long_code = fill.to_string().repeat(400);
         let mut out = String::from("# Guide\n");
         for ix in 0..96 {
             out.push_str(&format!(
