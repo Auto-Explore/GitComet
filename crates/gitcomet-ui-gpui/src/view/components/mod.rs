@@ -8,6 +8,7 @@ mod diff_stat;
 mod modal;
 mod picker_prompt;
 mod resize_grip;
+mod shortcut_keys;
 mod split_button;
 mod tab;
 mod tab_bar;
@@ -35,6 +36,7 @@ pub use picker_prompt::{
     PickerPrompt, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip};
+pub use shortcut_keys::shortcut_keys;
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
 pub use tab_bar::TabBar;

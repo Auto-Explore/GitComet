@@ -885,49 +885,24 @@ impl CommandPaletteView {
 
                         let mut content = command_row.child(label);
                         if let Some(shortcut_text) = command.shortcut.label() {
-                            content = content.child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(scaled_px(4.0))
-                                    .flex_shrink_0()
-                                    .children(shortcut_text.split('+').map(|key| {
-                                        div()
-                                            .min_w(scaled_px(22.0))
-                                            .h(scaled_px(22.0))
-                                            .px(scaled_px(6.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(scaled_px(4.0))
-                                            .bg(with_alpha(
-                                                theme.colors.text,
-                                                if theme.is_dark { 0.06 } else { 0.035 },
-                                            ))
-                                            .font_family(
-                                                crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                            )
-                                            .text_xs()
-                                            .line_height(scaled_px(14.0))
-                                            .text_color(theme.colors.text_muted)
-                                            .child(key.to_owned())
-                                    })),
-                            );
+                            content = content.child(components::shortcut_keys(
+                                &shortcut_text,
+                                theme,
+                                ui_scale,
+                            ));
                         }
 
                         (
                             content
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(
-                                        move |this, _: &MouseDownEvent, window, cx| {
-                                            this.close_and_notify_root(
-                                                Some(command_id_for_click.clone()),
-                                                window,
-                                                cx,
-                                            );
-                                        },
-                                    ),
+                                    cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                        this.close_and_notify_root(
+                                            Some(command_id_for_click.clone()),
+                                            window,
+                                            cx,
+                                        );
+                                    }),
                                 )
                                 .into_any_element(),
                             self.selected_index == Some(command_index),
