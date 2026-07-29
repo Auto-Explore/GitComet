@@ -406,6 +406,10 @@ fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAp
                     .branch_picker_search_input
                     .as_ref()
                     .expect("branch picker search input");
+                // The prompt prefills the source ("HEAD"), which the picker
+                // treats as a filter query; clear it so the whole ref list is
+                // listed, like a user who types over the prefilled source.
+                search.update(cx, |input, cx| input.set_text("", cx));
                 let focus = search.read_with(cx, |input, _| input.focus_handle());
                 window.focus(&focus, cx);
             });
