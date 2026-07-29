@@ -196,6 +196,113 @@ fn repository_switcher_selecting_recent_repo_opens_it_subprocess(cx: &mut gpui::
     });
 }
 
+#[test]
+fn repository_switcher_removes_a_recent_repo_wrapper() {
+    if std::env::var_os(SESSION_FILE_ENV).is_some() {
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let session_file = dir.path().join("session.json");
+    for name in ["repo-a", "repo-b"] {
+        let repo_path = dir.path().join(name);
+        std::fs::create_dir_all(&repo_path).expect("create recent repo dir");
+        gitcomet_state::session::persist_recent_repo_to_path(&repo_path, &session_file)
+            .expect("seed recent repo session");
+    }
+
+    let current_exe = std::env::current_exe().expect("locate current test binary");
+    let output = no_window_command(current_exe)
+        .arg("repository_switcher_removes_a_recent_repo_subprocess")
+        .arg("--nocapture")
+        .env(SESSION_FILE_ENV, &session_file)
+        .output()
+        .expect("spawn subtest process");
+    assert!(
+        output.status.success(),
+        "subtest failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[gpui::test]
+fn repository_switcher_removes_a_recent_repo_subprocess(cx: &mut gpui::TestAppContext) {
+    if std::env::var_os(SESSION_FILE_ENV).is_none() {
+        return;
+    }
+
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let seeded = gitcomet_state::session::load().recent_repos;
+    assert_eq!(seeded.len(), 2, "expected two seeded recent repositories");
+    let removed = seeded[0].clone();
+    let kept = seeded[1].clone();
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.toggle_repository_switcher(window, cx);
+        });
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+
+    // The remove button only appears once its row is hovered.
+    let row_bounds = cx
+        .debug_bounds("picker_prompt_item_0")
+        .expect("expected the first recent repository picker item");
+    cx.simulate_mouse_move(row_bounds.center(), None, gpui::Modifiers::default());
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let remove_bounds = cx
+        .debug_bounds("picker_prompt_item_remove_0")
+        .expect("expected a remove button on the recent repository row");
+    cx.simulate_mouse_move(remove_bounds.center(), None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        remove_bounds.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        remove_bounds.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        assert!(
+            crate::view::test_support::popover_is_open(view.read(app), app),
+            "removing a recent repository should leave the picker open"
+        );
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(
+            host.cached_recent_repos,
+            vec![kept.clone()],
+            "expected the removed repository to leave the picker list"
+        );
+    });
+    assert_eq!(
+        gitcomet_state::session::load().recent_repos,
+        vec![kept],
+        "expected the removal to persist to the session file"
+    );
+    assert!(
+        !gitcomet_state::session::load()
+            .recent_repos
+            .contains(&removed),
+        "expected the removed repository to stay gone"
+    );
+}
+
 #[gpui::test]
 fn repository_switcher_shortcut_toggles_the_picker_closed(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();

@@ -147,6 +147,7 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
                 "icons/folder.svg",
                 OPEN_SECTION,
                 recency,
+                false,
             )
         })
         .collect::<Vec<_>>();
@@ -174,6 +175,9 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
                 "icons/history.svg",
                 RECENTLY_CLOSED_SECTION,
                 recency,
+                // Only recents can be forgotten; open repositories leave the
+                // list by being closed.
+                true,
             )
         })
         .collect::<Vec<_>>();
@@ -194,10 +198,14 @@ fn sortable_row(
     icon: &'static str,
     section: &'static str,
     recency: usize,
+    removable: bool,
 ) -> SortableRow {
     SortableRow {
         entry,
-        item: repo_picker_item(workdir).icon(icon).section(section),
+        item: {
+            let item = repo_picker_item(workdir).icon(icon).section(section);
+            if removable { item.removable() } else { item }
+        },
         name_key: workdir
             .file_name()
             .and_then(|name| name.to_str())
@@ -219,6 +227,7 @@ mod tests {
             "icons/history.svg",
             RECENTLY_CLOSED_SECTION,
             recency,
+            true,
         )
     }
 
@@ -446,6 +455,24 @@ pub(super) fn activate(
     }
 }
 
+/// Drops a recently-closed entry from the session's recent list. Open
+/// repositories have no `x`, so anything else is a no-op.
+pub(super) fn forget(
+    this: &mut PopoverHost,
+    entry: &RepoPickerEntry,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    let RepoPickerEntry::RecentlyClosed(path) = entry else {
+        return;
+    };
+    let _ = session::remove_recent_repo(path);
+    this.cached_recent_repos.retain(|recent| recent != path);
+    // The rows below the removed one shift up, so a stale selection would
+    // point at a different repository than the one it highlighted.
+    this.repo_picker_selected_index = None;
+    cx.notify();
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
@@ -475,6 +502,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .iter()
             .map(|(entry, _)| entry.clone())
             .collect::<Vec<_>>();
+        let remove_entries = select_entries.clone();
 
         let mut prompt = components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
             .items(items)
@@ -486,6 +514,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .selected_hint("Enter")
             .accent_selection()
             .padded_query_row()
+            .remove_tooltip("Remove from recently closed")
             .query_row_trailing(sort_toggle(this, cx));
         if this.repo_picker_sort_menu_open {
             prompt = prompt.list_override(sort_menu(this, cx));
@@ -493,11 +522,21 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
 
         components::context_menu(
             theme,
-            prompt.render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
-                if let Some(entry) = select_entries.get(ix).cloned() {
-                    activate(this, entry, cx);
-                }
-            }),
+            prompt.render_with_remove(
+                theme,
+                ui_scale_percent,
+                cx,
+                move |this, ix, _e, _w, cx| {
+                    if let Some(entry) = select_entries.get(ix).cloned() {
+                        activate(this, entry, cx);
+                    }
+                },
+                move |this, ix, _w, cx| {
+                    if let Some(entry) = remove_entries.get(ix).cloned() {
+                        forget(this, &entry, cx);
+                    }
+                },
+            ),
         )
         // Fixed width: PickerPrompt rows size with `w_full`, which does not
         // stretch under fit-content parents.

@@ -7,7 +7,7 @@ use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
-    ScrollHandle, SharedString, WeakEntity, Window, div, px,
+    MouseMoveEvent, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -31,6 +31,7 @@ pub struct PickerPrompt {
     select_on_mouse_down: bool,
     query_row_trailing: Option<gpui::AnyElement>,
     list_override: Option<gpui::AnyElement>,
+    remove_tooltip: Option<SharedString>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +41,7 @@ pub struct PickerPromptItem {
     parts: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
     section: Option<SharedString>,
+    removable: bool,
 }
 
 /// Where a filtered picker list ends up on screen: which items survived the
@@ -84,6 +86,7 @@ pub struct PickerPromptItemPart {
 
 type OnSelectFn<V> =
     dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static;
+type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
 
 impl PickerPrompt {
     pub fn new(query_input: Entity<TextInput>, scroll_handle: ScrollHandle) -> Self {
@@ -104,6 +107,7 @@ impl PickerPrompt {
             select_on_mouse_down: false,
             query_row_trailing: None,
             list_override: None,
+            remove_tooltip: None,
         }
     }
 
@@ -189,6 +193,13 @@ impl PickerPrompt {
         self
     }
 
+    /// Tooltip for the trailing remove button on
+    /// [`PickerPromptItem::removable`] rows.
+    pub fn remove_tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.remove_tooltip = Some(tooltip.into());
+        self
+    }
+
     pub fn render<V: 'static>(
         self,
         theme: AppTheme,
@@ -196,7 +207,23 @@ impl PickerPrompt {
         cx: &gpui::Context<V>,
         on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Div {
+        self.render_with_remove(theme, ui_scale, cx, on_select, |_, _, _, _| {})
+    }
+
+    /// Like [`Self::render`], but also wires the trailing remove button that
+    /// [`PickerPromptItem::removable`] rows carry. `on_remove` receives the
+    /// item's original (pre-filter) index, like `on_select`.
+    pub fn render_with_remove<V: 'static>(
+        self,
+        theme: AppTheme,
+        ui_scale: impl Into<UiScale>,
+        cx: &gpui::Context<V>,
+        on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
+        on_remove: impl Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static,
+    ) -> Div {
         let on_select: Arc<OnSelectFn<V>> = Arc::new(on_select);
+        let on_remove: Arc<OnRemoveFn<V>> = Arc::new(on_remove);
+        let remove_tooltip = self.remove_tooltip;
         let scroll_handle = self.scroll_handle;
         let leading_icon = self.leading_icon;
         let selected_hint = self.selected_hint;
@@ -310,9 +337,12 @@ impl PickerPrompt {
                 let row_icon = self.items[original_index].icon.or(leading_icon);
                 let is_selected = selected_index == Some(display_ix);
                 let is_marked = self.marked_index == Some(original_index);
+                let is_removable = self.items[original_index].removable;
+                let row_group: SharedString = format!("picker_prompt_row_{original_index}").into();
                 let mut row = div()
                     .id(("picker_prompt_item", original_index))
                     .debug_selector(move || format!("picker_prompt_item_{original_index}"))
+                    .group(row_group.clone())
                     .h(control_height_md(ui_scale))
                     .w_full()
                     .relative()
@@ -367,6 +397,21 @@ impl PickerPrompt {
                                     .child(hint),
                             )
                         })
+                    })
+                    .when(is_removable, |row| {
+                        row.child(remove_row_button(
+                            theme,
+                            ui_scale,
+                            original_index,
+                            row_group.clone(),
+                            // Keyboard users never hover, so the row the
+                            // selection sits on keeps its button visible.
+                            is_selected,
+                            remove_tooltip.clone(),
+                            self.tooltip_host.clone(),
+                            Arc::clone(&on_remove),
+                            cx,
+                        ))
                     });
                 if select_on_mouse_down {
                     row = row.on_mouse_down(
@@ -466,11 +511,19 @@ impl PickerPromptItem {
             parts: built_parts,
             icon: None,
             section: None,
+            removable: false,
         }
     }
 
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Gives the row a trailing `x` that drops the entry from the list instead
+    /// of activating it. Requires [`PickerPrompt::render_with_remove`].
+    pub fn removable(mut self) -> Self {
+        self.removable = true;
         self
     }
 
@@ -729,6 +782,80 @@ fn picker_item_label<V: 'static>(
     }
 
     label
+}
+
+/// The trailing `x` on a removable row — drops the entry from the list the
+/// picker draws from, rather than activating it. Mirrors the repository tab's
+/// close affordance: hidden until the row is hovered (or carries the keyboard
+/// selection) and tinted with the danger colour.
+#[allow(clippy::too_many_arguments)]
+fn remove_row_button<V: 'static>(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    index: usize,
+    row_group: SharedString,
+    always_visible: bool,
+    tooltip: Option<SharedString>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    on_remove: Arc<OnRemoveFn<V>>,
+    cx: &gpui::Context<V>,
+) -> impl IntoElement {
+    let scaled_px = |value| ui_scale.px(value);
+    let tooltip_for_move = tooltip.clone();
+    let host_for_move = tooltip_host.clone();
+    let host_for_hover = tooltip_host;
+
+    div()
+        .id(("picker_prompt_item_remove", index))
+        .debug_selector(move || format!("picker_prompt_item_remove_{index}"))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(scaled_px(18.0))
+        .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
+        .when(!always_visible, |button| {
+            button
+                .invisible()
+                .group_hover(row_group, |style| style.visible())
+        })
+        .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
+        .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
+        .child(crate::view::icons::svg_icon(
+            "icons/repo_tab_close.svg",
+            theme.colors.danger,
+            scaled_px(12.0),
+        ))
+        .on_mouse_move(cx.listener(move |_this, event: &MouseMoveEvent, _w, cx| {
+            let (Some(host), Some(tooltip)) = (host_for_move.as_ref(), tooltip_for_move.as_ref())
+            else {
+                return;
+            };
+            let _ = host.update(cx, |host, cx| {
+                host.on_mouse_moved(event.position, cx);
+                host.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+            });
+        }))
+        .on_hover(cx.listener(move |_this, hovering: &bool, _w, cx| {
+            let (false, Some(host), Some(tooltip)) =
+                (*hovering, host_for_hover.as_ref(), tooltip.as_ref())
+            else {
+                return;
+            };
+            let _ = host.update(cx, |host, cx| {
+                host.clear_tooltip_if_matches(tooltip, cx);
+            });
+        }))
+        // Keeps the press off the row, which may activate on mouse-down.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_this, _event: &MouseDownEvent, _w, cx| cx.stop_propagation()),
+        )
+        .on_click(cx.listener(move |this, _event: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            (on_remove)(this, index, window, cx);
+        }))
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
