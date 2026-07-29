@@ -3759,3 +3759,414 @@ fn scrollbar_track_uses_own_bounds_when_larger_than_surface(cx: &mut gpui::TestA
         );
     });
 }
+
+/// Opens a window with `count` repositories and returns their ids in tab
+/// order. Enough of them to overflow the strip is the point of most callers.
+fn open_repo_tabs(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    view: gpui::Entity<crate::view::GitCometView>,
+    label: &str,
+    count: usize,
+) -> Vec<RepoId> {
+    let base =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{label}_{}", std::process::id()));
+    let repos: Vec<PathBuf> = (0..count)
+        .map(|ix| base.join(format!("repository-number-{ix}")))
+        .collect();
+    restore_session_and_draw(cx, store, view, repos)
+}
+
+fn repo_tab_scroll(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) -> (Pixels, Pixels) {
+    cx.update(|_window, app| crate::view::test_support::repo_tab_scroll(view.read(app), app))
+}
+
+fn scroll_over(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, delta_y: Pixels) {
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(gpui::point(px(0.0), delta_y)),
+        modifiers: Modifiers::default(),
+        touch_phase: Default::default(),
+    });
+}
+
+#[gpui::test]
+fn repo_tabs_scroll_with_the_wheel_once_they_overflow(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_wheel", 30);
+
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(scrolled, px(0.0), "expected the strip to start unscrolled");
+    assert!(
+        max_scroll > px(0.0),
+        "expected 30 repository tabs to overflow the strip, got max scroll {max_scroll:?}"
+    );
+
+    // A plain vertical wheel has to move the strip: it scrolls on one axis and
+    // there is no scrollbar to drag.
+    let over_tabs = cx
+        .debug_bounds(repo_tab_selector(repo_ids[0]))
+        .expect("expected first repo tab bounds")
+        .center();
+    scroll_over(cx, over_tabs, px(-200.0));
+    sync_view_for_tests(cx, &view);
+
+    let (scrolled, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled,
+        px(200.0),
+        "expected the wheel to scroll the repository tab strip"
+    );
+
+    scroll_over(cx, over_tabs, px(500.0));
+    sync_view_for_tests(cx, &view);
+
+    let (scrolled, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled,
+        px(0.0),
+        "expected scrolling back to stop at the start of the strip"
+    );
+}
+
+#[gpui::test]
+fn repo_tab_scroll_arrows_appear_only_when_tabs_overflow(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_tabs(cx, &store_for_test, view.clone(), "tab_arrows_few", 2);
+
+    assert!(
+        cx.debug_bounds("tab_bar_scroll_left").is_none()
+            && cx.debug_bounds("tab_bar_scroll_right").is_none(),
+        "expected no scroll arrows while every tab fits"
+    );
+
+    let repos: Vec<PathBuf> = (0..30)
+        .map(|ix| {
+            std::env::temp_dir()
+                .join(format!(
+                    "gitcomet_ui_test_tab_arrows_{}",
+                    std::process::id()
+                ))
+                .join(format!("repository-number-{ix}"))
+        })
+        .collect();
+    restore_session_and_draw(cx, &store_for_test, view.clone(), repos);
+    sync_view_for_tests(cx, &view);
+
+    assert!(
+        cx.debug_bounds("tab_bar_scroll_left").is_some()
+            && cx.debug_bounds("tab_bar_scroll_right").is_some(),
+        "expected both scroll arrows once the tabs overflow"
+    );
+}
+
+#[gpui::test]
+fn repo_tab_scroll_arrows_move_the_strip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_tabs(cx, &store_for_test, view.clone(), "tab_arrow_clicks", 30);
+
+    // The left arrow is inert at the start of the strip.
+    click_debug_selector(cx, "tab_bar_scroll_left", 1);
+    sync_view_for_tests(cx, &view);
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled,
+        px(0.0),
+        "expected the left arrow to do nothing at the start of the strip"
+    );
+
+    click_debug_selector(cx, "tab_bar_scroll_right", 1);
+    sync_view_for_tests(cx, &view);
+    let (after_right, _) = repo_tab_scroll(cx, &view);
+    assert!(
+        after_right > px(0.0) && after_right <= max_scroll,
+        "expected the right arrow to scroll the strip, got {after_right:?}"
+    );
+
+    click_debug_selector(cx, "tab_bar_scroll_left", 1);
+    sync_view_for_tests(cx, &view);
+    let (after_left, _) = repo_tab_scroll(cx, &view);
+    assert!(
+        after_left < after_right,
+        "expected the left arrow to scroll back, went from {after_right:?} to {after_left:?}"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_repo_tab_to_the_edge_scrolls_the_strip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_drag_scroll", 30);
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(scrolled, px(0.0));
+    assert!(max_scroll > px(0.0), "expected the tabs to overflow");
+
+    let dragged = repo_ids[0];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+    let right_arrow = cx
+        .debug_bounds("tab_bar_scroll_right")
+        .expect("expected the right scroll arrow");
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x + px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    // Park the pointer just inside the strip's trailing edge and let frames run
+    // without moving it again.
+    let parked = gpui::point(right_arrow.left() - px(4.0), start.y);
+    cx.simulate_mouse_move(parked, Some(MouseButton::Left), Modifiers::default());
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_for_tests(cx, &view);
+    }
+
+    let (scrolled_right, _) = repo_tab_scroll(cx, &view);
+    assert!(
+        scrolled_right > px(0.0),
+        "expected a tab held at the trailing edge to scroll the strip, got {scrolled_right:?}"
+    );
+
+    // Scrolling has to keep re-picking the drop target, or the tab would land
+    // back where it started however far the strip travelled.
+    let position = store_for_test
+        .snapshot()
+        .repos
+        .iter()
+        .position(|repo| repo.id == dragged)
+        .expect("expected the dragged repo to still be open");
+    assert!(
+        position > 0,
+        "expected the tabs scrolling under a parked drag to move it along, still at {position}"
+    );
+
+    // Holding at the opposite edge winds it back.
+    let strip_left = cx
+        .debug_bounds("tab_bar_scroll_left")
+        .expect("expected the left scroll arrow");
+    let parked_left = gpui::point(strip_left.right() + px(4.0), start.y);
+    cx.simulate_mouse_move(parked_left, Some(MouseButton::Left), Modifiers::default());
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_for_tests(cx, &view);
+    }
+
+    let (scrolled_left, _) = repo_tab_scroll(cx, &view);
+    assert!(
+        scrolled_left < scrolled_right,
+        "expected the leading edge to scroll back, went {scrolled_right:?} -> {scrolled_left:?}"
+    );
+
+    cx.simulate_mouse_up(parked_left, MouseButton::Left, Modifiers::default());
+    sync_view_for_tests(cx, &view);
+
+    // The drag is over: the strip must sit still even with the pointer left in
+    // the edge zone.
+    let (settled, _) = repo_tab_scroll(cx, &view);
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_for_tests(cx, &view);
+    }
+    let (after_drop, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        settled, after_drop,
+        "expected auto-scroll to stop once the tab is dropped"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_repo_tab_past_the_strip_ends_keeps_it_inside(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_drag_clamp", 6);
+    let dragged = repo_ids[2];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+    let strip = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x - px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    // Haul it far past the leading edge, out where the sidebar lives.
+    cx.simulate_mouse_move(
+        gpui::point(strip.left() - px(400.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    sync_view_for_tests(cx, &view);
+
+    let at_left = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected the dragged tab to stay mounted in the strip");
+    assert!(
+        at_left.left() >= strip.left() - px(1.0),
+        "a tab dragged off the leading edge must stop at it \
+         (tab left={:?}, strip left={:?})",
+        at_left.left(),
+        strip.left()
+    );
+
+    // And the same past the trailing edge, where the add-repo button sits.
+    cx.simulate_mouse_move(
+        gpui::point(strip.right() + px(400.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    sync_view_for_tests(cx, &view);
+
+    let at_right = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected the dragged tab to stay mounted after the trailing haul");
+    assert!(
+        at_right.right() <= strip.right() + px(1.0),
+        "a tab dragged off the trailing edge must stop at it \
+         (tab right={:?}, strip right={:?})",
+        at_right.right(),
+        strip.right()
+    );
+
+    cx.simulate_mouse_up(
+        gpui::point(strip.right() + px(400.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    sync_view_for_tests(cx, &view);
+}
+
+#[gpui::test]
+fn add_repo_button_stays_pinned_right_of_overflowing_tabs(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_plus_pinned", 30);
+
+    let plus = cx
+        .debug_bounds("add_repo_menu")
+        .expect("expected the + button to stay rendered while tabs overflow");
+    let right_arrow = cx
+        .debug_bounds("tab_bar_scroll_right")
+        .expect("expected the right scroll arrow");
+    let last_tab = cx
+        .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
+        .expect("expected last repo tab bounds");
+
+    assert!(
+        right_arrow.right() <= plus.left(),
+        "expected the right arrow to sit left of the + button"
+    );
+    assert!(
+        plus.left() < last_tab.left(),
+        "expected the + button to stay on screen while the last tab is scrolled out"
+    );
+}
+
+#[gpui::test]
+fn add_repo_button_follows_the_last_tab_until_they_overflow(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // Few enough tabs to leave slack in the strip: the + belongs right after
+    // the last one, browser-style, not marooned at the far end of the bar.
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_plus_follows", 3);
+    let (_, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(max_scroll, px(0.0), "expected three tabs not to overflow");
+
+    let plus = cx
+        .debug_bounds("add_repo_menu")
+        .expect("expected the + button");
+    let last_tab = cx
+        .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
+        .expect("expected last repo tab bounds");
+    let strip = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+
+    assert!(
+        plus.left() >= last_tab.right() - px(1.0),
+        "expected the + button to sit after the last tab \
+         (plus left={:?}, last tab right={:?})",
+        plus.left(),
+        last_tab.right()
+    );
+    let gap = plus.left() - last_tab.right();
+    assert!(
+        gap < strip.size.width / 2.0,
+        "expected the + button to hug the last tab, not the end of the bar (gap={gap:?})"
+    );
+    assert!(
+        cx.debug_bounds("tab_bar_scroll_right").is_none(),
+        "expected no scroll arrows while the tabs fit"
+    );
+}
+
+#[gpui::test]
+fn activating_a_repo_scrolls_its_tab_into_view(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_reveal", 30);
+    let (scrolled, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(scrolled, px(0.0), "expected the strip to start unscrolled");
+
+    let last = *repo_ids.last().expect("repo ids");
+    store_for_test.dispatch(Msg::SetActiveRepo { repo_id: last });
+    sync_view_for_tests(cx, &view);
+    sync_view_for_tests(cx, &view);
+
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled, max_scroll,
+        "expected activating the last repository to scroll its tab into view"
+    );
+}

@@ -39,7 +39,7 @@ pub use resize_grip::{ResizeGripAxis, resize_grip};
 pub use shortcut_keys::shortcut_keys;
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
-pub use tab_bar::TabBar;
+pub use tab_bar::{TabBar, TabBarScroll};
 pub use toast::{ToastKind, toast};
 pub use tokens::*;
 pub(crate) use truncated_text::{
