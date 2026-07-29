@@ -106,7 +106,8 @@ fn shape_truncated_line_cached_from(
 
 /// Which visual family a ref chip belongs to. Tags stay accent-tinted pills,
 /// the HEAD chip is a solid accent pill, plain branches are neutral so a busy
-/// ref column doesn't shout.
+/// ref column doesn't shout, and a plain branch selected in the sidebar is
+/// tinted so the revealed commit visibly belongs to it.
 #[derive(Clone, Copy)]
 enum HistoryChipStyleKind {
     Tag,
@@ -127,31 +128,86 @@ fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryCh
             bg: with_alpha(theme.colors.accent, 0.12),
             text: theme.colors.accent,
         },
+        // The HEAD chip carries no selection state: a ring around a pill that is
+        // already a solid accent fill reads as a rendering artifact, not as a
+        // selection. Selecting the checked-out branch is left unmarked here.
         HistoryChipStyleKind::Head => HistoryChipVisual {
             border: with_alpha(theme.colors.accent, 0.90),
             bg: with_alpha(theme.colors.accent, 0.90),
             text: theme.colors.accent_text,
         },
-        HistoryChipStyleKind::Branch { selected } => HistoryChipVisual {
-            border: if selected {
-                with_alpha(theme.colors.accent, 0.45)
-            } else {
-                with_alpha(theme.colors.border, 0.90)
-            },
-            bg: theme.colors.surface_bg_elevated,
-            text: if selected {
-                selected_branch_label_color(theme)
-            } else {
-                theme.colors.text_muted
-            },
+        // The branch picked in the sidebar is tinted rather than merely
+        // re-bordered: on a busy ref column a border alone reads as noise, and
+        // this chip is the only thing marking which branch the revealed commit
+        // is the tip of. It stays short of the solid HEAD fill so the two
+        // remain distinguishable on the same row.
+        HistoryChipStyleKind::Branch { selected: true } => HistoryChipVisual {
+            border: with_alpha(theme.colors.accent, 0.85),
+            bg: with_alpha(theme.colors.accent, 0.22),
+            text: selected_branch_label_color(theme),
         },
+        HistoryChipStyleKind::Branch { selected: false } => HistoryChipVisual {
+            border: with_alpha(theme.colors.border, 0.90),
+            bg: theme.colors.surface_bg_elevated,
+            text: theme.colors.text_muted,
+        },
+    }
+}
+
+/// Whether one rendered ref is the branch selected in the sidebar. Comparison
+/// is on ref identity, not the chip's label: a local and a remote branch of the
+/// same name are different refs that can share a row, and label matching cannot
+/// tell them apart. The checked-out branch matches through its `HEAD → name`
+/// chip, which is the only ref item it gets.
+fn history_ref_is_selected_branch(
+    kind: &HistoryRefListItemKind,
+    selected_branch: Option<&SelectedHistoryBranch>,
+) -> bool {
+    let Some(selected) = selected_branch else {
+        return false;
+    };
+    let is = |section: BranchSection, name: &str| {
+        selected.section == section && selected.name.as_ref() == name
+    };
+
+    match kind {
+        HistoryRefListItemKind::AttachedHead { branch } => is(BranchSection::Local, branch),
+        HistoryRefListItemKind::LocalBranch { name } => is(BranchSection::Local, name),
+        HistoryRefListItemKind::RemoteBranch { name } => is(BranchSection::Remote, name),
+        HistoryRefListItemKind::Tag { .. } | HistoryRefListItemKind::DetachedHead => false,
+    }
+}
+
+/// Whether this row is the tip of the branch selected in the sidebar.
+///
+/// Deliberately derived from the row's own refs rather than from
+/// `selected_branch.is_some()`: the sidebar's pick outlives the reveal, so
+/// after picking a branch and then clicking some other commit, the newly
+/// selected row would otherwise claim the branch too.
+fn history_row_is_selected_branch_tip(
+    ref_items: &[HistoryRefListItem],
+    selected_branch: Option<&SelectedHistoryBranch>,
+) -> bool {
+    ref_items
+        .iter()
+        .any(|item| history_ref_is_selected_branch(&item.kind, selected_branch))
+}
+
+/// The commit summary carries the sidebar's branch selection: on the revealed
+/// tip it lifts from body text to `emphasis_text`. This is the cue that reads
+/// from across the window, and unlike the ref chips it works the same whether
+/// the branch is checked out or not.
+fn history_summary_color(theme: AppTheme, is_selected_branch_tip: bool) -> gpui::Rgba {
+    if is_selected_branch_tip {
+        selected_branch_label_color(theme)
+    } else {
+        theme.colors.text
     }
 }
 
 fn history_chip_style_kind(
     kind: &HistoryRefListItemKind,
-    selected_branch_entry_text: Option<&SharedString>,
-    item_text: &str,
+    selected_branch: Option<&SelectedHistoryBranch>,
 ) -> HistoryChipStyleKind {
     match kind {
         HistoryRefListItemKind::Tag { .. } => HistoryChipStyleKind::Tag,
@@ -160,8 +216,7 @@ fn history_chip_style_kind(
         }
         HistoryRefListItemKind::LocalBranch { .. }
         | HistoryRefListItemKind::RemoteBranch { .. } => HistoryChipStyleKind::Branch {
-            selected: selected_branch_entry_text
-                .is_some_and(|selected| selected.as_ref() == item_text),
+            selected: history_ref_is_selected_branch(kind, selected_branch),
         },
     }
 }
@@ -235,7 +290,7 @@ pub(super) fn history_commit_row_canvas(
     graph_row_ix: usize,
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
-    selected_branch_entry_text: Option<SharedString>,
+    selected_branch: Option<SelectedHistoryBranch>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
@@ -274,6 +329,9 @@ pub(super) fn history_commit_row_canvas(
                 ));
             }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+
+            let is_selected_branch_tip =
+                history_row_is_selected_branch_tip(&ref_items, selected_branch.as_ref());
 
             let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
             let scaled_px = |value| px(value * design_scale_factor);
@@ -507,8 +565,7 @@ pub(super) fn history_commit_row_canvas(
                                 ChipEntry::Ref(item) => {
                                     let style_kind = history_chip_style_kind(
                                         &item.kind,
-                                        selected_branch_entry_text.as_ref(),
-                                        item.text.as_ref(),
+                                        selected_branch.as_ref(),
                                     );
                                     (
                                         // Truncate from the start so the leaf
@@ -628,7 +685,7 @@ pub(super) fn history_commit_row_canvas(
                     summary.shared(),
                     summary.text_hash(),
                     summary_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text,
+                    history_summary_color(theme, is_selected_branch_tip),
                     None,
                 );
                 window.with_content_mask(
@@ -902,40 +959,82 @@ pub(super) fn history_commit_row_canvas(
 mod tests {
     use super::*;
 
+    fn selected(section: BranchSection, name: &str) -> SelectedHistoryBranch {
+        SelectedHistoryBranch {
+            section,
+            name: name.into(),
+        }
+    }
+
     #[test]
-    fn history_chip_style_kind_marks_selected_branch() {
-        let selected: SharedString = "feat/new_gui".into();
-        let kind = HistoryRefListItemKind::LocalBranch {
+    fn history_chip_style_kind_marks_the_selected_branch_by_identity() {
+        let local = HistoryRefListItemKind::LocalBranch {
             name: "feat/new_gui".to_string(),
         };
         assert!(matches!(
-            history_chip_style_kind(&kind, Some(&selected), "feat/new_gui"),
+            history_chip_style_kind(
+                &local,
+                Some(&selected(BranchSection::Local, "feat/new_gui"))
+            ),
             HistoryChipStyleKind::Branch { selected: true }
         ));
         assert!(matches!(
-            history_chip_style_kind(&kind, Some(&selected), "feat/other"),
+            history_chip_style_kind(&local, Some(&selected(BranchSection::Local, "feat/other"))),
             HistoryChipStyleKind::Branch { selected: false }
         ));
         assert!(matches!(
-            history_chip_style_kind(&kind, None, "feat/new_gui"),
+            history_chip_style_kind(&local, None),
             HistoryChipStyleKind::Branch { selected: false }
         ));
     }
 
     #[test]
-    fn history_chip_style_kind_maps_head_and_tags() {
+    fn history_chip_style_kind_keeps_local_and_remote_branches_apart() {
+        let local = HistoryRefListItemKind::LocalBranch {
+            name: "main".to_string(),
+        };
+        let remote = HistoryRefListItemKind::RemoteBranch {
+            name: "origin/main".to_string(),
+        };
+
         assert!(matches!(
             history_chip_style_kind(
-                &HistoryRefListItemKind::AttachedHead {
-                    branch: "main".to_string()
-                },
-                None,
-                "HEAD → main"
+                &remote,
+                Some(&selected(BranchSection::Remote, "origin/main"))
             ),
+            HistoryChipStyleKind::Branch { selected: true }
+        ));
+        // Selecting the local branch must not light up its remote twin.
+        assert!(matches!(
+            history_chip_style_kind(&remote, Some(&selected(BranchSection::Local, "main"))),
+            HistoryChipStyleKind::Branch { selected: false }
+        ));
+        assert!(matches!(
+            history_chip_style_kind(
+                &local,
+                Some(&selected(BranchSection::Remote, "origin/main"))
+            ),
+            HistoryChipStyleKind::Branch { selected: false }
+        ));
+    }
+
+    #[test]
+    fn history_chip_style_kind_leaves_the_head_chip_unmarked_when_selected() {
+        // Selecting the checked-out branch must not restyle its HEAD pill: a
+        // ring around an already-solid accent fill reads as an artifact.
+        let head = HistoryRefListItemKind::AttachedHead {
+            branch: "main".to_string(),
+        };
+        assert!(matches!(
+            history_chip_style_kind(&head, Some(&selected(BranchSection::Local, "main"))),
             HistoryChipStyleKind::Head
         ));
         assert!(matches!(
-            history_chip_style_kind(&HistoryRefListItemKind::DetachedHead, None, "HEAD"),
+            history_chip_style_kind(&head, Some(&selected(BranchSection::Local, "other"))),
+            HistoryChipStyleKind::Head
+        ));
+        assert!(matches!(
+            history_chip_style_kind(&HistoryRefListItemKind::DetachedHead, None),
             HistoryChipStyleKind::Head
         ));
         assert!(matches!(
@@ -943,11 +1042,129 @@ mod tests {
                 &HistoryRefListItemKind::Tag {
                     name: "v1.0".to_string()
                 },
-                None,
-                "v1.0"
+                None
             ),
             HistoryChipStyleKind::Tag
         ));
+    }
+
+    fn ref_item(kind: HistoryRefListItemKind) -> HistoryRefListItem {
+        HistoryRefListItem {
+            text: HistoryTextVm::new(SharedString::from("chip")),
+            kind,
+        }
+    }
+
+    #[test]
+    fn summary_lifts_on_the_selected_branch_tip_including_the_checked_out_branch() {
+        // The HEAD chip carries no selection state, so the summary is the only
+        // cue left when the picked branch is the one that is checked out.
+        let head_row = [ref_item(HistoryRefListItemKind::AttachedHead {
+            branch: "main".to_string(),
+        })];
+        assert!(history_row_is_selected_branch_tip(
+            &head_row,
+            Some(&selected(BranchSection::Local, "main"))
+        ));
+
+        let feature_row = [ref_item(HistoryRefListItemKind::LocalBranch {
+            name: "feature".to_string(),
+        })];
+        assert!(history_row_is_selected_branch_tip(
+            &feature_row,
+            Some(&selected(BranchSection::Local, "feature"))
+        ));
+
+        let remote_row = [ref_item(HistoryRefListItemKind::RemoteBranch {
+            name: "origin/main".to_string(),
+        })];
+        assert!(history_row_is_selected_branch_tip(
+            &remote_row,
+            Some(&selected(BranchSection::Remote, "origin/main"))
+        ));
+    }
+
+    #[test]
+    fn summary_stays_body_text_on_rows_that_do_not_carry_the_selected_branch() {
+        // The sidebar's pick outlives the reveal: clicking a different commit
+        // afterwards must not brighten that row's summary too.
+        let other_row = [ref_item(HistoryRefListItemKind::LocalBranch {
+            name: "other".to_string(),
+        })];
+        assert!(!history_row_is_selected_branch_tip(
+            &other_row,
+            Some(&selected(BranchSection::Local, "feature"))
+        ));
+
+        // A row with no refs at all is the common case for that stale pick.
+        assert!(!history_row_is_selected_branch_tip(
+            &[],
+            Some(&selected(BranchSection::Local, "feature"))
+        ));
+
+        // Local and remote refs of the same name stay distinct.
+        let local_main = [ref_item(HistoryRefListItemKind::LocalBranch {
+            name: "main".to_string(),
+        })];
+        assert!(!history_row_is_selected_branch_tip(
+            &local_main,
+            Some(&selected(BranchSection::Remote, "origin/main"))
+        ));
+
+        // Tags never stand in for a branch, and nothing is picked by default.
+        let tag_row = [ref_item(HistoryRefListItemKind::Tag {
+            name: "v1.0".to_string(),
+        })];
+        assert!(!history_row_is_selected_branch_tip(
+            &tag_row,
+            Some(&selected(BranchSection::Local, "v1.0"))
+        ));
+        assert!(!history_row_is_selected_branch_tip(&local_main, None));
+    }
+
+    #[test]
+    fn selected_branch_tip_summary_is_brighter_than_body_text() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let plain = history_summary_color(theme, false);
+            let tip = history_summary_color(theme, true);
+            assert_ne!(
+                (plain.r, plain.g, plain.b, plain.a),
+                (tip.r, tip.g, tip.b, tip.a),
+                "the revealed branch tip's summary must not reuse the body text color"
+            );
+            // Dark themes lift toward white, light themes toward black; either
+            // way the tip must move away from body text, not sit between it and
+            // the muted text used for de-emphasized columns.
+            assert_eq!(
+                tip,
+                theme.colors.emphasis_text,
+                "the tip summary should use the theme's emphasis color"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_chips_are_visibly_apart_from_their_unselected_form() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let rgba = |c: gpui::Rgba| (c.r, c.g, c.b, c.a);
+            let sel = history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: true });
+            let plain =
+                history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: false });
+            let head = history_chip_visual(theme, HistoryChipStyleKind::Head);
+
+            // A border-only difference is what made the sidebar's branch
+            // selection invisible on the revealed row; the fill has to carry it.
+            assert_ne!(
+                rgba(sel.bg),
+                rgba(plain.bg),
+                "selected branch chip must not reuse the plain chip fill"
+            );
+            assert_ne!(
+                rgba(sel.bg),
+                rgba(head.bg),
+                "selected branch chip must stay distinguishable from HEAD"
+            );
+        }
     }
 
     #[test]
@@ -961,3 +1178,4 @@ mod tests {
         assert_eq!(hit_test_index(&chips, point(px(15.0), px(5.0))), None);
     }
 }
+

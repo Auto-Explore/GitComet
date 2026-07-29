@@ -1294,18 +1294,12 @@ impl HistoryView {
         cx.notify();
     }
 
-    pub(in super::super) fn selected_branch_entry_text_for_history_row(
+    pub(in super::super) fn selected_branch_for_history_row(
         &self,
         repo_id: RepoId,
-        is_head: bool,
         selected: bool,
-    ) -> Option<SharedString> {
-        selected_branch_history_entry_text(
-            self.selected_branch.as_ref(),
-            repo_id,
-            is_head,
-            selected,
-        )
+    ) -> Option<SelectedHistoryBranch> {
+        selected_branch_for_history_row(self.selected_branch.as_ref(), repo_id, selected)
     }
 
     pub(in super::super) fn history_visible_column_preferences(&self) -> (bool, bool, bool, bool) {
@@ -2450,7 +2444,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_branch_history_entry_text_formats_head_local_branch() {
+    fn selected_branch_for_history_row_carries_branch_identity() {
         let selected_branch = SelectedBranch {
             repo_id: RepoId(7),
             section: BranchSection::Local,
@@ -2458,13 +2452,16 @@ mod tests {
         };
 
         assert_eq!(
-            selected_branch_history_entry_text(Some(&selected_branch), RepoId(7), true, true),
-            Some(SharedString::from("HEAD → main"))
+            selected_branch_for_history_row(Some(&selected_branch), RepoId(7), true),
+            Some(SelectedHistoryBranch {
+                section: BranchSection::Local,
+                name: "main".into(),
+            })
         );
     }
 
     #[test]
-    fn selected_branch_history_entry_text_formats_remote_branch_without_head_prefix() {
+    fn selected_branch_for_history_row_keeps_the_remote_section() {
         let selected_branch = SelectedBranch {
             repo_id: RepoId(7),
             section: BranchSection::Remote,
@@ -2472,13 +2469,16 @@ mod tests {
         };
 
         assert_eq!(
-            selected_branch_history_entry_text(Some(&selected_branch), RepoId(7), true, true),
-            Some(SharedString::from("origin/feature/topic"))
+            selected_branch_for_history_row(Some(&selected_branch), RepoId(7), true),
+            Some(SelectedHistoryBranch {
+                section: BranchSection::Remote,
+                name: "origin/feature/topic".into(),
+            })
         );
     }
 
     #[test]
-    fn selected_branch_history_entry_text_requires_selected_row_and_matching_repo() {
+    fn selected_branch_for_history_row_requires_selected_row_and_matching_repo() {
         let selected_branch = SelectedBranch {
             repo_id: RepoId(7),
             section: BranchSection::Local,
@@ -2486,11 +2486,11 @@ mod tests {
         };
 
         assert_eq!(
-            selected_branch_history_entry_text(Some(&selected_branch), RepoId(8), true, true),
+            selected_branch_for_history_row(Some(&selected_branch), RepoId(8), true),
             None
         );
         assert_eq!(
-            selected_branch_history_entry_text(Some(&selected_branch), RepoId(7), true, false),
+            selected_branch_for_history_row(Some(&selected_branch), RepoId(7), false),
             None
         );
     }

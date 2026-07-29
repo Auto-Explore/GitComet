@@ -3455,6 +3455,111 @@ mod tests {
     }
 
     #[gpui::test]
+    fn branch_reveal_marks_the_branch_chip_on_the_revealed_history_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let feature_tip = commit_id("feature-tip");
+        let initial_scope = LogScope::default();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        store_for_assert.dispatch(Msg::OpenRepo(PathBuf::from("/tmp/repo")));
+        wait_until(cx, "opened repo placeholder", |_cx| {
+            let snapshot = store_for_assert.snapshot();
+            snapshot.active_repo == Some(repo_id)
+                && snapshot.repos.iter().any(|repo| repo.id == repo_id)
+        });
+
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::HeadBranchLoaded {
+            repo_id,
+            result: Ok("main".to_string()),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![
+                Branch {
+                    name: "main".to_string(),
+                    target: commit_id("main-tip"),
+                    upstream: None,
+                    divergence: None,
+                },
+                Branch {
+                    name: "feature".to_string(),
+                    target: feature_tip.clone(),
+                    upstream: None,
+                    divergence: None,
+                },
+            ]),
+        }));
+        store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
+            repo_id,
+            scope: initial_scope,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("feature-tip"), commit("main-tip")],
+                next_cursor: None,
+            }),
+        }));
+        wait_until(cx, "sidebar repo data", |cx| {
+            sync_view_for_tests(cx, &view);
+            let snapshot = store_for_assert.snapshot();
+            let Some(repo) = snapshot.repos.iter().find(|repo| repo.id == repo_id) else {
+                return false;
+            };
+            matches!(repo.branches, Loadable::Ready(_)) && matches!(repo.log, Loadable::Ready(_))
+        });
+
+        let sidebar_pane = cx.update(|_window, app| view.read(app).sidebar_pane.clone());
+        cx.update(|window, app| {
+            sidebar_pane.update(app, |pane, cx| {
+                pane.reveal_branch_commit_in_history(
+                    repo_id,
+                    BranchSection::Local,
+                    "feature",
+                    feature_tip.clone(),
+                    None,
+                    cx,
+                );
+            });
+            let _ = window.draw(app);
+        });
+
+        wait_until(cx, "revealed branch tip selected", |cx| {
+            sync_view_for_tests(cx, &view);
+            let snapshot = store_for_assert.snapshot();
+            snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| {
+                    repo.history_state.selected_commit.as_ref() == Some(&feature_tip)
+                })
+        });
+
+        let marked = cx.update(|_window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view
+                .read(app)
+                .selected_branch_for_history_row(repo_id, true)
+        });
+        assert_eq!(
+            marked,
+            Some(SelectedHistoryBranch {
+                section: BranchSection::Local,
+                name: "feature".into(),
+            }),
+            "the revealed row should mark the clicked branch's chip as selected"
+        );
+    }
+
+    #[gpui::test]
     fn branch_reveal_routes_through_main_pane_and_selects_commit(cx: &mut gpui::TestAppContext) {
         let _visual_guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new(Arc::new(BlockingBackend));

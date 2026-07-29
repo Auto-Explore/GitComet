@@ -31,12 +31,21 @@ pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.10 })
 }
 
-pub(in crate::view) fn selected_branch_history_entry_text(
+/// Which ref a history row should mark as the one the sidebar selected.
+/// Carries the branch identity rather than its rendered label: the same branch
+/// is drawn as `main` or `HEAD → main` depending on the row, so matching on
+/// display text silently missed whichever form the row happened to use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedHistoryBranch {
+    pub(in crate::view) section: BranchSection,
+    pub(in crate::view) name: SharedString,
+}
+
+pub(in crate::view) fn selected_branch_for_history_row(
     selected_branch: Option<&SelectedBranch>,
     repo_id: RepoId,
-    is_head: bool,
     selected: bool,
-) -> Option<SharedString> {
+) -> Option<SelectedHistoryBranch> {
     if !selected {
         return None;
     }
@@ -46,12 +55,10 @@ pub(in crate::view) fn selected_branch_history_entry_text(
         return None;
     }
 
-    match selected_branch.section {
-        BranchSection::Local if is_head => Some(format!("HEAD → {}", selected_branch.name).into()),
-        BranchSection::Local | BranchSection::Remote => {
-            Some(SharedString::from(selected_branch.name.clone()))
-        }
-    }
+    Some(SelectedHistoryBranch {
+        section: selected_branch.section,
+        name: SharedString::from(selected_branch.name.clone()),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
