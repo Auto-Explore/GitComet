@@ -1448,7 +1448,7 @@ fn markdown_diff_preview_row_limit_shows_fallback_instead_of_rendering(
 }
 
 #[gpui::test]
-fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
+fn markdown_diff_preview_keeps_layout_controls_and_ignores_text_hotkeys(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -1523,20 +1523,56 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
         let pane = view.read(app).main_pane.read(app);
         assert!(pane.is_markdown_preview_active());
     });
+    // The change-nav buttons stay: `diff_nav_entries` walks the rendered
+    // preview's changed blocks, so Alt+Up / Alt+Down still work here. So does
+    // the inline/split toggle: `render_markdown_diff_preview` draws a merged
+    // list or an old/new column pair from the same `diff_view`.
     assert!(
-        cx.debug_bounds("diff_prev_hunk").is_none(),
-        "markdown diff preview should hide previous-change control"
+        cx.debug_bounds("diff_view_toggle").is_some(),
+        "markdown diff preview should keep the inline/split toggle"
     );
-    assert!(
-        cx.debug_bounds("diff_next_hunk").is_none(),
-        "markdown diff preview should hide next-change control"
-    );
-    assert!(
-        cx.debug_bounds("diff_view_toggle").is_none(),
-        "markdown diff preview should hide inline/split toggle"
-    );
+    // Blame keeps its slot but greys out — the preview has no annotation
+    // gutter, so the click is dropped and only Text mode annotates.
+    let blame_bounds = cx
+        .debug_bounds("diff_annotate")
+        .expect("markdown diff preview should keep the blame toggle visible");
+    cx.simulate_click(blame_bounds.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        assert!(
+            !view.read(app).main_pane.read(app).annotate_enabled,
+            "clicking blame in the markdown preview should not enable annotations"
+        );
+    });
 
+    // Without the fallback installed the Alt keystrokes below reach nothing,
+    // so the layout assertions would hold no matter how the guard is written.
+    cx.update(|_window, app| {
+        crate::app::install_global_diff_shortcut_fallback_for_test(app);
+    });
+
+    // Alt+I switches the preview to its merged inline list; Alt+W stays inert
+    // because the whitespace toggles only drive the diff-text rows.
     cx.simulate_keystrokes("alt-i alt-w");
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.diff_view, DiffViewMode::Inline);
+        assert!(!pane.reveal_whitespace_chars);
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Rendered
+        );
+    });
+
+    focus_diff_panel(cx, &view);
+
+    cx.simulate_keystrokes("alt-s");
 
     cx.update(|window, app| {
         let _ = window.draw(app);
@@ -1553,30 +1589,30 @@ fn markdown_diff_preview_hides_text_controls_and_ignores_text_hotkeys(
         );
     });
 
+    // Back in Text mode the same button annotates, so blame is greyed out by
+    // the preview rather than unavailable for markdown files.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.diff_view = DiffViewMode::Inline;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
                 cx.notify();
             });
         });
     });
-    focus_diff_panel(cx, &view);
-
-    cx.simulate_keystrokes("alt-s");
-
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
 
+    let blame_bounds = cx
+        .debug_bounds("diff_annotate")
+        .expect("text mode should keep the blame toggle");
+    cx.simulate_click(blame_bounds.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert_eq!(pane.diff_view, DiffViewMode::Inline);
-        assert!(!pane.reveal_whitespace_chars);
-        assert_eq!(
-            pane.rendered_preview_modes
-                .get(RenderedPreviewKind::Markdown),
-            RenderedPreviewMode::Rendered
+        assert!(
+            view.read(app).main_pane.read(app).annotate_enabled,
+            "clicking blame in markdown text mode should enable annotations"
         );
     });
 }
