@@ -159,6 +159,13 @@ pub(in super::super) struct PopoverHost {
     tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
+    sidebar_pane: Entity<SidebarPaneView>,
+    /// Mirror of the sidebar pane's pinned branches, keyed by repository
+    /// workdir. Kept here because context menus are built from click handlers
+    /// that already hold the sidebar pane's update borrow, so its entity can't
+    /// be read at that point.
+    pinned_branches_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
@@ -921,6 +928,11 @@ impl PopoverHost {
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
+        sidebar_pane: Entity<SidebarPaneView>,
+        pinned_branches_by_repo: std::collections::BTreeMap<
+            std::path::PathBuf,
+            std::collections::BTreeSet<String>,
+        >,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -1463,6 +1475,8 @@ impl PopoverHost {
             tooltip_host,
             main_pane,
             details_pane,
+            sidebar_pane,
+            pinned_branches_by_repo,
             popover: None,
             popover_anchor: None,
             cherry_pick_mainline: None,
@@ -3115,6 +3129,33 @@ impl PopoverHost {
     fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn set_pinned_branches(
+        &mut self,
+        pinned: std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.pinned_branches_by_repo == pinned {
+            return;
+        }
+        self.pinned_branches_by_repo = pinned;
+        cx.notify();
+    }
+
+    pub(in super::super) fn is_branch_pinned(
+        &self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+    ) -> bool {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return false;
+        };
+        let key = crate::view::branch_sidebar::branch_pin_storage_key(section, name);
+        self.pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .is_some_and(|items| items.contains(&key))
     }
 
     pub(in super::super) fn set_date_time_format(

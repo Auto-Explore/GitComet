@@ -422,21 +422,6 @@ impl SidebarPaneView {
             .collect()
     }
 
-    pub(in super::super) fn is_branch_pinned(
-        &self,
-        repo_id: RepoId,
-        section: BranchSection,
-        name: &str,
-    ) -> bool {
-        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
-            return false;
-        };
-        let key = branch_sidebar::branch_pin_storage_key(section, name);
-        self.sidebar_pinned_branches_by_repo
-            .get(&repo.spec.workdir)
-            .is_some_and(|items| items.contains(&key))
-    }
-
     pub(in super::super) fn toggle_pinned_branch(
         &mut self,
         repo_id: RepoId,
@@ -463,7 +448,24 @@ impl SidebarPaneView {
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
         self.schedule_ui_settings_persist(cx);
+        self.sync_popover_pinned_branches(cx);
         cx.notify();
+    }
+
+    /// Mirror the pinned set into the popover host so the branch context menu
+    /// can label its pin entry. Deferred because this runs inside the sidebar
+    /// pane's own update, and the toggle itself may have been dispatched from
+    /// the popover host (which is then mid-update too).
+    fn sync_popover_pinned_branches(&self, cx: &mut gpui::Context<Self>) {
+        let pinned = self.sidebar_pinned_branches_by_repo.clone();
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.popover_host.update(cx, |host, cx| {
+                    host.set_pinned_branches(pinned, cx);
+                });
+            });
+        });
     }
 
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {

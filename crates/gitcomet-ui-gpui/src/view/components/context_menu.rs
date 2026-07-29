@@ -452,6 +452,7 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/cloud.svg" => Some("icons/cloud.svg"),
         "icons/computer.svg" => Some("icons/computer.svg"),
         "icons/history.svg" => Some("icons/history.svg"),
+        "icons/pin.svg" => Some("icons/pin.svg"),
         _ => None,
     };
     if by_icon.is_some() {
@@ -571,6 +572,7 @@ mod tests {
             "icons/pencil.svg",
             "icons/cloud.svg",
             "icons/computer.svg",
+            "icons/pin.svg",
         ];
 
         for path in paths {
@@ -654,6 +656,7 @@ mod tests {
             "icons/minus.svg",
             "icons/cloud.svg",
             "icons/computer.svg",
+            "icons/pin.svg",
         ];
         for path in paths {
             assert_eq!(

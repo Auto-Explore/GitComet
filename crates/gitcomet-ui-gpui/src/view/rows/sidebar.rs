@@ -485,68 +485,6 @@ impl SidebarPaneView {
             slot.child(button).into_any_element()
         };
 
-        // A pin toggle that sits just left of the `⋮` overflow button on a
-        // branch row. A pinned branch shows the icon at rest (primary color) so
-        // its pinned state is visible and can be undone; an unpinned branch only
-        // reveals a muted icon while its row is hovered, mirroring the dots.
-        let pin_accessory = |ix: usize,
-                             repo_id: RepoId,
-                             section: BranchSection,
-                             name: SharedString,
-                             row_group: SharedString,
-                             pinned: bool,
-                             cx: &mut gpui::Context<Self>|
-         -> AnyElement {
-            let rest_color = if pinned {
-                theme.colors.text
-            } else {
-                theme.colors.text_muted
-            };
-            let btn_group: SharedString = format!("branch_pin_btn_{ix}").into();
-            let button = div()
-                .id(("branch_pin", ix))
-                .debug_selector(move || format!("branch_pin_{ix}"))
-                .group(btn_group.clone())
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(scaled_px(20.0))
-                .cursor(CursorStyle::PointingHand)
-                .child(
-                    gpui::svg()
-                        .path("icons/pin.svg")
-                        .w(scaled_px(14.0))
-                        .h(scaled_px(14.0))
-                        .flex_shrink_0()
-                        .text_color(rest_color)
-                        .group_hover(btn_group.clone(), move |s| s.text_color(theme.colors.text)),
-                )
-                .on_click(cx.listener(move |this, e: &ClickEvent, _window, cx| {
-                    if !e.standard_click() {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    this.toggle_pinned_branch(repo_id, section, name.as_ref(), cx);
-                }))
-                .gitcomet_tooltip(
-                    theme,
-                    if pinned { "Unpin branch" } else { "Pin branch" }.into(),
-                );
-
-            // The pin only appears while the row is hovered, even for an
-            // already-pinned branch (its pinned state is still conveyed by the
-            // dedicated Pinned section and the filled icon color on hover).
-            let slot = div()
-                .flex_none()
-                .w(scaled_px(20.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .invisible()
-                .group_hover(row_group, |d| d.visible());
-            slot.child(button).into_any_element()
-        };
-
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
@@ -1698,8 +1636,6 @@ impl SidebarPaneView {
                     let full_name_for_reveal: SharedString = name.clone();
                     let full_name_for_menu: SharedString = name.clone();
                     let full_name_for_tooltip: SharedString = name.clone();
-                    let branch_pinned =
-                        this.is_branch_pinned(repo_id, section, full_name_for_menu.as_ref());
                     let section_key = match section {
                         BranchSection::Local => "local",
                         BranchSection::Remote => "remote",
@@ -2032,16 +1968,6 @@ impl SidebarPaneView {
                     if show_branch_badges {
                         row = row.child(end_accessories);
                     }
-
-                    row = row.child(pin_accessory(
-                        ix,
-                        repo_id,
-                        section,
-                        full_name_for_menu.clone(),
-                        row_group.clone(),
-                        branch_pinned,
-                        cx,
-                    ));
 
                     row = row.child(menu_dots_accessory(
                         ix,

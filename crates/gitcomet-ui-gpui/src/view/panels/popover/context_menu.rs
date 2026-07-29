@@ -650,6 +650,15 @@ impl PopoverHost {
                 });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
             }
+            ContextMenuAction::ToggleBranchPin {
+                repo_id,
+                section,
+                name,
+            } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.toggle_pinned_branch(repo_id, section, &name, cx);
+                });
+            }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }

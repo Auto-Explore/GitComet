@@ -109,6 +109,22 @@ pub(super) fn model(
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText { text: name.clone() }),
     });
+    let pinned = this.is_branch_pinned(repo_id, section, name);
+    items.push(ContextMenuItem::Entry {
+        label: if pinned {
+            "Unpin branch".into()
+        } else {
+            "Pin branch".into()
+        },
+        icon: Some("icons/pin.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ToggleBranchPin {
+            repo_id,
+            section,
+            name: name.clone(),
+        }),
+    });
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Separator);
         if !is_current_branch {

@@ -83,6 +83,12 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         name: String,
     },
+    /// Pins/unpins a branch in the sidebar's dedicated "Pinned" section.
+    ToggleBranchPin {
+        repo_id: RepoId,
+        section: BranchSection,
+        name: String,
+    },
     SetHistoryScope {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,

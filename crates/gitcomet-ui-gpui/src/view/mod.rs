@@ -1434,6 +1434,8 @@ impl GitCometView {
                 tooltip_host.downgrade(),
                 main_pane.clone(),
                 details_pane.clone(),
+                sidebar_pane.clone(),
+                ui_session.repo_sidebar_pinned_branches.clone(),
                 window,
                 cx,
             )
