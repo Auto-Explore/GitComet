@@ -1072,8 +1072,8 @@ impl GitCometView {
                         })
                         .flatten();
                     let popover_anim_seq = self.sidebar_collapsed_popover_anim_seq;
-                    self.sidebar_pane.update(cx, |pane, _cx| {
-                        pane.set_collapsed_popover_section(popover_render);
+                    self.sidebar_pane.update(cx, |pane, cx| {
+                        pane.set_collapsed_popover_section(popover_render, cx);
                     });
 
                     div()

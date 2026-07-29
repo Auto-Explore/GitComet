@@ -326,11 +326,11 @@ impl SidebarPaneView {
         };
         // Prefer the transient section-scoped presentation set while rendering a
         // collapsed-sidebar popover; fall back to the full cached presentation.
-        // The branch filter only applies to the expanded sidebar, so its matched
-        // letters are only highlighted there (never in the collapsed popover).
+        // Each surface highlights matches from its own filter: the popover's
+        // toggled filter box, or the expanded sidebar's filter bar.
         let is_collapsed_popover = this.collapsed_popover_presentation.is_some();
         let filter_query = if is_collapsed_popover {
-            String::new()
+            this.collapsed_popover_filter_query.trim().to_ascii_lowercase()
         } else {
             this.branch_filter_query.trim().to_ascii_lowercase()
         };
@@ -629,6 +629,42 @@ impl SidebarPaneView {
                             context_menu_active,
                             cx,
                         ))
+                        .into_any_element()
+                }
+                BranchSidebarRow::FilterGroupHeader { section } => {
+                    let (icon_path, label): (&'static str, SharedString) = match section {
+                        BranchSection::Local => ("icons/computer.svg", "Local Branches".into()),
+                        BranchSection::Remote => ("icons/cloud.svg", "Remote Branches".into()),
+                    };
+                    let selector_suffix = match section {
+                        BranchSection::Local => "local",
+                        BranchSection::Remote => "remote",
+                    };
+                    // Purely a divider between the two halves of a cross-section
+                    // filter result: no collapse toggle, no menu, no hover.
+                    div()
+                        .id(("branch_filter_group", ix))
+                        .debug_selector(move || format!("branch_filter_group_{selector_suffix}"))
+                        .h(scaled_px(24.0))
+                        .w_full()
+                        .pl(indent_px(0))
+                        .pr_2()
+                        .flex()
+                        .items_center()
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
+                        .child(tree_toggle_slot(None))
+                        .child(tree_icon_slot(icon_path, icon_primary, 14.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.text_muted)
+                                .child(label),
+                        )
                         .into_any_element()
                 }
                 BranchSidebarRow::SectionSpacer => div()

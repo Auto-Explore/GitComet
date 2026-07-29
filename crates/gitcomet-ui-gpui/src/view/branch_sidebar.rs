@@ -121,6 +121,11 @@ pub(super) enum BranchSidebarRow {
         collapse_key: SharedString,
     },
     SectionSpacer,
+    /// A non-interactive group label. Only the collapsed-rail branch popovers
+    /// emit these, to separate Local from Remote when a filter spans both.
+    FilterGroupHeader {
+        section: BranchSection,
+    },
     Placeholder {
         section: BranchSection,
         message: SharedString,

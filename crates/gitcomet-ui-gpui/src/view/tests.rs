@@ -2136,6 +2136,96 @@ fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feature/alpha".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    state.repos[0].remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature/beta".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    assert!(
+        cx.debug_bounds("collapsed_popover_filter_bar").is_none(),
+        "the popover filter must stay hidden until its header toggle is used"
+    );
+    let toggle = cx
+        .debug_bounds("collapsed_popover_filter_toggle")
+        .expect("expected a filter toggle in the branch popover header");
+
+    cx.simulate_mouse_move(toggle.center(), None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        toggle.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        toggle.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+
+    let filter_bar = cx
+        .debug_bounds("collapsed_popover_filter_bar")
+        .expect("expected the toggle to reveal the popover filter");
+    // The branch sits under a `feature/` group header, so it is not row zero.
+    let first_row = ["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"]
+        .into_iter()
+        .find_map(|selector| cx.debug_bounds(selector))
+        .expect("expected the popover to render branch rows");
+    assert!(
+        filter_bar.bottom() <= first_row.top(),
+        "the filter box must sit above every branch row \
+         (filter={filter_bar:?}, first row={first_row:?})"
+    );
+    assert!(
+        filter_bar.top() > toggle.top(),
+        "the filter box must sit below the popover header"
+    );
+
+    cx.simulate_keystrokes("b e t a");
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("branch_filter_group_remote").is_some(),
+        "a Local popover filter must also surface Remote matches, under a Remote label"
+    );
+    let query = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .collapsed_popover_filter_query
+            .clone()
+    });
+    assert_eq!(query, "beta", "keystrokes must reach the popover filter box");
+}
+
+#[gpui::test]
 fn details_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
