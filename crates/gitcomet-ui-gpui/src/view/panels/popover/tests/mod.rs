@@ -47,6 +47,7 @@ impl GitBackend for TestBackend {
     }
 }
 
+mod app_menu;
 mod branch;
 mod browse_history;
 mod clone;

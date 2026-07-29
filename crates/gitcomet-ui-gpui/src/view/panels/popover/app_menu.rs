@@ -1,12 +1,11 @@
 use super::*;
 
-use crate::view::shortcut_labels::secondary_shortcut;
+use crate::view::shortcut_labels::Shortcut;
 
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let ui_scale_percent = super::popover_ui_scale_percent(cx);
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
-    let close = cx.listener(|this, _e: &ClickEvent, _w, cx| this.close_popover(cx));
     // Text-alpha overlays: the canvas-tuned hover token has no contrast on
     // the elevated popover surface.
     let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
@@ -36,57 +35,50 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .child(text)
     };
 
-    let entry =
-        |id: &'static str, label: SharedString, shortcut: Option<SharedString>, disabled: bool| {
-            div()
-                .id(id)
-                .debug_selector(move || id.to_string())
-                .min_h(components::control_height_md(ui_scale_percent))
-                .px(scaled_px(8.0))
-                .py(scaled_px(4.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .text_sm()
-                .line_height(scaled_px(18.0))
-                .when(!disabled, |d| {
-                    d.cursor(CursorStyle::PointingHand)
-                        .hover(move |s| s.bg(hover_overlay))
-                        .active(move |s| s.bg(active_overlay))
-                })
-                .when(disabled, |d| {
-                    d.text_color(theme.colors.text_muted)
-                        .cursor(CursorStyle::Arrow)
-                })
-                .child(label)
-                .when_some(shortcut, |d, s| {
-                    d.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(s),
-                    )
-                })
-        };
+    let entry = |id: &'static str, label: SharedString, shortcut: Shortcut, disabled: bool| {
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .min_h(components::control_height_md(ui_scale_percent))
+            .px(scaled_px(8.0))
+            .py(scaled_px(4.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .text_sm()
+            .line_height(scaled_px(18.0))
+            .when(!disabled, |d| {
+                d.cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(hover_overlay))
+                    .active(move |s| s.bg(active_overlay))
+            })
+            .when(disabled, |d| {
+                d.text_color(theme.colors.text_muted)
+                    .cursor(CursorStyle::Arrow)
+            })
+            .child(label)
+            .when_some(shortcut.label(), |d, s| {
+                d.child(components::shortcut_keys(&s, theme, ui_scale_percent))
+            })
+    };
 
-    let desktop_integration_supported = cfg!(any(target_os = "linux", target_os = "freebsd"));
-    #[allow(unused_mut)]
-    let mut install_desktop = entry(
-        "app_menu_install_desktop",
-        "Install desktop integration".into(),
-        None,
-        !desktop_integration_supported,
-    );
-
+    // Only platforms with a real desktop-entry story get the row at all; a
+    // permanently inert entry is noise everywhere else.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-    {
-        install_desktop = install_desktop.on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
+    let install_desktop = Some(
+        entry(
+            "app_menu_install_desktop",
+            "Install desktop integration".into(),
+            Shortcut::None,
+            false,
+        )
+        .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             this.install_linux_desktop_integration(cx);
             this.close_popover(cx);
-        }));
-    }
+        })),
+    );
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    let install_desktop: Option<gpui::Stateful<gpui::Div>> = None;
 
     div()
         .flex()
@@ -97,7 +89,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             entry(
                 "app_menu_command_palette",
                 "Command Palette".into(),
-                Some(secondary_shortcut("P").into()),
+                Shortcut::Secondary("P"),
                 false,
             )
             .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
@@ -109,7 +101,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             entry(
                 "app_menu_settings",
                 "Settings…".into(),
-                Some(secondary_shortcut(",").into()),
+                Shortcut::Secondary(","),
                 false,
             )
             .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
@@ -122,7 +114,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 entry(
                     "app_menu_open_in_code_editor",
                     "Open in code editor".into(),
-                    Some(secondary_shortcut("Shift+E").into()),
+                    Shortcut::Secondary("Shift+E"),
                     active_repo_workdir.is_none(),
                 )
                 .on_click(cx.listener(
@@ -144,7 +136,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             entry(
                 "app_menu_apply_patch",
                 "Apply patch…".into(),
-                None,
+                Shortcut::None,
                 active_repo_id.is_none(),
             )
             .on_click(cx.listener(move |this, _e: &ClickEvent, window, cx| {
@@ -180,17 +172,30 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             })),
         )
         .child(separator())
-        .child(install_desktop)
+        .when_some(install_desktop, |menu, install_desktop| {
+            menu.child(install_desktop)
+        })
         .child(
             entry(
                 "app_menu_quit",
                 "Quit".into(),
-                Some(secondary_shortcut("Q").into()),
+                Shortcut::Secondary("Q"),
                 false,
             )
             .on_click(cx.listener(|_this, _e: &ClickEvent, _w, cx| {
                 crate::app::quit_app_or_warn(cx);
             })),
         )
-        .child(entry("app_menu_close", "Close".into(), None, false).on_click(close))
+        .child(
+            entry(
+                "app_menu_close_window",
+                "Close Window".into(),
+                Shortcut::Secondary("Shift+W"),
+                false,
+            )
+            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
+                this.close_popover(cx);
+                crate::app::close_window_or_warn(window, cx);
+            })),
+        )
 }
