@@ -407,6 +407,19 @@ impl SidebarPaneView {
             scaled_px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
         };
 
+        // Rows paint their highlights over the surface behind the list, which
+        // differs between the pane and the collapsed rail's flyout. Label fades
+        // have to land on the resulting color, so resolve it per row state.
+        let row_surface = if is_collapsed_popover {
+            theme.colors.surface_bg_elevated
+        } else {
+            theme.colors.sidebar_bg
+        };
+        let row_bg = move |highlight: Option<gpui::Rgba>| match highlight {
+            Some(highlight) => crate::theme::composite_over(row_surface, highlight),
+            None => row_surface,
+        };
+
         let top_divider = |color: gpui::Rgba| {
             div()
                 .absolute()
@@ -821,13 +834,20 @@ impl SidebarPaneView {
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 12.0))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .text_sm()
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .child(message.clone()),
+                            components::FadingText::new(
+                                div().text_sm().child(message.clone()),
+                                row_bg(context_menu_active.then_some(theme.colors.active)),
+                            )
+                            .hover_bg(
+                                row_group.clone(),
+                                row_bg(Some(if context_menu_active {
+                                    theme.colors.active
+                                } else {
+                                    theme.colors.hover
+                                })),
+                            )
+                            .render(ui_scale_percent)
+                            .flex_1(),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() < 2 {
@@ -1557,7 +1577,22 @@ impl SidebarPaneView {
                             remote_color,
                             14.0,
                         ))
-                        .child(div().flex_1().min_w(px(0.0)).line_clamp(1).child(name))
+                        .child(
+                            components::FadingText::new(
+                                div().child(name),
+                                row_bg(context_menu_active.then_some(theme.colors.active)),
+                            )
+                            .hover_bg(
+                                row_group.clone(),
+                                row_bg(Some(if context_menu_active {
+                                    theme.colors.active
+                                } else {
+                                    theme.colors.hover
+                                })),
+                            )
+                            .render(ui_scale_percent)
+                            .flex_1(),
+                        )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
                                 return;
@@ -1612,12 +1647,16 @@ impl SidebarPaneView {
                         BranchSection::Local => icon_primary,
                         BranchSection::Remote => theme.colors.text_muted,
                     };
+                    let row_group: SharedString =
+                        format!("branch_group_row_{}_{}", repo_id.0, ix).into();
+
                     div()
                         .id(("branch_group", ix))
                         .h(scaled_px(22.0))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
                         .pr_2()
+                        .group(row_group.clone())
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -1635,12 +1674,8 @@ impl SidebarPaneView {
                             14.0,
                         ))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .child(filtered_label_element(
+                            components::FadingText::new(
+                                filtered_label_element(
                                     label,
                                     &filter_query,
                                     theme.colors.text_muted,
@@ -1648,7 +1683,12 @@ impl SidebarPaneView {
                                     gpui::rems(0.75).into(),
                                     FontWeight::SEMIBOLD,
                                     cx,
-                                )),
+                                ),
+                                row_bg(None),
+                            )
+                            .hover_bg(row_group.clone(), row_bg(Some(theme.colors.hover)))
+                            .render(ui_scale_percent)
+                            .flex_1(),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
                             if !e.standard_click() || e.click_count() != 1 {
@@ -1783,6 +1823,27 @@ impl SidebarPaneView {
                         }
                         badge
                     };
+                    let head_highlight =
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
+                    // Mirrors the row's own `bg`/`hover` rules below, so the
+                    // label fade always dissolves into the color under it.
+                    let branch_row_highlight = if context_menu_active {
+                        Some(theme.colors.active)
+                    } else if branch_selected {
+                        Some(branch_selected_bg)
+                    } else if is_head {
+                        Some(head_highlight)
+                    } else {
+                        None
+                    };
+                    let branch_row_hover_highlight = Some(if context_menu_active {
+                        theme.colors.active
+                    } else if branch_selected {
+                        branch_selected_bg
+                    } else {
+                        theme.colors.hover
+                    });
+
                     let mut row = div()
                         .id(("branch_item", ix))
                         .debug_selector(move || row_debug_selector.clone())
@@ -1800,12 +1861,7 @@ impl SidebarPaneView {
                         .pl(indent_px(usize::from(depth)))
                         .pr(px(0.0))
                         .rounded(px(theme.radii.row))
-                        .when(is_head, |d| {
-                            d.bg(with_alpha(
-                                theme.colors.accent,
-                                if theme.is_dark { 0.18 } else { 0.12 },
-                            ))
-                        })
+                        .when(is_head, |d| d.bg(head_highlight))
                         .when(branch_selected, |d| d.bg(branch_selected_bg))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
@@ -1834,22 +1890,26 @@ impl SidebarPaneView {
                             12.0,
                         ))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w(px(0.0))
-                                .text_sm()
-                                .line_clamp(1)
-                                .whitespace_nowrap()
-                                .text_color(branch_selected_label_color)
-                                .child(filtered_label_element(
-                                    label,
-                                    &filter_query,
-                                    branch_selected_label_color,
-                                    theme.colors.accent,
-                                    gpui::rems(0.875).into(),
-                                    FontWeight::NORMAL,
-                                    cx,
-                                )),
+                            // Long branch names run into the trailing badges;
+                            // fade them into the row instead of slicing a glyph.
+                            components::FadingText::new(
+                                div()
+                                    .text_sm()
+                                    .text_color(branch_selected_label_color)
+                                    .child(filtered_label_element(
+                                        label,
+                                        &filter_query,
+                                        branch_selected_label_color,
+                                        theme.colors.accent,
+                                        gpui::rems(0.875).into(),
+                                        FontWeight::NORMAL,
+                                        cx,
+                                    )),
+                                row_bg(branch_row_highlight),
+                            )
+                            .hover_bg(row_group.clone(), row_bg(branch_row_hover_highlight))
+                            .render(ui_scale_percent)
+                            .flex_1(),
                         );
 
                     let show_branch_badges = divergence_behind.is_some()

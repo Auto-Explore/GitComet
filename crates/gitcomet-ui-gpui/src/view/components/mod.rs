@@ -12,6 +12,7 @@ mod shortcut_keys;
 mod split_button;
 mod tab;
 mod tab_bar;
+mod text_fade;
 mod toast;
 mod tokens;
 mod truncated_text;
@@ -40,6 +41,7 @@ pub use shortcut_keys::shortcut_keys;
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
 pub use tab_bar::{TabBar, TabBarScroll};
+pub use text_fade::FadingText;
 pub use toast::{ToastKind, toast};
 pub use tokens::*;
 pub(crate) use truncated_text::{

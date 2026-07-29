@@ -179,6 +179,20 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
 }
 
+/// The title bar's fill. The active window lifts it off the workspace surface;
+/// an inactive one drops back to it. Repo tabs sit on this color, so anything
+/// that has to blend into the bar (the label fade, for one) asks here.
+pub(in crate::view) fn title_bar_background(theme: AppTheme, window_is_active: bool) -> gpui::Rgba {
+    if window_is_active {
+        lighten(
+            theme.colors.surface_bg,
+            if theme.is_dark { 0.06 } else { 0.03 },
+        )
+    } else {
+        theme.colors.surface_bg
+    }
+}
+
 fn window_frame_visual_inset(ui_scale_percent: u32) -> Pixels {
     if cfg!(target_os = "macos") {
         px(0.0)
@@ -391,14 +405,7 @@ impl Render for TitleBarView {
             with_alpha(theme.colors.accent, if theme.is_dark { 0.48 } else { 0.38 });
         let app_menu_hover_bg = theme.titlebar_hover_overlay();
         let app_menu_active_bg = theme.titlebar_active_overlay();
-        let bar_bg = if window.is_window_active() {
-            lighten(
-                theme.colors.surface_bg,
-                if theme.is_dark { 0.06 } else { 0.03 },
-            )
-        } else {
-            theme.colors.surface_bg
-        };
+        let bar_bg = title_bar_background(theme, window.is_window_active());
 
         let menu_toggle = div()
             .id("app_menu")

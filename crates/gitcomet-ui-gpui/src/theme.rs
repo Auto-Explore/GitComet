@@ -1155,6 +1155,20 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color
 }
 
+/// Flattens a translucent overlay onto an opaque base, giving the single color
+/// the eye sees where the two are stacked. Anything that has to blend into a
+/// surface it doesn't paint itself — a label fade over a hovered row, say —
+/// needs this rather than the overlay color alone.
+pub(crate) fn composite_over(base: Rgba, overlay: Rgba) -> Rgba {
+    let t = overlay.a.clamp(0.0, 1.0);
+    Rgba {
+        r: base.r + (overlay.r - base.r) * t,
+        g: base.g + (overlay.g - base.g) * t,
+        b: base.b + (overlay.b - base.b) * t,
+        a: base.a,
+    }
+}
+
 /// A fixed, deliberately-distinct purple flagging that the user is browsing a
 /// historical commit rather than the live repository state. Intentionally outside
 /// the theme palette so it reads as "off-live" in every theme.

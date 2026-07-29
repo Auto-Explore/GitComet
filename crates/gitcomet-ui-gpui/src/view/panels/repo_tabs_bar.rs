@@ -606,6 +606,13 @@ impl Render for RepoTabsBarView {
         let active = self.active_repo_id();
         let spinner =
             |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(12.0));
+        // Tabs are transparent, so a label fading out has to land on whatever
+        // is actually behind it: the bar for an idle tab, the content strip
+        // for the active one.
+        let strip_bg = crate::view::chrome::title_bar_background(theme, window.is_window_active());
+        let hovered_tab_bg =
+            crate::theme::composite_over(strip_bg, components::Tab::hover_overlay(theme));
+
         // Reveal the active tab when the repository changes, then leave the
         // offset alone so manual scrolling sticks.
         if self.revealed_repo != active {
@@ -631,8 +638,15 @@ impl Render for RepoTabsBarView {
             let context_menu_active =
                 self.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
             let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-            let show_close = self.hovered_repo_tab == Some(repo_id);
+            let is_hovered = self.hovered_repo_tab == Some(repo_id);
             let label = path_display::repo_path_name(&repo.spec.workdir);
+            let label_bg = if is_active || context_menu_active {
+                theme.colors.sidebar_bg
+            } else if is_hovered {
+                hovered_tab_bg
+            } else {
+                strip_bg
+            };
             let drag_left = self
                 .repo_tab_drag_visual
                 .filter(|drag| drag.repo_id == repo_id)
@@ -670,7 +684,7 @@ impl Render for RepoTabsBarView {
 
             let mut tab = components::Tab::new(("repo_tab", repo_id.0))
                 .selected(is_active || context_menu_active);
-            if show_close {
+            if is_hovered {
                 tab = tab.end_slot(close_button);
             }
 
@@ -708,12 +722,11 @@ impl Render for RepoTabsBarView {
                         }),
                 )
                 .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .text_sm()
-                        .line_clamp(1)
-                        .child(label),
+                    // A name too long for the tab fades into the tab's own
+                    // background rather than being cut mid-glyph.
+                    components::FadingText::new(div().text_sm().child(label), label_bg)
+                        .render(ui_scale_percent)
+                        .flex_1(),
                 )
                 .when(self.open_terminal_repo_ids.contains(&repo_id), |d| {
                     d.child(

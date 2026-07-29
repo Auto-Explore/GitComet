@@ -24,6 +24,12 @@ impl Tab {
     /// Long repository names truncate rather than widening the tab past this.
     const TAB_MAX_WIDTH_PX: f32 = 180.0;
 
+    /// Overlay an idle tab picks up on hover. Exposed so anything painted on
+    /// top of a tab (the label fade) can flatten it into a matching color.
+    pub fn hover_overlay(theme: AppTheme) -> gpui::Rgba {
+        with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 })
+    }
+
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
         Self {
@@ -57,7 +63,7 @@ impl Tab {
         } else {
             theme.colors.text_muted
         };
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
+        let hover_bg = Self::hover_overlay(theme);
         let active_bg = theme.colors.active;
 
         let end_slot = div()
