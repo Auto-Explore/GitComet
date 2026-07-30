@@ -6,12 +6,18 @@
 //!
 //! Compatible with `git merge-file` marker format.
 
-use crate::file_diff::{
-    DiffHunk, Edit, edits_to_hunks_with, histogram_edits, myers_edits, reconstruct_side_with,
-    split_lines,
-};
+use crate::file_diff::split_lines;
 use std::borrow::Cow;
 use std::fmt;
+
+mod plan;
+
+pub use plan::{
+    AlignedRow, InteractiveMergePlanBudget, MergeBlock, MergeBlockClassification, MergeBlockId,
+    MergePlan, MergeSource, OrderedSelection, build_merge_plan,
+    build_merge_plan_with_optional_base, interactive_merge_plan_is_practical,
+    try_build_interactive_merge_plan_with_optional_base,
+};
 
 /// Default conflict marker width (matches git's default).
 pub const DEFAULT_MARKER_SIZE: usize = 7;
@@ -71,6 +77,13 @@ pub struct MergeOptions {
     pub labels: MergeLabels,
     pub marker_size: usize,
     pub diff_algorithm: DiffAlgorithm,
+    /// Run the additional local↔remote alignment pass.
+    ///
+    /// KDiff3 exposes this pass as an option and disables it in its application
+    /// defaults. It can make identical contributor lines share an aligned row
+    /// even when neither line matches the base, but is intentionally opt-in
+    /// because it must not alter one-sided merge semantics.
+    pub align_contributors: bool,
 }
 
 impl Default for MergeOptions {
@@ -81,6 +94,7 @@ impl Default for MergeOptions {
             labels: MergeLabels::default(),
             marker_size: DEFAULT_MARKER_SIZE,
             diff_algorithm: DiffAlgorithm::default(),
+            align_contributors: false,
         }
     }
 }
@@ -128,6 +142,19 @@ pub fn merge_file_bytes(
     theirs: &[u8],
     options: &MergeOptions,
 ) -> Result<MergeResult, MergeError> {
+    merge_file_bytes_with_optional_base(Some(base), ours, theirs, options)
+}
+
+/// Perform a text merge on raw byte inputs with an optional base.
+///
+/// A missing base uses KDiff3's true two-input mode rather than treating an
+/// empty file as an ancestor.
+pub fn merge_file_bytes_with_optional_base(
+    base: Option<&[u8]>,
+    ours: &[u8],
+    theirs: &[u8],
+    options: &MergeOptions,
+) -> Result<MergeResult, MergeError> {
     fn check_binary(data: &[u8]) -> Result<&str, MergeError> {
         if data.contains(&0) {
             return Err(MergeError::BinaryContent);
@@ -135,11 +162,20 @@ pub fn merge_file_bytes(
         std::str::from_utf8(data).map_err(|_| MergeError::BinaryContent)
     }
 
-    let base_str = check_binary(base)?;
-    let ours_str = check_binary(ours)?;
-    let theirs_str = check_binary(theirs)?;
+    let base = base.map(check_binary).transpose()?;
+    let ours = check_binary(ours)?;
+    let theirs = check_binary(theirs)?;
+    Ok(merge_file_with_optional_base(base, ours, theirs, options))
+}
 
-    Ok(merge_file(base_str, ours_str, theirs_str, options))
+/// Alias for [`merge_file_bytes_with_optional_base`].
+pub fn merge_file_bytes_optional_base(
+    base: Option<&[u8]>,
+    ours: &[u8],
+    theirs: &[u8],
+    options: &MergeOptions,
+) -> Result<MergeResult, MergeError> {
+    merge_file_bytes_with_optional_base(base, ours, theirs, options)
 }
 
 /// Perform a three-way merge of text files.
@@ -149,23 +185,31 @@ pub fn merge_file_bytes(
 /// base region differently, a conflict is emitted (or auto-resolved per
 /// the chosen strategy).
 pub fn merge_file(base: &str, ours: &str, theirs: &str, options: &MergeOptions) -> MergeResult {
-    let base_lines = split_lines(base);
-    let ours_lines = split_lines(ours);
-    let theirs_lines = split_lines(theirs);
+    merge_file_with_optional_base(Some(base), ours, theirs, options)
+}
 
-    let diff_fn = match options.diff_algorithm {
-        DiffAlgorithm::Myers => myers_edits,
-        DiffAlgorithm::Histogram => histogram_edits,
-    };
-    let edits_ours = diff_fn(&base_lines, &ours_lines);
-    let edits_theirs = diff_fn(&base_lines, &theirs_lines);
+/// Merge text with an optional common ancestor.
+///
+/// `None` selects KDiff3-compatible two-input behavior. Existing callers with
+/// a base should continue using [`merge_file`].
+pub fn merge_file_with_optional_base(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    options: &MergeOptions,
+) -> MergeResult {
+    let plan = build_merge_plan_with_optional_base(base, ours, theirs, options);
+    render_merge_plan(&plan, options)
+}
 
-    let hunks_ours = edits_to_hunks(&edits_ours);
-    let hunks_theirs = edits_to_hunks(&edits_theirs);
-
-    let merged_hunks = merge_hunks(&base_lines, &hunks_ours, &hunks_theirs);
-    let merged_hunks = coalesce_zealous_conflicts(&base_lines, merged_hunks);
-    render_merged(&base_lines, &merged_hunks, base, ours, theirs, options)
+/// Alias for [`merge_file_with_optional_base`].
+pub fn merge_file_optional_base(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    options: &MergeOptions,
+) -> MergeResult {
+    merge_file_with_optional_base(base, ours, theirs, options)
 }
 
 /// How the sides relate within one aligned run.
@@ -204,101 +248,20 @@ impl AlignedRun {
 }
 
 /// Compute the three-way alignment of base/ours/theirs (section 30 aligned row
-/// space). This walks the same base-anchored regions the merge algorithm
-/// uses to produce conflict markers, but reports per-side line ranges
-/// instead of merged content. The runs partition each input exactly.
+/// space). This projects the shared KDiff3-compatible plan into per-side line
+/// ranges. The runs partition each input exactly.
 pub fn align_three_way(
     base: &str,
     ours: &str,
     theirs: &str,
     algorithm: DiffAlgorithm,
 ) -> Vec<AlignedRun> {
-    let base_lines = split_lines(base);
-    let ours_lines = split_lines(ours);
-    let theirs_lines = split_lines(theirs);
-
-    let diff_fn = match algorithm {
-        DiffAlgorithm::Myers => myers_edits,
-        DiffAlgorithm::Histogram => histogram_edits,
+    let options = MergeOptions {
+        diff_algorithm: algorithm,
+        ..MergeOptions::default()
     };
-    let edits_ours = diff_fn(&base_lines, &ours_lines);
-    let edits_theirs = diff_fn(&base_lines, &theirs_lines);
-    let hunks_ours = edits_to_hunks(&edits_ours);
-    let hunks_theirs = edits_to_hunks(&edits_theirs);
-
-    let mut runs = Vec::new();
-    let mut base_pos = 0usize;
-    let mut ours_pos = 0usize;
-    let mut theirs_pos = 0usize;
-
-    let push_unchanged = |runs: &mut Vec<AlignedRun>,
-                          base_pos: &mut usize,
-                          ours_pos: &mut usize,
-                          theirs_pos: &mut usize,
-                          until: usize| {
-        let len = until.saturating_sub(*base_pos);
-        if len == 0 {
-            return;
-        }
-        runs.push(AlignedRun {
-            base: *base_pos..*base_pos + len,
-            ours: *ours_pos..*ours_pos + len,
-            theirs: *theirs_pos..*theirs_pos + len,
-            kind: AlignedRunKind::Unchanged,
-        });
-        *base_pos += len;
-        *ours_pos += len;
-        *theirs_pos += len;
-    };
-
-    for_each_merge_region(&base_lines, &hunks_ours, &hunks_theirs, |region| {
-        push_unchanged(
-            &mut runs,
-            &mut base_pos,
-            &mut ours_pos,
-            &mut theirs_pos,
-            region.base_start,
-        );
-
-        let ours_shape = side_region_shape(
-            region.base_start,
-            region.base_end,
-            region.ours_hunks,
-            ours_pos,
-        );
-        let theirs_shape = side_region_shape(
-            region.base_start,
-            region.base_end,
-            region.theirs_hunks,
-            theirs_pos,
-        );
-        let (ours_end, theirs_end) = emit_region_rows(
-            &mut runs,
-            &ours_lines,
-            &theirs_lines,
-            region.base_start,
-            region.base_end,
-            &ours_shape,
-            &theirs_shape,
-            ours_pos,
-            theirs_pos,
-        );
-        base_pos = region.base_end;
-        ours_pos = ours_end;
-        theirs_pos = theirs_end;
-    });
-
-    push_unchanged(
-        &mut runs,
-        &mut base_pos,
-        &mut ours_pos,
-        &mut theirs_pos,
-        base_lines.len(),
-    );
-
-    debug_assert_eq!(ours_pos, ours_lines.len());
-    debug_assert_eq!(theirs_pos, theirs_lines.len());
-    runs
+    let plan = build_merge_plan(base, ours, theirs, &options);
+    aligned_plan_to_runs(&plan)
 }
 
 /// Compute a direct two-way alignment of ours/theirs (section 30 aligned row space,
@@ -309,717 +272,312 @@ pub fn align_three_way(
 /// `OursChanged` (deletion) or `TheirsChanged` (insertion) runs. The runs
 /// partition both inputs exactly.
 pub fn align_two_way(ours: &str, theirs: &str, algorithm: DiffAlgorithm) -> Vec<AlignedRun> {
-    let ours_lines = split_lines(ours);
-    let theirs_lines = split_lines(theirs);
-
-    let diff_fn = match algorithm {
-        DiffAlgorithm::Myers => myers_edits,
-        DiffAlgorithm::Histogram => histogram_edits,
+    let options = MergeOptions {
+        diff_algorithm: algorithm,
+        ..MergeOptions::default()
     };
-    // Hunks are base-relative; here "base" is the ours side.
-    let hunks = edits_to_hunks(&diff_fn(&ours_lines, &theirs_lines));
+    let plan = build_merge_plan_with_optional_base(None, ours, theirs, &options);
+    aligned_plan_to_runs(&plan)
+}
 
-    let mut runs = Vec::with_capacity(hunks.len().saturating_mul(2).saturating_add(1));
-    let mut ours_pos = 0usize;
-    let mut theirs_pos = 0usize;
+/// Project an existing shared merge plan into the legacy aligned-run API.
+pub fn align_merge_plan(plan: &MergePlan) -> Vec<AlignedRun> {
+    aligned_plan_to_runs(plan)
+}
 
-    let push_unchanged =
-        |runs: &mut Vec<AlignedRun>, ours_pos: &mut usize, theirs_pos: &mut usize, until: usize| {
-            let len = until.saturating_sub(*ours_pos);
-            if len == 0 {
-                return;
-            }
-            runs.push(AlignedRun {
-                base: 0..0,
-                ours: *ours_pos..*ours_pos + len,
-                theirs: *theirs_pos..*theirs_pos + len,
-                kind: AlignedRunKind::Unchanged,
-            });
-            *ours_pos += len;
-            *theirs_pos += len;
+fn aligned_row_kind(row: &AlignedRow, three_way: bool) -> AlignedRunKind {
+    if !three_way {
+        return match (row.a, row.b) {
+            (Some(_), Some(_)) if row.equal_ab => AlignedRunKind::Unchanged,
+            (Some(_), Some(_)) => AlignedRunKind::Conflict,
+            (Some(_), None) => AlignedRunKind::OursChanged,
+            (None, Some(_)) => AlignedRunKind::TheirsChanged,
+            (None, None) => AlignedRunKind::Unchanged,
         };
-
-    for hunk in &hunks {
-        push_unchanged(&mut runs, &mut ours_pos, &mut theirs_pos, hunk.base_start);
-        let ours_range = ours_pos..hunk.base_end;
-        let theirs_range = theirs_pos..theirs_pos + hunk.new_lines.len();
-        let kind = match (ours_range.is_empty(), theirs_range.is_empty()) {
-            (true, true) => continue,
-            (false, true) => AlignedRunKind::OursChanged,
-            (true, false) => AlignedRunKind::TheirsChanged,
-            (false, false) => AlignedRunKind::Conflict,
-        };
-        ours_pos = ours_range.end;
-        theirs_pos = theirs_range.end;
-        runs.push(AlignedRun {
-            base: 0..0,
-            ours: ours_range,
-            theirs: theirs_range,
-            kind,
-        });
     }
-    push_unchanged(&mut runs, &mut ours_pos, &mut theirs_pos, ours_lines.len());
 
-    debug_assert_eq!(ours_pos, ours_lines.len());
-    debug_assert_eq!(theirs_pos, theirs_lines.len());
+    match (row.a, row.b, row.c) {
+        (Some(_), Some(_), Some(_)) if row.equal_ab && row.equal_ac => AlignedRunKind::Unchanged,
+        (Some(_), Some(_), Some(_)) if row.equal_ab => AlignedRunKind::TheirsChanged,
+        (Some(_), Some(_), Some(_)) if row.equal_ac => AlignedRunKind::OursChanged,
+        (Some(_), Some(_), Some(_)) if row.equal_bc => AlignedRunKind::BothSame,
+        (Some(_), Some(_), Some(_)) => AlignedRunKind::Conflict,
+        (Some(_), Some(_), None) if row.equal_ab => AlignedRunKind::TheirsChanged,
+        (Some(_), None, Some(_)) if row.equal_ac => AlignedRunKind::OursChanged,
+        (None, Some(_), Some(_)) if row.equal_bc => AlignedRunKind::BothSame,
+        (None, Some(_), None) => AlignedRunKind::OursChanged,
+        (None, None, Some(_)) => AlignedRunKind::TheirsChanged,
+        (Some(_), None, None) => AlignedRunKind::BothSame,
+        _ => AlignedRunKind::Conflict,
+    }
+}
+
+fn aligned_plan_to_runs(plan: &MergePlan) -> Vec<AlignedRun> {
+    let three_way = plan.has_base();
+    let mut forced_conflict = vec![false; plan.rows.len()];
+
+    // In true two-input mode KDiff3 groups an uneven replacement as one
+    // conflict block. The aligned-row projection must keep that block whole:
+    // trailing rows on the longer side are padding within the replacement,
+    // not independent insertions or deletions.
+    if !three_way {
+        for block in &plan.blocks {
+            let contains_replacement = plan.rows[block.rows.clone()]
+                .iter()
+                .any(|row| row.a.is_some() && row.b.is_some() && !row.equal_ab);
+            if block.original_conflict && contains_replacement {
+                forced_conflict[block.rows.clone()].fill(true);
+            }
+        }
+    }
+
+    aligned_rows_to_runs(&plan.rows, three_way, &forced_conflict)
+}
+
+fn aligned_rows_to_runs(
+    rows: &[AlignedRow],
+    three_way: bool,
+    forced_conflict: &[bool],
+) -> Vec<AlignedRun> {
+    let mut runs = Vec::<AlignedRun>::new();
+    let mut a = 0usize;
+    let mut b = 0usize;
+    let mut c = 0usize;
+
+    for (row_index, row) in rows.iter().enumerate() {
+        let (base_present, ours_present, theirs_present) = if three_way {
+            (row.a.is_some(), row.b.is_some(), row.c.is_some())
+        } else {
+            (false, row.a.is_some(), row.b.is_some())
+        };
+        let kind = if forced_conflict.get(row_index).copied().unwrap_or(false) {
+            AlignedRunKind::Conflict
+        } else {
+            aligned_row_kind(row, three_way)
+        };
+        let next = AlignedRun {
+            base: a..a + usize::from(base_present),
+            ours: b..b + usize::from(ours_present),
+            theirs: c..c + usize::from(theirs_present),
+            kind,
+        };
+        a = next.base.end;
+        b = next.ours.end;
+        c = next.theirs.end;
+
+        let mut coalesced = false;
+        if let Some(previous) = runs.last_mut()
+            && previous.kind == kind
+        {
+            let previous_rows = previous.visual_rows();
+            let previous_presence = (
+                previous.base.len() == previous_rows,
+                previous.ours.len() == previous_rows,
+                previous.theirs.len() == previous_rows,
+            );
+            let next_presence = (base_present, ours_present, theirs_present);
+            let combined_rows = next.base.end.saturating_sub(previous.base.start).max(
+                next.ours
+                    .end
+                    .saturating_sub(previous.ours.start)
+                    .max(next.theirs.end.saturating_sub(previous.theirs.start)),
+            );
+            // A run can represent the rows exactly when extending its longest
+            // range adds one visual row. Presence changes are only folded for
+            // rows explicitly kept in a two-input replacement block.
+            if combined_rows == previous_rows + 1
+                && (previous_presence == next_presence
+                    || forced_conflict.get(row_index).copied().unwrap_or(false))
+            {
+                previous.base.end = next.base.end;
+                previous.ours.end = next.ours.end;
+                previous.theirs.end = next.theirs.end;
+                coalesced = true;
+            }
+        }
+        if !coalesced {
+            runs.push(next);
+        }
+    }
     runs
 }
 
-/// A base-anchored change region visited by [`for_each_merge_region`].
-struct MergeRegion<'h, 'a> {
-    base_start: usize,
-    base_end: usize,
-    ours_hunks: &'h [Hunk<'a>],
-    theirs_hunks: &'h [Hunk<'a>],
+struct MergePlanLineSlices<'a> {
+    a: Vec<&'a str>,
+    b: Vec<&'a str>,
+    c: Vec<&'a str>,
 }
 
-/// Walk the overlapping-hunk regions of the two edit scripts, exactly as
-/// [`merge_hunks`] does, invoking `visit` per region.
-fn for_each_merge_region<'a>(
-    base_lines: &'a [&'a str],
-    ours: &[Hunk<'a>],
-    theirs: &[Hunk<'a>],
-    mut visit: impl FnMut(MergeRegion<'_, 'a>),
+impl<'a> MergePlanLineSlices<'a> {
+    fn new(plan: &'a MergePlan) -> Self {
+        if let Some(base) = plan.base.as_deref() {
+            Self {
+                a: split_lines(base),
+                b: split_lines(&plan.local),
+                c: split_lines(&plan.remote),
+            }
+        } else {
+            Self {
+                a: split_lines(&plan.local),
+                b: split_lines(&plan.remote),
+                c: Vec::new(),
+            }
+        }
+    }
+
+    fn source(&self, source: MergeSource) -> &[&'a str] {
+        match source {
+            MergeSource::A => &self.a,
+            MergeSource::B => &self.b,
+            MergeSource::C => &self.c,
+        }
+    }
+
+    fn block_source_lines(
+        &self,
+        plan: &MergePlan,
+        block: &MergeBlock,
+        source: MergeSource,
+    ) -> Vec<&'a str> {
+        let source_lines = self.source(source);
+        plan.rows[block.rows.clone()]
+            .iter()
+            .filter_map(|row| {
+                row.line(source)
+                    .and_then(|index| source_lines.get(index).copied())
+            })
+            .collect()
+    }
+
+    fn block_ancestor_lines(&self, plan: &MergePlan, block: &MergeBlock) -> Vec<&'a str> {
+        if !plan.has_base() {
+            return Vec::new();
+        }
+        let start = plan.rows[..block.rows.start]
+            .iter()
+            .rev()
+            .find(|row| row.equal_ab && row.equal_ac)
+            .and_then(|row| row.a)
+            .map_or(0, |line| line + 1);
+        let end = plan.rows[block.rows.end..]
+            .iter()
+            .find(|row| row.equal_ab && row.equal_ac)
+            .and_then(|row| row.a)
+            .unwrap_or(self.a.len());
+        self.a[start.min(end)..end].to_vec()
+    }
+}
+
+fn append_plan_source(
+    output: &mut String,
+    plan: &MergePlan,
+    block: &MergeBlock,
+    source: MergeSource,
+    lines: &MergePlanLineSlices<'_>,
 ) {
-    let _ = base_lines;
-    let mut oi = 0;
-    let mut ti = 0;
-
-    loop {
-        let oh_start = ours.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
-        let th_start = theirs.get(ti).map(|h| h.base_start).unwrap_or(usize::MAX);
-        if oh_start == usize::MAX && th_start == usize::MAX {
-            break;
-        }
-
-        let change_start = oh_start.min(th_start);
-        let mut region_end = change_start;
-        let oi_start = oi;
-        let ti_start = ti;
-
-        loop {
-            let mut extended = false;
-            while let Some(oh) = ours.get(oi) {
-                if oh.base_start <= region_end {
-                    region_end = region_end.max(oh.base_end);
-                    oi += 1;
-                    extended = true;
-                } else {
-                    break;
-                }
-            }
-            while let Some(th) = theirs.get(ti) {
-                if th.base_start <= region_end {
-                    region_end = region_end.max(th.base_end);
-                    ti += 1;
-                    extended = true;
-                } else {
-                    break;
-                }
-            }
-            if !extended {
-                break;
-            }
-        }
-
-        visit(MergeRegion {
-            base_start: change_start,
-            base_end: region_end,
-            ours_hunks: &ours[oi_start..oi],
-            theirs_hunks: &theirs[ti_start..ti],
-        });
+    for line in lines.block_source_lines(plan, block, source) {
+        output.push_str(line);
+        output.push_str(plan.line_ending);
     }
 }
 
-/// Per-side shape of a change region: which base lines survive on the side
-/// (with their side line index), and the side's free (inserted/replacement)
-/// line segments keyed by the base boundary they precede.
-struct SideRegionShape {
-    /// For each region-relative base index: `Some(side_line)` when the base
-    /// line survives on this side.
-    kept: Vec<Option<usize>>,
-    /// For each boundary position `0..=len`: `(side_line_start, count)` of
-    /// side lines inserted before that base line (or at the region end).
-    free_at: Vec<(usize, usize)>,
+fn render_plan_conflict(
+    output: &mut String,
+    plan: &MergePlan,
+    block: &MergeBlock,
+    options: &MergeOptions,
+    lines: &MergePlanLineSlices<'_>,
+) {
+    let ours: Vec<Cow<'_, str>> = lines
+        .block_source_lines(plan, block, plan.local_source())
+        .into_iter()
+        .map(Cow::Borrowed)
+        .collect();
+    let theirs: Vec<Cow<'_, str>> = lines
+        .block_source_lines(plan, block, plan.remote_source())
+        .into_iter()
+        .map(Cow::Borrowed)
+        .collect();
+    let base = lines.block_ancestor_lines(plan, block);
+
+    if plan.has_base() {
+        emit_conflict_markers(output, &ours, &theirs, &base, options, plan.line_ending);
+    } else {
+        // Diff3/zdiff3 have no ancestor section in true two-input mode.
+        let mut two_input_options = options.clone();
+        two_input_options.style = ConflictStyle::Merge;
+        emit_conflict_markers(
+            output,
+            &ours,
+            &theirs,
+            &[],
+            &two_input_options,
+            plan.line_ending,
+        );
+    }
 }
 
-fn side_region_shape(
-    region_start: usize,
-    region_end: usize,
-    hunks: &[Hunk<'_>],
-    side_start: usize,
-) -> SideRegionShape {
-    let len = region_end - region_start;
-    let mut kept = vec![None; len];
-    let mut free_at = vec![(0usize, 0usize); len + 1];
-    let mut side_line = side_start;
-    let mut b = region_start;
+/// Render a shared merge plan using the requested marker and strategy options.
+pub fn render_merge_plan(plan: &MergePlan, options: &MergeOptions) -> MergeResult {
+    let mut output = String::new();
+    let mut conflict_count = 0usize;
+    let lines = MergePlanLineSlices::new(plan);
+    let final_block_is_manual = plan
+        .blocks
+        .last()
+        .is_some_and(|block| block.manual_content.is_some());
 
-    for hunk in hunks {
-        let hunk_start = hunk.base_start.clamp(region_start, region_end);
-        while b < hunk_start {
-            kept[b - region_start] = Some(side_line);
-            side_line += 1;
-            b += 1;
-        }
-        let slot = &mut free_at[b - region_start];
-        if slot.1 == 0 {
-            slot.0 = side_line;
-        }
-        slot.1 += hunk.new_lines.len();
-        side_line += hunk.new_lines.len();
-        b = hunk.base_end.clamp(b, region_end);
-    }
-    while b < region_end {
-        kept[b - region_start] = Some(side_line);
-        side_line += 1;
-        b += 1;
-    }
-
-    SideRegionShape { kept, free_at }
-}
-
-/// Emit kdiff3-style aligned rows for one change region.
-///
-/// Base lines anchor to their surviving copies: a side that dropped the base
-/// line contributes its next replacement line on that row instead of padding.
-/// Free lines from both sides pair up top-aligned; a side's free lines always
-/// flush before its own anchored copy so side ranges stay contiguous.
-/// Returns the per-side cursor positions after the region.
-#[allow(clippy::too_many_arguments)]
-fn emit_region_rows(
-    runs: &mut Vec<AlignedRun>,
-    ours_lines: &[&str],
-    theirs_lines: &[&str],
-    region_start: usize,
-    region_end: usize,
-    ours_shape: &SideRegionShape,
-    theirs_shape: &SideRegionShape,
-    ours_start: usize,
-    theirs_start: usize,
-) -> (usize, usize) {
-    // Pending free lines per side; contiguous by construction (a side's free
-    // segments are only ever separated by its own anchored copies, which
-    // force a flush first).
-    let mut pend_o = (ours_start, 0usize);
-    let mut pend_t = (theirs_start, 0usize);
-
-    fn extend(pend: &mut (usize, usize), seg: (usize, usize)) {
-        if seg.1 == 0 {
-            return;
-        }
-        if pend.1 == 0 {
-            pend.0 = seg.0;
-        }
-        pend.1 += seg.1;
-    }
-    fn take(pend: &mut (usize, usize), n: usize) -> std::ops::Range<usize> {
-        let n = n.min(pend.1);
-        let range = pend.0..pend.0 + n;
-        pend.0 += n;
-        pend.1 -= n;
-        range
-    }
-
-    let mut o_cur = ours_start;
-    let mut t_cur = theirs_start;
-    let push_row = |runs: &mut Vec<AlignedRun>,
-                    o_cur: &mut usize,
-                    t_cur: &mut usize,
-                    base: std::ops::Range<usize>,
-                    ours: std::ops::Range<usize>,
-                    theirs: std::ops::Range<usize>,
-                    kind: AlignedRunKind| {
-        debug_assert_eq!(ours.start.max(*o_cur), *o_cur);
-        *o_cur = ours.end.max(*o_cur);
-        *t_cur = theirs.end.max(*t_cur);
-        runs.push(AlignedRun {
-            base,
-            ours,
-            theirs,
-            kind,
-        });
-    };
-
-    let zip_pending = |runs: &mut Vec<AlignedRun>,
-                       pend_o: &mut (usize, usize),
-                       pend_t: &mut (usize, usize),
-                       o_cur: &mut usize,
-                       t_cur: &mut usize,
-                       base_at: usize| {
-        let n = pend_o.1.min(pend_t.1);
-        if n == 0 {
-            return;
-        }
-        let ours = take(pend_o, n);
-        let theirs = take(pend_t, n);
-        let kind = if ours_lines.get(ours.clone()) == theirs_lines.get(theirs.clone())
-            && ours_lines.get(ours.clone()).is_some()
-        {
-            AlignedRunKind::BothSame
-        } else {
-            AlignedRunKind::Conflict
-        };
-        push_row(runs, o_cur, t_cur, base_at..base_at, ours, theirs, kind);
-    };
-    let flush_solo = |runs: &mut Vec<AlignedRun>,
-                      pend: &mut (usize, usize),
-                      o_cur: &mut usize,
-                      t_cur: &mut usize,
-                      base_at: usize,
-                      is_ours: bool| {
-        if pend.1 == 0 {
-            return;
-        }
-        let range = take(pend, pend.1);
-        let (ours, theirs, kind) = if is_ours {
-            (range, *t_cur..*t_cur, AlignedRunKind::OursChanged)
-        } else {
-            (*o_cur..*o_cur, range, AlignedRunKind::TheirsChanged)
-        };
-        push_row(runs, o_cur, t_cur, base_at..base_at, ours, theirs, kind);
-    };
-
-    let len = region_end - region_start;
-    for p in 0..len {
-        extend(&mut pend_o, ours_shape.free_at[p]);
-        extend(&mut pend_t, theirs_shape.free_at[p]);
-        let b = region_start + p;
-        let kept_o = ours_shape.kept[p];
-        let kept_t = theirs_shape.kept[p];
-
-        if kept_o.is_none() && kept_t.is_none() {
-            // The base line was dropped by both sides: it pairs positionally
-            // with the next replacement line of each (kdiff3's modified-line
-            // rows — an N-line block replaced on both sides aligns 1:1).
-            // Leftover replacements flow to later anchors or the region end.
-            let ours = take(&mut pend_o, 1);
-            let theirs = take(&mut pend_t, 1);
-            let kind = if !ours.is_empty()
-                && ours_lines.get(ours.clone()) == theirs_lines.get(theirs.clone())
-            {
-                AlignedRunKind::BothSame
-            } else {
-                AlignedRunKind::Conflict
-            };
-            push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
+    for block in &plan.blocks {
+        if let Some(manual) = block.manual_content.as_deref() {
+            output.push_str(manual);
             continue;
         }
 
-        zip_pending(runs, &mut pend_o, &mut pend_t, &mut o_cur, &mut t_cur, b);
-        // A side's free lines precede its anchored copy in side order, so
-        // they must be on rows above the anchor row.
-        if kept_o.is_some() {
-            flush_solo(runs, &mut pend_o, &mut o_cur, &mut t_cur, b, true);
-        }
-        if kept_t.is_some() {
-            flush_solo(runs, &mut pend_t, &mut o_cur, &mut t_cur, b, false);
-        }
-
-        let ours = match kept_o {
-            Some(line) => line..line + 1,
-            None => take(&mut pend_o, 1),
+        let strategy_selection = if block.selection.is_empty() {
+            match options.strategy {
+                MergeStrategy::Normal => None,
+                MergeStrategy::Ours => Some(OrderedSelection::from(plan.local_source())),
+                MergeStrategy::Theirs => Some(OrderedSelection::from(plan.remote_source())),
+                MergeStrategy::Union => Some(OrderedSelection::from_sources([
+                    plan.local_source(),
+                    plan.remote_source(),
+                ])),
+            }
+        } else {
+            Some(block.selection.clone())
         };
-        let theirs = match kept_t {
-            Some(line) => line..line + 1,
-            None => take(&mut pend_t, 1),
+
+        if let Some(selection) = strategy_selection {
+            for source in selection.iter() {
+                append_plan_source(&mut output, plan, block, source, &lines);
+            }
+        } else {
+            render_plan_conflict(&mut output, plan, block, options, &lines);
+            conflict_count += 1;
+        }
+    }
+
+    if !final_block_is_manual {
+        let base_text = plan.base.as_deref().unwrap_or_default();
+        let base_lines = if plan.has_base() {
+            lines.source(MergeSource::A)
+        } else {
+            &[]
         };
-        let kind = match (kept_o.is_some(), kept_t.is_some()) {
-            (true, true) => AlignedRunKind::Unchanged,
-            (true, false) => AlignedRunKind::TheirsChanged,
-            (false, true) => AlignedRunKind::OursChanged,
-            (false, false) => unreachable!("handled above"),
-        };
-        push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
+        apply_trailing_newline_decision(
+            &mut output,
+            base_text,
+            base_lines,
+            &plan.local,
+            lines.source(plan.local_source()),
+            &plan.remote,
+            lines.source(plan.remote_source()),
+        );
     }
-
-    // Region-end boundary: remaining free lines pair up, overflow flushes.
-    extend(&mut pend_o, ours_shape.free_at[len]);
-    extend(&mut pend_t, theirs_shape.free_at[len]);
-    zip_pending(
-        runs,
-        &mut pend_o,
-        &mut pend_t,
-        &mut o_cur,
-        &mut t_cur,
-        region_end,
-    );
-    flush_solo(runs, &mut pend_o, &mut o_cur, &mut t_cur, region_end, true);
-    flush_solo(runs, &mut pend_t, &mut o_cur, &mut t_cur, region_end, false);
-
-    (o_cur, t_cur)
-}
-
-// ---------------------------------------------------------------------------
-// Internal types
-// ---------------------------------------------------------------------------
-
-/// A contiguous change from one side's diff against the base.
-type Hunk<'a> = DiffHunk<Cow<'a, str>>;
-
-/// A merged hunk — either cleanly resolved or a conflict.
-#[derive(Clone, Debug)]
-enum MergedHunk<'a> {
-    /// Resolved: output these lines.
-    Resolved {
-        base_start: usize,
-        base_end: usize,
-        lines: Vec<Cow<'a, str>>,
-    },
-    /// Conflict: both sides changed the same base region differently.
-    Conflict {
-        base_start: usize,
-        base_end: usize,
-        ours_lines: Vec<Cow<'a, str>>,
-        theirs_lines: Vec<Cow<'a, str>>,
-    },
-}
-
-impl MergedHunk<'_> {
-    fn base_start(&self) -> usize {
-        match self {
-            MergedHunk::Resolved { base_start, .. } => *base_start,
-            MergedHunk::Conflict { base_start, .. } => *base_start,
-        }
-    }
-
-    fn base_end(&self) -> usize {
-        match self {
-            MergedHunk::Resolved { base_end, .. } => *base_end,
-            MergedHunk::Conflict { base_end, .. } => *base_end,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Diff → Hunk conversion
-// ---------------------------------------------------------------------------
-
-fn edits_to_hunks<'a>(edits: &[Edit<'a>]) -> Vec<Hunk<'a>> {
-    edits_to_hunks_with(edits, Cow::Borrowed)
-}
-
-// ---------------------------------------------------------------------------
-// Hunk merging
-// ---------------------------------------------------------------------------
-
-/// Merge two hunk lists into a sequence of resolved/conflict hunks.
-fn merge_hunks<'a>(
-    base_lines: &'a [&'a str],
-    ours: &[Hunk<'a>],
-    theirs: &[Hunk<'a>],
-) -> Vec<MergedHunk<'a>> {
-    let mut result = Vec::new();
-    let mut oi = 0;
-    let mut ti = 0;
-
-    loop {
-        let oh_start = ours.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
-        let th_start = theirs.get(ti).map(|h| h.base_start).unwrap_or(usize::MAX);
-
-        if oh_start == usize::MAX && th_start == usize::MAX {
-            break;
-        }
-
-        // Determine the start of the next change region.
-        let change_start = oh_start.min(th_start);
-
-        // Expand the region to include all overlapping hunks from both sides.
-        let mut region_end = change_start;
-        let oi_start = oi;
-        let ti_start = ti;
-
-        // Consume initial hunks at change_start.
-        while let Some(oh) = ours.get(oi) {
-            if oh.base_start <= region_end {
-                region_end = region_end.max(oh.base_end);
-                oi += 1;
-            } else {
-                break;
-            }
-        }
-        while let Some(th) = theirs.get(ti) {
-            if th.base_start <= region_end {
-                region_end = region_end.max(th.base_end);
-                ti += 1;
-            } else {
-                break;
-            }
-        }
-
-        // Keep expanding while hunks overlap.
-        loop {
-            let mut extended = false;
-            while let Some(oh) = ours.get(oi) {
-                if oh.base_start <= region_end {
-                    region_end = region_end.max(oh.base_end);
-                    oi += 1;
-                    extended = true;
-                } else {
-                    break;
-                }
-            }
-            while let Some(th) = theirs.get(ti) {
-                if th.base_start <= region_end {
-                    region_end = region_end.max(th.base_end);
-                    ti += 1;
-                    extended = true;
-                } else {
-                    break;
-                }
-            }
-            if !extended {
-                break;
-            }
-        }
-
-        let ours_involved = oi > oi_start;
-        let theirs_involved = ti > ti_start;
-
-        if ours_involved && theirs_involved {
-            // Both sides changed the same region.
-            let ours_hunks = &ours[oi_start..oi];
-            let theirs_hunks = &theirs[ti_start..ti];
-
-            if ours_hunks == theirs_hunks {
-                // Identical hunk structure — skip reconstructing theirs entirely.
-                let ours_content =
-                    reconstruct_side(base_lines, change_start, region_end, ours_hunks);
-                result.push(MergedHunk::Resolved {
-                    base_start: change_start,
-                    base_end: region_end,
-                    lines: ours_content,
-                });
-            } else {
-                let ours_content =
-                    reconstruct_side(base_lines, change_start, region_end, ours_hunks);
-                let theirs_content =
-                    reconstruct_side(base_lines, change_start, region_end, theirs_hunks);
-
-                if ours_content == theirs_content {
-                    // Different hunks but same result — resolved.
-                    result.push(MergedHunk::Resolved {
-                        base_start: change_start,
-                        base_end: region_end,
-                        lines: ours_content,
-                    });
-                } else {
-                    result.push(MergedHunk::Conflict {
-                        base_start: change_start,
-                        base_end: region_end,
-                        ours_lines: ours_content,
-                        theirs_lines: theirs_content,
-                    });
-                }
-            }
-        } else if ours_involved {
-            let content =
-                reconstruct_side(base_lines, change_start, region_end, &ours[oi_start..oi]);
-            result.push(MergedHunk::Resolved {
-                base_start: change_start,
-                base_end: region_end,
-                lines: content,
-            });
-        } else if theirs_involved {
-            let content =
-                reconstruct_side(base_lines, change_start, region_end, &theirs[ti_start..ti]);
-            result.push(MergedHunk::Resolved {
-                base_start: change_start,
-                base_end: region_end,
-                lines: content,
-            });
-        }
-    }
-
-    result
-}
-
-/// Coalesce consecutive conflict hunks when the unchanged base context between
-/// them is adjacent or blank-only. This mirrors git's "zealous" behavior for
-/// reducing noisy back-to-back conflict markers.
-fn coalesce_zealous_conflicts<'a>(
-    base_lines: &'a [&'a str],
-    hunks: Vec<MergedHunk<'a>>,
-) -> Vec<MergedHunk<'a>> {
-    let mut out = Vec::with_capacity(hunks.len());
-
-    for hunk in hunks {
-        let mut merged_into_previous = false;
-
-        if let Some(last) = out.last_mut()
-            && let (
-                MergedHunk::Conflict {
-                    base_end: last_base_end,
-                    ours_lines: last_ours,
-                    theirs_lines: last_theirs,
-                    ..
-                },
-                MergedHunk::Conflict {
-                    base_start: next_base_start,
-                    base_end: next_base_end,
-                    ours_lines: next_ours,
-                    theirs_lines: next_theirs,
-                    ..
-                },
-            ) = (last, &hunk)
-            && blank_only_or_adjacent_separator(base_lines, *last_base_end, *next_base_start)
-        {
-            let start = (*last_base_end).min(base_lines.len());
-            let end = (*next_base_start).min(base_lines.len());
-            for &line in &base_lines[start..end] {
-                last_ours.push(Cow::Borrowed(line));
-                last_theirs.push(Cow::Borrowed(line));
-            }
-            last_ours.extend(next_ours.iter().cloned());
-            last_theirs.extend(next_theirs.iter().cloned());
-            *last_base_end = *next_base_end;
-            merged_into_previous = true;
-        }
-
-        if !merged_into_previous {
-            out.push(hunk);
-        }
-    }
-
-    out
-}
-
-fn blank_only_or_adjacent_separator(base_lines: &[&str], from: usize, to: usize) -> bool {
-    if to < from {
-        return false;
-    }
-
-    let start = from.min(base_lines.len());
-    let end = to.min(base_lines.len());
-    base_lines[start..end]
-        .iter()
-        .all(|line| line.trim().is_empty())
-}
-
-/// Reconstruct the content of one side for a base line range, applying hunks.
-fn reconstruct_side<'a>(
-    base_lines: &'a [&'a str],
-    range_start: usize,
-    range_end: usize,
-    hunks: &[Hunk<'a>],
-) -> Vec<Cow<'a, str>> {
-    let mut lines = Vec::new();
-    reconstruct_side_with(
-        base_lines,
-        range_start..range_end,
-        hunks,
-        &mut lines,
-        Cow::Borrowed,
-    );
-    lines
-}
-
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
-
-/// Render merged hunks into final output text.
-fn render_merged(
-    base_lines: &[&str],
-    merged_hunks: &[MergedHunk<'_>],
-    base_text: &str,
-    ours_text: &str,
-    theirs_text: &str,
-    options: &MergeOptions,
-) -> MergeResult {
-    let line_ending = detect_line_ending(ours_text, theirs_text, base_text);
-    let mut output = String::new();
-    let mut conflict_count = 0;
-    let mut base_pos = 0;
-
-    for hunk in merged_hunks {
-        // Emit unchanged base lines before this hunk.
-        let ctx_end = hunk.base_start().min(base_lines.len());
-        emit_context_lines(&mut output, base_lines, base_pos, ctx_end, line_ending);
-        base_pos = hunk.base_end();
-
-        match hunk {
-            MergedHunk::Resolved { lines, .. } => {
-                for line in lines {
-                    output.push_str(line.as_ref());
-                    output.push_str(line_ending);
-                }
-            }
-            MergedHunk::Conflict {
-                base_start,
-                base_end,
-                ours_lines,
-                theirs_lines,
-            } => {
-                let base_conflict_lines =
-                    &base_lines[*base_start..(*base_end).min(base_lines.len())];
-
-                match options.strategy {
-                    MergeStrategy::Ours => {
-                        for line in ours_lines {
-                            output.push_str(line.as_ref());
-                            output.push_str(line_ending);
-                        }
-                    }
-                    MergeStrategy::Theirs => {
-                        for line in theirs_lines {
-                            output.push_str(line.as_ref());
-                            output.push_str(line_ending);
-                        }
-                    }
-                    MergeStrategy::Union => {
-                        for line in ours_lines {
-                            output.push_str(line.as_ref());
-                            output.push_str(line_ending);
-                        }
-                        for line in theirs_lines {
-                            output.push_str(line.as_ref());
-                            output.push_str(line_ending);
-                        }
-                    }
-                    MergeStrategy::Normal => {
-                        emit_conflict_markers(
-                            &mut output,
-                            ours_lines,
-                            theirs_lines,
-                            base_conflict_lines,
-                            options,
-                            line_ending,
-                        );
-                        conflict_count += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    // Remaining base lines after all hunks.
-    emit_context_lines(
-        &mut output,
-        base_lines,
-        base_pos,
-        base_lines.len(),
-        line_ending,
-    );
-
-    apply_trailing_newline_decision(&mut output, base_text, base_lines, ours_text, theirs_text);
 
     MergeResult {
         output,
         conflict_count,
-    }
-}
-
-fn emit_context_lines(
-    output: &mut String,
-    base_lines: &[&str],
-    from: usize,
-    to: usize,
-    line_ending: &str,
-) {
-    for &line in &base_lines[from..to] {
-        output.push_str(line);
-        output.push_str(line_ending);
     }
 }
 
@@ -1031,14 +589,13 @@ fn apply_trailing_newline_decision(
     base_text: &str,
     base_lines: &[&str],
     ours_text: &str,
+    ours_lines: &[&str],
     theirs_text: &str,
+    theirs_lines: &[&str],
 ) {
     let ours_has_trailing = ours_text.is_empty() || ours_text.ends_with('\n');
     let theirs_has_trailing = theirs_text.is_empty() || theirs_text.ends_with('\n');
     let base_has_trailing = base_text.is_empty() || base_text.ends_with('\n');
-
-    let ours_lines_all = split_lines(ours_text);
-    let theirs_lines_all = split_lines(theirs_text);
 
     let output_last = output
         .trim_end_matches('\n')
@@ -1047,8 +604,8 @@ fn apply_trailing_newline_decision(
         .next()
         .unwrap_or("");
 
-    let ours_last_matches = ours_lines_all.last().is_some_and(|l| *l == output_last);
-    let theirs_last_matches = theirs_lines_all.last().is_some_and(|l| *l == output_last);
+    let ours_last_matches = ours_lines.last().is_some_and(|l| *l == output_last);
+    let theirs_last_matches = theirs_lines.last().is_some_and(|l| *l == output_last);
     let base_last_matches = base_lines.last().is_some_and(|l| *l == output_last);
 
     // Each branch has distinct semantics even when the result expression
@@ -1255,31 +812,9 @@ fn base_common_suffix_len(base: &[&str], side: &[Cow<'_, str>]) -> usize {
     n
 }
 
-/// Detect the dominant line ending in the full-file merge inputs.
-///
-/// This remains a local counting heuristic so merge-file output keeps its
-/// historical full-text behavior even as other modules share
-/// `text_utils::detect_line_ending_from_texts` with context-specific modes.
-fn detect_line_ending(ours: &str, theirs: &str, base: &str) -> &'static str {
-    let crlf_count = ours.matches("\r\n").count()
-        + theirs.matches("\r\n").count()
-        + base.matches("\r\n").count();
-    let lf_only_count =
-        ours.matches('\n').count() + theirs.matches('\n').count() + base.matches('\n').count()
-            - crlf_count;
-
-    if crlf_count > lf_only_count {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_diff::EditKind;
-    use std::borrow::Cow;
 
     fn default_opts() -> MergeOptions {
         MergeOptions::default()
@@ -1310,75 +845,112 @@ mod tests {
         }
     }
 
-    #[test]
-    fn edits_to_hunks_inserts_use_borrowed_cow() {
-        let inserted_line = String::from("inserted");
-        let edits = vec![Edit {
-            kind: EditKind::Insert,
-            old: None,
-            new: Some(inserted_line.as_str()),
-        }];
+    fn render_merge_plan_uncached_for_test(
+        plan: &MergePlan,
+        options: &MergeOptions,
+    ) -> MergeResult {
+        let mut output = String::new();
+        let mut conflict_count = 0usize;
+        let final_block_is_manual = plan
+            .blocks
+            .last()
+            .is_some_and(|block| block.manual_content.is_some());
+        for block in &plan.blocks {
+            if let Some(manual) = block.manual_content.as_deref() {
+                output.push_str(manual);
+                continue;
+            }
+            if !block.selection.is_empty() {
+                for source in block.selection.iter() {
+                    for line in plan.block_source_lines(block, source) {
+                        output.push_str(line);
+                        output.push_str(plan.line_ending);
+                    }
+                }
+                continue;
+            }
 
-        let hunks = edits_to_hunks(&edits);
-        assert_eq!(hunks.len(), 1);
-        assert_eq!(hunks[0].new_lines.len(), 1);
-        assert!(matches!(
-            &hunks[0].new_lines[0],
-            Cow::Borrowed(line) if *line == "inserted"
-        ));
+            let ours: Vec<Cow<'_, str>> = plan
+                .block_source_lines(block, plan.local_source())
+                .into_iter()
+                .map(Cow::Borrowed)
+                .collect();
+            let theirs: Vec<Cow<'_, str>> = plan
+                .block_source_lines(block, plan.remote_source())
+                .into_iter()
+                .map(Cow::Borrowed)
+                .collect();
+            let base = plan.block_ancestor_lines(block);
+            emit_conflict_markers(
+                &mut output,
+                &ours,
+                &theirs,
+                &base,
+                options,
+                plan.line_ending,
+            );
+            conflict_count += 1;
+        }
+        if !final_block_is_manual {
+            let base_text = plan.base.as_deref().unwrap_or_default();
+            let base_lines = split_lines(base_text);
+            let local_lines = split_lines(&plan.local);
+            let remote_lines = split_lines(&plan.remote);
+            apply_trailing_newline_decision(
+                &mut output,
+                base_text,
+                &base_lines,
+                &plan.local,
+                &local_lines,
+                &plan.remote,
+                &remote_lines,
+            );
+        }
+        MergeResult {
+            output,
+            conflict_count,
+        }
     }
 
     #[test]
-    fn reconstruct_side_uses_borrowed_base_and_insert_lines() {
-        let base_lines = split_lines("base-1\nbase-2\n");
-        let inserted_lines = split_lines("inserted\n");
-        let hunks = vec![Hunk {
-            base_start: 1,
-            base_end: 1,
-            new_lines: vec![Cow::Borrowed(inserted_lines[0])],
-        }];
+    fn final_manual_content_controls_its_trailing_newline() {
+        let options = MergeOptions::default();
+        let mut plan = build_merge_plan("base", "local", "remote", &options);
+        let conflict = plan.original_conflict_block_indices()[0];
 
-        let lines = reconstruct_side(&base_lines, 0, 2, &hunks);
-        assert_eq!(lines.len(), 3);
-        assert!(matches!(&lines[0], Cow::Borrowed(line) if *line == "base-1"));
-        assert!(matches!(&lines[1], Cow::Borrowed(line) if *line == "inserted"));
-        assert!(matches!(&lines[2], Cow::Borrowed(line) if *line == "base-2"));
+        assert!(plan.set_manual_content(conflict, "local\n".to_owned()));
+        assert_eq!(render_merge_plan(&plan, &options).output, "local\n");
+
+        assert!(plan.set_manual_content(conflict, "local".to_owned()));
+        assert_eq!(render_merge_plan(&plan, &options).output, "local");
+
+        assert!(plan.set_manual_content(conflict, "local\r\n".to_owned()));
+        assert_eq!(render_merge_plan(&plan, &options).output, "local\r\n");
     }
 
     #[test]
-    fn coalesce_zealous_conflicts_reuses_borrowed_separator_lines() {
-        let base_lines = split_lines("top\n\nbottom\n");
-        let hunks = vec![
-            MergedHunk::Conflict {
-                base_start: 0,
-                base_end: 1,
-                ours_lines: vec![Cow::Borrowed("ours-1")],
-                theirs_lines: vec![Cow::Borrowed("theirs-1")],
-            },
-            MergedHunk::Conflict {
-                base_start: 2,
-                base_end: 3,
-                ours_lines: vec![Cow::Borrowed("ours-2")],
-                theirs_lines: vec![Cow::Borrowed("theirs-2")],
-            },
-        ];
-
-        let coalesced = coalesce_zealous_conflicts(&base_lines, hunks);
-        assert_eq!(coalesced.len(), 1);
-
-        let MergedHunk::Conflict {
-            ours_lines,
-            theirs_lines,
-            ..
-        } = &coalesced[0]
-        else {
-            panic!("expected coalesced conflict hunk");
+    fn cached_line_renderer_matches_uncached_many_small_blocks() {
+        let mut base = String::new();
+        let mut local = String::new();
+        let mut remote = String::new();
+        for index in 0..256 {
+            base.push_str(&format!("context-{index}\nbase-{index}\n"));
+            local.push_str(&format!("context-{index}\nlocal-{index}\n"));
+            remote.push_str(&format!("context-{index}\nremote-{index}\n"));
+        }
+        let options = MergeOptions {
+            style: ConflictStyle::Diff3,
+            ..MergeOptions::default()
         };
-
-        assert_eq!(ours_lines.len(), 3);
-        assert_eq!(theirs_lines.len(), 3);
-        assert!(matches!(&ours_lines[1], Cow::Borrowed(line) if line.is_empty()));
-        assert!(matches!(&theirs_lines[1], Cow::Borrowed(line) if line.is_empty()));
+        let plan = build_merge_plan(&base, &local, &remote, &options);
+        assert!(
+            plan.original_conflict_block_indices().len() > 200,
+            "fixture should exercise many independently rendered blocks",
+        );
+        assert_eq!(
+            render_merge_plan(&plan, &options),
+            render_merge_plan_uncached_for_test(&plan, &options),
+        );
     }
 
     // -----------------------------------------------------------------------

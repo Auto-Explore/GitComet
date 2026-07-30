@@ -6,8 +6,4 @@ file1
 file1
 file1
 file1
-file1
-<<<<<<<
-=======
 file1; edited in branch
->>>>>>>

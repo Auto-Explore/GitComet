@@ -1,0 +1,2130 @@
+//! KDiff3-compatible aligned merge planning.
+//!
+//! KDiff3 builds one aligned A/B/C row list first, then derives merge blocks
+//! and their default selections from that list. Keeping the same separation
+//! here gives the GUI and headless renderer one source of truth.
+
+use super::{DiffAlgorithm, MergeOptions};
+use crate::file_diff::{Edit, EditKind, histogram_edits, myers_edits, split_lines};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::ops::Range;
+use std::sync::Arc;
+
+/// A source in KDiff3's aligned merge space.
+///
+/// With a base, A is the base, B is local/ours, and C is remote/theirs.
+/// Without a base, true two-input behavior is used: A is local and B is
+/// remote; C is absent.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum MergeSource {
+    A,
+    B,
+    C,
+}
+
+/// Conservative preflight limits for an interactive merge plan.
+///
+/// The regular plan builders remain available to callers that explicitly
+/// accept their algorithmic cost. Resolver sessions use this budget before
+/// invoking Myers so opening a file cannot allocate an effectively quadratic
+/// trace for large, unrelated inputs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InteractiveMergePlanBudget {
+    pub always_plan_total_lines: usize,
+    pub max_total_lines: usize,
+    pub minimum_shared_line_numerator: usize,
+    pub minimum_shared_line_denominator: usize,
+}
+
+impl Default for InteractiveMergePlanBudget {
+    fn default() -> Self {
+        Self {
+            always_plan_total_lines: 2_000,
+            max_total_lines: 100_000,
+            minimum_shared_line_numerator: 1,
+            minimum_shared_line_denominator: 4,
+        }
+    }
+}
+
+/// Whether an interactive merge plan is safe enough to construct.
+pub fn interactive_merge_plan_is_practical(
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    budget: InteractiveMergePlanBudget,
+) -> bool {
+    let base_count = base.map_or(0, |text| text.lines().count());
+    let local_count = local.lines().count();
+    let remote_count = remote.lines().count();
+    let total = base_count
+        .saturating_add(local_count)
+        .saturating_add(remote_count);
+    if total > budget.max_total_lines {
+        return false;
+    }
+    if total <= budget.always_plan_total_lines {
+        return true;
+    }
+    if budget.minimum_shared_line_denominator == 0 {
+        return false;
+    }
+
+    let shared_enough = |shared: usize, side_count: usize| {
+        side_count == 0
+            || shared.saturating_mul(budget.minimum_shared_line_denominator)
+                >= side_count.saturating_mul(budget.minimum_shared_line_numerator)
+    };
+
+    if let Some(base) = base {
+        let base_lines: HashSet<&str> = base.lines().collect();
+        let local_shared = local
+            .lines()
+            .filter(|line| base_lines.contains(line))
+            .count();
+        let remote_shared = remote
+            .lines()
+            .filter(|line| base_lines.contains(line))
+            .count();
+        shared_enough(local_shared, local_count) && shared_enough(remote_shared, remote_count)
+    } else {
+        let local_lines: HashSet<&str> = local.lines().collect();
+        let remote_shared = remote
+            .lines()
+            .filter(|line| local_lines.contains(line))
+            .count();
+        shared_enough(remote_shared, remote_count)
+    }
+}
+
+/// Build an interactive plan only when its preflight budget permits it.
+pub fn try_build_interactive_merge_plan_with_optional_base(
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    options: &MergeOptions,
+    budget: InteractiveMergePlanBudget,
+) -> Option<MergePlan> {
+    interactive_merge_plan_is_practical(base, local, remote, budget)
+        .then(|| build_merge_plan_with_optional_base(base, local, remote, options))
+}
+
+/// A unique, ordered set of selected merge sources.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OrderedSelection {
+    sources: Vec<MergeSource>,
+}
+
+impl OrderedSelection {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_source(source: MergeSource) -> Self {
+        Self {
+            sources: vec![source],
+        }
+    }
+
+    pub fn from_sources(sources: impl IntoIterator<Item = MergeSource>) -> Self {
+        let mut selection = Self::new();
+        for source in sources {
+            selection.append(source);
+        }
+        selection
+    }
+
+    pub fn as_slice(&self) -> &[MergeSource] {
+        &self.sources
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = MergeSource> + '_ {
+        self.sources.iter().copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.sources.len()
+    }
+
+    pub fn contains(&self, source: MergeSource) -> bool {
+        self.sources.contains(&source)
+    }
+
+    /// Append a source if it is not already selected.
+    pub fn append(&mut self, source: MergeSource) {
+        if !self.contains(source) {
+            self.sources.push(source);
+        }
+    }
+
+    /// Toggle a source, appending newly selected sources at the end.
+    pub fn toggle(&mut self, source: MergeSource) {
+        if let Some(index) = self
+            .sources
+            .iter()
+            .position(|candidate| *candidate == source)
+        {
+            self.sources.remove(index);
+        } else {
+            self.sources.push(source);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.sources.clear();
+    }
+}
+
+impl<const N: usize> From<[MergeSource; N]> for OrderedSelection {
+    fn from(value: [MergeSource; N]) -> Self {
+        Self::from_sources(value)
+    }
+}
+
+impl From<MergeSource> for OrderedSelection {
+    fn from(value: MergeSource) -> Self {
+        Self::from_source(value)
+    }
+}
+
+/// One row in the shared aligned A/B/C space.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlignedRow {
+    pub a: Option<usize>,
+    pub b: Option<usize>,
+    pub c: Option<usize>,
+    /// Exact line equality after final alignment.
+    pub equal_ab: bool,
+    pub equal_ac: bool,
+    pub equal_bc: bool,
+    /// Equality after removing whitespace, matching the equality metadata
+    /// KDiff3 uses while aligning whole lines.
+    pub whitespace_equal_ab: bool,
+    pub whitespace_equal_ac: bool,
+    pub whitespace_equal_bc: bool,
+    /// Missing lines count as white, as they do in KDiff3's merge metadata.
+    pub whitespace_a: bool,
+    pub whitespace_b: bool,
+    pub whitespace_c: bool,
+}
+
+impl Default for AlignedRow {
+    fn default() -> Self {
+        Self {
+            a: None,
+            b: None,
+            c: None,
+            equal_ab: false,
+            equal_ac: false,
+            equal_bc: false,
+            whitespace_equal_ab: false,
+            whitespace_equal_ac: false,
+            whitespace_equal_bc: false,
+            whitespace_a: true,
+            whitespace_b: true,
+            whitespace_c: true,
+        }
+    }
+}
+
+impl AlignedRow {
+    pub fn line(&self, source: MergeSource) -> Option<usize> {
+        match source {
+            MergeSource::A => self.a,
+            MergeSource::B => self.b,
+            MergeSource::C => self.c,
+        }
+    }
+}
+
+/// KDiff3's per-row merge detail classifications.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum MergeBlockClassification {
+    Default,
+    NoChange,
+    BChanged,
+    CChanged,
+    BCChanged,
+    BCChangedAndEqual,
+    BDeleted,
+    CDeleted,
+    BCDeleted,
+    BChangedCDeleted,
+    CChangedBDeleted,
+    BAdded,
+    CAdded,
+    BCAdded,
+    BCAddedAndEqual,
+}
+
+/// Stable content identity for a merge block.
+///
+/// `occurrence` distinguishes repeated blocks for navigation within one plan.
+/// It is not sufficient proof of cross-plan identity after an identical block
+/// is inserted or removed; restoration across changed plans must treat
+/// duplicate fingerprints as ambiguous.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct MergeBlockId {
+    pub fingerprint: u64,
+    pub occurrence: u32,
+}
+
+/// A grouped range of aligned rows and its current output decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MergeBlock {
+    pub id: MergeBlockId,
+    pub rows: Range<usize>,
+    pub classification: MergeBlockClassification,
+    pub is_delta: bool,
+    pub original_conflict: bool,
+    pub whitespace_conflict: bool,
+    pub automatic_selection: OrderedSelection,
+    pub selection: OrderedSelection,
+    pub manual_content: Option<String>,
+}
+
+impl MergeBlock {
+    pub fn is_resolved(&self) -> bool {
+        self.manual_content.is_some() || !self.selection.is_empty()
+    }
+
+    pub fn toggle_source(&mut self, source: MergeSource) {
+        self.manual_content = None;
+        self.selection.toggle(source);
+    }
+
+    pub fn replace_selection(&mut self, selection: OrderedSelection) {
+        self.manual_content = None;
+        self.selection = selection;
+    }
+
+    pub fn set_manual_content(&mut self, content: String) {
+        self.selection.clear();
+        self.manual_content = Some(content);
+    }
+
+    pub fn reset_to_automatic(&mut self) {
+        self.manual_content = None;
+        self.selection = self.automatic_selection.clone();
+    }
+}
+
+/// Complete shared plan used by aligned views and merge rendering.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MergePlan {
+    pub base: Option<Arc<str>>,
+    pub local: Arc<str>,
+    pub remote: Arc<str>,
+    pub rows: Vec<AlignedRow>,
+    pub blocks: Vec<MergeBlock>,
+    pub unresolved_blocks: Vec<usize>,
+    pub line_ending: &'static str,
+}
+
+impl MergePlan {
+    pub fn has_base(&self) -> bool {
+        self.base.is_some()
+    }
+
+    pub fn local_source(&self) -> MergeSource {
+        if self.has_base() {
+            MergeSource::B
+        } else {
+            MergeSource::A
+        }
+    }
+
+    pub fn remote_source(&self) -> MergeSource {
+        if self.has_base() {
+            MergeSource::C
+        } else {
+            MergeSource::B
+        }
+    }
+
+    pub fn source_text(&self, source: MergeSource) -> Option<&str> {
+        match (self.has_base(), source) {
+            (true, MergeSource::A) => self.base.as_deref(),
+            (true, MergeSource::B) => Some(self.local.as_ref()),
+            (true, MergeSource::C) => Some(self.remote.as_ref()),
+            (false, MergeSource::A) => Some(self.local.as_ref()),
+            (false, MergeSource::B) => Some(self.remote.as_ref()),
+            (false, MergeSource::C) => None,
+        }
+    }
+
+    pub fn source_lines(&self, source: MergeSource) -> Vec<&str> {
+        self.source_text(source)
+            .map(split_lines)
+            .unwrap_or_default()
+    }
+
+    pub fn block_source_lines<'a>(
+        &'a self,
+        block: &MergeBlock,
+        source: MergeSource,
+    ) -> Vec<&'a str> {
+        let lines = self.source_lines(source);
+        self.rows[block.rows.clone()]
+            .iter()
+            .filter_map(|row| row.line(source).and_then(|index| lines.get(index).copied()))
+            .collect()
+    }
+
+    pub fn block_source_text(&self, block: &MergeBlock, source: MergeSource) -> String {
+        let mut text = String::new();
+        for line in self.block_source_lines(block, source) {
+            text.push_str(line);
+            text.push_str(self.line_ending);
+        }
+        text
+    }
+
+    /// Contiguous source-line coordinates covered by a block.
+    ///
+    /// A deletion has an empty range at its source insertion boundary.
+    pub fn block_source_line_range(&self, block: &MergeBlock, source: MergeSource) -> Range<usize> {
+        let mut indices = self.rows[block.rows.clone()]
+            .iter()
+            .filter_map(|row| row.line(source));
+        if let Some(first) = indices.next() {
+            let last = indices.next_back().unwrap_or(first);
+            return first..last.saturating_add(1);
+        }
+
+        let boundary = self.rows[..block.rows.start]
+            .iter()
+            .rev()
+            .find_map(|row| row.line(source))
+            .map_or(0, |line| line.saturating_add(1));
+        boundary..boundary
+    }
+
+    /// The ancestor line range belonging to the delta region around `block`.
+    ///
+    /// Contributor↔contributor realignment can place a base line on a nearby
+    /// automatically resolved row. Diff3 markers still need that ancestor
+    /// line, so the range is bounded by the nearest unchanged three-way
+    /// anchors rather than by base cells physically present in the block.
+    pub fn block_ancestor_range(&self, block: &MergeBlock) -> Option<Range<usize>> {
+        self.has_base().then(|| {
+            let start = self.rows[..block.rows.start]
+                .iter()
+                .rev()
+                .find(|row| row.equal_ab && row.equal_ac)
+                .and_then(|row| row.a)
+                .map_or(0, |line| line + 1);
+            let end = self.rows[block.rows.end..]
+                .iter()
+                .find(|row| row.equal_ab && row.equal_ac)
+                .and_then(|row| row.a)
+                .unwrap_or_else(|| self.source_lines(MergeSource::A).len());
+            start.min(end)..end
+        })
+    }
+
+    pub fn block_ancestor_lines<'a>(&'a self, block: &MergeBlock) -> Vec<&'a str> {
+        let Some(range) = self.block_ancestor_range(block) else {
+            return Vec::new();
+        };
+        let lines = self.source_lines(MergeSource::A);
+        lines[range].to_vec()
+    }
+
+    pub fn refresh_unresolved_blocks(&mut self) {
+        self.unresolved_blocks.clear();
+        self.unresolved_blocks.extend(
+            self.blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, block)| (!block.is_resolved()).then_some(index)),
+        );
+    }
+
+    pub fn unresolved_count(&self) -> usize {
+        self.unresolved_blocks.len()
+    }
+
+    /// Indices of all changed merge blocks, including automatically selected
+    /// changes and conflicts.
+    pub fn delta_block_indices(&self) -> Vec<usize> {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| block.is_delta.then_some(index))
+            .collect()
+    }
+
+    /// Indices of blocks that were conflicts when the plan was built.
+    ///
+    /// This set is stable as selections change.
+    pub fn original_conflict_block_indices(&self) -> Vec<usize> {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| block.original_conflict.then_some(index))
+            .collect()
+    }
+
+    /// Indices of original conflicts that currently have no output decision.
+    pub fn unresolved_block_indices(&self) -> &[usize] {
+        &self.unresolved_blocks
+    }
+
+    pub fn toggle_source(&mut self, block_index: usize, source: MergeSource) -> bool {
+        if self.source_text(source).is_none() {
+            return false;
+        }
+        let Some(block) = self.blocks.get_mut(block_index) else {
+            return false;
+        };
+        block.toggle_source(source);
+        self.refresh_unresolved_blocks();
+        true
+    }
+
+    pub fn replace_selection(&mut self, block_index: usize, selection: OrderedSelection) -> bool {
+        if selection
+            .iter()
+            .any(|source| self.source_text(source).is_none())
+        {
+            return false;
+        }
+        let Some(block) = self.blocks.get_mut(block_index) else {
+            return false;
+        };
+        block.replace_selection(selection);
+        self.refresh_unresolved_blocks();
+        true
+    }
+
+    pub fn set_manual_content(&mut self, block_index: usize, content: String) -> bool {
+        let Some(block) = self.blocks.get_mut(block_index) else {
+            return false;
+        };
+        block.set_manual_content(content);
+        self.refresh_unresolved_blocks();
+        true
+    }
+
+    fn refresh_block_ids(&mut self) {
+        let local = Arc::clone(&self.local);
+        let remote = Arc::clone(&self.remote);
+        let base = self.base.clone();
+        let (a_text, b_text, c_text) = match base.as_ref() {
+            Some(base) => (base.as_ref(), local.as_ref(), remote.as_ref()),
+            None => (local.as_ref(), remote.as_ref(), ""),
+        };
+        let a_lines = split_lines(a_text);
+        let b_lines = split_lines(b_text);
+        let c_lines = split_lines(c_text);
+        let mut occurrences = BTreeMap::<u64, u32>::new();
+
+        for block in &mut self.blocks {
+            let fingerprint = block_fingerprint(
+                &self.rows[block.rows.clone()],
+                block.classification,
+                &a_lines,
+                &b_lines,
+                &c_lines,
+            );
+            let occurrence = occurrences.entry(fingerprint).or_default();
+            block.id = MergeBlockId {
+                fingerprint,
+                occurrence: *occurrence,
+            };
+            *occurrence = occurrence.saturating_add(1);
+        }
+    }
+
+    /// Split one plan block into adjacent row ranges whose A/B/C line counts
+    /// match the newly split conflict regions.
+    pub(crate) fn split_block_by_source_line_counts(
+        &mut self,
+        block_index: usize,
+        part_counts: &[[usize; 3]],
+    ) -> Option<usize> {
+        if part_counts.len() < 2 {
+            return None;
+        }
+        let original = self.blocks.get(block_index)?.clone();
+        let available =
+            self.rows[original.rows.clone()]
+                .iter()
+                .fold([0usize; 3], |mut counts, row| {
+                    counts[0] += usize::from(row.a.is_some());
+                    counts[1] += usize::from(row.b.is_some());
+                    counts[2] += usize::from(row.c.is_some());
+                    counts
+                });
+        let requested = part_counts.iter().fold([0usize; 3], |mut total, counts| {
+            for source in 0..3 {
+                total[source] += counts[source];
+            }
+            total
+        });
+        if available != requested {
+            return None;
+        }
+
+        let mut cursor = original.rows.start;
+        let mut ranges = Vec::with_capacity(part_counts.len());
+        for counts in part_counts {
+            if counts.iter().all(|count| *count == 0) {
+                return None;
+            }
+            let start = cursor;
+            let mut remaining = *counts;
+            while remaining.iter().any(|count| *count > 0) {
+                let row = self.rows.get(cursor)?;
+                for (source, present) in [row.a.is_some(), row.b.is_some(), row.c.is_some()]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if !present {
+                        continue;
+                    }
+                    if remaining[source] == 0 {
+                        return None;
+                    }
+                    remaining[source] -= 1;
+                }
+                cursor += 1;
+            }
+            if cursor == start {
+                return None;
+            }
+            ranges.push(start..cursor);
+        }
+        if cursor != original.rows.end {
+            return None;
+        }
+
+        let replacement = ranges.into_iter().map(|rows| MergeBlock {
+            rows,
+            ..original.clone()
+        });
+        self.blocks
+            .splice(block_index..block_index + 1, replacement);
+        self.refresh_block_ids();
+        self.refresh_unresolved_blocks();
+        Some(part_counts.len())
+    }
+
+    /// Join a contiguous range of plan blocks into one unresolved conflict.
+    pub(crate) fn join_block_range(
+        &mut self,
+        first_block_index: usize,
+        last_block_index: usize,
+    ) -> Option<usize> {
+        if first_block_index > last_block_index || last_block_index >= self.blocks.len() {
+            return None;
+        }
+        let rows =
+            self.blocks[first_block_index].rows.start..self.blocks[last_block_index].rows.end;
+        let whitespace_conflict = self.rows[rows.clone()]
+            .iter()
+            .all(|row| row_whitespace_conflict(row, self.has_base()));
+        let joined = MergeBlock {
+            id: MergeBlockId {
+                fingerprint: 0,
+                occurrence: 0,
+            },
+            rows,
+            classification: if self.has_base() {
+                MergeBlockClassification::BCChanged
+            } else {
+                MergeBlockClassification::BChanged
+            },
+            is_delta: true,
+            original_conflict: true,
+            whitespace_conflict,
+            automatic_selection: OrderedSelection::new(),
+            selection: OrderedSelection::new(),
+            manual_content: None,
+        };
+        let removed = last_block_index - first_block_index;
+        self.blocks
+            .splice(first_block_index..last_block_index + 1, [joined]);
+        self.refresh_block_ids();
+        self.refresh_unresolved_blocks();
+        Some(removed)
+    }
+
+    /// Restore decisions by stable block identity.
+    pub fn restore_decisions_from(&mut self, previous: &MergePlan) {
+        let same_sequence = self.blocks.len() == previous.blocks.len()
+            && self
+                .blocks
+                .iter()
+                .zip(&previous.blocks)
+                .all(|(current, previous)| current.id.fingerprint == previous.id.fingerprint);
+        if same_sequence {
+            for (block, previous) in self.blocks.iter_mut().zip(&previous.blocks) {
+                block.selection = previous.selection.clone();
+                block.manual_content = previous.manual_content.clone();
+            }
+            self.refresh_unresolved_blocks();
+            return;
+        }
+
+        let mut previous_counts = BTreeMap::<u64, usize>::new();
+        let mut current_counts = BTreeMap::<u64, usize>::new();
+        for block in &previous.blocks {
+            *previous_counts.entry(block.id.fingerprint).or_default() += 1;
+        }
+        for block in &self.blocks {
+            *current_counts.entry(block.id.fingerprint).or_default() += 1;
+        }
+        let decisions: BTreeMap<u64, (&OrderedSelection, Option<&String>)> = previous
+            .blocks
+            .iter()
+            .filter(|block| previous_counts.get(&block.id.fingerprint) == Some(&1))
+            .map(|block| {
+                (
+                    block.id.fingerprint,
+                    (&block.selection, block.manual_content.as_ref()),
+                )
+            })
+            .collect();
+        for block in &mut self.blocks {
+            let fingerprint = block.id.fingerprint;
+            if current_counts.get(&fingerprint) != Some(&1) {
+                continue;
+            }
+            if let Some((selection, manual)) = decisions.get(&fingerprint) {
+                block.selection = (*selection).clone();
+                block.manual_content = manual.map(|content| (*content).clone());
+            }
+        }
+        self.refresh_unresolved_blocks();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PairChunk {
+    equal: usize,
+    left: usize,
+    right: usize,
+}
+
+fn pair_chunks(edits: &[Edit<'_>]) -> Vec<PairChunk> {
+    let mut chunks = Vec::new();
+    let mut index = 0usize;
+    while index < edits.len() {
+        let mut chunk = PairChunk::default();
+        while index < edits.len() && edits[index].kind == EditKind::Equal {
+            chunk.equal += 1;
+            index += 1;
+        }
+        while index < edits.len() && edits[index].kind != EditKind::Equal {
+            match edits[index].kind {
+                EditKind::Delete => chunk.left += 1,
+                EditKind::Insert => chunk.right += 1,
+                EditKind::Equal => unreachable!(),
+            }
+            index += 1;
+        }
+        if chunk != PairChunk::default() {
+            chunks.push(chunk);
+        }
+    }
+    chunks
+}
+
+fn diff_chunks<'a>(
+    left: &[&'a str],
+    right: &[&'a str],
+    algorithm: DiffAlgorithm,
+) -> Vec<PairChunk> {
+    // GNU diff peels byte-identical prefixes and suffixes before applying its
+    // whitespace-insensitive equivalence classes. Preserve that detail: it
+    // makes an exact repeated line win over an earlier whitespace-equivalent
+    // candidate (one of KDiff3's upstream alignment regressions).
+    let mut prefix = 0usize;
+    while prefix < left.len() && prefix < right.len() && left[prefix] == right[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0usize;
+    while prefix + suffix < left.len()
+        && prefix + suffix < right.len()
+        && left[left.len() - 1 - suffix] == right[right.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let left_mid = &left[prefix..left.len() - suffix];
+    let right_mid = &right[prefix..right.len() - suffix];
+
+    // KDiff3's whole-line alignment ignores whitespace, then its fine-diff
+    // pass restores exact equality for merge classification.
+    let left_normalized: Vec<String> = left_mid
+        .iter()
+        .map(|line| normalized_without_whitespace(line))
+        .collect();
+    let right_normalized: Vec<String> = right_mid
+        .iter()
+        .map(|line| normalized_without_whitespace(line))
+        .collect();
+    let left_normalized: Vec<&str> = left_normalized.iter().map(String::as_str).collect();
+    let right_normalized: Vec<&str> = right_normalized.iter().map(String::as_str).collect();
+    let edits = match algorithm {
+        DiffAlgorithm::Myers => myers_edits(&left_normalized, &right_normalized),
+        DiffAlgorithm::Histogram => histogram_edits(&left_normalized, &right_normalized),
+    };
+    let mut chunks = Vec::new();
+    if prefix > 0 {
+        chunks.push(PairChunk {
+            equal: prefix,
+            ..PairChunk::default()
+        });
+    }
+    chunks.extend(pair_chunks(&edits));
+    if suffix > 0 {
+        chunks.push(PairChunk {
+            equal: suffix,
+            ..PairChunk::default()
+        });
+    }
+    chunks
+}
+
+#[derive(Clone, Debug)]
+struct RowNode {
+    row: AlignedRow,
+    previous: Option<usize>,
+    next: Option<usize>,
+    alive: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RowList {
+    nodes: Vec<RowNode>,
+    first: Option<usize>,
+    last: Option<usize>,
+}
+
+impl RowList {
+    fn push_back(&mut self, row: AlignedRow) -> usize {
+        self.insert_before(None, row)
+    }
+
+    fn insert_before(&mut self, before: Option<usize>, row: AlignedRow) -> usize {
+        let previous = before
+            .and_then(|id| self.nodes.get(id).and_then(|node| node.previous))
+            .or_else(|| before.is_none().then_some(self.last).flatten());
+        let id = self.nodes.len();
+        self.nodes.push(RowNode {
+            row,
+            previous,
+            next: before,
+            alive: true,
+        });
+        if let Some(previous) = previous {
+            self.nodes[previous].next = Some(id);
+        } else {
+            self.first = Some(id);
+        }
+        if let Some(before) = before {
+            self.nodes[before].previous = Some(id);
+        } else {
+            self.last = Some(id);
+        }
+        id
+    }
+
+    fn next(&self, id: usize) -> Option<usize> {
+        self.nodes.get(id).and_then(|node| node.next)
+    }
+
+    fn find_from(
+        &self,
+        mut cursor: Option<usize>,
+        source: MergeSource,
+        line: usize,
+    ) -> Option<usize> {
+        while let Some(id) = cursor {
+            let node = &self.nodes[id];
+            if node.alive && node.row.line(source) == Some(line) {
+                return Some(id);
+            }
+            cursor = node.next;
+        }
+        None
+    }
+
+    fn comes_before(&self, left: usize, right: usize) -> bool {
+        let mut cursor = Some(left);
+        while let Some(id) = cursor {
+            if id == right {
+                return true;
+            }
+            cursor = self.next(id);
+        }
+        false
+    }
+
+    fn ids_between(&self, start: usize, end: usize) -> Vec<usize> {
+        let mut ids = Vec::new();
+        let mut cursor = Some(start);
+        while let Some(id) = cursor {
+            if id == end {
+                break;
+            }
+            ids.push(id);
+            cursor = self.next(id);
+        }
+        ids
+    }
+
+    fn into_rows(self) -> Vec<AlignedRow> {
+        let mut rows = Vec::new();
+        let mut cursor = self.first;
+        while let Some(id) = cursor {
+            let node = &self.nodes[id];
+            if node.alive {
+                rows.push(node.row.clone());
+            }
+            cursor = node.next;
+        }
+        rows
+    }
+
+    fn from_rows(rows: Vec<AlignedRow>) -> Self {
+        let mut list = Self::default();
+        for row in rows {
+            list.push_back(row);
+        }
+        list
+    }
+}
+
+fn build_ab(chunks: &[PairChunk]) -> RowList {
+    let mut rows = RowList::default();
+    let mut a = 0usize;
+    let mut b = 0usize;
+    for chunk in chunks {
+        for _ in 0..chunk.equal {
+            rows.push_back(AlignedRow {
+                a: Some(a),
+                b: Some(b),
+                ..AlignedRow::default()
+            });
+            a += 1;
+            b += 1;
+        }
+        let paired = chunk.left.min(chunk.right);
+        for _ in 0..paired {
+            rows.push_back(AlignedRow {
+                a: Some(a),
+                b: Some(b),
+                ..AlignedRow::default()
+            });
+            a += 1;
+            b += 1;
+        }
+        for _ in paired..chunk.left {
+            rows.push_back(AlignedRow {
+                a: Some(a),
+                ..AlignedRow::default()
+            });
+            a += 1;
+        }
+        for _ in paired..chunk.right {
+            rows.push_back(AlignedRow {
+                b: Some(b),
+                ..AlignedRow::default()
+            });
+            b += 1;
+        }
+    }
+    rows
+}
+
+fn integrate_ac(rows: &mut RowList, chunks: &[PairChunk]) {
+    let mut cursor = rows.first;
+    let mut a = 0usize;
+    let mut c = 0usize;
+    for chunk in chunks {
+        for _ in 0..chunk.equal {
+            let found = rows
+                .find_from(cursor, MergeSource::A, a)
+                .expect("A line from A↔C diff must exist in A↔B alignment");
+            rows.nodes[found].row.c = Some(c);
+            cursor = rows.next(found);
+            a += 1;
+            c += 1;
+        }
+
+        let paired = chunk.left.min(chunk.right);
+        for _ in 0..paired {
+            rows.insert_before(
+                cursor,
+                AlignedRow {
+                    c: Some(c),
+                    ..AlignedRow::default()
+                },
+            );
+            a += 1;
+            c += 1;
+        }
+        a += chunk.left - paired;
+        for _ in paired..chunk.right {
+            rows.insert_before(
+                cursor,
+                AlignedRow {
+                    c: Some(c),
+                    ..AlignedRow::default()
+                },
+            );
+            c += 1;
+        }
+    }
+}
+
+fn integrate_bc(
+    rows: &mut RowList,
+    chunks: &[PairChunk],
+    a_lines: &[&str],
+    b_lines: &[&str],
+    c_lines: &[&str],
+) {
+    let mut cursor_b = rows.first;
+    let mut cursor_c = rows.first;
+    let mut b = 0usize;
+    let mut c = 0usize;
+
+    for original in chunks {
+        let mut chunk = *original;
+        while chunk.equal > 0 {
+            let mut changed_rows = Vec::new();
+            let row_b = rows
+                .find_from(cursor_b, MergeSource::B, b)
+                .expect("B line from B↔C diff must exist");
+            let row_c = rows
+                .find_from(cursor_c, MergeSource::C, c)
+                .expect("C line from B↔C diff must exist");
+
+            if row_b == row_c {
+                // Already aligned.
+            } else if rows.comes_before(row_c, row_b) && !rows.nodes[row_b].row.whitespace_equal_ab
+            {
+                let between = rows.ids_between(row_c, row_b);
+                if between.iter().any(|id| rows.nodes[*id].row.b.is_some()) {
+                    let last_equal_a = between
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|id| rows.nodes[*id].row.whitespace_equal_ab);
+                    let mut before_or_on_equal_a = last_equal_a.is_some();
+                    for id in between {
+                        let should_move = rows.nodes[id].row.b.is_some()
+                            || (before_or_on_equal_a && rows.nodes[id].row.a.is_some());
+                        if should_move {
+                            let a = if before_or_on_equal_a {
+                                rows.nodes[id].row.a.take()
+                            } else {
+                                None
+                            };
+                            let moved = AlignedRow {
+                                a,
+                                b: rows.nodes[id].row.b.take(),
+                                ..AlignedRow::default()
+                            };
+                            let inserted = rows.insert_before(Some(row_c), moved);
+                            changed_rows.extend([id, inserted]);
+                        }
+                        if Some(id) == last_equal_a {
+                            before_or_on_equal_a = false;
+                        }
+                    }
+                }
+                rows.nodes[row_b].row.b = None;
+                rows.nodes[row_c].row.b = Some(b);
+                changed_rows.extend([row_b, row_c]);
+            } else if rows.comes_before(row_b, row_c) && !rows.nodes[row_c].row.whitespace_equal_ac
+            {
+                let between = rows.ids_between(row_b, row_c);
+                if between.iter().any(|id| rows.nodes[*id].row.c.is_some()) {
+                    let last_equal_a = between
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(|id| rows.nodes[*id].row.whitespace_equal_ac);
+                    let mut before_or_on_equal_a = last_equal_a.is_some();
+                    for id in between {
+                        let should_move = rows.nodes[id].row.c.is_some()
+                            || (before_or_on_equal_a && rows.nodes[id].row.a.is_some());
+                        if should_move {
+                            let a = if before_or_on_equal_a {
+                                rows.nodes[id].row.a.take()
+                            } else {
+                                None
+                            };
+                            let moved = AlignedRow {
+                                a,
+                                c: rows.nodes[id].row.c.take(),
+                                ..AlignedRow::default()
+                            };
+                            let inserted = rows.insert_before(Some(row_b), moved);
+                            changed_rows.extend([id, inserted]);
+                        }
+                        if Some(id) == last_equal_a {
+                            before_or_on_equal_a = false;
+                        }
+                    }
+                }
+                rows.nodes[row_c].row.c = None;
+                rows.nodes[row_b].row.c = Some(c);
+                changed_rows.extend([row_c, row_b]);
+            }
+
+            // Only moved rows lose or gain cells. Recomputing the entire list
+            // for every equal B↔C anchor makes this pass quadratic on large,
+            // mostly-identical files.
+            changed_rows.sort_unstable();
+            changed_rows.dedup();
+            for id in changed_rows {
+                recompute_row_metadata(&mut rows.nodes[id].row, a_lines, b_lines, c_lines);
+            }
+            chunk.equal -= 1;
+            b += 1;
+            c += 1;
+            cursor_b = rows.next(row_b);
+            cursor_c = rows.next(row_c);
+        }
+
+        while chunk.left > 0 {
+            let found = rows
+                .find_from(cursor_b, MergeSource::B, b)
+                .expect("B diff line must exist");
+            if Some(found) != cursor_b && !rows.nodes[found].row.whitespace_equal_ab {
+                rows.nodes[found].row.b = None;
+                rows.insert_before(
+                    cursor_b,
+                    AlignedRow {
+                        b: Some(b),
+                        ..AlignedRow::default()
+                    },
+                );
+            } else {
+                cursor_b = Some(found);
+            }
+            chunk.left -= 1;
+            b += 1;
+            cursor_b = cursor_b.and_then(|id| rows.next(id));
+            if chunk.right > 0 {
+                chunk.right -= 1;
+                c += 1;
+            }
+        }
+        c += chunk.right;
+    }
+}
+
+fn normalized_without_whitespace(text: &str) -> String {
+    text.chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
+
+fn pair_metadata(
+    left: Option<usize>,
+    right: Option<usize>,
+    left_lines: &[&str],
+    right_lines: &[&str],
+) -> (bool, bool) {
+    let (Some(left), Some(right)) = (left, right) else {
+        return (false, false);
+    };
+    let Some(left) = left_lines.get(left) else {
+        return (false, false);
+    };
+    let Some(right) = right_lines.get(right) else {
+        return (false, false);
+    };
+    (
+        left == right,
+        normalized_without_whitespace(left) == normalized_without_whitespace(right),
+    )
+}
+
+fn recompute_row_metadata(
+    row: &mut AlignedRow,
+    a_lines: &[&str],
+    b_lines: &[&str],
+    c_lines: &[&str],
+) {
+    (row.equal_ab, row.whitespace_equal_ab) = pair_metadata(row.a, row.b, a_lines, b_lines);
+    (row.equal_ac, row.whitespace_equal_ac) = pair_metadata(row.a, row.c, a_lines, c_lines);
+    (row.equal_bc, row.whitespace_equal_bc) = pair_metadata(row.b, row.c, b_lines, c_lines);
+    row.whitespace_a = row
+        .a
+        .and_then(|index| a_lines.get(index))
+        .is_none_or(|line| line.trim().is_empty());
+    row.whitespace_b = row
+        .b
+        .and_then(|index| b_lines.get(index))
+        .is_none_or(|line| line.trim().is_empty());
+    row.whitespace_c = row
+        .c
+        .and_then(|index| c_lines.get(index))
+        .is_none_or(|line| line.trim().is_empty());
+}
+
+fn line_equal(
+    left: Option<usize>,
+    right: Option<usize>,
+    left_lines: &[&str],
+    right_lines: &[&str],
+) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left_lines.get(left) == right_lines.get(right),
+        _ => false,
+    }
+}
+
+fn trim_rows(
+    mut rows: Vec<AlignedRow>,
+    a_lines: &[&str],
+    b_lines: &[&str],
+    c_lines: &[&str],
+) -> Vec<AlignedRow> {
+    rows.retain(|row| row.a.is_some() || row.b.is_some() || row.c.is_some());
+    for row in &mut rows {
+        recompute_row_metadata(row, a_lines, b_lines, c_lines);
+    }
+    if rows.is_empty() {
+        return rows;
+    }
+
+    let mut cursor_a = 0usize;
+    let mut cursor_b = 0usize;
+    let mut cursor_c = 0usize;
+    let mut line_a = 0usize;
+    let mut line_b = 0usize;
+    let mut line_c = 0usize;
+
+    for look in 0..rows.len() {
+        if look > line_a
+            && rows[look].a.is_some()
+            && rows[cursor_a].b.is_some()
+            && rows[cursor_a].whitespace_equal_bc
+            && line_equal(rows[look].a, rows[cursor_a].b, a_lines, b_lines)
+        {
+            rows[cursor_a].a = rows[look].a.take();
+            recompute_row_metadata(&mut rows[cursor_a], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_a += 1;
+            line_a += 1;
+        }
+
+        if look > line_b
+            && rows[look].b.is_some()
+            && rows[cursor_b].a.is_some()
+            && rows[cursor_b].whitespace_equal_ac
+            && line_equal(rows[look].b, rows[cursor_b].a, b_lines, a_lines)
+        {
+            rows[cursor_b].b = rows[look].b.take();
+            recompute_row_metadata(&mut rows[cursor_b], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_b += 1;
+            line_b += 1;
+        }
+
+        if look > line_c
+            && rows[look].c.is_some()
+            && rows[cursor_c].a.is_some()
+            && rows[cursor_c].whitespace_equal_ab
+            && line_equal(rows[look].c, rows[cursor_c].a, c_lines, a_lines)
+        {
+            rows[cursor_c].c = rows[look].c.take();
+            recompute_row_metadata(&mut rows[cursor_c], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_c += 1;
+            line_c += 1;
+        }
+
+        if look > line_a
+            && rows[look].a.is_some()
+            && !rows[look].whitespace_equal_ab
+            && !rows[look].whitespace_equal_ac
+        {
+            rows[cursor_a].a = rows[look].a.take();
+            recompute_row_metadata(&mut rows[cursor_a], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_a += 1;
+            line_a += 1;
+        }
+
+        if look > line_b
+            && rows[look].b.is_some()
+            && !rows[look].whitespace_equal_ab
+            && !rows[look].whitespace_equal_bc
+        {
+            rows[cursor_b].b = rows[look].b.take();
+            recompute_row_metadata(&mut rows[cursor_b], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_b += 1;
+            line_b += 1;
+        }
+
+        if look > line_c
+            && rows[look].c.is_some()
+            && !rows[look].whitespace_equal_ac
+            && !rows[look].whitespace_equal_bc
+        {
+            rows[cursor_c].c = rows[look].c.take();
+            recompute_row_metadata(&mut rows[cursor_c], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_c += 1;
+            line_c += 1;
+        }
+
+        if look > line_a
+            && look > line_b
+            && rows[look].a.is_some()
+            && rows[look].whitespace_equal_ab
+            && !rows[look].whitespace_equal_ac
+        {
+            let target = if line_a > line_b { cursor_a } else { cursor_b };
+            let next_line = line_a.max(line_b) + 1;
+            rows[target].a = rows[look].a.take();
+            rows[target].b = rows[look].b.take();
+            recompute_row_metadata(&mut rows[target], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_a = target + 1;
+            cursor_b = target + 1;
+            line_a = next_line;
+            line_b = next_line;
+        } else if look > line_a
+            && look > line_c
+            && rows[look].a.is_some()
+            && rows[look].whitespace_equal_ac
+            && !rows[look].whitespace_equal_ab
+        {
+            let target = if line_a > line_c { cursor_a } else { cursor_c };
+            let next_line = line_a.max(line_c) + 1;
+            rows[target].a = rows[look].a.take();
+            rows[target].c = rows[look].c.take();
+            recompute_row_metadata(&mut rows[target], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_a = target + 1;
+            cursor_c = target + 1;
+            line_a = next_line;
+            line_c = next_line;
+        } else if look > line_b
+            && look > line_c
+            && rows[look].b.is_some()
+            && rows[look].whitespace_equal_bc
+            && !rows[look].whitespace_equal_ac
+        {
+            let target = if line_b > line_c { cursor_b } else { cursor_c };
+            let next_line = line_b.max(line_c) + 1;
+            rows[target].b = rows[look].b.take();
+            rows[target].c = rows[look].c.take();
+            recompute_row_metadata(&mut rows[target], a_lines, b_lines, c_lines);
+            recompute_row_metadata(&mut rows[look], a_lines, b_lines, c_lines);
+            cursor_b = target + 1;
+            cursor_c = target + 1;
+            line_b = next_line;
+            line_c = next_line;
+        }
+
+        if rows[look].a.is_some() {
+            line_a = look + 1;
+            cursor_a = look + 1;
+        }
+        if rows[look].b.is_some() {
+            line_b = look + 1;
+            cursor_b = look + 1;
+        }
+        if rows[look].c.is_some() {
+            line_c = look + 1;
+            cursor_c = look + 1;
+        }
+    }
+
+    rows.retain(|row| row.a.is_some() || row.b.is_some() || row.c.is_some());
+    for row in &mut rows {
+        recompute_row_metadata(row, a_lines, b_lines, c_lines);
+    }
+    rows
+}
+
+#[derive(Clone, Debug)]
+struct RowDecision {
+    classification: MergeBlockClassification,
+    conflict: bool,
+    removed: bool,
+    selection: OrderedSelection,
+}
+
+fn classify_two_input(row: &AlignedRow) -> RowDecision {
+    match (row.a, row.b) {
+        (Some(_), Some(_)) if row.equal_ab => RowDecision {
+            classification: MergeBlockClassification::NoChange,
+            conflict: false,
+            removed: false,
+            selection: MergeSource::A.into(),
+        },
+        (Some(_), Some(_)) => RowDecision {
+            classification: MergeBlockClassification::BChanged,
+            conflict: true,
+            removed: false,
+            selection: OrderedSelection::new(),
+        },
+        _ => RowDecision {
+            classification: MergeBlockClassification::BDeleted,
+            conflict: true,
+            removed: false,
+            selection: OrderedSelection::new(),
+        },
+    }
+}
+
+fn classify_three_way(row: &AlignedRow) -> RowDecision {
+    use MergeBlockClassification as Kind;
+    use MergeSource::{A, B, C};
+
+    match (row.a, row.b, row.c) {
+        (Some(_), Some(_), Some(_)) if row.equal_ab && row.equal_ac => RowDecision {
+            classification: Kind::NoChange,
+            conflict: false,
+            removed: false,
+            selection: A.into(),
+        },
+        (Some(_), Some(_), Some(_)) if row.equal_ab => RowDecision {
+            classification: Kind::CChanged,
+            conflict: false,
+            removed: false,
+            selection: C.into(),
+        },
+        (Some(_), Some(_), Some(_)) if row.equal_ac => RowDecision {
+            classification: Kind::BChanged,
+            conflict: false,
+            removed: false,
+            selection: B.into(),
+        },
+        (Some(_), Some(_), Some(_)) if row.equal_bc => RowDecision {
+            classification: Kind::BCChangedAndEqual,
+            conflict: false,
+            removed: false,
+            selection: C.into(),
+        },
+        (Some(_), Some(_), Some(_)) => RowDecision {
+            classification: Kind::BCChanged,
+            conflict: true,
+            removed: false,
+            selection: OrderedSelection::new(),
+        },
+        (Some(_), Some(_), None) if !row.equal_ab => RowDecision {
+            classification: Kind::BChangedCDeleted,
+            conflict: true,
+            removed: false,
+            selection: OrderedSelection::new(),
+        },
+        (Some(_), Some(_), None) => RowDecision {
+            classification: Kind::CDeleted,
+            conflict: false,
+            removed: true,
+            selection: C.into(),
+        },
+        (Some(_), None, Some(_)) if !row.equal_ac => RowDecision {
+            classification: Kind::CChangedBDeleted,
+            conflict: true,
+            removed: false,
+            selection: OrderedSelection::new(),
+        },
+        (Some(_), None, Some(_)) => RowDecision {
+            classification: Kind::BDeleted,
+            conflict: false,
+            removed: true,
+            selection: B.into(),
+        },
+        (None, Some(_), Some(_)) if !row.equal_bc => RowDecision {
+            classification: Kind::BCAdded,
+            conflict: true,
+            removed: false,
+            selection: OrderedSelection::new(),
+        },
+        (None, Some(_), Some(_)) => RowDecision {
+            classification: Kind::BCAddedAndEqual,
+            conflict: false,
+            removed: false,
+            selection: C.into(),
+        },
+        (None, None, Some(_)) => RowDecision {
+            classification: Kind::CAdded,
+            conflict: false,
+            removed: false,
+            selection: C.into(),
+        },
+        (None, Some(_), None) => RowDecision {
+            classification: Kind::BAdded,
+            conflict: false,
+            removed: false,
+            selection: B.into(),
+        },
+        (Some(_), None, None) => RowDecision {
+            classification: Kind::BCDeleted,
+            conflict: false,
+            removed: true,
+            selection: C.into(),
+        },
+        (None, None, None) => RowDecision {
+            classification: Kind::Default,
+            conflict: false,
+            removed: true,
+            selection: OrderedSelection::new(),
+        },
+    }
+}
+
+fn row_whitespace_conflict(row: &AlignedRow, three_way: bool) -> bool {
+    if three_way {
+        (row.whitespace_equal_ab && row.whitespace_equal_ac)
+            || (row.whitespace_a && row.whitespace_b && row.whitespace_c)
+    } else {
+        row.whitespace_equal_ab || (row.whitespace_a && row.whitespace_b)
+    }
+}
+
+fn same_block_kind(
+    previous: &RowDecision,
+    next: &RowDecision,
+    previous_row: &AlignedRow,
+    next_row: &AlignedRow,
+) -> bool {
+    if previous.conflict && next.conflict {
+        return previous_row.whitespace_equal_ac == next_row.whitespace_equal_ac
+            && previous_row.whitespace_equal_ab == next_row.whitespace_equal_ab;
+    }
+
+    let previous_delta = previous.selection.as_slice() != [MergeSource::A];
+    let next_delta = next.selection.as_slice() != [MergeSource::A];
+    if !previous.conflict && !next.conflict && previous_delta && next_delta {
+        return previous.selection == next.selection
+            && (previous.classification == next.classification
+                || (previous.classification != MergeBlockClassification::BCAddedAndEqual
+                    && next.classification != MergeBlockClassification::BCAddedAndEqual));
+    }
+
+    !previous_delta && !next_delta
+}
+
+fn fnv_update(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn block_fingerprint(
+    rows: &[AlignedRow],
+    classification: MergeBlockClassification,
+    a_lines: &[&str],
+    b_lines: &[&str],
+    c_lines: &[&str],
+) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    hash = fnv_update(hash, format!("{classification:?}").as_bytes());
+    for row in rows {
+        for (tag, index, lines) in [
+            (b'A', row.a, a_lines),
+            (b'B', row.b, b_lines),
+            (b'C', row.c, c_lines),
+        ] {
+            hash = fnv_update(hash, &[tag]);
+            if let Some(line) = index.and_then(|index| lines.get(index)) {
+                hash = fnv_update(hash, line.as_bytes());
+            } else {
+                hash = fnv_update(hash, &[0xff]);
+            }
+            hash = fnv_update(hash, &[0]);
+        }
+    }
+    hash
+}
+
+fn build_blocks(
+    rows: &[AlignedRow],
+    three_way: bool,
+    a_lines: &[&str],
+    b_lines: &[&str],
+    c_lines: &[&str],
+) -> Vec<MergeBlock> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let decisions: Vec<RowDecision> = rows
+        .iter()
+        .map(|row| {
+            if three_way {
+                classify_three_way(row)
+            } else {
+                classify_two_input(row)
+            }
+        })
+        .collect();
+
+    let mut raw = Vec::<(Range<usize>, RowDecision)>::new();
+    let mut start = 0usize;
+    for index in 1..rows.len() {
+        if !same_block_kind(
+            &decisions[index - 1],
+            &decisions[index],
+            &rows[index - 1],
+            &rows[index],
+        ) {
+            raw.push((start..index, decisions[start].clone()));
+            start = index;
+        }
+    }
+    raw.push((start..rows.len(), decisions[start].clone()));
+
+    let mut occurrences = BTreeMap::<u64, u32>::new();
+    raw.into_iter()
+        .map(|(range, decision)| {
+            let fingerprint = block_fingerprint(
+                &rows[range.clone()],
+                decision.classification,
+                a_lines,
+                b_lines,
+                c_lines,
+            );
+            let occurrence = occurrences.entry(fingerprint).or_default();
+            let id = MergeBlockId {
+                fingerprint,
+                occurrence: *occurrence,
+            };
+            *occurrence = occurrence.saturating_add(1);
+            let whitespace_conflict = decision.conflict
+                && rows[range.clone()]
+                    .iter()
+                    .all(|row| row_whitespace_conflict(row, three_way));
+            let is_delta = decision.selection.as_slice() != [MergeSource::A];
+            let automatic_selection = decision.selection;
+            let _removed = decision.removed;
+            MergeBlock {
+                id,
+                rows: range,
+                classification: decision.classification,
+                is_delta,
+                original_conflict: decision.conflict,
+                whitespace_conflict,
+                selection: automatic_selection.clone(),
+                automatic_selection,
+                manual_content: None,
+            }
+        })
+        .collect()
+}
+
+fn detect_line_ending(base: Option<&str>, local: &str, remote: &str) -> &'static str {
+    let base = base.unwrap_or_default();
+    let crlf = base.matches("\r\n").count()
+        + local.matches("\r\n").count()
+        + remote.matches("\r\n").count();
+    let lf =
+        base.matches('\n').count() + local.matches('\n').count() + remote.matches('\n').count()
+            - crlf;
+    if crlf > lf { "\r\n" } else { "\n" }
+}
+
+fn source_indices_are_complete_and_ordered(
+    rows: &[AlignedRow],
+    source: MergeSource,
+    expected_len: usize,
+) -> bool {
+    rows.iter()
+        .filter_map(|row| row.line(source))
+        .eq(0..expected_len)
+}
+
+fn exact_base_anchor_pairs(
+    rows: &[AlignedRow],
+    contributor: MergeSource,
+) -> BTreeSet<(usize, usize)> {
+    rows.iter()
+        .filter_map(|row| {
+            let base = row.a?;
+            let contributor_line = row.line(contributor)?;
+            let equal = match contributor {
+                MergeSource::B => row.equal_ab,
+                MergeSource::C => row.equal_ac,
+                MergeSource::A => true,
+            };
+            equal.then_some((base, contributor_line))
+        })
+        .collect()
+}
+
+fn contributor_alignment_preserves_base_anchors(
+    baseline: &[AlignedRow],
+    candidate: &[AlignedRow],
+    a_len: usize,
+    b_len: usize,
+    c_len: usize,
+) -> bool {
+    source_indices_are_complete_and_ordered(candidate, MergeSource::A, a_len)
+        && source_indices_are_complete_and_ordered(candidate, MergeSource::B, b_len)
+        && source_indices_are_complete_and_ordered(candidate, MergeSource::C, c_len)
+        && exact_base_anchor_pairs(baseline, MergeSource::B)
+            .is_subset(&exact_base_anchor_pairs(candidate, MergeSource::B))
+        && exact_base_anchor_pairs(baseline, MergeSource::C)
+            .is_subset(&exact_base_anchor_pairs(candidate, MergeSource::C))
+}
+
+/// Build a shared merge plan for an optional base.
+pub fn build_merge_plan_with_optional_base(
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    options: &MergeOptions,
+) -> MergePlan {
+    let (a_text, b_text, c_text, three_way) = match base {
+        Some(base) => (base, local, remote, true),
+        None => (local, remote, "", false),
+    };
+    let a_lines = split_lines(a_text);
+    let b_lines = split_lines(b_text);
+    let c_lines = split_lines(c_text);
+
+    let mut list = build_ab(&diff_chunks(&a_lines, &b_lines, options.diff_algorithm));
+    recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
+
+    let rows = if three_way {
+        integrate_ac(
+            &mut list,
+            &diff_chunks(&a_lines, &c_lines, options.diff_algorithm),
+        );
+        recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
+        let first_trim = trim_rows(list.into_rows(), &a_lines, &b_lines, &c_lines);
+        let mut list = RowList::from_rows(first_trim);
+        recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
+        if options.align_contributors && a_text != b_text && a_text != c_text && b_text != c_text {
+            let baseline = list.clone().into_rows();
+            let chunks = diff_chunks(&b_lines, &c_lines, options.diff_algorithm);
+            integrate_bc(&mut list, &chunks, &a_lines, &b_lines, &c_lines);
+            recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
+            let candidate = trim_rows(list.into_rows(), &a_lines, &b_lines, &c_lines);
+            if contributor_alignment_preserves_base_anchors(
+                &baseline,
+                &candidate,
+                a_lines.len(),
+                b_lines.len(),
+                c_lines.len(),
+            ) {
+                candidate
+            } else {
+                baseline
+            }
+        } else {
+            list.into_rows()
+        }
+    } else {
+        list.into_rows()
+    };
+
+    let blocks = build_blocks(&rows, three_way, &a_lines, &b_lines, &c_lines);
+    let unresolved_blocks = blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| (!block.is_resolved()).then_some(index))
+        .collect();
+
+    MergePlan {
+        base: base.map(Arc::<str>::from),
+        local: Arc::<str>::from(local),
+        remote: Arc::<str>::from(remote),
+        rows,
+        blocks,
+        unresolved_blocks,
+        line_ending: detect_line_ending(base, local, remote),
+    }
+}
+
+fn recompute_rows_in_list(
+    rows: &mut RowList,
+    a_lines: &[&str],
+    b_lines: &[&str],
+    c_lines: &[&str],
+) {
+    for node in &mut rows.nodes {
+        if node.alive {
+            recompute_row_metadata(&mut node.row, a_lines, b_lines, c_lines);
+        }
+    }
+}
+
+/// Build a shared three-input merge plan.
+pub fn build_merge_plan(
+    base: &str,
+    local: &str,
+    remote: &str,
+    options: &MergeOptions,
+) -> MergePlan {
+    build_merge_plan_with_optional_base(Some(base), local, remote, options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merge::{ConflictStyle, MergeStrategy, render_merge_plan};
+
+    fn row(
+        a: bool,
+        b: bool,
+        c: bool,
+        equal_ab: bool,
+        equal_ac: bool,
+        equal_bc: bool,
+    ) -> AlignedRow {
+        AlignedRow {
+            a: a.then_some(0),
+            b: b.then_some(0),
+            c: c.then_some(0),
+            equal_ab,
+            equal_ac,
+            equal_bc,
+            ..AlignedRow::default()
+        }
+    }
+
+    #[test]
+    fn builds_plan_for_an_empty_side_against_a_large_base() {
+        // The preflight admits an empty side because it shares nothing to
+        // require. Planning must then stay linear: a trace-storing search at
+        // depth 30_000 would allocate over a gigabyte before the plan exists.
+        let base: String = (0..30_000).map(|line| format!("line {line}\n")).collect();
+        let mut local = base.clone();
+        local.push_str("local tail\n");
+
+        let budget = InteractiveMergePlanBudget::default();
+        assert!(interactive_merge_plan_is_practical(
+            Some(&base),
+            &local,
+            "",
+            budget
+        ));
+
+        let plan = try_build_interactive_merge_plan_with_optional_base(
+            Some(&base),
+            &local,
+            "",
+            &MergeOptions::default(),
+            budget,
+        )
+        .expect("empty remote side should still produce a plan");
+        assert_eq!(plan.source_lines(MergeSource::C).len(), 0);
+        assert_eq!(plan.source_lines(MergeSource::B).len(), 30_001);
+    }
+
+    #[test]
+    fn classifies_every_three_way_merge_detail() {
+        use MergeBlockClassification as Kind;
+
+        let cases = [
+            (row(false, false, false, false, false, false), Kind::Default),
+            (row(true, true, true, true, true, true), Kind::NoChange),
+            (row(true, true, true, false, true, false), Kind::BChanged),
+            (row(true, true, true, true, false, false), Kind::CChanged),
+            (row(true, true, true, false, false, false), Kind::BCChanged),
+            (
+                row(true, true, true, false, false, true),
+                Kind::BCChangedAndEqual,
+            ),
+            (row(true, false, true, false, true, false), Kind::BDeleted),
+            (row(true, true, false, true, false, false), Kind::CDeleted),
+            (
+                row(true, false, false, false, false, false),
+                Kind::BCDeleted,
+            ),
+            (
+                row(true, true, false, false, false, false),
+                Kind::BChangedCDeleted,
+            ),
+            (
+                row(true, false, true, false, false, false),
+                Kind::CChangedBDeleted,
+            ),
+            (row(false, true, false, false, false, false), Kind::BAdded),
+            (row(false, false, true, false, false, false), Kind::CAdded),
+            (row(false, true, true, false, false, false), Kind::BCAdded),
+            (
+                row(false, true, true, false, false, true),
+                Kind::BCAddedAndEqual,
+            ),
+        ];
+
+        for (row, expected) in cases {
+            assert_eq!(classify_three_way(&row).classification, expected);
+        }
+    }
+
+    #[test]
+    fn contributor_alignment_anchors_identical_changed_lines() {
+        let base = "start\nbase one\nbase two\nend\n";
+        let local = "start\nlocal\nshared\nend\n";
+        let remote = "start\nshared\nremote\nend\n";
+
+        let without = build_merge_plan(
+            base,
+            local,
+            remote,
+            &MergeOptions {
+                align_contributors: false,
+                ..MergeOptions::default()
+            },
+        );
+        let with = build_merge_plan(
+            base,
+            local,
+            remote,
+            &MergeOptions {
+                align_contributors: true,
+                ..MergeOptions::default()
+            },
+        );
+
+        let shared_aligned = |plan: &MergePlan| {
+            plan.rows
+                .iter()
+                .any(|row| row.b == Some(2) && row.c == Some(1) && row.equal_bc)
+        };
+        assert!(!shared_aligned(&without));
+        assert!(shared_aligned(&with));
+    }
+
+    #[test]
+    fn contributor_alignment_scales_for_large_mostly_equal_inputs() {
+        const LINE_COUNT: usize = 20_001;
+        let base_lines = (0..LINE_COUNT)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>();
+        let mut local_lines = base_lines.clone();
+        let mut remote_lines = base_lines.clone();
+        local_lines[LINE_COUNT / 2] = "local change".to_owned();
+        remote_lines[LINE_COUNT / 2] = "remote change".to_owned();
+
+        let base = base_lines.join("\n");
+        let local = local_lines.join("\n");
+        let remote = remote_lines.join("\n");
+        let plan = build_merge_plan(
+            &base,
+            &local,
+            &remote,
+            &MergeOptions {
+                align_contributors: true,
+                ..MergeOptions::default()
+            },
+        );
+
+        assert_eq!(plan.rows.len(), LINE_COUNT);
+        assert_eq!(plan.unresolved_count(), 1);
+    }
+
+    #[test]
+    fn contributor_alignment_cannot_discard_a_one_sided_edit() {
+        let base = "a\na\nb\n";
+        let local = "b\na\n";
+        let remote = base;
+
+        for options in [
+            MergeOptions::default(),
+            MergeOptions {
+                align_contributors: true,
+                ..MergeOptions::default()
+            },
+        ] {
+            let plan = build_merge_plan(base, local, remote, &options);
+            let result = render_merge_plan(&plan, &options);
+            assert_eq!(result.output, local);
+            assert_eq!(result.conflict_count, 0);
+        }
+    }
+
+    #[test]
+    fn interactive_budget_rejects_large_unrelated_inputs_before_planning() {
+        let base = (0..10_000)
+            .map(|line| format!("base {line}\n"))
+            .collect::<String>();
+        let local = (0..10_000)
+            .map(|line| format!("local {line}\n"))
+            .collect::<String>();
+        let remote = (0..10_000)
+            .map(|line| format!("remote {line}\n"))
+            .collect::<String>();
+
+        assert!(
+            try_build_interactive_merge_plan_with_optional_base(
+                Some(&base),
+                &local,
+                &remote,
+                &MergeOptions::default(),
+                InteractiveMergePlanBudget::default(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn ordered_selections_toggle_render_order_and_replace_manual_content() {
+        let options = MergeOptions::default();
+        let mut plan = build_merge_plan("base\n", "local\n", "remote\n", &options);
+        let conflict = plan.original_conflict_block_indices()[0];
+        assert_eq!(plan.unresolved_block_indices(), &[conflict]);
+
+        assert!(plan.toggle_source(conflict, MergeSource::B));
+        assert!(plan.toggle_source(conflict, MergeSource::C));
+        assert_eq!(render_merge_plan(&plan, &options).output, "local\nremote\n");
+
+        assert!(plan.replace_selection(
+            conflict,
+            OrderedSelection::from_sources([MergeSource::C, MergeSource::B]),
+        ));
+        assert_eq!(render_merge_plan(&plan, &options).output, "remote\nlocal\n");
+
+        assert!(plan.set_manual_content(conflict, "manual\n".to_owned()));
+        assert_eq!(render_merge_plan(&plan, &options).output, "manual\n");
+        assert!(plan.toggle_source(conflict, MergeSource::B));
+        assert!(plan.blocks[conflict].manual_content.is_none());
+        assert_eq!(render_merge_plan(&plan, &options).output, "local\n");
+
+        assert!(plan.toggle_source(conflict, MergeSource::B));
+        assert!(plan.blocks[conflict].selection.is_empty());
+        assert_eq!(plan.unresolved_block_indices(), &[conflict]);
+    }
+
+    #[test]
+    fn structural_split_keeps_independent_selections_and_join_resets_once() {
+        let options = MergeOptions::default();
+        let mut plan = build_merge_plan(
+            "base one\nbase two\n",
+            "local one\nlocal two\n",
+            "remote one\nremote two\n",
+            &options,
+        );
+        let conflict = plan.original_conflict_block_indices()[0];
+        plan.replace_selection(conflict, MergeSource::B.into());
+
+        assert_eq!(
+            plan.split_block_by_source_line_counts(conflict, &[[1, 1, 1], [1, 1, 1]]),
+            Some(2),
+        );
+        assert_eq!(
+            plan.blocks[conflict].selection.as_slice(),
+            &[MergeSource::B]
+        );
+        assert_eq!(
+            plan.blocks[conflict + 1].selection.as_slice(),
+            &[MergeSource::B]
+        );
+
+        plan.toggle_source(conflict, MergeSource::C);
+        assert_eq!(
+            plan.blocks[conflict].selection.as_slice(),
+            &[MergeSource::B, MergeSource::C]
+        );
+        assert_eq!(
+            plan.blocks[conflict + 1].selection.as_slice(),
+            &[MergeSource::B]
+        );
+
+        assert_eq!(plan.join_block_range(conflict, conflict + 1), Some(1));
+        assert!(plan.blocks[conflict].selection.is_empty());
+        assert_eq!(plan.unresolved_block_indices(), &[conflict]);
+    }
+
+    #[test]
+    fn optional_base_uses_true_two_input_markers_and_source_mapping() {
+        let options = MergeOptions {
+            style: ConflictStyle::Diff3,
+            strategy: MergeStrategy::Normal,
+            ..MergeOptions::default()
+        };
+        let mut plan = build_merge_plan_with_optional_base(None, "local\n", "remote\n", &options);
+        assert!(!plan.has_base());
+        assert_eq!(plan.local_source(), MergeSource::A);
+        assert_eq!(plan.remote_source(), MergeSource::B);
+        let conflict = plan.original_conflict_block_indices()[0];
+        assert!(!plan.toggle_source(conflict, MergeSource::C));
+        assert!(!plan.replace_selection(
+            conflict,
+            OrderedSelection::from_sources([MergeSource::A, MergeSource::C]),
+        ));
+
+        let output = render_merge_plan(&plan, &options).output;
+        assert!(output.contains("<<<<<<<"));
+        assert!(output.contains("======="));
+        assert!(output.contains(">>>>>>>"));
+        assert!(!output.contains("|||||||"));
+    }
+
+    #[test]
+    fn decisions_restore_by_stable_block_identity() {
+        let options = MergeOptions::default();
+        let mut previous =
+            build_merge_plan("a\nbase\nz\n", "a\nlocal\nz\n", "a\nremote\nz\n", &options);
+        let previous_conflict = previous.original_conflict_block_indices()[0];
+        previous.replace_selection(
+            previous_conflict,
+            OrderedSelection::from_sources([MergeSource::C, MergeSource::B]),
+        );
+
+        let mut refreshed = build_merge_plan(
+            "prefix\na\nbase\nz\n",
+            "prefix\na\nlocal\nz\n",
+            "prefix\na\nremote\nz\n",
+            &options,
+        );
+        refreshed.restore_decisions_from(&previous);
+        let refreshed_conflict = refreshed.original_conflict_block_indices()[0];
+        assert_eq!(
+            refreshed.blocks[refreshed_conflict].selection.as_slice(),
+            &[MergeSource::C, MergeSource::B]
+        );
+    }
+
+    #[test]
+    fn whitespace_metadata_marks_exact_and_equivalent_lines_separately() {
+        let plan = build_merge_plan(
+            "value = 1\n",
+            "value=1\n",
+            "value  =  1\n",
+            &MergeOptions::default(),
+        );
+        let row = plan.rows.first().expect("one aligned row");
+        assert!(!row.equal_ab);
+        assert!(!row.equal_ac);
+        assert!(!row.equal_bc);
+        assert!(row.whitespace_equal_ab);
+        assert!(row.whitespace_equal_ac);
+        assert!(row.whitespace_equal_bc);
+        assert!(plan.blocks.iter().any(|block| block.whitespace_conflict));
+    }
+
+    #[test]
+    fn navigation_sets_are_distinct_and_resolution_sensitive() {
+        let mut plan = build_merge_plan(
+            "one\ntwo\nthree\n",
+            "ONE\ntwo\nlocal\n",
+            "one\nTWO\nremote\n",
+            &MergeOptions::default(),
+        );
+        let deltas = plan.delta_block_indices();
+        let original = plan.original_conflict_block_indices();
+        assert!(deltas.len() > original.len());
+        assert_eq!(plan.unresolved_block_indices(), original.as_slice());
+
+        let conflict = original[0];
+        plan.replace_selection(conflict, MergeSource::B.into());
+        assert_eq!(plan.original_conflict_block_indices(), original);
+        assert!(plan.unresolved_block_indices().is_empty());
+    }
+}

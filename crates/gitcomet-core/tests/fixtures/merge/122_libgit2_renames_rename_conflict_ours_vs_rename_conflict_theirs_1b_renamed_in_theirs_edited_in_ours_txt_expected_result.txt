@@ -1,28 +1,2 @@
-<<<<<<<
-this will be renamed in theirs
-and edited in ours
-
 (and lo, it is edited in ours)
 
-this will be renamed in theirs
-and edited in ours
-
-this will be renamed in theirs
-and edited in ours
-
-this will be renamed in theirs
-and edited in ours
-
-this will be renamed in theirs
-and edited in ours
-
-this will be renamed in theirs
-and edited in ours
-
-this will be renamed in theirs
-and edited in ours
-
-this will be renamed in theirs
-and edited in ours
-=======
->>>>>>>

@@ -5,6 +5,5 @@ file1
 file1
 file1
 file1
-file1
 file1; modified in branch2
 file1

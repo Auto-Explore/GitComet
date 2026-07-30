@@ -19,6 +19,7 @@
 //!   - `#@ opts.strategy=ours`
 //!   - `#@ opts.marker_size=10`
 //!   - `#@ opts.diff_algorithm=histogram`
+//!   - `#@ opts.align_contributors=true`
 //!   - `#@ opts.label.ours=HEAD`
 //!   - `#@ opts.label.base=BASE`
 //!   - `#@ opts.label.theirs=branch`
@@ -36,8 +37,8 @@
 //! 6. On mismatch, writes `{prefix}_actual_result.{ext}` for manual diff.
 
 use gitcomet_core::merge::{
-    ConflictStyle, DiffAlgorithm, MergeError, MergeOptions, MergeStrategy, merge_file,
-    merge_file_bytes,
+    ConflictStyle, DiffAlgorithm, MergeError, MergeOptions, MergeStrategy, build_merge_plan,
+    merge_file, merge_file_bytes,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
@@ -90,9 +91,14 @@ struct FixtureDirectives {
 
 impl Default for FixtureDirectives {
     fn default() -> Self {
+        let mut merge_options = MergeOptions::default();
+        // This corpus is specifically a KDiff3-compatibility reference. Keep
+        // its optional contributor-alignment pass explicit rather than
+        // inheriting the safer application default.
+        merge_options.align_contributors = true;
         Self {
             api: MergeApi::Text,
-            merge_options: MergeOptions::default(),
+            merge_options,
             expected_clean: None,
             expected_conflict_count: None,
             expected_error: None,
@@ -104,19 +110,6 @@ impl Default for FixtureDirectives {
 struct ParsedExpectedFixture {
     expected: ExpectedFixture,
     directives: FixtureDirectives,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DiffOp {
-    Equal,
-    Delete,
-    Insert,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SideProjection {
-    base_to_side: Vec<Option<usize>>,
-    inserts_before: Vec<Vec<usize>>,
 }
 
 /// Discover all merge fixtures in the given directory.
@@ -285,6 +278,10 @@ fn parse_directive(raw: &str, directives: &mut FixtureDirectives) -> Result<(), 
             directives.merge_options.diff_algorithm = parse_diff_algorithm(value)?;
             Ok(())
         }
+        "opts.align_contributors" => {
+            directives.merge_options.align_contributors = parse_bool(value)?;
+            Ok(())
+        }
         "opts.label.ours" => {
             directives.merge_options.labels.ours = Some(value.to_string());
             Ok(())
@@ -429,162 +426,25 @@ fn split_visual_lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         Vec::new()
     } else {
-        text.split('\n').collect()
+        text.lines().collect()
     }
 }
 
-fn lcs_diff_ops(a: &[&str], b: &[&str]) -> Vec<DiffOp> {
-    let n = a.len();
-    let m = b.len();
-    let mut dp = vec![vec![0usize; m + 1]; n + 1];
-
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            dp[i][j] = if a[i] == b[j] {
-                dp[i + 1][j + 1] + 1
-            } else {
-                dp[i + 1][j].max(dp[i][j + 1])
-            };
-        }
-    }
-
-    let mut ops = Vec::with_capacity(n + m);
-    let mut i = 0usize;
-    let mut j = 0usize;
-    while i < n && j < m {
-        if a[i] == b[j] {
-            ops.push(DiffOp::Equal);
-            i += 1;
-            j += 1;
-        } else if dp[i + 1][j] >= dp[i][j + 1] {
-            ops.push(DiffOp::Delete);
-            i += 1;
-        } else {
-            ops.push(DiffOp::Insert);
-            j += 1;
-        }
-    }
-    while i < n {
-        ops.push(DiffOp::Delete);
-        i += 1;
-    }
-    while j < m {
-        ops.push(DiffOp::Insert);
-        j += 1;
-    }
-    ops
-}
-
-fn project_side(base_lines: &[&str], side_lines: &[&str]) -> SideProjection {
-    let ops = lcs_diff_ops(base_lines, side_lines);
-    let mut base_to_side = vec![None; base_lines.len()];
-    let mut inserts_before = vec![Vec::new(); base_lines.len() + 1];
-    let mut base_idx = 0usize;
-    let mut side_idx = 0usize;
-
-    for op in ops {
-        match op {
-            DiffOp::Equal => {
-                base_to_side[base_idx] = Some(side_idx);
-                base_idx += 1;
-                side_idx += 1;
-            }
-            DiffOp::Delete => {
-                base_to_side[base_idx] = None;
-                base_idx += 1;
-            }
-            DiffOp::Insert => {
-                inserts_before[base_idx].push(side_idx);
-                side_idx += 1;
-            }
-        }
-    }
-
-    assert_eq!(base_idx, base_lines.len());
-    assert_eq!(side_idx, side_lines.len());
-
-    SideProjection {
-        base_to_side,
-        inserts_before,
-    }
-}
-
-fn align_insertions(
-    contrib1_indices: &[usize],
-    contrib2_indices: &[usize],
-    contrib1_lines: &[&str],
-    contrib2_lines: &[&str],
-) -> Vec<(Option<usize>, Option<usize>)> {
-    let seq1: Vec<&str> = contrib1_indices
-        .iter()
-        .map(|&idx| contrib1_lines[idx])
-        .collect();
-    let seq2: Vec<&str> = contrib2_indices
-        .iter()
-        .map(|&idx| contrib2_lines[idx])
-        .collect();
-    let ops = lcs_diff_ops(&seq1, &seq2);
-
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    let mut j = 0usize;
-
-    for op in ops {
-        match op {
-            DiffOp::Equal => {
-                out.push((Some(contrib1_indices[i]), Some(contrib2_indices[j])));
-                i += 1;
-                j += 1;
-            }
-            DiffOp::Delete => {
-                out.push((Some(contrib1_indices[i]), None));
-                i += 1;
-            }
-            DiffOp::Insert => {
-                out.push((None, Some(contrib2_indices[j])));
-                j += 1;
-            }
-        }
-    }
-
-    out
-}
-
-fn build_three_way_alignment(base: &str, contrib1: &str, contrib2: &str) -> Vec<AlignmentRow> {
-    let base_lines = split_visual_lines(base);
-    let contrib1_lines = split_visual_lines(contrib1);
-    let contrib2_lines = split_visual_lines(contrib2);
-
-    let p1 = project_side(&base_lines, &contrib1_lines);
-    let p2 = project_side(&base_lines, &contrib2_lines);
-
-    let mut rows = Vec::new();
-
-    for slot in 0..=base_lines.len() {
-        let inserted_rows = align_insertions(
-            &p1.inserts_before[slot],
-            &p2.inserts_before[slot],
-            &contrib1_lines,
-            &contrib2_lines,
-        );
-        for (c1, c2) in inserted_rows {
-            rows.push(AlignmentRow {
-                base: None,
-                contrib1: c1,
-                contrib2: c2,
-            });
-        }
-
-        if slot < base_lines.len() {
-            rows.push(AlignmentRow {
-                base: Some(slot),
-                contrib1: p1.base_to_side[slot],
-                contrib2: p2.base_to_side[slot],
-            });
-        }
-    }
-
-    rows
+fn build_three_way_alignment(
+    base: &str,
+    contrib1: &str,
+    contrib2: &str,
+    options: &MergeOptions,
+) -> Vec<AlignmentRow> {
+    build_merge_plan(base, contrib1, contrib2, options)
+        .rows
+        .into_iter()
+        .map(|row| AlignmentRow {
+            base: row.a,
+            contrib1: row.b,
+            contrib2: row.c,
+        })
+        .collect()
 }
 
 fn validate_alignment_invariants(
@@ -632,33 +492,9 @@ fn validate_alignment_invariants(
             );
         }
 
-        if let (Some(b), Some(c1)) = (row.base, row.contrib1) {
-            assert_eq!(
-                base_lines[b],
-                contrib1_lines[c1],
-                "[{}] alignment row {}: base/contrib1 content mismatch",
-                fixture_name,
-                row_ix + 1
-            );
-        }
-        if let (Some(b), Some(c2)) = (row.base, row.contrib2) {
-            assert_eq!(
-                base_lines[b],
-                contrib2_lines[c2],
-                "[{}] alignment row {}: base/contrib2 content mismatch",
-                fixture_name,
-                row_ix + 1
-            );
-        }
-        if let (Some(c1), Some(c2)) = (row.contrib1, row.contrib2) {
-            assert_eq!(
-                contrib1_lines[c1],
-                contrib2_lines[c2],
-                "[{}] alignment row {}: contrib1/contrib2 content mismatch",
-                fixture_name,
-                row_ix + 1
-            );
-        }
+        // Aligned rows are positional merge candidates, not an assertion that
+        // every populated pair is equal. Exact and whitespace equality are
+        // carried separately by the core `AlignedRow` metadata.
     }
 }
 
@@ -1113,7 +949,8 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
             }
         }
         ExpectedFixture::Alignment(expected_rows) => {
-            let actual_rows = build_three_way_alignment(&base, &contrib1, &contrib2);
+            let actual_rows =
+                build_three_way_alignment(&base, &contrib1, &contrib2, &directives.merge_options);
             let actual_path = actual_result_path(fixture);
             let actual_text = serialize_alignment_rows(&actual_rows);
             run_validation_with_artifact(
@@ -1259,6 +1096,7 @@ fn parses_directives_and_merge_output_body() {
          #@ opts.strategy=union\n\
          #@ opts.marker_size=10\n\
          #@ opts.diff_algorithm=histogram\n\
+         #@ opts.align_contributors=false\n\
          #@ opts.label.ours=HEAD\n\
          #@ opts.label.base=BASE\n\
          #@ opts.label.theirs=theirs\n\
@@ -1279,6 +1117,7 @@ fn parses_directives_and_merge_output_body() {
         parsed.directives.merge_options.diff_algorithm,
         DiffAlgorithm::Histogram
     );
+    assert!(!parsed.directives.merge_options.align_contributors);
     assert_eq!(
         parsed.directives.merge_options.labels.ours.as_deref(),
         Some("HEAD")
