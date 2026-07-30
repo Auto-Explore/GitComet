@@ -2,7 +2,7 @@ use crate::cli::{MergetoolConfig, exit_code};
 use gitcomet_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
     conflict_session::try_autosolve_merged_text,
-    merge::{MergeError, MergeLabels, MergeOptions, merge_file_bytes},
+    merge::{MergeError, MergeLabels, MergeOptions, merge_file_bytes_with_optional_base},
 };
 use std::{fs, path::Path};
 
@@ -35,12 +35,14 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         )
     })?;
 
-    let base_bytes = match &config.base {
-        Some(base_path) => fs::read(base_path)
-            .map_err(|e| format!("Failed to read base file {}: {e}", base_path.display()))?,
-        // No base file: treat as empty (add/add conflict scenario).
-        None => Vec::new(),
-    };
+    let base_bytes = config
+        .base
+        .as_ref()
+        .map(|base_path| {
+            fs::read(base_path)
+                .map_err(|e| format!("Failed to read base file {}: {e}", base_path.display()))
+        })
+        .transpose()?;
 
     // Build merge options from config labels and algorithm preferences.
     let options = MergeOptions {
@@ -52,13 +54,18 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     };
 
     // Run the 3-way merge algorithm with byte-level binary detection.
-    let result = match merge_file_bytes(&base_bytes, &local_bytes, &remote_bytes, &options) {
+    let result = match merge_file_bytes_with_optional_base(
+        base_bytes.as_deref(),
+        &local_bytes,
+        &remote_bytes,
+        &options,
+    ) {
         Ok(result) => result,
         Err(MergeError::BinaryContent) => {
             return handle_binary_merge(
                 config,
                 config.base.is_some(),
-                &base_bytes,
+                base_bytes.as_deref().unwrap_or_default(),
                 &local_bytes,
                 &remote_bytes,
             );

@@ -401,7 +401,7 @@ fn standalone_mergetool_empty_base_flag_treated_as_no_base() {
 }
 
 #[test]
-fn standalone_mergetool_no_base_zdiff3_uses_empty_tree_label() {
+fn standalone_mergetool_no_base_zdiff3_uses_true_two_input_markers() {
     let dir = tempfile::tempdir().unwrap();
     let local = dir.path().join("local.txt");
     let remote = dir.path().join("remote.txt");
@@ -431,8 +431,8 @@ fn standalone_mergetool_no_base_zdiff3_uses_empty_tree_label() {
         "expected local filename fallback label\n{text}\nmerged:\n{merged_text}"
     );
     assert!(
-        merged_text.contains("||||||| empty tree"),
-        "expected no-base zdiff3 marker label\n{text}\nmerged:\n{merged_text}"
+        !merged_text.contains("|||||||"),
+        "true two-input mode must omit the ancestor section\n{text}\nmerged:\n{merged_text}"
     );
     assert!(
         merged_text.contains(">>>>>>> remote.txt"),

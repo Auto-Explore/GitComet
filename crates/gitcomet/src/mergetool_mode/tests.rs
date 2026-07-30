@@ -160,7 +160,7 @@ fn conflict_with_partial_labels_defaults_missing_side_to_filename() {
 // ── No base (add/add conflict) ───────────────────────────────────
 
 #[test]
-fn no_base_uses_empty_base() {
+fn no_base_uses_true_two_input_mode() {
     let tmp = tempfile::tempdir().unwrap();
     let config = make_config(
         tmp.path(),
@@ -171,7 +171,7 @@ fn no_base_uses_empty_base() {
     );
 
     let result = run_mergetool(&config).expect("mergetool run");
-    // With empty base, both sides adding different content = conflict.
+    // Two differing inputs without an ancestor remain a conflict.
     assert_eq!(result.exit_code, exit_code::CANCELED);
 
     let merged = fs::read_to_string(&config.merged).unwrap();
@@ -924,7 +924,7 @@ fn diff3_style_defaults_base_label_to_filename() {
 }
 
 #[test]
-fn diff3_style_no_base_uses_empty_tree_label() {
+fn diff3_style_no_base_uses_true_two_input_markers() {
     let tmp = tempfile::tempdir().unwrap();
     let mut config = make_config(tmp.path(), None, "local change\n", "remote change\n", "");
     config.conflict_style = gitcomet_core::merge::ConflictStyle::Diff3;
@@ -933,7 +933,9 @@ fn diff3_style_no_base_uses_empty_tree_label() {
     assert_eq!(result.exit_code, exit_code::CANCELED);
 
     let merged = fs::read_to_string(&config.merged).unwrap();
-    assert!(merged.contains("||||||| empty tree"), "output: {merged}");
+    assert!(!merged.contains("|||||||"), "output: {merged}");
+    assert!(merged.contains("<<<<<<< local.txt"), "output: {merged}");
+    assert!(merged.contains(">>>>>>> remote.txt"), "output: {merged}");
 }
 
 #[test]
