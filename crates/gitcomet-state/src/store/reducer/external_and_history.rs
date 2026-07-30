@@ -167,12 +167,24 @@ pub(super) fn repo_externally_changed(
                 change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
             }
             DiffTarget::Commit { .. } => false,
-            DiffTarget::CommitRange { .. } => false,
+            // A commit↔commit range is immutable; a commit↔working-tree range
+            // (to == None) tracks the worktree, so reload it on any change that
+            // moves the index or worktree.
+            DiffTarget::CommitRange { to_commit_id, .. } => {
+                to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
+            }
         });
 
     if should_reload_diff
         && let Some(target) = repo_state.diff_state.diff_target.clone()
-        && matches!(target, DiffTarget::WorkingTree { .. })
+        && matches!(
+            target,
+            DiffTarget::WorkingTree { .. }
+                | DiffTarget::CommitRange {
+                    to_commit_id: None,
+                    ..
+                }
+        )
     {
         // The working-tree content changed underneath us and the diff is being
         // reloaded; the annotation column is derived from that same content, so
@@ -192,6 +204,28 @@ pub(super) fn repo_externally_changed(
         } else {
             effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
+    }
+
+    // Refresh the changed-file list of an active commit↔working-tree comparison
+    // (to == None) so files appear/disappear as the worktree changes. A
+    // commit↔commit comparison is immutable and needs no refresh. `LoadRangeFiles`
+    // results are dropped if the selection no longer matches (see
+    // `range_files_loaded`), so a late reply after the user re-selects is safe.
+    if (change.git_state || change.index || change.worktree)
+        && let Some(range) = repo_state
+            .history_state
+            .range_selection
+            .as_ref()
+            .filter(|range| range.to.is_none())
+    {
+        // Keep the current list visible until the refresh lands (no flicker
+        // to a loading state on every debounced save).
+        let from = range.from.clone();
+        effects.push(Effect::LoadRangeFiles {
+            repo_id,
+            from,
+            to: None,
+        });
     }
 
     effects

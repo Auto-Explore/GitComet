@@ -96,6 +96,8 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::SetHistoryScope { .. }
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
+            | Msg::CompareCommitRange { .. }
+            | Msg::CompareWithMarked { .. }
             | Msg::SelectDiff { .. }
             | Msg::SelectConflictDiff { .. }
             | Msg::LoadStashes { .. }
@@ -729,6 +731,8 @@ fn is_view_navigation(msg: &Msg) -> bool {
         Msg::SelectDiff { .. }
             | Msg::SelectConflictDiff { .. }
             | Msg::SelectCommit { .. }
+            | Msg::CompareCommitRange { .. }
+            | Msg::CompareWithMarked { .. }
             | Msg::OpenFileContent { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
@@ -892,6 +896,37 @@ fn reduce_inner(
             visible_order,
         ),
         Msg::ClearCommitSelection { repo_id } => effects::clear_commit_selection(state, repo_id),
+        Msg::CompareCommitRange {
+            repo_id,
+            from,
+            to,
+            from_label,
+            to_label,
+        } => effects::compare_range(state, repo_id, from, Some(to), from_label, to_label),
+        Msg::CompareWithWorkingTree {
+            repo_id,
+            from,
+            from_label,
+        } => effects::compare_range(
+            state,
+            repo_id,
+            from,
+            None,
+            from_label,
+            "Working tree".to_string(),
+        ),
+        Msg::ClearComparison { repo_id } => effects::clear_comparison(state, repo_id),
+        Msg::MarkForComparison {
+            repo_id,
+            commit_id,
+            label,
+        } => effects::mark_for_comparison(state, repo_id, commit_id, label),
+        Msg::CompareWithMarked {
+            repo_id,
+            commit_id,
+            label,
+        } => effects::compare_with_marked(state, repo_id, commit_id, label),
+        Msg::ClearComparisonMark { repo_id } => effects::clear_comparison_mark(state, repo_id),
         Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
@@ -1854,6 +1889,12 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+            repo_id,
+            from,
+            to,
+            result,
+        }) => effects::range_files_loaded(state, repo_id, from, to, result),
         Msg::Internal(crate::msg::InternalMsg::SquashMessagePreviewLoaded {
             repo_id,
             oldest,
@@ -2565,5 +2606,346 @@ mod nav_history_tests {
         );
         assert_eq!(r.nav_history.cursor, 0);
         assert!(!r.nav_history.can_back());
+    }
+}
+
+#[cfg(test)]
+mod comparison_tests {
+    use super::*;
+    use crate::model::{AppState, Loadable, RepoState};
+    use crate::msg::{CommitSelectMode, Effect};
+    use gitcomet_core::domain::{
+        Commit, CommitFileChange, CommitId, FileStatusKind, LogPage, RepoSpec,
+    };
+    use gitcomet_core::process::{
+        GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
+    };
+    use std::sync::atomic::AtomicU64;
+
+    fn commit(id: &str) -> Commit {
+        Commit {
+            id: CommitId(id.into()),
+            parent_ids: Default::default(),
+            summary: id.into(),
+            author: "Tester".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    /// A repo whose loaded log is newest-first `c3, c2, c1` (so `c1` is oldest).
+    fn state_with_log(repo_id: RepoId) -> AppState {
+        let mut state = AppState::default();
+        state.git_runtime = GitRuntimeState {
+            preference: GitExecutablePreference::SystemPath,
+            availability: GitExecutableAvailability::Available {
+                version_output: "git version 2.0.0".to_string(),
+            },
+        };
+        let mut repo_state = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: std::path::PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo_state.history_state.log = Loadable::Ready(Arc::new(LogPage {
+            commits: vec![commit("c3"), commit("c2"), commit("c1")],
+            next_cursor: None,
+        }));
+        state.repos.push(repo_state);
+        state.active_repo = Some(repo_id);
+        state
+    }
+
+    fn dispatch_effects(state: &mut AppState, msg: Msg) -> Vec<Effect> {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(99);
+        reduce(&mut repos, &id_alloc, state, msg)
+    }
+
+    fn repo(state: &AppState, repo_id: RepoId) -> &RepoState {
+        state.repos.iter().find(|r| r.id == repo_id).unwrap()
+    }
+
+    fn select(state: &mut AppState, repo_id: RepoId, id: &str, mode: CommitSelectMode) -> Vec<Effect> {
+        dispatch_effects(
+            state,
+            Msg::SelectCommitMulti {
+                repo_id,
+                commit_id: CommitId(id.into()),
+                mode,
+                clicked_index: None,
+                visible_order: None,
+            },
+        )
+    }
+
+    #[test]
+    fn selecting_two_commits_enters_ordered_range_comparison() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        let c1 = CommitId("c1".into());
+        let c3 = CommitId("c3".into());
+
+        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+        let effects = select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+
+        let range = repo(&state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("two selected commits should start a comparison");
+        // Oldest (larger log index) is the base regardless of click order.
+        assert_eq!(range.from, c1);
+        assert_eq!(range.to, Some(c3.clone()));
+
+        // The diff pane stays empty: the comparison presents the file
+        // side-selection first, and the user opens a file to view its diff.
+        assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
+        assert!(matches!(
+            repo(&state, repo_id).history_state.range_files,
+            Loadable::Loading
+        ));
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::LoadRangeFiles { from, to, .. } if *from == c1 && *to == Some(c3.clone())
+            )),
+            "a LoadRangeFiles effect for c1->c3 should be issued"
+        );
+    }
+
+    #[test]
+    fn range_files_loaded_populates_only_the_current_comparison() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+
+        let files = vec![CommitFileChange {
+            path: std::path::PathBuf::from("a.rs"),
+            kind: FileStatusKind::Modified,
+            is_submodule: false,
+            additions: Some(1),
+            deletions: Some(0),
+        }];
+
+        // A stale result (wrong `from`) is dropped.
+        dispatch_effects(
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+                repo_id,
+                from: CommitId("c9".into()),
+                to: Some(CommitId("c3".into())),
+                result: Ok(files.clone()),
+            }),
+        );
+        assert!(matches!(
+            repo(&state, repo_id).history_state.range_files,
+            Loadable::Loading
+        ));
+
+        // The matching result populates the list.
+        dispatch_effects(
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+                repo_id,
+                from: CommitId("c1".into()),
+                to: Some(CommitId("c3".into())),
+                result: Ok(files.clone()),
+            }),
+        );
+        match &repo(&state, repo_id).history_state.range_files {
+            Loadable::Ready(loaded) => assert_eq!(loaded.as_ref(), &files),
+            other => panic!("expected loaded range files, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_selection_clears_an_active_comparison() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+        assert!(repo(&state, repo_id).history_state.range_selection.is_some());
+
+        select(&mut state, repo_id, "c2", CommitSelectMode::Single);
+        assert!(
+            repo(&state, repo_id).history_state.range_selection.is_none(),
+            "collapsing to a single commit ends the comparison"
+        );
+    }
+
+    #[test]
+    fn clear_comparison_dismisses_selection_and_diff() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+        assert!(repo(&state, repo_id).history_state.range_selection.is_some());
+
+        dispatch_effects(&mut state, Msg::ClearComparison { repo_id });
+        let r = repo(&state, repo_id);
+        assert!(r.history_state.range_selection.is_none());
+        assert!(!r.history_state.multi_selection.is_multi());
+        assert_eq!(r.diff_state.diff_target, None);
+    }
+
+    #[test]
+    fn mark_then_compare_with_marked_builds_the_range() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        let c1 = CommitId("c1".into());
+        let c3 = CommitId("c3".into());
+
+        // Nothing marked yet: comparing is a no-op.
+        let effects = dispatch_effects(
+            &mut state,
+            Msg::CompareWithMarked {
+                repo_id,
+                commit_id: c3.clone(),
+                label: "c3".into(),
+            },
+        );
+        assert!(effects.is_empty());
+        assert!(repo(&state, repo_id).history_state.range_selection.is_none());
+
+        // Mark c1 (base), then compare c3 against it.
+        dispatch_effects(
+            &mut state,
+            Msg::MarkForComparison {
+                repo_id,
+                commit_id: c1.clone(),
+                label: "main".into(),
+            },
+        );
+        dispatch_effects(
+            &mut state,
+            Msg::CompareWithMarked {
+                repo_id,
+                commit_id: c3.clone(),
+                label: "feature".into(),
+            },
+        );
+        let range = repo(&state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("compare with marked should start a comparison");
+        assert_eq!(range.from, c1);
+        assert_eq!(range.to, Some(c3.clone()));
+        assert_eq!(range.from_label, "main");
+        assert_eq!(range.to_label, "feature");
+    }
+
+    #[test]
+    fn compare_commit_range_message_orders_via_labels() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        let effects = dispatch_effects(
+            &mut state,
+            Msg::CompareCommitRange {
+                repo_id,
+                from: CommitId("c1".into()),
+                to: CommitId("c3".into()),
+                from_label: "main".into(),
+                to_label: "feature".into(),
+            },
+        );
+        let range = repo(&state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("explicit compare should set a comparison");
+        assert_eq!(range.from_label, "main");
+        assert_eq!(range.to_label, "feature");
+        assert!(effects.iter().any(|e| matches!(e, Effect::LoadRangeFiles { .. })));
+    }
+
+    #[test]
+    fn compare_with_working_tree_starts_a_worktree_comparison() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        let from = CommitId("c2".into());
+
+        let effects = dispatch_effects(
+            &mut state,
+            Msg::CompareWithWorkingTree {
+                repo_id,
+                from: from.clone(),
+                from_label: "main".into(),
+            },
+        );
+
+        let range = repo(&state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("compare with working tree should start a comparison");
+        assert_eq!(range.from, from);
+        // The tip is the working tree, not a commit.
+        assert_eq!(range.to, None);
+        assert_eq!(range.to_label, "Working tree");
+        // A worktree-tip file list load is issued, and the diff pane is cleared.
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadRangeFiles { from: f, to: None, .. } if *f == from
+        )));
+        assert_eq!(repo(&state, repo_id).diff_state.diff_target, None);
+    }
+
+    #[test]
+    fn external_worktree_change_refreshes_a_worktree_comparison() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        let from = CommitId("c2".into());
+        dispatch_effects(
+            &mut state,
+            Msg::CompareWithWorkingTree {
+                repo_id,
+                from: from.clone(),
+                from_label: "main".into(),
+            },
+        );
+
+        // A worktree change while a commit↔working-tree comparison is active
+        // reloads the file list (the tip is mutable).
+        let effects = dispatch_effects(
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: crate::msg::RepoExternalChange::Worktree,
+            },
+        );
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::LoadRangeFiles { from: f, to: None, .. } if *f == from
+            )),
+            "expected the worktree comparison file list to refresh"
+        );
+    }
+
+    #[test]
+    fn external_change_does_not_refresh_a_commit_comparison() {
+        let repo_id = RepoId(1);
+        let mut state = state_with_log(repo_id);
+        // Two-commit (immutable) comparison.
+        select(&mut state, repo_id, "c3", CommitSelectMode::Single);
+        select(&mut state, repo_id, "c1", CommitSelectMode::Toggle);
+        assert!(repo(&state, repo_id).history_state.range_selection.is_some());
+
+        let effects = dispatch_effects(
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: crate::msg::RepoExternalChange::Worktree,
+            },
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::LoadRangeFiles { .. })),
+            "a commit↔commit comparison is immutable and must not refresh"
+        );
     }
 }

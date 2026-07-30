@@ -358,7 +358,10 @@ pub enum DiffTarget {
     },
     CommitRange {
         from_commit_id: CommitId,
-        to_commit_id: CommitId,
+        /// The newer side of the comparison. `Some(id)` compares two commits
+        /// (`git diff from to`); `None` compares `from` against the live working
+        /// tree (`git diff from`), so the tip tracks uncommitted changes.
+        to_commit_id: Option<CommitId>,
         path: Option<PathBuf>,
     },
 }

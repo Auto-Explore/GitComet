@@ -259,6 +259,18 @@ impl std::fmt::Debug for InternalMsg {
                 .field("commit_id", commit_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::RangeFilesLoaded {
+                repo_id,
+                from,
+                to,
+                result,
+            } => f
+                .debug_struct("RangeFilesLoaded")
+                .field("repo_id", repo_id)
+                .field("from", from)
+                .field("to", to)
+                .field("result", result)
+                .finish(),
             InternalMsg::SquashMessagePreviewLoaded {
                 repo_id,
                 oldest,

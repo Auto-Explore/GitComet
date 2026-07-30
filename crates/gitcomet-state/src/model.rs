@@ -656,6 +656,14 @@ pub struct HistoryState {
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
     pub multi_selection: CommitMultiSelection,
+    /// Active "compare two points" selection: when two commits are selected (or
+    /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
+    /// and the changed-file list between them. `None` when no comparison is
+    /// active. The per-file and whole-range diffs render through the normal
+    /// `DiffState` pipeline via a `DiffTarget::CommitRange`.
+    pub range_selection: Option<RangeSelection>,
+    pub range_files: Loadable<Shared<Vec<CommitFileChange>>>,
+    pub range_files_rev: u64,
     pub squash_preview: Loadable<SquashPreview>,
     pub squash_preview_rev: u64,
     /// The `(oldest, head)` range whose message preview is currently being
@@ -683,6 +691,9 @@ impl Default for HistoryState {
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
             multi_selection: CommitMultiSelection::default(),
+            range_selection: None,
+            range_files: Loadable::NotLoaded,
+            range_files_rev: 0,
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
@@ -711,6 +722,19 @@ impl CommitMultiSelection {
     pub fn contains(&self, id: &CommitId) -> bool {
         self.commits.iter().any(|c| c == id)
     }
+}
+
+/// A "compare two points" selection. `from` is the base/older side and `to`
+/// the newer side, so `git diff from to` reads as "what `to` adds". A `to` of
+/// `None` compares `from` against the live working tree. The labels are what the
+/// UI shows (short shas for commits, ref names for branches/tags, "Working
+/// tree" for the worktree tip).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RangeSelection {
+    pub from: CommitId,
+    pub to: Option<CommitId>,
+    pub from_label: String,
+    pub to_label: String,
 }
 
 /// Backend-built default message for the squash confirmation prompt.
@@ -955,6 +979,20 @@ pub struct RepoState {
     pub pending_commit_retry: Option<PendingCommitRetry>,
     pub load_epoch: u64,
     pub pending_force_push_lease: Option<ForcePushLease>,
+    /// A commit/branch/tag the user "marked for comparison" via the context
+    /// menu. The next "Compare with marked" resolves the target's commit and
+    /// starts a range comparison (mark = base, target = tip). `None` when
+    /// nothing is marked.
+    pub comparison_mark: Option<ComparisonMark>,
+}
+
+/// A point marked for comparison via the "Mark for comparison" context-menu
+/// action. `commit_id` is the resolved commit (branch/tag tips resolve to their
+/// target); `label` is what the menu shows (short sha, branch, or tag name).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ComparisonMark {
+    pub commit_id: CommitId,
+    pub label: String,
 }
 
 impl RepoState {
@@ -1032,6 +1070,7 @@ impl RepoState {
             pending_commit_retry: None,
             load_epoch: 0,
             pending_force_push_lease: None,
+            comparison_mark: None,
         }
     }
 
@@ -1395,12 +1434,33 @@ impl RepoState {
         if v.is_none() {
             // Clearing the selection always dissolves any multi-selection too;
             // every clear site (scope change, repo switch, diff selection)
-            // relies on this.
+            // relies on this. A range comparison is likewise a form of
+            // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
+            self.history_state.range_selection = None;
+            self.history_state.range_files = Loadable::NotLoaded;
+            self.history_state.range_files_rev =
+                self.history_state.range_files_rev.wrapping_add(1);
         }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_range_selection(&mut self, v: Option<RangeSelection>) {
+        if self.history_state.range_selection == v {
+            return;
+        }
+        self.history_state.range_selection = v;
+        // The details pane keys its comparison-vs-single/multi decision off the
+        // commit-selection revision, so bump it when the comparison changes.
+        self.history_state.selected_commit_rev =
+            self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_range_files(&mut self, v: Loadable<Shared<Vec<CommitFileChange>>>) {
+        self.history_state.range_files = v;
+        self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {

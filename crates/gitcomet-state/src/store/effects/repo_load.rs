@@ -1112,6 +1112,28 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+pub(super) fn schedule_load_range_files(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    from: gitcomet_core::domain::CommitId,
+    to: Option<gitcomet_core::domain::CommitId>,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        let result = repo.diff_range_files(&from, to.as_ref());
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+                repo_id,
+                from: from.clone(),
+                to: to.clone(),
+                result,
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_squash_message_preview(
     executor: &TaskExecutor,
     repos: &RepoMap,

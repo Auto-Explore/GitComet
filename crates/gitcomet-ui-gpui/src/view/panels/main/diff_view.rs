@@ -105,7 +105,7 @@ fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmodu
             kind: change.kind,
             target: DiffTarget::CommitRange {
                 from_commit_id: from_commit_id.clone(),
-                to_commit_id: to_commit_id.clone(),
+                to_commit_id: Some(to_commit_id.clone()),
                 path: Some(change.path.clone()),
             },
             section: InlineSubmoduleDiffSection::Range(range.kind),
@@ -1432,7 +1432,7 @@ impl MainPaneView {
                                     |(from_commit_id, to_commit_id)| {
                                         Some(DiffTarget::CommitRange {
                                             from_commit_id: from_commit_id.clone(),
-                                            to_commit_id: to_commit_id.clone(),
+                                            to_commit_id: Some(to_commit_id.clone()),
                                             path: Some(change_path.clone()),
                                         })
                                     },

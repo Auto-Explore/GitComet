@@ -121,6 +121,12 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    LoadRangeFiles {
+        repo_id: RepoId,
+        from: CommitId,
+        /// `None` lists files between `from` and the working tree.
+        to: Option<CommitId>,
+    },
     LoadSquashMessagePreview {
         repo_id: RepoId,
         oldest: CommitId,

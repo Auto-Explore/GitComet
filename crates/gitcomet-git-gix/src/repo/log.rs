@@ -437,6 +437,25 @@ fn commit_file_change_from_diff(
     }))
 }
 
+/// Diff two trees (an absent `old_tree` means an empty tree, i.e. every path in
+/// `new_tree` is an addition) into the flat `CommitFileChange` list used by both
+/// commit details (parent → commit) and range comparisons (from → to).
+fn tree_diff_file_changes(
+    repo: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+) -> Result<Vec<CommitFileChange>> {
+    let changes = repo
+        .diff_tree_to_tree(old_tree, new_tree, None)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
+
+    let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
+    changes
+        .into_iter()
+        .filter_map(|change| commit_file_change_from_diff(repo, change, compute_stats).transpose())
+        .collect()
+}
+
 fn commit_file_changes(
     repo: &gix::Repository,
     commit: &gix::Commit<'_>,
@@ -458,15 +477,36 @@ fn commit_file_changes(
                 .map_err(|e| Error::new(ErrorKind::Backend(format!("gix parent tree: {e}"))))
         })
         .transpose()?;
-    let changes = repo
-        .diff_tree_to_tree(parent_tree.as_ref(), &commit_tree, None)
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix diff_tree_to_tree: {e}"))))?;
 
-    let compute_stats = changes.len() <= COMMIT_STATS_MAX_FILES;
-    changes
-        .into_iter()
-        .filter_map(|change| commit_file_change_from_diff(repo, change, compute_stats).transpose())
-        .collect()
+    tree_diff_file_changes(repo, parent_tree.as_ref(), &commit_tree)
+}
+
+/// List the files that differ between two commits (`from` → `to`), for the
+/// compare-selected-commits feature. `from` is the base/older side.
+pub(crate) fn diff_range_files(
+    repo: &gix::Repository,
+    from: &CommitId,
+    to: &CommitId,
+) -> Result<Vec<CommitFileChange>> {
+    let from_tree = commit_tree_for_id(repo, from, "gix range from")?;
+    let to_tree = commit_tree_for_id(repo, to, "gix range to")?;
+    tree_diff_file_changes(repo, Some(&from_tree), &to_tree)
+}
+
+fn commit_tree_for_id<'repo>(
+    repo: &'repo gix::Repository,
+    id: &CommitId,
+    context: &str,
+) -> Result<gix::Tree<'repo>> {
+    let spec = id.as_ref();
+    repo.rev_parse_single(spec)
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("{context} rev-parse {spec}: {e}"))))?
+        .object()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("{context} object {spec}: {e}"))))?
+        .peel_to_commit()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("{context} peel {spec}: {e}"))))?
+        .tree()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("{context} tree {spec}: {e}"))))
 }
 
 fn empty_log_page() -> LogPage {
@@ -1396,6 +1436,23 @@ impl GixRepo {
         })
     }
 
+    pub(super) fn diff_range_files_impl(
+        &self,
+        from: &CommitId,
+        to: Option<&CommitId>,
+    ) -> Result<Vec<CommitFileChange>> {
+        match to {
+            Some(to) => {
+                let repo = self._repo.to_thread_local();
+                diff_range_files(&repo, from, to)
+            }
+            // Working-tree tip: the newer side is the live worktree, which has no
+            // tree object, so shell out to `git diff <from>` for the file list
+            // (consistent with the unified diff shown in the main pane).
+            None => super::submodules::diff_commit_to_worktree_files(&self.spec.workdir, from),
+        }
+    }
+
     pub(super) fn commit_messages_impl(&self, ids: &[CommitId]) -> Result<Vec<String>> {
         let repo = self._repo.to_thread_local();
         ids.iter()
@@ -1666,6 +1723,97 @@ mod tests {
     #[test]
     fn object_id_from_commit_id_rejects_invalid_hex() {
         assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    }
+
+    #[test]
+    fn diff_range_files_lists_changes_between_two_commits() {
+        use gitcomet_core::domain::FileStatusKind;
+        use gitcomet_core::services::GitRepository;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        // Base commit: two files.
+        write_file(repo, "keep.txt", "one\ntwo\n");
+        write_file(repo, "gone.txt", "delete me\n");
+        git_success(repo, &["add", "."]);
+        git_success(repo, &["commit", "-m", "base"]);
+        let from = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+        // Target commit: modify keep.txt, delete gone.txt, add new.txt.
+        write_file(repo, "keep.txt", "one\ntwo\nthree\n");
+        fs::remove_file(repo.join("gone.txt")).expect("remove gone.txt");
+        write_file(repo, "new.txt", "brand new\n");
+        git_success(repo, &["add", "-A"]);
+        git_success(repo, &["commit", "-m", "target"]);
+        let to = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+        let opened = open_repo(repo);
+        let mut files = opened
+            .diff_range_files(&CommitId(from.into()), Some(&CommitId(to.into())))
+            .expect("diff_range_files should succeed");
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let by_path: Vec<(String, FileStatusKind)> = files
+            .iter()
+            .map(|f| (f.path.to_string_lossy().into_owned(), f.kind))
+            .collect();
+        assert_eq!(
+            by_path,
+            vec![
+                ("gone.txt".to_string(), FileStatusKind::Deleted),
+                ("keep.txt".to_string(), FileStatusKind::Modified),
+                ("new.txt".to_string(), FileStatusKind::Added),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_range_files_lists_changes_against_the_working_tree() {
+        use gitcomet_core::domain::FileStatusKind;
+        use gitcomet_core::services::GitRepository;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path();
+        init_test_repo(repo);
+
+        // Committed base: two files.
+        write_file(repo, "keep.txt", "one\ntwo\n");
+        write_file(repo, "gone.txt", "delete me\n");
+        git_success(repo, &["add", "."]);
+        git_success(repo, &["commit", "-m", "base"]);
+        let from = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+        // Uncommitted worktree changes: modify keep.txt (unstaged), delete
+        // gone.txt (staged), add new.txt (staged). `git diff <from>` compares the
+        // commit directly to the worktree, so all three show; the untracked
+        // scratch file does not.
+        write_file(repo, "keep.txt", "one\ntwo\nthree\n");
+        fs::remove_file(repo.join("gone.txt")).expect("remove gone.txt");
+        write_file(repo, "new.txt", "brand new\n");
+        git_success(repo, &["add", "new.txt", "gone.txt"]);
+        write_file(repo, "untracked.txt", "scratch\n");
+
+        let opened = open_repo(repo);
+        // `None` tip = compare `from` against the working tree.
+        let mut files = opened
+            .diff_range_files(&CommitId(from.into()), None)
+            .expect("diff_range_files should succeed");
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+
+        let by_path: Vec<(String, FileStatusKind)> = files
+            .iter()
+            .map(|f| (f.path.to_string_lossy().into_owned(), f.kind))
+            .collect();
+        assert_eq!(
+            by_path,
+            vec![
+                ("gone.txt".to_string(), FileStatusKind::Deleted),
+                ("keep.txt".to_string(), FileStatusKind::Modified),
+                ("new.txt".to_string(), FileStatusKind::Added),
+            ]
+        );
     }
 
     #[test]

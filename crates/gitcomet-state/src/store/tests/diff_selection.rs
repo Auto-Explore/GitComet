@@ -541,7 +541,7 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
 
     let target = gitcomet_core::domain::DiffTarget::CommitRange {
         from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: CommitId("bbbb".into()),
+        to_commit_id: Some(CommitId("bbbb".into())),
         path: Some(PathBuf::from("src/lib.rs")),
     };
     let effects = reduce(
@@ -666,7 +666,7 @@ fn stale_inline_submodule_file_load_is_ignored() {
 
     let target = gitcomet_core::domain::DiffTarget::CommitRange {
         from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: CommitId("bbbb".into()),
+        to_commit_id: Some(CommitId("bbbb".into())),
         path: Some(PathBuf::from("src/lib.rs")),
     };
     reduce(
@@ -730,7 +730,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
 
     let target = gitcomet_core::domain::DiffTarget::CommitRange {
         from_commit_id: CommitId("aaaa".into()),
-        to_commit_id: CommitId("bbbb".into()),
+        to_commit_id: Some(CommitId("bbbb".into())),
         path: Some(PathBuf::from("src/lib.rs")),
     };
     let entry = crate::model::InlineSubmoduleDiffEntry {

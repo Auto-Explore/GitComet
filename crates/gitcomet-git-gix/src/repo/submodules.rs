@@ -5,7 +5,7 @@ use crate::util::{
     run_git_raw_output, run_git_simple, run_git_with_output,
 };
 use gitcomet_core::domain::{
-    CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
+    CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
 };
@@ -865,8 +865,8 @@ fn submodule_range_changes_from_commits(
     from: &CommitId,
     to: &CommitId,
 ) -> Result<Vec<SubmoduleInnerChange>> {
-    let status_changes = git_range_status_changes(nested_workdir, from, to)?;
-    let counts = git_range_numstat_counts(nested_workdir, from, to)?;
+    let status_changes = git_range_status_changes(nested_workdir, from, Some(to))?;
+    let counts = git_range_numstat_counts(nested_workdir, from, Some(to))?;
     Ok(status_changes
         .into_iter()
         .map(|(path, kind)| {
@@ -874,6 +874,30 @@ fn submodule_range_changes_from_commits(
             SubmoduleInnerChange {
                 path,
                 kind,
+                additions,
+                deletions,
+            }
+        })
+        .collect())
+}
+
+/// List the files that differ between commit `from` and the live working tree
+/// (`git diff <from>`), for the compare-against-working-tree feature. Untracked
+/// files are excluded, matching the unified diff shown in the main pane.
+pub(super) fn diff_commit_to_worktree_files(
+    workdir: &Path,
+    from: &CommitId,
+) -> Result<Vec<CommitFileChange>> {
+    let status_changes = git_range_status_changes(workdir, from, None)?;
+    let counts = git_range_numstat_counts(workdir, from, None)?;
+    Ok(status_changes
+        .into_iter()
+        .map(|(path, kind)| {
+            let (additions, deletions) = counts.get(&path).cloned().unwrap_or((None, None));
+            CommitFileChange {
+                path,
+                kind,
+                is_submodule: false,
                 additions,
                 deletions,
             }
@@ -953,7 +977,7 @@ fn git_numstat_counts(workdir: &Path, cached: bool) -> Result<NumstatCounts> {
 fn git_range_status_changes(
     workdir: &Path,
     from: &CommitId,
-    to: &CommitId,
+    to: Option<&CommitId>,
 ) -> Result<Vec<(PathBuf, gitcomet_core::domain::FileStatusKind)>> {
     let mut command = git_workdir_cmd_for(workdir);
     command
@@ -962,8 +986,11 @@ fn git_range_status_changes(
         .arg("--name-status")
         .arg("-z")
         .arg("--find-renames")
-        .arg(from.as_ref())
-        .arg(to.as_ref());
+        .arg(from.as_ref());
+    // Omitting `to` makes git compare `from` against the working tree.
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
     let label = "git diff --name-status -z --find-renames";
     let output = run_git_raw_output(command, label)?;
     if !output.status.success() {
@@ -1010,7 +1037,7 @@ fn git_range_status_changes(
 fn git_range_numstat_counts(
     workdir: &Path,
     from: &CommitId,
-    to: &CommitId,
+    to: Option<&CommitId>,
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
     command
@@ -1019,8 +1046,11 @@ fn git_range_numstat_counts(
         .arg("--numstat")
         .arg("-z")
         .arg("--find-renames")
-        .arg(from.as_ref())
-        .arg(to.as_ref());
+        .arg(from.as_ref());
+    // Omitting `to` makes git compare `from` against the working tree.
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
     let label = "git diff --numstat -z --find-renames";
     let output = run_git_raw_output(command, label)?;
     if !output.status.success() {

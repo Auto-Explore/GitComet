@@ -981,6 +981,201 @@ impl DetailsPaneView {
             .into_any_element()
     }
 
+    /// The details-pane view shown while two points are being compared: the
+    /// selected commit cards, a "viewing diff between" subheader, and the list
+    /// of files that differ between them. The diff pane starts empty; clicking a
+    /// file loads that file's range diff in the main pane.
+    fn range_comparison_view(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+
+        let (card_count, range, files_loading, files_count) = {
+            let Some(repo) = self.active_repo() else {
+                return div().into_any_element();
+            };
+            let Some(range) = repo.history_state.range_selection.clone() else {
+                return div().into_any_element();
+            };
+            let card_count = Self::multi_selected_commits_in_log_order(repo).len();
+            let (files_loading, files_count) = match &repo.history_state.range_files {
+                Loadable::Ready(files) => (false, files.len()),
+                Loadable::Error(_) => (false, 0),
+                Loadable::Loading | Loadable::NotLoaded => (true, 0),
+            };
+            (card_count, range, files_loading, files_count)
+        };
+
+        let header_title: SharedString = if card_count > 1 {
+            format!("{card_count} commits selected").into()
+        } else {
+            "Comparison".into()
+        };
+        let subheader: SharedString =
+            format!("Viewing diff: {} → {}", range.from_label, range.to_label).into();
+
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(components::control_height_md(ui_scale))
+            .px_2()
+            .bg(theme.colors.surface_bg_elevated)
+            .border_b_1()
+            .border_color(theme.colors.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .line_clamp(1)
+                    .child(header_title),
+            )
+            .child(
+                components::Button::new("range_comparison_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        if let Some(repo_id) = this.active_repo_id() {
+                            this.store.dispatch(Msg::ClearComparison { repo_id });
+                        }
+                        cx.notify();
+                    })
+                    .gitcomet_tooltip(theme, "Close comparison".into()),
+            );
+
+        // Selected commit cards (present for the two-commit selection path).
+        let cards = (card_count > 0).then(|| {
+            let cards_height = crate::ui_scale::design_px_from_percent(
+                MULTI_COMMIT_ROW_HEIGHT_PX * card_count as f32,
+                self.ui_scale_percent,
+            );
+            let list = uniform_list(
+                ("range_commit_list", repo_id.0),
+                card_count,
+                cx.processor(Self::render_multi_commit_rows),
+            )
+            .w_full()
+            .track_scroll(&self.commit_multi_scroll);
+            div().flex_none().w_full().h(cards_height).child(list)
+        });
+
+        let files_label: SharedString = format!("{files_count} changed").into();
+        let files_body: AnyElement = if files_loading {
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("Loading")
+                .into_any_element()
+        } else if files_count == 0 {
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("No files.")
+                .into_any_element()
+        } else {
+            let list = uniform_list(
+                ("range_files_list", repo_id.0),
+                files_count,
+                cx.processor(Self::render_range_file_rows),
+            )
+            .w_full()
+            .h_full()
+            .min_h(px(0.0))
+            .track_scroll(&self.range_files_scroll);
+            let list = restrict_scroll_to_vertical_axis(list);
+            let scrollbar_gutter = components::Scrollbar::visible_gutter(
+                self.range_files_scroll.clone(),
+                components::ScrollbarAxis::Vertical,
+            );
+            div()
+                .id(("range_files_container", repo_id.0))
+                .relative()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .h_full()
+                .min_h(px(0.0))
+                .w_full()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .w_full()
+                        .flex_1()
+                        .h_full()
+                        .min_h(px(0.0))
+                        .pr(scrollbar_gutter)
+                        .child(list),
+                )
+                .child(
+                    components::Scrollbar::new(
+                        ("range_files_scrollbar", repo_id.0),
+                        self.range_files_scroll.clone(),
+                    )
+                    .render(theme),
+                )
+                .into_any_element()
+        };
+
+        div()
+            .id("range_comparison_container")
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .child(header)
+            .child(
+                div()
+                    .id("range_comparison_body")
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(subheader),
+                    )
+                    .children(cards)
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .flex_1()
+                            .h_full()
+                            .min_h(px(0.0))
+                            .border_t_1()
+                            .border_color(theme.colors.border_variant)
+                            .pt_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(files_label),
+                            )
+                            .child(files_body),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// Commit message shown in the details pane: a scrollable block whose
     /// summary line is emphasized and whose SHA references are linkified.
     fn commit_details_message_view(&self, theme: AppTheme, repo_id: RepoId) -> AnyElement {
@@ -1007,6 +1202,15 @@ impl DetailsPaneView {
         let selected_id = self
             .active_repo()
             .and_then(|repo| repo.history_state.selected_commit.clone());
+
+        // An active two-point comparison takes precedence over both the single
+        // and multi commit-detail views: show the range's changed files.
+        let has_range_comparison = self
+            .active_repo()
+            .is_some_and(|repo| repo.history_state.range_selection.is_some());
+        if let (Some(repo_id), true) = (active_repo_id, has_range_comparison) {
+            return self.range_comparison_view(repo_id, cx);
+        }
 
         let multi_count = self
             .active_repo()

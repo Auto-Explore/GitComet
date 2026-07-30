@@ -51,7 +51,7 @@ fn inline_submodule_entries_from_range(
             kind: change.kind,
             target: DiffTarget::CommitRange {
                 from_commit_id: (*from_commit_id).clone(),
-                to_commit_id: (*to_commit_id).clone(),
+                to_commit_id: Some((*to_commit_id).clone()),
                 path: Some(change.path.clone()),
             },
             section: InlineSubmoduleDiffSection::Range(range.kind),

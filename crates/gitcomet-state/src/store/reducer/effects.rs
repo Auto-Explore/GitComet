@@ -3,15 +3,15 @@ use super::util::{
     push_notification, selected_diff_load_plan,
 };
 use crate::model::{
-    AppNotificationKind, AppState, ConflictFileLoadMode, DiagnosticKind, Loadable, RepoId,
-    RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
+    AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
+    Loadable, RangeSelection, RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictResolverStrategy, ConflictSession};
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitId, FileEntry, FileSource, FileStatusKind, LogPage,
-    RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoStatus, StashEntry,
-    Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitFileChange, CommitId, FileEntry, FileSource,
+    FileStatusKind, LogPage, RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
+    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
@@ -434,7 +434,168 @@ pub(super) fn select_commit_multi(
     };
 
     repo_state.set_commit_multi_selection(sel);
-    select_commit_and_load_details(repo_state, repo_id, focus)
+
+    // Exactly two selected commits enter "compare" mode: the details pane shows
+    // the diff between them instead of a plain list. Any other count (1, or 3+)
+    // clears the comparison and falls back to single/multi-list behavior.
+    let range_pair = {
+        let selected = &repo_state.history_state.multi_selection.commits;
+        (selected.len() == 2).then(|| order_range_pair(repo_state, &selected[0], &selected[1]))
+    };
+
+    match range_pair {
+        Some((from, to)) => {
+            // Keep the focused commit selected (selection-derived UI stays
+            // coherent) but don't load its details — the comparison view takes
+            // over the details pane, so a single-commit detail load is wasted.
+            repo_state.set_selected_commit(Some(focus));
+            let from_label = short_commit_label(&from);
+            let to_label = short_commit_label(&to);
+            compare_range(state, repo_id, from, Some(to), from_label, to_label)
+        }
+        None => {
+            repo_state.set_range_selection(None);
+            repo_state.set_range_files(Loadable::NotLoaded);
+            select_commit_and_load_details(repo_state, repo_id, focus)
+        }
+    }
+}
+
+/// Order a commit pair oldest→newest for a range comparison. The history log is
+/// newest-first, so the larger index is the older commit and becomes `from`
+/// (the base). Falls back to input order when either id isn't in the loaded log.
+fn order_range_pair(repo_state: &RepoState, a: &CommitId, b: &CommitId) -> (CommitId, CommitId) {
+    let index_of = |id: &CommitId| -> Option<usize> {
+        match &repo_state.history_state.log {
+            Loadable::Ready(page) => page.commits.iter().position(|c| &c.id == id),
+            _ => None,
+        }
+    };
+    match (index_of(a), index_of(b)) {
+        // a is newer (smaller index) → base is b.
+        (Some(ia), Some(ib)) if ia < ib => (b.clone(), a.clone()),
+        _ => (a.clone(), b.clone()),
+    }
+}
+
+/// Abbreviated commit id used as a fallback label in the comparison UI/menus.
+fn short_commit_label(id: &CommitId) -> String {
+    let full = id.as_ref();
+    full.get(..8).unwrap_or(full).to_string()
+}
+
+/// Enter "compare two points" mode: record the ordered `from`/`to` pair and load
+/// the changed-file list. A `to` of `None` compares `from` against the live
+/// working tree. The diff pane is left empty (any prior selection is cleared) so
+/// the comparison presents the file side-selection first — the user opens an
+/// individual file's range diff by clicking it, rather than the whole range
+/// patch opening automatically. Reused by two-commit selection, the mark/compare
+/// context-menu flow, and the compare-with-working-tree action.
+pub(super) fn compare_range(
+    state: &mut AppState,
+    repo_id: RepoId,
+    from: CommitId,
+    to: Option<CommitId>,
+    from_label: String,
+    to_label: String,
+) -> Vec<Effect> {
+    {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        repo_state.set_range_selection(Some(RangeSelection {
+            from: from.clone(),
+            to: to.clone(),
+            from_label,
+            to_label,
+        }));
+        repo_state.set_range_files(Loadable::Loading);
+    }
+
+    let mut effects = super::diff_selection::clear_diff_selection(state, repo_id);
+    effects.push(Effect::LoadRangeFiles { repo_id, from, to });
+    effects
+}
+
+/// Dismiss an active range comparison: clear the selection, the file list, and
+/// the range diff from the diff pane.
+pub(super) fn clear_comparison(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        repo_state.set_commit_multi_selection(CommitMultiSelection::default());
+        repo_state.set_range_selection(None);
+        repo_state.set_range_files(Loadable::NotLoaded);
+    }
+    super::diff_selection::clear_diff_selection(state, repo_id)
+}
+
+pub(super) fn mark_for_comparison(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+    label: String,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.comparison_mark = Some(crate::model::ComparisonMark { commit_id, label });
+    }
+    Vec::new()
+}
+
+pub(super) fn clear_comparison_mark(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.comparison_mark = None;
+    }
+    Vec::new()
+}
+
+/// Compare the marked point (base) against `commit_id` (tip). No-op when nothing
+/// is marked or the mark equals the target.
+pub(super) fn compare_with_marked(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+    label: String,
+) -> Vec<Effect> {
+    let mark = {
+        let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        match &repo_state.comparison_mark {
+            Some(mark) if mark.commit_id != commit_id => mark.clone(),
+            _ => return Vec::new(),
+        }
+    };
+    compare_range(state, repo_id, mark.commit_id, Some(commit_id), mark.label, label)
+}
+
+pub(super) fn range_files_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    from: CommitId,
+    to: Option<CommitId>,
+    result: std::result::Result<Vec<CommitFileChange>, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let still_current = repo_state
+            .history_state
+            .range_selection
+            .as_ref()
+            .is_some_and(|range| range.from == from && range.to == to);
+        if !still_current {
+            return Vec::new();
+        }
+        let next = match result {
+            Ok(files) => Loadable::Ready(Arc::new(files)),
+            Err(e) => {
+                push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
+                Loadable::Error(e.to_string())
+            }
+        };
+        repo_state.set_range_files(next);
+    }
+    Vec::new()
 }
 
 fn collapse_multi_selection_to(

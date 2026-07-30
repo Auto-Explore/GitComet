@@ -211,6 +211,53 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
+    // Comparison: mark this commit as a base, or compare it against a mark.
+    let comparison_mark = this
+        .active_repo()
+        .filter(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.comparison_mark.clone());
+    items.push(ContextMenuItem::Entry {
+        label: format!("Mark {short} for comparison").into(),
+        icon: Some("icons/git_commit.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::MarkForComparison {
+            repo_id,
+            commit_id: commit_id.clone(),
+            label: short.to_string(),
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
+        label: "Compare with working tree".into(),
+        icon: Some("icons/open_external.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::CompareWithWorkingTree {
+            repo_id,
+            commit_id: commit_id.clone(),
+            label: short.to_string(),
+        }),
+    });
+    if let Some(mark) = comparison_mark.filter(|mark| mark.commit_id != *commit_id) {
+        items.push(ContextMenuItem::Entry {
+            label: format!("Compare with {}", mark.label).into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CompareWithMarked {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: short.to_string(),
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
+            label: "Clear comparison mark".into(),
+            icon: Some("icons/generic_close.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::ClearComparisonMark { repo_id }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "Export patch…".into(),
         icon: Some("icons/arrow_down.svg".into()),

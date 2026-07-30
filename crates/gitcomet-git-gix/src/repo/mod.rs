@@ -1,7 +1,8 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, Diff, DiffArea, DiffPreviewTextSide, DiffTarget,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
+    DiffTarget,
     FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage,
     ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
     SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
@@ -302,6 +303,14 @@ impl GitRepository for GixRepo {
 
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails> {
         self.commit_details_impl(id)
+    }
+
+    fn diff_range_files(
+        &self,
+        from: &CommitId,
+        to: Option<&CommitId>,
+    ) -> Result<Vec<CommitFileChange>> {
+        self.diff_range_files_impl(from, to)
     }
 
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {

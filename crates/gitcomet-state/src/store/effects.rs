@@ -409,6 +409,14 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadRangeFiles { repo_id, from, to } => {
+            send(Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+                repo_id,
+                from,
+                to,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::LoadSquashMessagePreview {
             repo_id,
             oldest,
@@ -1671,6 +1679,13 @@ pub(super) fn schedule_effect(
                 repo_load::schedule_load_commit_details(
                     executor, repos, msg_tx, repo_id, commit_id,
                 );
+            }
+        }
+        Effect::LoadRangeFiles { repo_id, from, to } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_range_files(executor, repos, msg_tx, repo_id, from, to);
             }
         }
         Effect::LoadSquashMessagePreview {
