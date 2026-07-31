@@ -2176,6 +2176,17 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
     let toggle = cx
         .debug_bounds("collapsed_popover_filter_toggle")
         .expect("expected a filter toggle in the branch popover header");
+    let section_menu = cx
+        .debug_bounds("collapsed_popover_section_menu")
+        .expect("expected a section menu button in the branch popover header");
+    let panel = cx
+        .debug_bounds("collapsed_sidebar_popover")
+        .expect("expected the collapsed branch popover");
+    assert!(
+        section_menu.left() >= toggle.right() && section_menu.right() <= panel.right(),
+        "the header's two buttons must sit side by side inside the panel \
+         (filter={toggle:?}, menu={section_menu:?}, panel={panel:?})"
+    );
 
     cx.simulate_mouse_move(toggle.center(), None, gpui::Modifiers::default());
     cx.simulate_mouse_down(
@@ -2222,7 +2233,77 @@ fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestApp
             .collapsed_popover_filter_query
             .clone()
     });
-    assert_eq!(query, "beta", "keystrokes must reach the popover filter box");
+    assert_eq!(
+        query, "beta",
+        "keystrokes must reach the popover filter box"
+    );
+}
+
+#[gpui::test]
+fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    // An empty section is the worst case: it has no rows to right-click, so
+    // without the panel's own handler the click falls through to the history
+    // canvas underneath (whose listener is window-level, not hitbox-gated).
+    state.repos[0].worktrees = Loadable::Ready(Arc::new(vec![]));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Worktrees, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    let panel = cx
+        .debug_bounds("collapsed_sidebar_popover")
+        .expect("expected the collapsed Worktrees popover");
+    assert!(
+        cx.debug_bounds("collapsed_popover_section_menu").is_some(),
+        "the popover header must expose the section's menu button"
+    );
+
+    // Low in the panel, below the header and the empty state.
+    let empty_point = gpui::point(panel.center().x, panel.bottom() - px(24.0));
+    cx.simulate_mouse_move(empty_point, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        empty_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        empty_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::worktree(
+                RepoId(1),
+                WorktreePopoverKind::SectionMenu
+            )),
+            "right-clicking the popover must open the worktrees section menu"
+        );
+        assert_eq!(
+            view.read(app).sidebar_collapsed_popover,
+            Some(CollapsedSidebarSection::Worktrees),
+            "the popover must stay open behind its own context menu"
+        );
+    });
 }
 
 #[gpui::test]

@@ -111,6 +111,46 @@ impl CollapsedSidebarSection {
         }
     }
 
+    /// The section-level menu the expanded sidebar hangs off this section's
+    /// header row, paired with the invoker id that header uses so both routes
+    /// light up the same "menu is open" highlight. Files has no section menu:
+    /// its actions live on the individual file rows.
+    pub(in crate::view) fn section_menu(
+        self,
+        repo_id: RepoId,
+    ) -> Option<(SharedString, PopoverKind)> {
+        let (invoker, kind): (String, PopoverKind) = match self {
+            Self::Local => (
+                format!("branch_section_menu_{}_local", repo_id.0),
+                PopoverKind::BranchSectionMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                },
+            ),
+            Self::Remote => (
+                format!("branch_section_menu_{}_remote", repo_id.0),
+                PopoverKind::BranchSectionMenu {
+                    repo_id,
+                    section: BranchSection::Remote,
+                },
+            ),
+            Self::Worktrees => (
+                format!("worktrees_section_menu_{}", repo_id.0),
+                PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
+            ),
+            Self::Submodules => (
+                format!("submodules_section_menu_{}", repo_id.0),
+                PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
+            ),
+            Self::Stashes => (
+                format!("stash_section_menu_{}", repo_id.0),
+                PopoverKind::StashPrompt,
+            ),
+            Self::Files => return None,
+        };
+        Some((invoker.into(), kind))
+    }
+
     fn storage_key(self) -> Option<&'static str> {
         match self {
             Self::Local => Some(branch_sidebar::local_section_storage_key()),
@@ -644,6 +684,18 @@ impl SidebarPaneView {
         let filterable = section.branch_section().is_some();
         let filter_open = filterable && self.collapsed_popover_filter_open;
 
+        // Every section but Files has the same header menu the expanded sidebar
+        // hangs off its section row (add a worktree, stash, submodule, ...). The
+        // rail popover shows only the section's rows, so without this button —
+        // and the right-click on the panel behind it — those actions would be
+        // out of reach while the sidebar is collapsed.
+        let section_menu = self
+            .active_repo_id()
+            .and_then(|repo_id| section.section_menu(repo_id));
+        let section_menu_active = section_menu
+            .as_ref()
+            .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
+
         let title = div()
             .flex_none()
             .flex()
@@ -697,6 +749,35 @@ impl SidebarPaneView {
                             },
                         )
                         .debug_selector(|| "collapsed_popover_filter_toggle".to_string()),
+                )
+            })
+            .when_some(section_menu.clone(), |header, (invoker, kind)| {
+                header.child(
+                    components::Button::new("collapsed_popover_section_menu", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .selected(section_menu_active)
+                        .selected_bg(with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.34 } else { 0.24 },
+                        ))
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/more_vertical.svg",
+                            if section_menu_active {
+                                theme.colors.text
+                            } else {
+                                theme.colors.text_muted
+                            },
+                            scaled_px(15.0),
+                        ))
+                        .on_click(theme, cx, move |this, e, window, cx| {
+                            this.activate_context_menu_invoker(invoker.clone(), cx);
+                            this.open_popover_at(kind.clone(), e.position(), window, cx);
+                        })
+                        .w(scaled_px(22.0))
+                        .h(scaled_px(22.0))
+                        .gitcomet_tooltip(theme, "More actions".into())
+                        .debug_selector(|| "collapsed_popover_section_menu".to_string()),
                 )
             });
 
@@ -843,7 +924,10 @@ impl SidebarPaneView {
 
     /// Reset the popover filter when the rail opens a different section (or the
     /// popover closes), so a stale query never greets the next section.
-    pub(in super::super) fn reset_collapsed_popover_filter(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(in super::super) fn reset_collapsed_popover_filter(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
         self.clear_collapsed_popover_filter(cx);
         if self.collapsed_popover_filter_open {
             self.collapsed_popover_filter_open = false;
@@ -2430,12 +2514,8 @@ mod tests {
 
     fn filter_rows(query: &str, section: CollapsedSidebarSection) -> Vec<BranchSidebarRow> {
         let repo = repo_with_local_and_remote_branches();
-        let full = branch_sidebar::branch_sidebar_rows(
-            &repo,
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-            query,
-        );
+        let full =
+            branch_sidebar::branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), query);
         filter_result_rows(&full, section)
     }
 
@@ -2468,7 +2548,10 @@ mod tests {
         );
         assert_eq!(
             branch_names(&rows),
-            vec!["feature/alpha".to_string(), "origin/feature/beta".to_string()],
+            vec![
+                "feature/alpha".to_string(),
+                "origin/feature/beta".to_string()
+            ],
             "local matches lead, remote matches follow"
         );
 
@@ -2480,7 +2563,10 @@ mod tests {
         );
         assert_eq!(
             branch_names(&rows),
-            vec!["origin/feature/beta".to_string(), "feature/alpha".to_string()]
+            vec![
+                "origin/feature/beta".to_string(),
+                "feature/alpha".to_string()
+            ]
         );
     }
 

@@ -969,7 +969,7 @@ impl GitCometView {
     /// both the scrim and the main card, while staying below the context-menu layer.
     fn collapsed_sidebar_popover(
         &mut self,
-        _section: CollapsedSidebarSection,
+        section: CollapsedSidebarSection,
         theme: AppTheme,
         fade_in: bool,
         anim_seq: u64,
@@ -993,6 +993,28 @@ impl GitCometView {
             // Claim clicks anywhere on the panel so its empty regions don't fall
             // through to the dismiss scrim underneath.
             .occlude()
+            // `occlude` only hides the panes underneath from hitbox-driven
+            // handlers; the history and diff canvases install window-level mouse
+            // listeners that see every event regardless of what is painted over
+            // them. Rows claim their own right-click (they stop propagation), so
+            // this catches the gaps — the header, the padding, an empty section —
+            // which would otherwise open a commit menu through the popover. It
+            // opens the section's own menu instead, which is the only way to
+            // reach the worktree/stash/submodule section actions while collapsed.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    let Some((invoker, kind)) = this
+                        .active_repo_id()
+                        .and_then(|repo_id| section.section_menu(repo_id))
+                    else {
+                        return;
+                    };
+                    this.set_active_context_menu_invoker(Some(invoker), cx);
+                    this.open_popover_at(kind, e.position, window, cx);
+                }),
+            )
             .child(self.sidebar_pane.clone())
             // Use the same preferred-size bounds for every collapsed-sidebar
             // popover. Section content chooses the intrinsic height between them.
