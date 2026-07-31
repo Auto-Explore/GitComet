@@ -431,11 +431,10 @@ fn install_blame_annotation_mouse_handler(
         let message_hitbox = message_hitbox.clone();
         let prior_icon_hitbox = prior_icon_hitbox.clone();
         let browse_icon_hitbox = browse_icon_hitbox.clone();
-        move |event: &gpui::MouseDownEvent, phase, _window, cx| {
+        move |event: &gpui::MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != gpui::MouseButton::Left {
                 return;
             }
-            let pos = event.position;
             let commit_id = commit_id.clone();
             let path = path.clone();
             // For renamed files, navigate to the historical name at this commit
@@ -444,11 +443,14 @@ fn install_blame_annotation_mouse_handler(
                 .as_deref()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| path.to_path_buf());
-            let action = if browse_enabled && browse_icon_hitbox.contains(&pos) {
+            // `is_hovered`, not `contains`: this is a window-level listener, so
+            // it runs even for clicks that landed on something painted over the
+            // diff. Only the hit test knows what actually owns the pointer.
+            let action = if browse_enabled && browse_icon_hitbox.is_hovered(window) {
                 BlameClickAction::Browse
-            } else if prior_enabled && prior_icon_hitbox.contains(&pos) {
+            } else if prior_enabled && prior_icon_hitbox.is_hovered(window) {
                 BlameClickAction::PriorRevision
-            } else if message_enabled && message_hitbox.contains(&pos) {
+            } else if message_enabled && message_hitbox.is_hovered(window) {
                 BlameClickAction::OpenDetails
             } else {
                 return;
@@ -618,16 +620,17 @@ fn install_blame_annotation_hover_handler(
         let message = hitboxes.message.clone();
         let prior_icon = hitboxes.prior_icon.clone();
         let browse_icon = hitboxes.browse_icon.clone();
-        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+        move |_event: &gpui::MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
             }
-            let pos = event.position;
-            let area = if message_enabled && message.contains(&pos) {
+            // Hover follows the hit test, so a panel painted over the diff hides
+            // the annotations underneath instead of highlighting them through it.
+            let area = if message_enabled && message.is_hovered(window) {
                 Some(AnnotArea::Message)
-            } else if prior_enabled && prior_icon.contains(&pos) {
+            } else if prior_enabled && prior_icon.is_hovered(window) {
                 Some(AnnotArea::PriorIcon)
-            } else if browse_enabled && browse_icon.contains(&pos) {
+            } else if browse_enabled && browse_icon.is_hovered(window) {
                 Some(AnnotArea::BrowseIcon)
             } else {
                 None
@@ -1704,6 +1707,8 @@ pub(super) fn inline_diff_line_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = inline_text_bounds(content_bounds, gutter_total, pad);
+            // Everything but the annotation column, which owns its own clicks.
+            let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
             let annot_hitboxes =
                 build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
@@ -1714,6 +1719,7 @@ pub(super) fn inline_diff_line_row_canvas(
                 gutter_total,
                 annot_w: annotation_width,
                 text_bounds,
+                row_hitbox,
                 text_hitbox,
                 annot_hitboxes,
             }
@@ -1802,18 +1808,15 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
             });
 
-            let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds =
-                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
                 &view,
                 visible_ix,
                 DiffRowMouseHandlers {
-                    row_bounds: visible_row_bounds,
+                    row_hitbox: prepaint.row_hitbox.clone(),
                     regions: DiffRowTextRegions::single(
                         DiffTextRegion::Inline,
                         visible_text_bounds,
@@ -1930,6 +1933,8 @@ pub(super) fn split_diff_line_row_canvas(
             let left_text_bounds = column_text_bounds(left_col, gutter_total, pad);
             let right_text_bounds = column_text_bounds(right_col, gutter_total, pad);
 
+            // Everything but the annotation column, which owns its own clicks.
+            let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let left_hitbox = window.insert_hitbox(left_text_bounds, HitboxBehavior::Normal);
             let right_hitbox = window.insert_hitbox(right_text_bounds, HitboxBehavior::Normal);
             let annot_hitboxes =
@@ -1944,6 +1949,7 @@ pub(super) fn split_diff_line_row_canvas(
                 right_col,
                 left_text_bounds,
                 right_text_bounds,
+                row_hitbox,
                 left_hitbox,
                 right_hitbox,
                 annot_hitboxes,
@@ -2066,12 +2072,9 @@ pub(super) fn split_diff_line_row_canvas(
                 );
             });
 
-            let row_bounds = prepaint.bounds;
             let left_text_bounds = prepaint.left_text_bounds;
             let right_text_bounds = prepaint.right_text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds =
-                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_left_text_bounds = left_text_bounds.intersect(&clip_bounds);
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
@@ -2079,7 +2082,7 @@ pub(super) fn split_diff_line_row_canvas(
                 &view,
                 visible_ix,
                 DiffRowMouseHandlers {
-                    row_bounds: visible_row_bounds,
+                    row_hitbox: prepaint.row_hitbox.clone(),
                     regions: DiffRowTextRegions::split(
                         visible_left_text_bounds,
                         visible_right_text_bounds,
@@ -2177,6 +2180,8 @@ pub(super) fn patch_split_column_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = single_column_text_bounds(content_bounds, gutter_total, pad);
+            // Everything but the annotation column, which owns its own clicks.
+            let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
             let annot_hitboxes =
                 build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
@@ -2185,6 +2190,7 @@ pub(super) fn patch_split_column_row_canvas(
                 pad,
                 annot_w: annotation_width,
                 text_bounds,
+                row_hitbox,
                 text_hitbox,
                 annot_hitboxes,
             }
@@ -2263,18 +2269,15 @@ pub(super) fn patch_split_column_row_canvas(
                 );
             });
 
-            let row_bounds = prepaint.bounds;
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds =
-                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
                 &view,
                 visible_ix,
                 DiffRowMouseHandlers {
-                    row_bounds: visible_row_bounds,
+                    row_hitbox: prepaint.row_hitbox.clone(),
                     regions: DiffRowTextRegions::single(region, visible_text_bounds),
                     right_click: DiffRowRightClickBehavior::OpenContextMenu,
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
@@ -2446,15 +2449,14 @@ pub(super) fn worktree_preview_row_canvas(
                 );
             });
 
-            let text_bounds = prepaint.text_bounds;
-            let clip_bounds = window.content_mask().bounds;
-            let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
+                // The hitbox covers the same text area, but consulting it rather
+                // than the bounds keeps clicks on anything painted over the
+                // preview (a floating popover, a menu) from reaching this row.
+                let text_hitbox = prepaint.text_hitbox.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || !visible_text_bounds.contains(&event.position)
-                    {
+                    if phase != DispatchPhase::Bubble || !text_hitbox.is_hovered(window) {
                         return;
                     }
 
@@ -2530,6 +2532,7 @@ struct InlineRowPrepaintState {
     gutter_total: Pixels,
     annot_w: Pixels,
     text_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     text_hitbox: Hitbox,
     annot_hitboxes: Option<AnnotHitboxes>,
 }
@@ -2544,6 +2547,7 @@ struct SplitRowPrepaintState {
     right_col: Bounds<Pixels>,
     left_text_bounds: Bounds<Pixels>,
     right_text_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     left_hitbox: Hitbox,
     right_hitbox: Hitbox,
     annot_hitboxes: Option<AnnotHitboxes>,
@@ -2555,6 +2559,7 @@ struct SingleColumnRowPrepaintState {
     pad: Pixels,
     annot_w: Pixels,
     text_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     text_hitbox: Hitbox,
     annot_hitboxes: Option<AnnotHitboxes>,
 }
@@ -2626,18 +2631,23 @@ enum DiffRowMouseUpBehavior {
 
 #[derive(Clone, Debug)]
 struct DiffRowMouseHandlers {
-    row_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     regions: DiffRowTextRegions,
     right_click: DiffRowRightClickBehavior,
     mouse_up: DiffRowMouseUpBehavior,
 }
 
+/// Row mouse handlers are window-level listeners: they see every event, whatever
+/// is painted over the diff. Asking the row's hitbox (rather than its bounds)
+/// whether it is hovered defers to the hit test, so a click on a panel floating
+/// above the diff — the collapsed sidebar's section popover, say — stops there
+/// instead of also landing on the row beneath it.
 fn should_handle_row_mouse_event(
     phase: DispatchPhase,
-    row_bounds: &Bounds<Pixels>,
-    position: gpui::Point<Pixels>,
+    row_hitbox: &Hitbox,
+    window: &Window,
 ) -> bool {
-    phase == DispatchPhase::Bubble && row_bounds.contains(&position)
+    phase == DispatchPhase::Bubble && row_hitbox.is_hovered(window)
 }
 
 fn install_diff_row_mouse_handlers(
@@ -2647,17 +2657,17 @@ fn install_diff_row_mouse_handlers(
     handlers: DiffRowMouseHandlers,
 ) {
     let DiffRowMouseHandlers {
-        row_bounds,
+        row_hitbox,
         regions,
         right_click,
         mouse_up,
     } = handlers;
-    let row_bounds_for_down = row_bounds;
+    let row_hitbox_for_down = row_hitbox.clone();
     let regions = regions.clone();
     window.on_mouse_event({
         let view = view.clone();
         move |event: &gpui::MouseDownEvent, phase, window, cx| {
-            if !should_handle_row_mouse_event(phase, &row_bounds_for_down, event.position) {
+            if !should_handle_row_mouse_event(phase, &row_hitbox_for_down, window) {
                 return;
             }
 
@@ -2705,12 +2715,11 @@ fn install_diff_row_mouse_handlers(
         return;
     }
 
-    let row_bounds_for_up = row_bounds;
     window.on_mouse_event({
         let view = view.clone();
-        move |event: &gpui::MouseUpEvent, phase, _window, cx| {
+        move |event: &gpui::MouseUpEvent, phase, window, cx| {
             if event.button != gpui::MouseButton::Left
-                || !should_handle_row_mouse_event(phase, &row_bounds_for_up, event.position)
+                || !should_handle_row_mouse_event(phase, &row_hitbox, window)
             {
                 return;
             }
@@ -3401,29 +3410,6 @@ mod tests {
             painted.size.height,
             bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
         );
-    }
-
-    #[test]
-    fn should_handle_row_mouse_event_requires_bubble_phase_and_in_bounds() {
-        let row_bounds = test_bounds(10.0, 20.0, 50.0, 10.0);
-        let inside = point(px(20.0), px(25.0));
-        let outside = point(px(200.0), px(25.0));
-
-        assert!(should_handle_row_mouse_event(
-            DispatchPhase::Bubble,
-            &row_bounds,
-            inside,
-        ));
-        assert!(!should_handle_row_mouse_event(
-            DispatchPhase::Capture,
-            &row_bounds,
-            inside,
-        ));
-        assert!(!should_handle_row_mouse_event(
-            DispatchPhase::Bubble,
-            &row_bounds,
-            outside,
-        ));
     }
 
     #[test]

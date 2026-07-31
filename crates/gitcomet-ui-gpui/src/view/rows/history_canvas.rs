@@ -878,9 +878,15 @@ pub(super) fn history_commit_row_canvas(
                 let view = view.clone();
                 let commit_id = commit_id.clone();
                 let ref_items = Arc::clone(&ref_items);
+                let hitbox = hitbox.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+                    // The row's hitbox — not its bounds — decides whether this
+                    // row owns the pointer: window-level listeners run whatever
+                    // is painted on top, so anything overlaying the history (the
+                    // collapsed sidebar's popover, a panel, a menu) must win.
                     if phase != DispatchPhase::Bubble
                         || ref_items.is_empty()
+                        || !hitbox.is_hovered(window)
                         || !branch_bounds.contains(&event.position)
                     {
                         return;
@@ -904,9 +910,12 @@ pub(super) fn history_commit_row_canvas(
                 let view = view.clone();
                 let commit_id = commit_id.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                    // Hitbox, not bounds: see the hover listener above. Without
+                    // this, right-clicking an overlay that happens to sit over
+                    // the history opens this commit's menu through it.
                     if phase != DispatchPhase::Bubble
                         || event.button != MouseButton::Right
-                        || !bounds.contains(&event.position)
+                        || !hitbox.is_hovered(window)
                     {
                         return;
                     }

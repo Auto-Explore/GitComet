@@ -3911,6 +3911,132 @@ mod tests {
         });
     }
 
+    /// Commit rows open their hover and context menu from window-level mouse
+    /// listeners, which run for every event no matter what is painted over the
+    /// history. They must therefore defer to the hit test: a click that landed
+    /// on the collapsed sidebar's popover — or on the scrim that dismisses it —
+    /// belongs to that popover, not to the row it happens to cover.
+    #[gpui::test]
+    fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let commits = (0..12)
+            .map(|ix| {
+                let id = format!("c{ix:02}");
+                commit(&id, &[], &format!("commit {ix:02}"))
+            })
+            .collect::<Vec<_>>();
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-collapsed-popover-clicks"),
+            },
+        );
+        // Everything the sidebar reads is already loaded, so opening a section
+        // popover never has to ask the store (and its worker threads) for data.
+        repo.open = Loadable::Ready(());
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
+        repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
+        repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+        wait_until(cx, "history rows", |cx| {
+            cx.debug_bounds("history_row_3").is_some()
+        });
+
+        // Draw only: every step here is synchronous, and pumping the executor
+        // (or advancing the clock) would let store background work race the
+        // deliberately deterministic test scheduler.
+        let settle = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+        };
+        let right_click = |cx: &mut gpui::VisualTestContext, at: Point<Pixels>| {
+            cx.simulate_mouse_move(at, None, gpui::Modifiers::default());
+            cx.simulate_mouse_down(at, gpui::MouseButton::Right, gpui::Modifiers::default());
+            cx.simulate_mouse_up(at, gpui::MouseButton::Right, gpui::Modifiers::default());
+            settle(cx);
+        };
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.set_sidebar_collapsed(true, cx);
+                this.open_sidebar_collapsed_popover(
+                    crate::view::panes::sidebar::CollapsedSidebarSection::Local,
+                    cx,
+                );
+            });
+        });
+        settle(cx);
+        settle(cx);
+
+        let panel = cx
+            .debug_bounds("collapsed_sidebar_popover")
+            .expect("expected the collapsed sidebar popover");
+        let row = cx
+            .debug_bounds("history_row_3")
+            .expect("history row should be rendered");
+
+        // Right of the popover, over the dismiss scrim, on a commit row: the
+        // click dismisses the popover and stops there. That it dismisses at all
+        // is what proves the event reached this point, so a silent commit menu
+        // cannot be mistaken for nothing having been clicked.
+        let on_scrim = point(panel.right() + px(120.0), row.center().y);
+        assert!(
+            row.contains(&on_scrim),
+            "expected the test point to sit on a commit row (row={row:?}, point={on_scrim:?})"
+        );
+        right_click(cx, on_scrim);
+
+        cx.update(|_window, app| {
+            assert_eq!(
+                crate::view::test_support::popover_kind(view.read(app), app),
+                None,
+                "dismissing the popover must not open the commit menu underneath it"
+            );
+            assert_eq!(
+                view.read(app).sidebar_collapsed_popover,
+                None,
+                "the click must still dismiss the popover"
+            );
+        });
+    }
+
     #[gpui::test]
     fn history_refs_hover_closes_when_history_scrolls_without_mouse_move(
         cx: &mut gpui::TestAppContext,

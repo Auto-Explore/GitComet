@@ -2602,9 +2602,15 @@ impl GitCometView {
         let seq = self.sidebar_collapsed_popover_anim_seq;
         cx.notify();
 
+        // Time the fade-out on the app's executor rather than a bare
+        // `smol::Timer`, which would arm the global reactor and fire on its own
+        // thread — deterministic under test, identical in the running app.
+        let fade_out = cx
+            .background_executor()
+            .timer(Duration::from_millis(COLLAPSED_POPOVER_FADE_MS));
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(COLLAPSED_POPOVER_FADE_MS)).await;
+                fade_out.await;
                 let _ = view.update(cx, |this, cx| {
                     if this.sidebar_collapsed_popover_anim_seq == seq
                         && this.sidebar_collapsed_popover_closing.is_some()
