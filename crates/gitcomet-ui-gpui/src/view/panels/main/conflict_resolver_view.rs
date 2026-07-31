@@ -6,9 +6,7 @@
 
 use super::*;
 
-/// Blank rows appended below the last line of the source diff lists so the
-/// tail of the file can be scrolled up into a comfortable reading position.
-pub(super) const CONFLICT_BOTTOM_OVERSCROLL_ROWS: usize = 10;
+pub(super) use conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS;
 
 fn conflict_output_wheel_requires_notify(delta_y: Pixels, horizontal_changed: bool) -> bool {
     delta_y != px(0.0) || horizontal_changed
@@ -542,6 +540,68 @@ impl MainPaneView {
 
     /// The main conflict resolver pane body: three-way / two-way source
     /// columns plus the merged output section.
+    /// Segmented control for the overview column's comparison mode, matching
+    /// kdiff3's Normal / A-B / A-C / B-C overview modes.
+    fn conflict_overview_mode_selector(
+        &self,
+        theme: AppTheme,
+        ui_scale_percent: u32,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        use gitcomet_core::merge::OverviewMode;
+
+        let active = self.conflict_resolver.overview_mode;
+        let selected_bg = theme.colors.active;
+        let mut row = div()
+            .id("conflict_overview_mode")
+            .flex()
+            .items_center()
+            .h(components::control_height(ui_scale_percent))
+            .rounded(px(theme.radii.row))
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(gpui::rgba(0x00000000))
+            .overflow_hidden()
+            .p(px(1.0));
+
+        for (ix, mode) in OverviewMode::ALL.into_iter().enumerate() {
+            if ix > 0 {
+                row = row.child(div().h_full().w(px(1.0)).bg(theme.colors.border));
+            }
+            let id = match mode {
+                OverviewMode::Merge => "conflict_overview_merge",
+                OverviewMode::BaseVsLocal => "conflict_overview_ab",
+                OverviewMode::BaseVsRemote => "conflict_overview_ac",
+                OverviewMode::LocalVsRemote => "conflict_overview_bc",
+            };
+            let tooltip = match mode {
+                OverviewMode::Merge => {
+                    "Overview: the merge — each side's changes and the conflicts"
+                }
+                OverviewMode::BaseVsLocal => "Overview: every line where Local differs from Base",
+                OverviewMode::BaseVsRemote => "Overview: every line where Remote differs from Base",
+                OverviewMode::LocalVsRemote => {
+                    "Overview: every line where Local differs from Remote"
+                }
+            };
+            row = row.child(
+                components::Button::new(id, mode.label())
+                    .borderless()
+                    .style(components::ButtonStyle::Subtle)
+                    .selected(active == mode)
+                    .selected_bg(selected_bg)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        this.conflict_resolver.overview_mode = mode;
+                        this.conflict_resolver.rebuild_overview_bands();
+                        cx.notify();
+                    })
+                    .gitcomet_tooltip(theme, tooltip.into()),
+            );
+        }
+
+        row.into_any_element()
+    }
+
     pub(super) fn render_conflict_resolver_pane(
         &mut self,
         conflict_target_path: Option<std::path::PathBuf>,
@@ -705,6 +765,21 @@ impl MainPaneView {
                                 show_preview_toggle
                                     && preview_mode == ConflictResolverPreviewMode::Preview;
 
+                            // kdiff3's overview column sits left of the inputs
+                            // and takes its width out of their budget.
+                            let overview_w = if !is_rendered_preview_active
+                                && self.conflict_resolver.has_overview()
+                            {
+                                px(components::OVERVIEW_COLUMN_WIDTH_PX)
+                            } else {
+                                px(0.0)
+                            };
+                            let overview_mode_selector = (overview_w > px(0.0)
+                                && !self.conflict_resolver.three_way_text.base.is_empty())
+                            .then(|| {
+                                self.conflict_overview_mode_selector(theme, ui_scale_percent, cx)
+                            });
+
                             let preview_toggle = show_preview_toggle.then(|| {
                                 let view_toggle_border = theme.colors.border;
                                 let view_toggle_selected_bg = theme.colors.active;
@@ -757,8 +832,24 @@ impl MainPaneView {
                                     )
                             });
 
-                            let top_header = preview_toggle.map(|toggle| {
-                                div().flex().items_center().justify_end().child(toggle)
+                            let top_header = (preview_toggle.is_some()
+                                || overview_mode_selector.is_some())
+                            .then(|| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_1()
+                                            .when_some(overview_mode_selector, |d, selector| {
+                                                d.child(selector)
+                                            }),
+                                    )
+                                    .when_some(preview_toggle, |d, toggle| d.child(toggle))
                             });
 
                             // Compute three-way column widths
@@ -774,8 +865,10 @@ impl MainPaneView {
                             };
                             let handle_w = px(PANE_RESIZE_HANDLE_PX);
                             let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
-                            let main_w =
-                                (self.main_pane_content_width(cx) - scrollbar_gutter).max(px(0.0));
+                            let main_w = (self.main_pane_content_width(cx)
+                                - scrollbar_gutter
+                                - overview_w)
+                                .max(px(0.0));
                             let available = (main_w - handle_w * 2.0).max(px(0.0));
                             let ratios = self.conflict_three_way_col_ratios;
                             let col_a_w = if available <= min_col_w * 3.0 {
@@ -1013,6 +1106,11 @@ impl MainPaneView {
                                 .w_full()
                                 .flex()
                                 .items_center()
+                                // Keep the column headers over their columns:
+                                // the overview column shifts the body right.
+                                .when(overview_w > px(0.0), |d| {
+                                    d.child(div().w(overview_w).h_full().flex_shrink_0())
+                                })
                                 .when(view_mode == ConflictResolverViewMode::ThreeWay, |d| {
                                     d.child(
                                         div()
@@ -1567,6 +1665,56 @@ impl MainPaneView {
                                             .into_any_element()
                                     }
                                 }
+                            };
+
+                            // kdiff3's Overview widget: the whole-file change
+                            // map beside the inputs, framing the viewport and
+                            // jumping the panes on click.
+                            let top_body: AnyElement = if overview_w > px(0.0) {
+                                let view = cx.entity();
+                                let jump_rows = diff_list_len;
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .h_full()
+                                    .min_h(px(0.0))
+                                    .child(
+                                        components::OverviewColumn::new(
+                                            "conflict_overview",
+                                            self.conflict_resolver.overview_bands.clone(),
+                                        )
+                                        .compare_bands(
+                                            self.conflict_resolver.overview_compare_bands.clone(),
+                                        )
+                                        .driver(self.conflict_resolver_diff_scroll.clone())
+                                        .on_jump(move |fraction, _window, cx| {
+                                            if jump_rows == 0 {
+                                                return;
+                                            }
+                                            let row = ((fraction * jump_rows as f32) as usize)
+                                                .min(jump_rows - 1);
+                                            view.update(cx, |this, cx| {
+                                                this.conflict_resolver_scroll_all_columns(
+                                                    row,
+                                                    gpui::ScrollStrategy::Center,
+                                                );
+                                                cx.notify();
+                                            });
+                                        })
+                                        .render(theme),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .flex_1()
+                                            .min_w(px(0.0))
+                                            .h_full()
+                                            .min_h(px(0.0))
+                                            .child(top_body),
+                                    )
+                                    .into_any_element()
+                            } else {
+                                top_body
                             };
 
                             let output_modified = self.conflict_resolved_output_is_modified();

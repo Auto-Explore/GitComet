@@ -1321,6 +1321,14 @@ pub(super) struct ConflictResolverUiState {
     /// section 30 aligned row space: maps visual rows to per-side lines. Identity
     /// (row == line) when alignment is unavailable.
     pub(super) three_way_aligned: conflict_resolver::ThreeWayAlignedMap,
+    /// kdiff3-style overview column: which comparison it visualizes.
+    pub(super) overview_mode: gitcomet_core::merge::OverviewMode,
+    /// Overview bands for the merge itself, in visible-row space. Empty when
+    /// no alignment is available, which hides the column.
+    pub(super) overview_bands: Arc<[gitcomet_core::merge::OverviewRowKind]>,
+    /// Overview bands for the active pairwise comparison, painted beside the
+    /// merge bands. `None` in merge mode.
+    pub(super) overview_compare_bands: Option<Arc<[gitcomet_core::merge::OverviewRowKind]>>,
     /// Exact merge-plan row ranges for the currently visible marker blocks.
     ///
     /// `None` is the legacy/current-only fallback where ranges must be
@@ -1421,6 +1429,9 @@ impl Default for ConflictResolverUiState {
             three_way_line_starts: ThreeWaySides::default(),
             three_way_len: 0,
             three_way_aligned: conflict_resolver::ThreeWayAlignedMap::default(),
+            overview_mode: gitcomet_core::merge::OverviewMode::default(),
+            overview_bands: Arc::from([]),
+            overview_compare_bands: None,
             merge_plan_aligned_conflict_ranges: None,
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
@@ -2493,6 +2504,41 @@ impl ConflictResolverUiState {
         self.three_way_visible_state_ready = true;
         self.conflict_output_row_anchors_dirty = true;
         self.refresh_three_way_horizontal_measure_rows();
+        self.rebuild_overview_bands();
+    }
+
+    /// Recompute the overview column's bands for the current projection and
+    /// mode. In a pairwise mode the merge bands stay in the left half and the
+    /// comparison goes in the right, as kdiff3's `paintEvent` splits it.
+    pub(super) fn rebuild_overview_bands(&mut self) {
+        let projection = match &self.mode_state {
+            ConflictModeState::Streamed(s) => &s.three_way_visible_projection,
+        };
+        let trailing = conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS;
+        let bands: Arc<[_]> = conflict_resolver::build_overview_bands(
+            &self.three_way_aligned,
+            projection,
+            gitcomet_core::merge::OverviewMode::Merge,
+            trailing,
+        )
+        .into();
+        let compare_bands: Option<Arc<[_]>> =
+            (self.overview_mode != gitcomet_core::merge::OverviewMode::Merge).then(|| {
+                conflict_resolver::build_overview_bands(
+                    &self.three_way_aligned,
+                    projection,
+                    self.overview_mode,
+                    trailing,
+                )
+                .into()
+            });
+        self.overview_bands = bands;
+        self.overview_compare_bands = compare_bands;
+    }
+
+    /// Whether the overview column has anything to show.
+    pub(super) fn has_overview(&self) -> bool {
+        !self.overview_bands.is_empty()
     }
 
     /// Rebuild two-way visible state from current marker segments.

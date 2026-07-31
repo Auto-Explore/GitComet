@@ -10,8 +10,10 @@ use crate::file_diff::split_lines;
 use std::borrow::Cow;
 use std::fmt;
 
+mod overview;
 mod plan;
 
+pub use overview::{OverviewMode, OverviewRowKind, overview_row_kind, overview_rows};
 pub use plan::{
     AlignedRow, InteractiveMergePlanBudget, MergeBlock, MergeBlockClassification, MergeBlockId,
     MergePlan, MergeSource, OrderedSelection, build_merge_plan,

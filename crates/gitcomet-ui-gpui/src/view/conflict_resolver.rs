@@ -4483,6 +4483,7 @@ struct AlignedMapRun {
     rows: usize,
     starts: [usize; 3],
     lens: [usize; 3],
+    kind: gitcomet_core::merge::AlignedRunKind,
 }
 
 impl ThreeWayAlignedMap {
@@ -4497,6 +4498,7 @@ impl ThreeWayAlignedMap {
                 rows,
                 starts: [run.base.start, run.ours.start, run.theirs.start],
                 lens: [run.base.len(), run.ours.len(), run.theirs.len()],
+                kind: run.kind,
             });
             aligned_start += rows;
         }
@@ -4972,6 +4974,134 @@ impl ThreeWayVisibleProjection {
         }
         None
     }
+}
+
+/// Blank rows appended below the last line of the source diff lists so the
+/// tail of the file can be scrolled up into a comfortable reading position.
+pub const CONFLICT_BOTTOM_OVERSCROLL_ROWS: usize = 10;
+
+/// Number of bands the overview column is quantized into.
+///
+/// kdiff3 paints one band per line; bounding the band count keeps paint cost
+/// independent of file size while staying far finer than any column height.
+pub const OVERVIEW_BAND_COUNT: usize = 2048;
+
+/// Build the overview column's bands for the current three-way projection.
+///
+/// The result is in *visible* row space so the painted column lines up with
+/// what the panes actually show: rows hidden by hide-resolved or collapsed
+/// context are folded into their summary row's band, exactly as they are in
+/// the lists. Returns an empty vector when the map carries no classification
+/// (the identity fallback used for unaligned/giant files), which callers treat
+/// as "no overview available".
+///
+/// `trailing_rows` are the blank overscroll rows the lists append below the
+/// last line. They carry no changes but do take up scroll range, so the bands
+/// have to cover them for the viewport frame to line up with the panes.
+pub fn build_overview_bands(
+    aligned: &ThreeWayAlignedMap,
+    projection: &ThreeWayVisibleProjection,
+    mode: gitcomet_core::merge::OverviewMode,
+    trailing_rows: usize,
+) -> Vec<gitcomet_core::merge::OverviewRowKind> {
+    use gitcomet_core::merge::OverviewRowKind;
+
+    if aligned.is_identity() || projection.len() == 0 {
+        return Vec::new();
+    }
+    let visible_len = projection.len() + trailing_rows;
+
+    let band_count = OVERVIEW_BAND_COUNT.min(visible_len);
+    let mut bands = vec![OverviewRowKind::Unchanged; band_count];
+    let mut paint = |visible: std::ops::Range<usize>, kind: OverviewRowKind| {
+        if kind == OverviewRowKind::Unchanged || visible.is_empty() {
+            return;
+        }
+        let first = visible.start.min(visible_len - 1) * band_count / visible_len;
+        let last = (visible.end - 1).min(visible_len - 1) * band_count / visible_len;
+        for band in &mut bands[first..=last.min(band_count - 1)] {
+            *band = band.merge(kind);
+        }
+    };
+
+    // Walk the visible spans and, for each, the aligned runs it covers. A
+    // collapsed span shows several aligned rows on one visible row, so every
+    // run it hides merges into that row's band.
+    let spans = projection.spans();
+    let runs = &aligned.runs;
+    let aligned_len = aligned.aligned_len();
+    let span_source_start = |span: &ThreeWayVisibleSpan| match *span {
+        ThreeWayVisibleSpan::Lines {
+            source_line_start, ..
+        }
+        | ThreeWayVisibleSpan::CollapsedContext {
+            source_line_start, ..
+        } => Some(source_line_start),
+        // A collapsed conflict block carries no source range of its own.
+        ThreeWayVisibleSpan::CollapsedResolvedBlock { .. } => None,
+    };
+
+    let mut covered = 0usize;
+    for (span_ix, span) in spans.iter().enumerate() {
+        let (source, visible_start, collapsed) = match *span {
+            ThreeWayVisibleSpan::Lines {
+                visible_start,
+                source_line_start,
+                len,
+            } => (
+                source_line_start..source_line_start + len,
+                visible_start,
+                false,
+            ),
+            ThreeWayVisibleSpan::CollapsedContext {
+                visible_index,
+                source_line_start,
+                len,
+                ..
+            } => (
+                source_line_start..source_line_start + len,
+                visible_index,
+                true,
+            ),
+            ThreeWayVisibleSpan::CollapsedResolvedBlock { visible_index, .. } => {
+                // The hidden rows are everything between the previous span and
+                // the next one that names a source line.
+                let next = spans[span_ix + 1..]
+                    .iter()
+                    .find_map(span_source_start)
+                    .unwrap_or(aligned_len);
+                (covered..next.max(covered), visible_index, true)
+            }
+        };
+        covered = covered.max(source.end);
+        if source.is_empty() {
+            continue;
+        }
+
+        let mut run_ix = runs.partition_point(|run| run.aligned_start + run.rows <= source.start);
+        while let Some(run) = runs
+            .get(run_ix)
+            .filter(|run| run.aligned_start < source.end)
+        {
+            run_ix += 1;
+            let kind = gitcomet_core::merge::overview_row_kind(run.kind, mode);
+            if kind == OverviewRowKind::Unchanged {
+                continue;
+            }
+            if collapsed {
+                paint(visible_start..visible_start + 1, kind);
+                continue;
+            }
+            let start = run.aligned_start.max(source.start);
+            let end = (run.aligned_start + run.rows).min(source.end);
+            paint(
+                visible_start + (start - source.start)..visible_start + (end - source.start),
+                kind,
+            );
+        }
+    }
+
+    bands
 }
 
 #[cfg(any(test, feature = "benchmarks"))]

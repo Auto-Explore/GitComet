@@ -1088,6 +1088,13 @@ impl MainPaneView {
             // Fresh opens honor the persisted collapse-unchanged default.
             self.mergetool_collapse_unchanged
         };
+        // The overview mode is a viewing preference, not file state: keep it
+        // across rebuilds of the same conflict, reset it on a new file.
+        let overview_mode = if is_same_conflict {
+            self.conflict_resolver.overview_mode
+        } else {
+            gitcomet_core::merge::OverviewMode::default()
+        };
         let nav_anchor = if is_same_conflict {
             self.conflict_resolver.nav_anchor
         } else {
@@ -1224,6 +1231,9 @@ impl MainPaneView {
             three_way_line_starts,
             three_way_len,
             three_way_aligned,
+            overview_mode,
+            overview_bands: Arc::from([]),
+            overview_compare_bands: None,
             merge_plan_aligned_conflict_ranges,
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
