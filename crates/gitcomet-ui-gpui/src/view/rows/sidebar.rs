@@ -330,7 +330,9 @@ impl SidebarPaneView {
         // toggled filter box, or the expanded sidebar's filter bar.
         let is_collapsed_popover = this.collapsed_popover_presentation.is_some();
         let filter_query = if is_collapsed_popover {
-            this.collapsed_popover_filter_query.trim().to_ascii_lowercase()
+            this.collapsed_popover_filter_query
+                .trim()
+                .to_ascii_lowercase()
         } else {
             this.branch_filter_query.trim().to_ascii_lowercase()
         };

@@ -1136,8 +1136,7 @@ mod tests {
             // way the tip must move away from body text, not sit between it and
             // the muted text used for de-emphasized columns.
             assert_eq!(
-                tip,
-                theme.colors.emphasis_text,
+                tip, theme.colors.emphasis_text,
                 "the tip summary should use the theme's emphasis color"
             );
         }
@@ -1178,4 +1177,3 @@ mod tests {
         assert_eq!(hit_test_index(&chips, point(px(15.0), px(5.0))), None);
     }
 }
-

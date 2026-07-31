@@ -431,12 +431,7 @@ impl RepoTabsBarView {
     /// to roam the whole title bar, so without this the tab follows it out past
     /// either end and paints over the window chrome. Held against an edge the
     /// tab now stops there while the strip auto-scrolls underneath.
-    fn clamp_repo_tab_drag_left(
-        &self,
-        left: Pixels,
-        repo_id: RepoId,
-        tab_width: Pixels,
-    ) -> Pixels {
+    fn clamp_repo_tab_drag_left(&self, left: Pixels, repo_id: RepoId, tab_width: Pixels) -> Pixels {
         let viewport = self.tab_scroll.viewport();
         // The drag records its own width on the first move over the dragged tab;
         // until then fall back to the width the strip laid out for it.
