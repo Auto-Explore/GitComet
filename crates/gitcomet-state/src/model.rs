@@ -485,6 +485,11 @@ pub struct AppState {
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
+    /// A submodule trust check is running in the background. Set the moment the
+    /// add/update/load is triggered and cleared when the check resolves, so the
+    /// UI can show a pending/spinner state instead of a dead gap before the
+    /// trust dialog (or a silent proceed) appears.
+    pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
     pub sidebar_mode: SidebarMode,
@@ -559,6 +564,21 @@ pub struct SubmoduleTrustPromptState {
     pub repo_id: RepoId,
     pub operation: SubmoduleTrustPromptOperation,
     pub sources: Vec<SubmoduleTrustTarget>,
+}
+
+/// Which pending action a background trust check belongs to. Mirrors the
+/// operation so the spinner's title matches the trust dialog that may follow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleTrustCheckOperation {
+    Add,
+    Update,
+    Load,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmoduleTrustCheckState {
+    pub repo_id: RepoId,
+    pub operation: SubmoduleTrustCheckOperation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

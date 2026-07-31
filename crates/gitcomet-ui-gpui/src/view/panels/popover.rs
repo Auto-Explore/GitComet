@@ -725,12 +725,13 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::Repo {
-            kind:
-                RepoPopoverKind::Submodule(
-                    SubmodulePopoverKind::AddPrompt | SubmodulePopoverKind::TrustConfirm,
-                ),
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
             ..
         } => Some(DIALOG_640_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+            ..
+        } => Some(DIALOG_460_WIDTH),
         PopoverKind::Repo {
             kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
             ..

@@ -3624,6 +3624,8 @@ pub struct GitCometView {
         Option<(RepoId, std::path::PathBuf, Option<String>)>,
     pub(super) pending_submodule_trust_prompt:
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
+    pub(super) pending_submodule_trust_check:
+        Option<gitcomet_state::model::SubmoduleTrustCheckState>,
     pub(super) pending_worktree_branch_removals: HashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

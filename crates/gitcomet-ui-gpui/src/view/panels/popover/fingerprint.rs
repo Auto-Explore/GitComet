@@ -102,6 +102,13 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
                     source.local_source_path.hash(&mut hasher);
                 }
             }
+            // The pending spinner and the resolved dialog share this popover
+            // kind, so fold the pending check in to force a re-render when the
+            // check starts or resolves.
+            if let Some(check) = state.submodule_trust_check_pending.as_ref() {
+                check.repo_id.hash(&mut hasher);
+                std::mem::discriminant(&check.operation).hash(&mut hasher);
+            }
         }
         _ => {
             if let Some(repo) = repo_for_popover(state, popover) {

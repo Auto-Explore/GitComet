@@ -541,6 +541,23 @@ impl GitCometView {
         });
     }
 
+    /// Close the submodule trust popover only while it is showing its pending
+    /// spinner for `repo_id` (no trust prompt yet). Used when a background trust
+    /// check resolves to a silent proceed or an error, so the spinner does not
+    /// linger. A no-op if the user already dismissed it or another popover is up.
+    pub(in crate::view) fn close_submodule_trust_spinner(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let kind = PopoverKind::submodule(repo_id, SubmodulePopoverKind::TrustConfirm);
+        self.popover_host.update(cx, |host, cx| {
+            if host.is_kind_open(&kind) {
+                host.close_popover(cx);
+            }
+        });
+    }
+
     pub(in crate::view) fn open_popover_centered(
         &mut self,
         kind: PopoverKind,
@@ -1709,6 +1726,7 @@ impl GitCometView {
             pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
+            pending_submodule_trust_check: None,
             pending_worktree_branch_removals: HashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
@@ -3281,6 +3299,21 @@ impl Render for GitCometView {
                     path,
                     branch,
                 },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        // A trust check just started: open the trust popover immediately in its
+        // pending/spinner state so there is no dead gap while the background
+        // check runs. It fills in with the real sources (or is closed on a
+        // silent proceed) when the check resolves — see `apply_state_snapshot`.
+        if let Some(check) = self.pending_submodule_trust_check.take()
+            && self.active_repo_id() == Some(check.repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::submodule(check.repo_id, SubmodulePopoverKind::TrustConfirm),
                 self.last_mouse_pos,
                 window,
                 cx,
