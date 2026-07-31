@@ -61,7 +61,11 @@ pub(super) fn panel(
                     .style(components::ButtonStyle::Filled)
                     .borderless()
                     .no_hover_border()
-                    .end_slot(div().font_family(UI_MONOSPACE_FONT_FAMILY).child("->"))
+                    .end_slot(svg_icon(
+                        "icons/open_external.svg",
+                        theme.colors.accent,
+                        px(14.0),
+                    ))
                     .on_click(theme, cx, |_this, _e, _window, cx| {
                         cx.open_url(SUBMODULE_TRUST_CVE_URL);
                     }),

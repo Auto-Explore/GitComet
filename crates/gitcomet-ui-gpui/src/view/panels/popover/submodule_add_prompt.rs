@@ -15,13 +15,15 @@ fn advanced_toggle(
     )
     .flex()
     .child(div().text_sm().child("Advanced"))
-    .child(
-        div()
-            .text_sm()
-            .font_family(UI_MONOSPACE_FONT_FAMILY)
-            .text_color(theme.colors.text_muted)
-            .child(if expanded { "^" } else { "v" }),
-    )
+    .child(svg_icon(
+        if expanded {
+            "icons/chevron_up.svg"
+        } else {
+            "icons/chevron_down.svg"
+        },
+        theme.colors.text_muted,
+        px(12.0),
+    ))
 }
 
 fn force_toggle(
