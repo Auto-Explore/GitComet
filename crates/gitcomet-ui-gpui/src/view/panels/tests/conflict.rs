@@ -2175,7 +2175,9 @@ fn whole_file_conflict_stage_anyway_uses_streamed_output_without_materializing(
                         &pane.conflict_resolver.marker_segments,
                     );
                     let input_before = pane.conflict_resolver_input.read(cx).text().to_string();
-                    let actual = pane.conflict_resolver_save_contents(cx);
+                    // Mirrors the production save path in conflict_resolver_view.
+                    let output_text = pane.current_conflict_resolved_output_text(cx);
+                    let actual = pane.conflict_resolver_save_contents_from_text(output_text);
                     let input_after = pane.conflict_resolver_input.read(cx).text().to_string();
                     (
                         expected,

@@ -2325,14 +2325,6 @@ impl MainPaneView {
         text
     }
 
-    pub(in crate::view) fn conflict_resolver_save_contents(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) -> String {
-        let text = self.current_conflict_resolved_output_text(cx);
-        self.conflict_resolver_save_contents_from_text(text)
-    }
-
     pub(in crate::view) fn ensure_prepared_syntax_chunk_poll(
         &mut self,
         cx: &mut gpui::Context<Self>,

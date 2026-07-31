@@ -2096,22 +2096,6 @@ pub(super) fn apply_conflict_choice_provenance_hints(
     );
 }
 
-pub(super) fn replace_output_lines_in_range(
-    output: &str,
-    range: Range<usize>,
-    replacement_lines: &[String],
-) -> String {
-    let mut lines: Vec<String> = if output.is_empty() {
-        Vec::new()
-    } else {
-        output.split('\n').map(|line| line.to_string()).collect()
-    };
-    let start = range.start.min(lines.len());
-    let end = range.end.min(lines.len()).max(start);
-    lines.splice(start..end, replacement_lines.iter().cloned());
-    lines.join("\n")
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ClearDiffSelectionAction {
     ClearSelection,

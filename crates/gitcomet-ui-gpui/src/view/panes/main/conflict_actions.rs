@@ -2486,7 +2486,7 @@ impl MainPaneView {
             ]);
             replacements.push((range.clone(), replacement));
         }
-        replacements.sort_by(|left, right| right.0.start.cmp(&left.0.start));
+        replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0.start));
 
         let theme = self.theme;
         let (snapshot, edit_deltas) = self.conflict_resolver_input.update(cx, |input, cx| {

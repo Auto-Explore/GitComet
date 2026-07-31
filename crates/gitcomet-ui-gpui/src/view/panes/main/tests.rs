@@ -14,7 +14,7 @@ use super::{
     focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
     pane_content_width_for_layout, parse_conflict_canvas_rows_env,
     remap_line_keyed_cache_for_delta, remap_resolved_output_conflict_block_ranges_for_delta,
-    renderable_conflict_file, replace_output_lines_in_range, resolved_outline_delta_between_texts,
+    renderable_conflict_file, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
     resolved_output_snapshot_is_modified, split_target_conflict_block_into_subchunks,
@@ -598,22 +598,6 @@ fn parse_conflict_canvas_rows_env_rejects_falsey_values() {
     assert!(!parse_conflict_canvas_rows_env("false"));
     assert!(!parse_conflict_canvas_rows_env("off"));
     assert!(!parse_conflict_canvas_rows_env("no"));
-}
-
-#[test]
-fn replace_output_lines_in_range_replaces_only_target_chunk() {
-    let output = "top\nkeep\nalso-keep\nbottom";
-    let replacement = vec!["picked".to_string()];
-    let next = replace_output_lines_in_range(output, 1..3, &replacement);
-    assert_eq!(next, "top\npicked\nbottom");
-}
-
-#[test]
-fn replace_output_lines_in_range_preserves_trailing_newline() {
-    let output = "a\nb\n";
-    let replacement = vec!["x".to_string(), "y".to_string()];
-    let next = replace_output_lines_in_range(output, 1..2, &replacement);
-    assert_eq!(next, "a\nx\ny\n");
 }
 
 #[test]
