@@ -1553,6 +1553,26 @@ fn reduce_inner(
             region_index,
             choice,
         } => conflict_interactions::set_region_choice(state, repo_id, path, region_index, choice),
+        Msg::ConflictToggleRegionSource {
+            repo_id,
+            path,
+            region_index,
+            source,
+        } => {
+            conflict_interactions::toggle_region_source(state, repo_id, path, region_index, source)
+        }
+        Msg::ConflictReplaceRegionSelection {
+            repo_id,
+            path,
+            region_index,
+            selection,
+        } => conflict_interactions::replace_region_selection(
+            state,
+            repo_id,
+            path,
+            region_index,
+            selection,
+        ),
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path,

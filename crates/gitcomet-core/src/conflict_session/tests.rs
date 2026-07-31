@@ -18,7 +18,13 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
         ours: ConflictPayload::Text("ours\n".into()),
         theirs: ConflictPayload::Text("theirs\n".into()),
         current: None,
+        marker_projection: None,
         regions,
+        region_source_ranges: Vec::new(),
+        merge_plan: None,
+        merge_plan_fallback: None,
+        region_plan_blocks: Vec::new(),
+        has_pending_structural_edits: false,
     }
 }
 
@@ -1134,6 +1140,61 @@ fn from_merged_text_without_markers_keeps_synthetic_two_way_region() {
 }
 
 #[test]
+fn stage_session_preserves_worktree_text_separately_from_marker_projection() {
+    let current = "before\nmanually merged\nafter\n";
+    let session = ConflictSession::from_stage_inputs_with_current(
+        PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("before\nbase\nafter\n".into()),
+        ConflictPayload::Text("before\nours\nafter\n".into()),
+        ConflictPayload::Text("before\ntheirs\nafter\n".into()),
+        Some(ConflictPayload::Text(current.into())),
+    );
+
+    assert_eq!(session.current_text(), Some(current));
+    let projection = session
+        .marker_projection_text()
+        .expect("stage session should expose marker geometry");
+    assert_ne!(projection, current);
+    assert!(projection.contains("<<<<<<<"));
+    assert!(session.merge_plan.is_some());
+}
+
+#[test]
+fn stage_session_uses_marker_fallback_before_planning_large_unrelated_files() {
+    let make_side = |prefix: &str| {
+        (0..10_000)
+            .map(|index| format!("{prefix}-{index}\n"))
+            .collect::<String>()
+    };
+    let base = make_side("base");
+    let ours = make_side("ours");
+    let theirs = make_side("theirs");
+    let current = "manual worktree result\n";
+
+    let session = ConflictSession::from_stage_inputs_with_current(
+        PathBuf::from("large.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+        Some(ConflictPayload::Text(current.into())),
+    );
+
+    assert_eq!(session.current_text(), Some(current));
+    assert!(session.merge_plan.is_none());
+    assert_eq!(
+        session.merge_plan_fallback,
+        Some(MergePlanFallbackReason::BudgetExceeded)
+    );
+    let projection = session
+        .marker_projection_text()
+        .expect("budget fallback should retain marker-backed geometry");
+    assert!(projection.starts_with("<<<<<<<"));
+    assert_eq!(session.regions.len(), 1);
+}
+
+#[test]
 fn has_unresolved_markers_reflects_unsolved() {
     let mut session = make_session(vec![make_region(Some("b"), "a", "c")]);
     assert!(session.has_unresolved_markers());
@@ -2216,4 +2277,87 @@ fn autosolve_malformed_diff3_no_end_preserves_all_sections() {
     let text = "before\n<<<<<<< ours\nours\n||||||| base\nbase\n=======\ntheirs\n";
     let result = try_autosolve_merged_text(text);
     assert_eq!(result.as_deref(), Some(text));
+}
+
+fn repeated_conflict_session(duplicate_count: usize) -> ConflictSession {
+    let mut base = String::new();
+    let mut ours = String::new();
+    let mut theirs = String::new();
+    for index in 0..duplicate_count {
+        base.push_str("duplicate-base\n");
+        ours.push_str("duplicate-ours\n");
+        theirs.push_str("duplicate-theirs\n");
+        let separator = format!("separator-{index}\n");
+        base.push_str(&separator);
+        ours.push_str(&separator);
+        theirs.push_str(&separator);
+    }
+    base.push_str("unique-base\nend\n");
+    ours.push_str("unique-ours\nend\n");
+    theirs.push_str("unique-theirs\nend\n");
+    ConflictSession::from_stage_inputs(
+        PathBuf::from("duplicates.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+    )
+}
+
+#[test]
+fn unchanged_duplicate_plan_sequence_restores_picks_positionally() {
+    use crate::merge::{MergeSource, OrderedSelection};
+
+    let mut previous = repeated_conflict_session(2);
+    assert_eq!(previous.regions.len(), 3);
+    assert!(previous.replace_region_selection(0, MergeSource::B.into()));
+    assert!(previous.replace_region_selection(1, MergeSource::C.into()));
+    assert!(previous.replace_region_selection(
+        2,
+        OrderedSelection::from_sources([MergeSource::C, MergeSource::B]),
+    ));
+
+    let mut refreshed = repeated_conflict_session(2);
+    refreshed.restore_plan_decisions_from(&previous);
+    assert_eq!(
+        refreshed.regions[0].resolution,
+        ConflictRegionResolution::Sources(MergeSource::B.into()),
+    );
+    assert_eq!(
+        refreshed.regions[1].resolution,
+        ConflictRegionResolution::Sources(MergeSource::C.into()),
+    );
+    assert_eq!(
+        refreshed.regions[2].resolution,
+        ConflictRegionResolution::Sources(OrderedSelection::from_sources([
+            MergeSource::C,
+            MergeSource::B,
+        ])),
+    );
+}
+
+#[test]
+fn inserted_duplicate_leaves_duplicates_unresolved_but_restores_unique_conflict() {
+    use crate::merge::{MergeSource, OrderedSelection};
+
+    let mut previous = repeated_conflict_session(2);
+    assert!(previous.replace_region_selection(0, MergeSource::B.into()));
+    assert!(previous.replace_region_selection(1, MergeSource::C.into()));
+    let unique = OrderedSelection::from_sources([MergeSource::C, MergeSource::B]);
+    assert!(previous.replace_region_selection(2, unique.clone()));
+
+    let mut refreshed = repeated_conflict_session(3);
+    assert_eq!(refreshed.regions.len(), 4);
+    refreshed.restore_plan_decisions_from(&previous);
+    assert!(
+        refreshed.regions[..3]
+            .iter()
+            .all(|region| region.resolution == ConflictRegionResolution::Unresolved),
+        "all duplicate fingerprints must fail closed after insertion",
+    );
+    assert_eq!(
+        refreshed.regions[3].resolution,
+        ConflictRegionResolution::Sources(unique),
+        "an unambiguous conflict should still restore across the same refresh",
+    );
 }

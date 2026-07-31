@@ -3,8 +3,8 @@
 //! Splitting rewrites one `<<<<<<<`/`>>>>>>>` block into 2–3 adjacent blocks
 //! at block-local line boundaries; joining merges two neighbouring blocks,
 //! absorbing the context between them into every side. Both operate purely on
-//! the merged text — sessions and views re-derive regions by re-parsing, so
-//! the marker text stays the single source of truth.
+//! the merged text. Sessions re-parse the edited marker projection and then
+//! reconcile its structural blocks with the shared merge plan.
 
 use super::marker_parse::{
     ParsedConflictBlockRanges, ParsedConflictSegmentRanges, parse_conflict_marker_ranges,

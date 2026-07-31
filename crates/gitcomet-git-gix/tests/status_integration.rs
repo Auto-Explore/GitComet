@@ -8606,9 +8606,38 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
         .expect("conflict session");
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
     assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
+    let plan = session
+        .merge_plan
+        .as_ref()
+        .expect("full-text Gix session should retain its stage merge plan");
+    assert_eq!(session.region_plan_blocks.len(), session.regions.len());
+    assert!(
+        session
+            .region_plan_blocks
+            .iter()
+            .all(|block_index| plan.blocks.get(*block_index).is_some()),
+        "every displayed region should map to a valid plan block",
+    );
+    let marker_projection = gitcomet_core::merge::render_merge_plan(
+        plan,
+        &gitcomet_core::merge::MergeOptions {
+            style: gitcomet_core::merge::ConflictStyle::Diff3,
+            ..Default::default()
+        },
+    )
+    .output;
+    let worktree_content = fs::read_to_string(repo.join("doc.txt")).unwrap();
+    assert_eq!(session.current_text(), Some(worktree_content.as_str()));
+    assert_eq!(
+        session.marker_projection_text(),
+        Some(marker_projection.as_str())
+    );
+    assert!(
+        marker_projection.contains("|||||||"),
+        "stage-backed three-way geometry should include the ancestor section",
+    );
 
     // 3. Verify worktree file contains conflict markers
-    let worktree_content = fs::read_to_string(repo.join("doc.txt")).unwrap();
     let validation = gitcomet_core::services::validate_conflict_resolution_text(&worktree_content);
     assert!(
         validation.has_conflict_markers,
@@ -8701,17 +8730,13 @@ fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
     assert_eq!(fs::read_to_string(repo.join("new.txt")).unwrap(), resolved);
 }
 
-/// End-to-end test: autosolve Pass 1 correctly resolves trivial regions
-/// using synthetic conflict stages where some regions are trivially
-/// resolvable (one side equals base) while others are genuine conflicts.
+/// End-to-end test: the stage-backed merge plan materializes trivial changes
+/// as automatic context and exposes only genuine conflicts as regions.
 #[test]
 fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
-    use gitcomet_core::conflict_session::{
-        ConflictPayload, ConflictRegionResolution, ConflictSession,
-    };
 
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -8773,70 +8798,32 @@ fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    // Build a ConflictSession from the backend
-    let session_opt = opened.conflict_session(Path::new("multi.txt")).unwrap();
-    // The backend may or may not build the session (depending on status
-    // detection of the synthetic stages). Build one manually if needed.
-    let mut session = session_opt.unwrap_or_else(|| {
-        ConflictSession::from_merged_text(
-            PathBuf::from("multi.txt"),
-            FileConflictKind::BothModified,
-            ConflictPayload::Text("base-r0\nbase-r1\nbase-r2\n".into()),
-            ConflictPayload::Text("ours-r0\nours-r1\nsame-r2\n".into()),
-            ConflictPayload::Text("base-r0\ntheirs-r1\nsame-r2\n".into()),
-            merged_markers,
-        )
-    });
+    let mut session = opened
+        .conflict_session(Path::new("multi.txt"))
+        .unwrap()
+        .expect("stage-backed conflict session");
 
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
-    assert_eq!(session.total_regions(), 3);
-    assert_eq!(
-        session.unsolved_count(),
-        3,
-        "all regions should start unresolved"
-    );
-
-    // Apply auto-resolve Pass 1
-    let auto_resolved = session.auto_resolve_safe();
-    assert_eq!(
-        auto_resolved, 2,
-        "expected 2 trivial regions to be auto-resolved"
-    );
+    assert!(session.merge_plan.is_some());
+    assert_eq!(session.total_regions(), 1);
     assert_eq!(
         session.unsolved_count(),
         1,
-        "1 genuine conflict should remain"
+        "only the genuine conflict should be exposed as a region",
     );
+    assert_eq!(session.current_text(), Some(merged_markers));
+    let projected = session.marker_projection_text().expect("marker projection");
+    assert_eq!(projected.matches("<<<<<<<").count(), 1);
+    assert!(projected.contains("ours-r0\n"));
+    assert!(projected.contains("same-r2\n"));
 
-    // Verify specific rules
-    match &session.regions[0].resolution {
-        ConflictRegionResolution::AutoResolved { rule, content, .. } => {
-            assert_eq!(
-                *rule,
-                gitcomet_core::conflict_session::AutosolveRule::OnlyOursChanged,
-            );
-            assert_eq!(content, "ours-r0\n");
-        }
-        other => panic!("region 0 should be auto-resolved, got {:?}", other),
-    }
-    assert!(
-        !session.regions[1].resolution.is_resolved(),
-        "region 1 (genuine conflict) should remain unresolved"
-    );
-    match &session.regions[2].resolution {
-        ConflictRegionResolution::AutoResolved { rule, content, .. } => {
-            assert_eq!(
-                *rule,
-                gitcomet_core::conflict_session::AutosolveRule::IdenticalSides,
-            );
-            assert_eq!(content, "same-r2\n");
-        }
-        other => panic!("region 2 should be auto-resolved, got {:?}", other),
-    }
-
-    // Navigation should point to the remaining unresolved region
-    assert_eq!(session.next_unresolved_after(0), Some(1));
-    assert_eq!(session.prev_unresolved_before(2), Some(1));
+    // The plan already resolved the trivial stage changes, so the legacy safe
+    // pass has no additional marker region to process.
+    let auto_resolved = session.auto_resolve_safe();
+    assert_eq!(auto_resolved, 0);
+    assert_eq!(session.unsolved_count(), 1);
+    assert_eq!(session.next_unresolved_after(0), Some(0));
+    assert_eq!(session.prev_unresolved_before(0), Some(0));
 }
 
 /// End-to-end test: conflict session for a modify/delete conflict

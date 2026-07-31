@@ -526,11 +526,12 @@ impl MainPaneView {
                     let label: SharedString = if matches!(column, ThreeWayColumn::Base) {
                         let choice_label = conflict_choices
                             .get(range_ix)
-                            .map(|c| match c {
+                            .map(|c| match *c {
                                 conflict_resolver::ConflictChoice::Base => "Base (A)",
                                 conflict_resolver::ConflictChoice::Ours => "Local (B)",
                                 conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
                                 conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+                                _ => "Ordered source selection",
                             })
                             .unwrap_or("?");
                         format!("  Resolved: picked {choice_label}").into()
@@ -556,17 +557,20 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
-                        .when(range_ix == this.conflict_resolver.active_conflict, |d| {
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(3.0))
-                                    .bg(theme.colors.accent),
-                            )
-                        })
+                        .when(
+                            Some(range_ix) == this.conflict_resolver.active_conflict,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(3.0))
+                                        .bg(theme.colors.accent),
+                                )
+                            },
+                        )
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
@@ -712,8 +716,7 @@ impl MainPaneView {
                         show_line_numbers,
                     );
 
-                    let is_active_conflict =
-                        range_ix == Some(this.conflict_resolver.active_conflict);
+                    let is_active_conflict = range_ix == this.conflict_resolver.active_conflict;
                     // section 30 split: highlight rows in the drag selection; the
                     // begin/extend handlers only fire when split is available.
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(ix);
@@ -1050,8 +1053,7 @@ impl MainPaneView {
                     show_line_numbers,
                 );
 
-                let is_active_conflict =
-                    conflict_ix == Some(this.conflict_resolver.active_conflict);
+                let is_active_conflict = conflict_ix == this.conflict_resolver.active_conflict;
                 if this.conflict_canvas_rows_enabled {
                     let chunk_context_data = conflict_ix.map(|conflict_ix| ConflictChunkContext {
                         conflict_ix,
@@ -1257,11 +1259,12 @@ impl MainPaneView {
                     let label: SharedString = if matches!(side, ConflictPickSide::Ours) {
                         let choice_label = conflict_choices
                             .get(range_ix)
-                            .map(|c| match c {
+                            .map(|c| match *c {
                                 conflict_resolver::ConflictChoice::Base => "Base (A)",
                                 conflict_resolver::ConflictChoice::Ours => "Local (B)",
                                 conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
                                 conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+                                _ => "Ordered source selection",
                             })
                             .unwrap_or("?");
                         format!("  Resolved: picked {choice_label}").into()
@@ -1287,17 +1290,20 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
-                        .when(range_ix == this.conflict_resolver.active_conflict, |d| {
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(3.0))
-                                    .bg(theme.colors.accent),
-                            )
-                        })
+                        .when(
+                            Some(range_ix) == this.conflict_resolver.active_conflict,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(3.0))
+                                        .bg(theme.colors.accent),
+                                )
+                            },
+                        )
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
@@ -1459,8 +1465,7 @@ impl MainPaneView {
                     let conflict_ix = this
                         .conflict_resolver
                         .conflict_index_for_side_line(column, row);
-                    let is_active_conflict =
-                        conflict_ix == Some(this.conflict_resolver.active_conflict);
+                    let is_active_conflict = conflict_ix == this.conflict_resolver.active_conflict;
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(row);
                     let row_selection_enabled =
                         this.conflict_resolver.conflict_row_selection_enabled();
@@ -1819,13 +1824,15 @@ impl MainPaneView {
                 // a line git itself pre-merged (or plain context), not a
                 // resolver pick — mute it so only real picks read as
                 // decisions.
-                let badge_fg = if gutter_row.has_marker() {
+                let badge_fg = if gutter_row.has_marker() && gutter_row.unresolved() {
+                    theme.colors.danger
+                } else if gutter_row.has_marker() {
                     badge_fg
                 } else {
                     with_alpha(badge_fg, if theme.is_dark { 0.45 } else { 0.55 })
                 };
                 let conflict_ix = gutter_row.marker_conflict_ix();
-                let conflict_active = conflict_ix == Some(this.conflict_resolver.active_conflict);
+                let conflict_active = conflict_ix == this.conflict_resolver.active_conflict;
                 let conflict_unresolved = gutter_row.unresolved();
                 let marker_color = if conflict_unresolved {
                     with_alpha(theme.colors.danger, if theme.is_dark { 0.96 } else { 0.90 })
@@ -2040,6 +2047,11 @@ impl MainPaneView {
                         resolved_row_bg
                     }
                 });
+                let text_color = if conflict_marker.is_some_and(|marker| marker.unresolved) {
+                    theme.colors.danger
+                } else {
+                    theme.colors.text
+                };
 
                 elements.push(
                     div()
@@ -2052,7 +2064,7 @@ impl MainPaneView {
                         .items_center()
                         .text_xs()
                         .font_family(editor_font_family.clone())
-                        .text_color(theme.colors.text)
+                        .text_color(text_color)
                         .whitespace_nowrap()
                         .when_some(row_bg, |d, bg| d.bg(bg))
                         .on_mouse_down(
@@ -2861,6 +2873,7 @@ fn three_way_choice_short_label(choice: conflict_resolver::ConflictChoice) -> &'
         conflict_resolver::ConflictChoice::Ours => "B",
         conflict_resolver::ConflictChoice::Theirs => "C",
         conflict_resolver::ConflictChoice::Both => "B+C",
+        _ => "ordered",
     }
 }
 

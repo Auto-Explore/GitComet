@@ -104,16 +104,10 @@ impl MainPaneView {
         controls = controls
             .when_some(prev_file_btn, |d, btn| d.child(btn))
             .when(!conflict_rendered_preview_active, |d| {
-                let nav_entries = self.conflict_nav_entries();
-                let current_nav_ix = self.conflict_resolver.nav_anchor.unwrap_or(0);
-                let can_nav_prev =
-                    diff_navigation::diff_nav_prev_target(&nav_entries, current_nav_ix).is_some();
-                let can_nav_next =
-                    diff_navigation::diff_nav_next_target(&nav_entries, current_nav_ix).is_some();
-                let conflict_count = self.conflict_resolver_conflict_count();
-                let active_conflict = self.conflict_resolver.active_conflict;
-                let can_jump_first = conflict_count > 0 && active_conflict > 0;
-                let can_jump_last = conflict_count > 0 && active_conflict + 1 < conflict_count;
+                let can_nav_prev = self.conflict_has_prev();
+                let can_nav_next = self.conflict_has_next();
+                let can_jump_first = self.conflict_has_prev_delta();
+                let can_jump_last = self.conflict_has_next_delta();
                 let can_prev_unresolved = self.conflict_has_prev_unresolved();
                 let can_next_unresolved = self.conflict_has_next_unresolved();
 
@@ -221,11 +215,15 @@ impl MainPaneView {
                 )
             })
             .when(
-                !conflict_rendered_preview_active && self.conflict_resolver_conflict_count() > 0,
+                !conflict_rendered_preview_active
+                    && self.conflict_resolver.active_conflict.is_some(),
                 |d| {
                     // section 30: visible pick affordances for the active conflict,
                     // mirroring the A/B/C/D quick-pick keys.
-                    let active_ix = self.conflict_resolver.active_conflict;
+                    let active_ix = self
+                        .conflict_resolver
+                        .active_conflict
+                        .expect("pick controls require an active displayed conflict");
                     let has_base = self
                         .conflict_resolver
                         .conflict_has_base
@@ -236,6 +234,7 @@ impl MainPaneView {
                         self.conflict_resolver_selected_choices_for_conflict_ix(active_ix);
                     let is_three_way =
                         self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
+                    let output_actions_enabled = !self.conflict_resolver.output_is_protected;
                     let mut pick_btn =
                         |id: &'static str,
                          label: &'static str,
@@ -261,7 +260,7 @@ impl MainPaneView {
                                 "Base",
                                 "A",
                                 conflict_resolver::ConflictChoice::Base,
-                                has_base,
+                                has_base && output_actions_enabled,
                                 "Pick the base (ancestor) version for the active conflict \
                                  (A or Ctrl+1; U un-resolves)",
                             ))
@@ -270,7 +269,7 @@ impl MainPaneView {
                                 "Ours",
                                 "B",
                                 conflict_resolver::ConflictChoice::Ours,
-                                true,
+                                output_actions_enabled,
                                 "Pick the local (ours) version for the active conflict \
                                  (B or Ctrl+2; U un-resolves)",
                             ))
@@ -279,7 +278,7 @@ impl MainPaneView {
                                 "Theirs",
                                 "C",
                                 conflict_resolver::ConflictChoice::Theirs,
-                                true,
+                                output_actions_enabled,
                                 "Pick the incoming (theirs) version for the active conflict \
                                  (C or Ctrl+3; U un-resolves)",
                             ))
@@ -288,7 +287,7 @@ impl MainPaneView {
                                 "Both",
                                 "D",
                                 conflict_resolver::ConflictChoice::Both,
-                                true,
+                                output_actions_enabled,
                                 "Keep both versions (ours, then theirs) for the active conflict \
                                  (D; U un-resolves)",
                             ))
@@ -299,7 +298,7 @@ impl MainPaneView {
                                 "Local",
                                 "A",
                                 conflict_resolver::ConflictChoice::Ours,
-                                true,
+                                output_actions_enabled,
                                 "Pick the local (ours) version for the active conflict \
                                  (A or Ctrl+1; U un-resolves)",
                             ))
@@ -308,7 +307,7 @@ impl MainPaneView {
                                 "Remote",
                                 "B",
                                 conflict_resolver::ConflictChoice::Theirs,
-                                true,
+                                output_actions_enabled,
                                 "Pick the incoming (theirs) version for the active conflict \
                                  (B or Ctrl+2; U un-resolves)",
                             ))
@@ -317,7 +316,7 @@ impl MainPaneView {
                                 "Both",
                                 "C",
                                 conflict_resolver::ConflictChoice::Both,
-                                true,
+                                output_actions_enabled,
                                 "Keep both versions (ours, then theirs) for the active conflict \
                                  (C or Ctrl+3; U un-resolves)",
                             ))
@@ -338,53 +337,77 @@ impl MainPaneView {
             };
             let save_path = path.clone();
             let stage_path = path.clone();
+            let gate_unresolved = if self.conflict_resolver.output_is_protected {
+                self.conflict_resolver_input.read_with(cx, |input, _| {
+                    usize::from(conflict_resolver::text_contains_conflict_markers(
+                        input.text(),
+                    ))
+                })
+            } else if self.conflict_resolved_output_is_streamed() {
+                unresolved
+            } else {
+                self.conflict_resolver_input.read_with(cx, |input, _| {
+                    conflict_resolver::conflict_stage_safety_check(
+                        input.text(),
+                        &self.conflict_resolver.marker_segments,
+                        &self.conflict_resolved_output_block_map,
+                    )
+                    .unresolved_blocks
+                })
+            };
+            let save_button = components::Button::new("conflict_save", save_label)
+                .style(components::ButtonStyle::Outlined)
+                .disabled(gate_unresolved > 0)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    let text = this.current_conflict_resolved_output_text(cx);
+                    let blocks_save = if this.conflict_resolver.output_is_protected {
+                        conflict_resolver::text_contains_conflict_markers(&text)
+                    } else {
+                        conflict_resolver::conflict_stage_safety_check(
+                            &text,
+                            &this.conflict_resolver.marker_segments,
+                            &this.conflict_resolved_output_block_map,
+                        )
+                        .blocks_save()
+                    };
+                    if blocks_save {
+                        cx.notify();
+                        return;
+                    }
+                    if this.view_mode == GitCometViewMode::FocusedMergetool {
+                        this.focused_mergetool_save_and_exit(repo_id, save_path.clone(), cx);
+                        return;
+                    }
+                    let text = this.conflict_resolver_save_contents_from_text(text);
+                    this.store.dispatch(Msg::SaveWorktreeFile {
+                        repo_id,
+                        path: save_path.clone(),
+                        contents: text,
+                        stage: false,
+                    });
+                });
             controls = controls
                 .child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
-                .child(
-                    components::Button::new("conflict_save", save_label)
-                        .style(components::ButtonStyle::Outlined)
-                        .on_click(theme, cx, move |this, _e, _w, cx| {
-                            if this.view_mode == GitCometViewMode::FocusedMergetool {
-                                this.focused_mergetool_save_and_exit(
-                                    repo_id,
-                                    save_path.clone(),
-                                    cx,
-                                );
-                                return;
-                            }
-                            let text = this.conflict_resolver_save_contents(cx);
-                            this.store.dispatch(Msg::SaveWorktreeFile {
-                                repo_id,
-                                path: save_path.clone(),
-                                contents: text,
-                                stage: false,
-                            });
-                        }),
-                )
+                .child(save_button)
                 .when(show_conflict_save_stage_action(self.view_mode), |d| {
-                    let gate_unresolved = unresolved;
                     let mut save_stage_btn =
                         components::Button::new("conflict_save_stage", "Save & stage")
                             .style(components::ButtonStyle::Filled)
                             .disabled(gate_unresolved > 0)
-                            .on_click(theme, cx, move |this, e, window, cx| {
+                            .on_click(theme, cx, move |this, _e, _window, cx| {
                                 let text = this.current_conflict_resolved_output_text(cx);
-                                let stage_safety = conflict_resolver::conflict_stage_safety_check(
-                                    &text,
-                                    &this.conflict_resolver.marker_segments,
-                                );
-                                if stage_safety.requires_confirmation() {
-                                    this.open_popover_at(
-                                        PopoverKind::ConflictSaveStageConfirm {
-                                            repo_id,
-                                            path: stage_path.clone(),
-                                            has_conflict_markers: stage_safety.has_conflict_markers,
-                                            unresolved_blocks: stage_safety.unresolved_blocks,
-                                        },
-                                        e.position(),
-                                        window,
-                                        cx,
-                                    );
+                                let blocks_stage = if this.conflict_resolver.output_is_protected {
+                                    conflict_resolver::text_contains_conflict_markers(&text)
+                                } else {
+                                    conflict_resolver::conflict_stage_safety_check(
+                                        &text,
+                                        &this.conflict_resolver.marker_segments,
+                                        &this.conflict_resolved_output_block_map,
+                                    )
+                                    .blocks_save()
+                                };
+                                if blocks_stage {
+                                    cx.notify();
                                 } else {
                                     let text = this.conflict_resolver_save_contents_from_text(text);
                                     this.store.dispatch(Msg::SaveWorktreeFile {
@@ -618,6 +641,7 @@ impl MainPaneView {
                                 .conflict_state.conflict_session
                                 .as_ref()
                                 .and_then(|session| {
+                                    let active_conflict = active_conflict?;
                                     conflict_resolver::active_conflict_autosolve_trace_label(
                                         session,
                                         &self.conflict_resolver.conflict_region_indices,

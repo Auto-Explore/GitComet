@@ -269,13 +269,13 @@ fn focused_mergetool_bootstrap_reuses_shared_text_arcs(cx: &mut gpui::TestAppCon
                     theirs: Some(theirs_text.clone()),
                     current: Some(current_text.clone()),
                 }));
-            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_shared_text(
                 file_rel.clone(),
                 gitcomet_core::domain::FileConflictKind::BothModified,
                 ConflictPayload::Text(base_text.clone()),
                 ConflictPayload::Text(ours_text.clone()),
                 ConflictPayload::Text(theirs_text.clone()),
-                &current_text,
+                current_text.clone(),
             ));
 
             let next_state = app_state_with_repo(repo, repo_id);
@@ -855,14 +855,19 @@ fn seed_conflict_scroll_matrix_state(
                 theirs_text.to_string(),
                 current_text.to_string(),
             );
-            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+            let mut session = ConflictSession::from_merged_text(
                 file_rel.to_path_buf(),
                 gitcomet_core::domain::FileConflictKind::BothModified,
                 ConflictPayload::Text(base_text.to_string().into()),
                 ConflictPayload::Text(ours_text.to_string().into()),
                 ConflictPayload::Text(theirs_text.to_string().into()),
                 current_text,
-            ));
+            );
+            for region in &mut session.regions {
+                region.resolution =
+                    gitcomet_core::conflict_session::ConflictRegionResolution::PickOurs;
+            }
+            repo.conflict_state.conflict_session = Some(session);
 
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
@@ -3928,7 +3933,18 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let next_state = app_state_with_repo(fixture.repo_state(repo_id), repo_id);
+            let mut repo = fixture.repo_state(repo_id);
+            for region in &mut repo
+                .conflict_state
+                .conflict_session
+                .as_mut()
+                .expect("large conflict session")
+                .regions
+            {
+                region.resolution =
+                    gitcomet_core::conflict_session::ConflictRegionResolution::PickOurs;
+            }
+            let next_state = app_state_with_repo(repo, repo_id);
 
             push_test_state(this, next_state, cx);
         });
@@ -3985,7 +4001,7 @@ fn large_conflict_two_way_resolved_outline_uses_indexed_sources_in_streamed_mode
                 assert_eq!(
                     conflict_meta.source,
                     crate::view::conflict_resolver::ResolvedLineSource::A,
-                    "default resolved output should map conflict lines to the ours side in two-way mode",
+                    "an explicit Local selection should map conflict lines to the ours side in two-way mode",
                 );
                 assert_eq!(
                     conflict_meta.input_line,
@@ -4752,8 +4768,8 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
                     "resolved output should still use the file-derived Rust syntax language"
                 );
                 assert!(
-                    pane.conflict_resolved_preview_prepared_syntax_document.is_some(),
-                    "background parse completed during init wait should have prepared the syntax document; zero foreground budget leaves highlights deferred but the document itself is available"
+                    pane.conflict_resolved_preview_prepared_syntax_document.is_none(),
+                    "zero foreground budget should leave resolved-output syntax pending until the background parse completes"
                 );
             });
         });
@@ -4763,47 +4779,38 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         let _ = window.draw(app);
     });
 
+    let target_ix = 1usize;
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        // Materialized output: projection is None; the TextInput holds the text.
+        assert_eq!(
+            pane.conflict_resolver_input.read_with(app, |input, _| {
+                input.text().lines().nth(target_ix).map(ToOwned::to_owned)
+            }),
+            Some(comment_line.to_owned()),
+            "the editable resolved-output buffer should expose the multiline comment text",
+        );
         assert!(
             pane.conflict_resolved_output_projection.is_none(),
-            "resolved output should be materialized for this fixture size"
-        );
-        assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some(),
-            "prepared syntax document should be available from the background parse"
-        );
-        assert_eq!(
-            pane.conflict_resolved_preview_syntax_language,
-            Some(rows::DiffSyntaxLanguage::Rust),
-            "resolved output should still use the file-derived Rust syntax language"
+            "resolver bootstrap should materialize the editable output buffer"
         );
     });
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                // Materialization already happened at bootstrap; the call is
-                // idempotent here.
                 pane.ensure_conflict_resolved_output_materialized(cx);
                 assert!(
                     pane.conflict_resolved_output_projection.is_none(),
-                    "materialized output should keep projection None"
+                    "explicit materialization should be idempotent"
                 );
                 assert_eq!(
                     pane.conflict_resolved_preview_line_count, line_count,
-                    "materialized preview should preserve the resolved output line count"
+                    "materialized preview should preserve the output line count"
                 );
                 assert_eq!(
                     pane.conflict_resolved_preview_syntax_language,
                     Some(rows::DiffSyntaxLanguage::Rust),
-                    "materialized resolved output should still keep the path-derived syntax language"
-                );
-                assert!(
-                    pane.conflict_resolved_preview_prepared_syntax_document.is_some(),
-                    "prepared syntax document should survive the idempotent materialization call"
+                    "materialized resolved output should keep the path-derived syntax language"
                 );
             });
         });
@@ -4811,24 +4818,61 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
 
     cx.update(|window, app| {
         let _ = window.draw(app);
-        let pane = view.read(app).main_pane.read(app);
-        assert!(
-            pane.conflict_resolved_output_projection.is_none(),
-            "after draw, projection should still be None (materialized)"
-        );
-        assert_eq!(
-            pane.conflict_resolved_preview_line_count, line_count,
-            "materialized preview should preserve the resolved output line count"
-        );
-        assert_eq!(
-            pane.conflict_resolved_preview_syntax_language,
-            Some(rows::DiffSyntaxLanguage::Rust),
-            "materialized resolved output should still keep the path-derived syntax language"
-        );
-        assert!(
+    });
+
+    let comment_highlight_ready = |pane: &MainPaneView| {
+        let Some(document) = pane.conflict_resolved_preview_prepared_syntax_document else {
+            return false;
+        };
+        rows::request_syntax_highlights_for_prepared_document_line_range(
+            pane.theme,
+            pane.conflict_resolved_preview_text.as_ref(),
+            pane.conflict_resolved_preview_line_starts.as_ref(),
+            document,
+            rows::DiffSyntaxLanguage::Rust,
+            target_ix..target_ix + 1,
+        )
+        .and_then(|lines| lines.into_iter().next())
+        .is_some_and(|line| {
+            !line.pending
+                && line.highlights.iter().any(|(range, style)| {
+                    range.start == 0
+                        && range.end == comment_line.len()
+                        && style.color == Some(pane.theme.syntax.comment.into())
+                })
+        })
+    };
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "large conflict resolved output background syntax upgrade",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
             pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some(),
-            "prepared syntax document should survive across draws"
+                .is_some()
+                && pane.conflict_resolved_preview_syntax_inflight.is_none()
+                && comment_highlight_ready(pane)
+        },
+        |pane| {
+            format!(
+                "prepared_document={:?} inflight={:?} comment_ready={}",
+                pane.conflict_resolved_preview_prepared_syntax_document,
+                pane.conflict_resolved_preview_syntax_inflight,
+                comment_highlight_ready(pane),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.conflict_resolved_preview_text.lines().nth(target_ix),
+            Some(comment_line),
+            "prepared syntax should retain the expected resolved-output text",
+        );
+        assert!(
+            comment_highlight_ready(pane),
+            "background syntax should classify the multiline comment row"
         );
     });
 
@@ -5056,33 +5100,37 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
     });
 
     let target_ix = 1usize;
-    let (pending_epoch, _pending_highlights_hash, _pending_has_comment_highlight) =
-        cx.update(|_window, app| {
-            let pane = view.read(app).main_pane.read(app);
-            assert!(
-                pane.conflict_resolved_preview_prepared_syntax_document
-                    .is_some(),
-                "resolved-output syntax should retain a prepared document instead of dropping to plain text after edit"
-            );
-            let styled = pane
-                .conflict_resolved_preview_segments_cache_get(target_ix);
-            // Row cache may not be populated after a single draw in the test
-            // rendering environment. Verify document state and read cache
-            // properties only when populated.
-            let highlights_hash = styled.as_ref().map_or(0, |s| s.highlights_hash);
-            let has_comment_highlight = styled.as_ref().map_or(false, |s| {
-                s.highlights.iter().any(|(range, style)| {
+    let comment_highlight_ready = |pane: &MainPaneView| {
+        let Some(document) = pane.conflict_resolved_preview_prepared_syntax_document else {
+            return false;
+        };
+        rows::request_syntax_highlights_for_prepared_document_line_range(
+            pane.theme,
+            pane.conflict_resolved_preview_text.as_ref(),
+            pane.conflict_resolved_preview_line_starts.as_ref(),
+            document,
+            rows::DiffSyntaxLanguage::Rust,
+            target_ix..target_ix + 1,
+        )
+        .and_then(|lines| lines.into_iter().next())
+        .is_some_and(|line| {
+            !line.pending
+                && line.highlights.iter().any(|(range, style)| {
                     range.start == 0
                         && range.end == inserted_comment_line.len()
                         && style.color == Some(pane.theme.syntax.comment.into())
                 })
-            });
-            (
-                pane.conflict_resolved_preview_style_cache_epoch,
-                highlights_hash,
-                has_comment_highlight,
-            )
-        });
+        })
+    };
+    let pending_epoch = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.conflict_resolved_preview_prepared_syntax_document
+                .is_some(),
+            "resolved-output syntax should retain a prepared document instead of dropping to plain text after edit"
+        );
+        pane.conflict_resolved_preview_style_cache_epoch
+    });
 
     wait_for_main_pane_condition_with_timeout(
         cx,
@@ -5093,28 +5141,30 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
             pane.conflict_resolved_preview_prepared_syntax_document
                 .is_some()
                 && pane.conflict_resolved_preview_style_cache_epoch >= pending_epoch
+                && pane.conflict_resolved_preview_syntax_inflight.is_none()
+                && comment_highlight_ready(pane)
         },
         |pane| {
-            let row_cache = pane
-                .conflict_resolved_preview_segments_cache_get(target_ix)
-                .map(styled_debug_info_with_styles);
             format!(
-                "prepared_document={:?} style_epoch={} pending_epoch={pending_epoch} inflight={:?} row_cache={row_cache:?}",
+                "prepared_document={:?} style_epoch={} pending_epoch={pending_epoch} inflight={:?} comment_ready={}",
                 pane.conflict_resolved_preview_prepared_syntax_document,
                 pane.conflict_resolved_preview_style_cache_epoch,
                 pane.conflict_resolved_preview_syntax_inflight,
+                comment_highlight_ready(pane),
             )
         },
     );
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        // Row cache may not be populated in the test rendering environment;
-        // verify the document state we've fixed is correct.
         assert!(
             pane.conflict_resolved_preview_prepared_syntax_document
                 .is_some(),
             "background syntax completion should leave a prepared document"
+        );
+        assert!(
+            comment_highlight_ready(pane),
+            "the inserted comment continuation row should upgrade to multiline comment highlighting after background reparsing"
         );
     });
 
@@ -5539,6 +5589,10 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
                 == 3
                 && pane.conflict_resolver.conflict_region_indices == vec![0, 1, 2]
                 && pane.conflict_resolver.row_selection.is_none()
+                && pane.conflict_resolver.active_conflict == Some(0)
+                && pane.conflict_resolver.nav_anchor.is_some_and(|anchor| {
+                    anchor.id == crate::view::conflict_resolver::ConflictNavTargetId::Region(0)
+                })
         },
         |pane| {
             format!(
@@ -5612,6 +5666,10 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
             crate::view::conflict_resolver::conflict_count(&pane.conflict_resolver.marker_segments)
                 == 2
                 && pane.conflict_resolver.conflict_region_indices == vec![0, 1]
+                && pane.conflict_resolver.active_conflict == Some(0)
+                && pane.conflict_resolver.nav_anchor.is_some_and(|anchor| {
+                    anchor.id == crate::view::conflict_resolver::ConflictNavTargetId::Region(0)
+                })
         },
         |pane| {
             format!(
@@ -5624,10 +5682,78 @@ fn conflict_resolver_split_selection_and_join_dispatch_and_rebuild_blocks(
             )
         },
     );
+
+    let before_reset = store_for_assert.snapshot();
+    let before_reset_repo = &before_reset.repos[0];
+    let before_reset_rev = before_reset_repo.conflict_state.conflict_rev;
+    let session_current = before_reset_repo
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .and_then(|session| session.marker_projection_text())
+        .expect("joined session marker projection")
+        .to_string();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                assert_eq!(
+                    pane.conflict_resolver.current.as_deref(),
+                    Some(session_current.as_str()),
+                    "lightweight resync must retain the same authoritative marker snapshot",
+                );
+                pane.conflict_resolver_reset_output_from_markers(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    let after_reset = store_for_assert.snapshot();
+    assert_eq!(
+        after_reset.repos[0].conflict_state.conflict_rev, before_reset_rev,
+        "Reset is a no-op in the reducer while every joined region is unresolved",
+    );
+    assert_eq!(
+        after_reset.repos[0]
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .expect("session after no-op Reset")
+            .regions
+            .len(),
+        2,
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "no-op reset keeps joined geometry",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            crate::view::conflict_resolver::conflict_count(&pane.conflict_resolver.marker_segments)
+                == 2
+                && pane.conflict_resolver.conflict_region_indices == vec![0, 1]
+        },
+        |pane| {
+            format!(
+                "blocks={} regions={:?} current_markers={}",
+                crate::view::conflict_resolver::conflict_count(
+                    &pane.conflict_resolver.marker_segments,
+                ),
+                pane.conflict_resolver.conflict_region_indices,
+                pane.conflict_resolver
+                    .current
+                    .as_deref()
+                    .map_or(0, |text| text.matches("<<<<<<<").count()),
+            )
+        },
+    );
 }
 
 #[gpui::test]
-fn conflict_resolver_current_only_then_full_keeps_persisted_three_way_mode(
+fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_output(
     cx: &mut gpui::TestAppContext,
 ) {
     use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
@@ -5725,6 +5851,7 @@ fn conflict_resolver_current_only_then_full_keeps_persisted_three_way_mode(
         );
     });
 
+    let full_current = "ctx\nmanually resolved during load\ntail\n".to_string();
     let mut full_repo = opening_repo_state(repo_id, &workdir);
     set_test_conflict_status(
         &mut full_repo,
@@ -5737,7 +5864,7 @@ fn conflict_resolver_current_only_then_full_keeps_persisted_three_way_mode(
         base.clone(),
         ours.clone(),
         theirs.clone(),
-        current.to_string(),
+        full_current.clone(),
     );
     full_repo.conflict_state.conflict_file_load_mode =
         gitcomet_state::model::ConflictFileLoadMode::Full;
@@ -5747,14 +5874,15 @@ fn conflict_resolver_current_only_then_full_keeps_persisted_three_way_mode(
         .conflict_state
         .conflict_rev
         .wrapping_add(1);
-    full_repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
-        file_rel.clone(),
-        gitcomet_core::domain::FileConflictKind::BothModified,
-        ConflictPayload::Text(base.clone().into()),
-        ConflictPayload::Text(ours.into()),
-        ConflictPayload::Text(theirs.into()),
-        current,
-    ));
+    full_repo.conflict_state.conflict_session =
+        Some(ConflictSession::from_stage_inputs_with_current(
+            file_rel.clone(),
+            gitcomet_core::domain::FileConflictKind::BothModified,
+            ConflictPayload::Text(base.clone().into()),
+            ConflictPayload::Text(ours.into()),
+            ConflictPayload::Text(theirs.into()),
+            Some(ConflictPayload::Text(full_current.clone().into())),
+        ));
     let full_state = app_state_with_repo(full_repo, repo_id);
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
@@ -5772,25 +5900,31 @@ fn conflict_resolver_current_only_then_full_keeps_persisted_three_way_mode(
             pane.conflict_resolver.path.as_ref() == Some(&file_rel)
                 && pane.conflict_resolver.three_way_text.base.as_ref() == base
                 && !pane.conflict_resolver.three_way_aligned.is_identity()
+                && pane.conflict_resolver.output_is_protected
+                && pane.conflict_resolved_output_projection.is_none()
         },
         |pane| {
             format!(
-                "path={:?} mode={:?} base_len={} identity={}",
+                "path={:?} mode={:?} base_len={} identity={} protected={} projected={}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.view_mode,
                 pane.conflict_resolver.three_way_text.base.len(),
                 pane.conflict_resolver.three_way_aligned.is_identity(),
+                pane.conflict_resolver.output_is_protected,
+                pane.conflict_resolved_output_projection.is_some(),
             )
         },
     );
     cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
         assert_eq!(
-            view.read(app)
-                .main_pane
-                .read(app)
-                .conflict_resolver
-                .view_mode,
-            ConflictResolverViewMode::ThreeWay,
+            pane.conflict_resolver.view_mode,
+            ConflictResolverViewMode::ThreeWay
+        );
+        assert_eq!(
+            pane.conflict_resolver_input.read(app).text(),
+            full_current,
+            "the Full upgrade must not replace a manual worktree result with stage markers",
         );
     });
 }

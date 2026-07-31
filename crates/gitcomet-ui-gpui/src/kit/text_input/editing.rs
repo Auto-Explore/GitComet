@@ -4,6 +4,44 @@ use super::state::*;
 use super::wrap::*;
 use super::*;
 
+fn utf8_edit_delta_between_texts(
+    old_text: &str,
+    new_text: &str,
+) -> Option<(Range<usize>, Range<usize>)> {
+    if old_text == new_text {
+        return None;
+    }
+
+    let old = old_text.as_bytes();
+    let new = new_text.as_bytes();
+    let mut prefix = 0usize;
+    while prefix < old.len().min(new.len()) && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+    while prefix > 0 && (!old_text.is_char_boundary(prefix) || !new_text.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+
+    let mut suffix = 0usize;
+    while suffix < old.len().saturating_sub(prefix)
+        && suffix < new.len().saturating_sub(prefix)
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    while suffix > 0
+        && (!old_text.is_char_boundary(old.len().saturating_sub(suffix))
+            || !new_text.is_char_boundary(new.len().saturating_sub(suffix)))
+    {
+        suffix -= 1;
+    }
+
+    Some((
+        prefix..old.len().saturating_sub(suffix),
+        prefix..new.len().saturating_sub(suffix),
+    ))
+}
+
 impl TextInput {
     pub fn new(options: TextInputOptions, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::from_options(options, cx)
@@ -156,7 +194,7 @@ impl TextInput {
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
         }
-        self.selection.pending_text_edit_delta = None;
+        self.selection.pending_text_edit_deltas.clear();
         self.invalidate_provider_highlights_for_text_change();
         cx.notify();
     }
@@ -1672,7 +1710,9 @@ impl TextInput {
         let inserted = self.replace_content_range(range.clone(), new_text);
         self.push_undo_snapshot(undo_snapshot);
         self.selection.redo_stack.clear();
-        self.selection.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
+        self.selection
+            .pending_text_edit_deltas
+            .push((range.clone(), inserted.clone()));
         let cursor = inserted.end;
         self.mark_wrap_dirty_from_edit(range, inserted.clone());
         self.selection.range = cursor..cursor;
@@ -1718,12 +1758,13 @@ impl TextInput {
         self.replace_utf8_range(self.selection.range.clone(), new_text, cx)
     }
 
-    /// Consume the latest UTF-8 edit delta as `(old_range, new_range)`.
+    /// Drain queued UTF-8 edit deltas in application order.
     ///
-    /// `old_range` references bytes in the pre-edit text; `new_range` references
-    /// bytes in the post-edit text.
-    pub fn take_recent_utf8_edit_delta(&mut self) -> Option<(Range<usize>, Range<usize>)> {
-        self.selection.pending_text_edit_delta.take()
+    /// Each `old_range` references bytes before its corresponding edit and
+    /// each `new_range` references bytes after it. Retaining the whole queue is
+    /// important when GPUI coalesces multiple notifications.
+    pub fn drain_recent_utf8_edit_deltas(&mut self) -> Vec<(Range<usize>, Range<usize>)> {
+        std::mem::take(&mut self.selection.pending_text_edit_deltas)
     }
 
     pub fn offset_for_position(&self, position: Point<Pixels>) -> usize {
@@ -1840,6 +1881,8 @@ impl TextInput {
     }
 
     pub(super) fn restore_undo_snapshot(&mut self, snapshot: UndoSnapshot, cx: &mut Context<Self>) {
+        let text_edit_delta =
+            utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
         self.content = snapshot.content.into();
         self.rebuild_content_width_cache_if_present();
         self.selection.range = snapshot.selected_range;
@@ -1852,7 +1895,9 @@ impl TextInput {
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
         }
-        self.selection.pending_text_edit_delta = None;
+        if let Some(delta) = text_edit_delta {
+            self.selection.pending_text_edit_deltas.push(delta);
+        }
         self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
@@ -2686,7 +2731,9 @@ impl EntityInputHandler for TextInput {
             .unwrap_or(self.selection.range.clone());
 
         let inserted = self.replace_content_range(range.clone(), new_text.as_str());
-        self.selection.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
+        self.selection
+            .pending_text_edit_deltas
+            .push((range.clone(), inserted.clone()));
         self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
         self.selection.range = inserted.end..inserted.end;
@@ -2723,7 +2770,9 @@ impl EntityInputHandler for TextInput {
             .unwrap_or(self.selection.range.clone());
 
         let inserted = self.replace_content_range(range.clone(), new_text.as_str());
-        self.selection.pending_text_edit_delta = Some((range.clone(), inserted.clone()));
+        self.selection
+            .pending_text_edit_deltas
+            .push((range.clone(), inserted.clone()));
         self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
         self.push_undo_snapshot(undo_snapshot);
         if !new_text.is_empty() {

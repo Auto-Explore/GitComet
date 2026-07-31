@@ -244,6 +244,54 @@ pub(super) fn resolved_output_snapshot_is_modified(
     saved.is_some_and(|saved| current != saved)
 }
 
+/// Whether the worktree payload must be kept as opaque user output instead of
+/// replacing it with the stage-derived marker projection.
+///
+/// Git's ordinary marker document often differs byte-for-byte from our
+/// projection (labels and marker style are common examples). It is still safe
+/// to use the projection when reconstructing its two sides exactly reproduces
+/// the immutable stage payloads and the projection can render the document's
+/// line endings. Any other difference may contain a partial or complete manual
+/// resolution, or terminators the projection would normalize, and must be
+/// preserved until the user explicitly resets it.
+pub(super) fn worktree_output_requires_protection(
+    current: Option<&str>,
+    marker_projection: Option<&str>,
+    ours: Option<&str>,
+    theirs: Option<&str>,
+) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    if marker_projection == Some(current) {
+        return false;
+    }
+    // The projection renders every line with one detected ending, so a document
+    // that mixes CRLF and LF cannot be reproduced from it even when its two
+    // reconstructed sides match the stages exactly. Keep the worktree bytes
+    // rather than rewriting terminators the user never touched.
+    if gitcomet_core::text_utils::text_has_mixed_line_endings(current) {
+        return true;
+    }
+
+    let (Some(ours), Some(theirs)) = (ours, theirs) else {
+        return true;
+    };
+    let marker_ranges = gitcomet_core::conflict_session::parse_conflict_marker_ranges(current);
+    if !marker_ranges.iter().any(|segment| {
+        matches!(
+            segment,
+            gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Conflict(_)
+        )
+    }) {
+        return true;
+    }
+
+    let (current_ours, current_theirs) =
+        gitcomet_core::conflict_session::reconstruct_conflict_marker_sides(current);
+    current_ours != ours || current_theirs != theirs
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct VersionedCachedDiffStyledText {
     pub(in crate::view) syntax_epoch: u64,
@@ -323,14 +371,6 @@ pub(in crate::view) fn versioned_query_cached_diff_styled_text_is_current(
     let entry = entry?;
     (entry.syntax_epoch == syntax_epoch && entry.query_generation == query_generation)
         .then_some(&entry.styled)
-}
-
-pub(super) fn split_text_lines_owned(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        Vec::new()
-    } else {
-        text.split('\n').map(|line| line.to_string()).collect()
-    }
 }
 
 pub(super) fn count_newlines(text: &str) -> usize {
@@ -792,6 +832,10 @@ pub(super) fn conflict_marker_ranges_for_block(
     block: &conflict_resolver::ConflictBlock,
     line_range: Range<usize>,
 ) -> Vec<Range<usize>> {
+    if !block.resolved && block.choice.is_empty() {
+        return vec![line_range];
+    }
+
     let mut marker_ranges = Vec::new();
     if !block.resolved
         && let Some(relative_subranges) = unresolved_decision_ranges_for_block(block)
@@ -874,17 +918,17 @@ pub(super) fn conflict_fragment_text_for_choice(
     theirs: &str,
     choice: conflict_resolver::ConflictChoice,
 ) -> String {
-    match choice {
-        conflict_resolver::ConflictChoice::Base => base.to_string(),
-        conflict_resolver::ConflictChoice::Ours => ours.to_string(),
-        conflict_resolver::ConflictChoice::Theirs => theirs.to_string(),
-        conflict_resolver::ConflictChoice::Both => {
-            let mut out = String::with_capacity(ours.len().saturating_add(theirs.len()));
-            out.push_str(ours);
-            out.push_str(theirs);
-            out
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+
+    let mut out = String::new();
+    for source in choice.iter() {
+        match source {
+            ConflictOutputSource::Base => out.push_str(base),
+            ConflictOutputSource::Ours => out.push_str(ours),
+            ConflictOutputSource::Theirs => out.push_str(theirs),
         }
     }
+    out
 }
 
 pub(super) fn unresolved_subchunk_conflict_ranges_for_block(
@@ -1161,6 +1205,7 @@ pub(super) fn first_output_marker_line_for_conflict(
     })
 }
 
+#[cfg(test)]
 pub(super) fn conflict_marker_nav_entries_from_markers(
     markers: &[Option<ResolvedOutputConflictMarker>],
 ) -> Vec<usize> {
@@ -1235,7 +1280,10 @@ pub(super) fn split_target_conflict_block_into_subchunks(
 
     enum SplitMode {
         Subchunks(Vec<Subchunk>),
-        DecisionRanges(Vec<UnresolvedDecisionRegion>),
+        DecisionRanges {
+            regions: Vec<UnresolvedDecisionRegion>,
+            choice_is_ours: bool,
+        },
     }
     let split_mode = if let Some(base) = target_block.base.as_deref() {
         split_conflict_into_subchunks(base, &target_block.ours, &target_block.theirs).and_then(
@@ -1251,8 +1299,24 @@ pub(super) fn split_target_conflict_block_into_subchunks(
         None
     }
     .or_else(|| {
-        unresolved_decision_regions_for_block(&target_block)
-            .and_then(|regions| (regions.len() > 1).then_some(SplitMode::DecisionRanges(regions)))
+        let (analysis_block, choice_is_ours) =
+            if target_block.choice == conflict_resolver::ConflictChoice::Ours {
+                (target_block.clone(), true)
+            } else if target_block.choice == conflict_resolver::ConflictChoice::Theirs {
+                (target_block.clone(), false)
+            } else if target_block.choice.is_empty() {
+                let mut analysis_block = target_block.clone();
+                analysis_block.choice = conflict_resolver::ConflictChoice::Ours;
+                (analysis_block, true)
+            } else {
+                return None;
+            };
+        unresolved_decision_regions_for_block(&analysis_block).and_then(|regions| {
+            (regions.len() > 1).then_some(SplitMode::DecisionRanges {
+                regions,
+                choice_is_ours,
+            })
+        })
     });
     let Some(split_mode) = split_mode else {
         return false;
@@ -1297,19 +1361,15 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                 }
                             }
                         }
-                        SplitMode::DecisionRanges(regions) => {
-                            let (selected_text, alternate_text, choice_is_ours) =
-                                match target_block.choice {
-                                    conflict_resolver::ConflictChoice::Ours => {
-                                        (&target_block.ours, &target_block.theirs, true)
-                                    }
-                                    conflict_resolver::ConflictChoice::Theirs => {
-                                        (&target_block.theirs, &target_block.ours, false)
-                                    }
-                                    _ => {
-                                        return false;
-                                    }
-                                };
+                        SplitMode::DecisionRanges {
+                            regions,
+                            choice_is_ours,
+                        } => {
+                            let (selected_text, alternate_text) = if *choice_is_ours {
+                                (&target_block.ours, &target_block.theirs)
+                            } else {
+                                (&target_block.theirs, &target_block.ours)
+                            };
                             let selected_total_lines = source_line_count(selected_text);
                             let mut selected_cursor = 0usize;
                             for region in regions {
@@ -1327,7 +1387,7 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                     alternate_text,
                                     region.alternate_line_range.clone(),
                                 );
-                                let (ours, theirs) = if choice_is_ours {
+                                let (ours, theirs) = if *choice_is_ours {
                                     (selected_fragment, alternate_fragment)
                                 } else {
                                     (alternate_fragment, selected_fragment)
@@ -1366,17 +1426,6 @@ pub(super) fn split_target_conflict_block_into_subchunks(
     *marker_segments = next_segments;
     *conflict_region_indices = next_region_indices;
     true
-}
-
-impl From<conflict_resolver::ConflictChoice> for gitcomet_state::msg::ConflictRegionChoice {
-    fn from(choice: conflict_resolver::ConflictChoice) -> Self {
-        match choice {
-            conflict_resolver::ConflictChoice::Base => Self::Base,
-            conflict_resolver::ConflictChoice::Ours => Self::Ours,
-            conflict_resolver::ConflictChoice::Theirs => Self::Theirs,
-            conflict_resolver::ConflictChoice::Both => Self::Both,
-        }
-    }
 }
 
 pub(super) fn conflict_region_index_is_unique(
@@ -1503,15 +1552,10 @@ pub(super) fn conflict_group_selected_choices_for_ix(
         if !block.resolved {
             continue;
         }
-        match block.choice {
-            conflict_resolver::ConflictChoice::Base => has_base = true,
-            conflict_resolver::ConflictChoice::Ours => has_ours = true,
-            conflict_resolver::ConflictChoice::Theirs => has_theirs = true,
-            conflict_resolver::ConflictChoice::Both => {
-                has_ours = true;
-                has_theirs = true;
-            }
-        }
+        use gitcomet_core::conflict_output::ConflictOutputSource;
+        has_base |= block.choice.contains(ConflictOutputSource::Base);
+        has_ours |= block.choice.contains(ConflictOutputSource::Ours);
+        has_theirs |= block.choice.contains(ConflictOutputSource::Theirs);
     }
 
     let mut selected = Vec::with_capacity(3);
@@ -1556,26 +1600,19 @@ pub(super) fn conflict_group_indices_for_choice(
                 return false;
             }
             match choice {
-                conflict_resolver::ConflictChoice::Base => {
-                    block.choice == conflict_resolver::ConflictChoice::Base
-                }
-                conflict_resolver::ConflictChoice::Ours => {
-                    matches!(
-                        block.choice,
-                        conflict_resolver::ConflictChoice::Ours
-                            | conflict_resolver::ConflictChoice::Both
-                    )
-                }
-                conflict_resolver::ConflictChoice::Theirs => {
-                    matches!(
-                        block.choice,
-                        conflict_resolver::ConflictChoice::Theirs
-                            | conflict_resolver::ConflictChoice::Both
-                    )
-                }
+                conflict_resolver::ConflictChoice::Base => block
+                    .choice
+                    .contains(gitcomet_core::conflict_output::ConflictOutputSource::Base),
+                conflict_resolver::ConflictChoice::Ours => block
+                    .choice
+                    .contains(gitcomet_core::conflict_output::ConflictOutputSource::Ours),
+                conflict_resolver::ConflictChoice::Theirs => block
+                    .choice
+                    .contains(gitcomet_core::conflict_output::ConflictOutputSource::Theirs),
                 conflict_resolver::ConflictChoice::Both => {
                     block.choice == conflict_resolver::ConflictChoice::Both
                 }
+                _ => block.choice == choice,
             }
         })
         .collect()
@@ -1641,8 +1678,9 @@ pub(super) fn reset_conflict_block_selection(
                 return false;
             }
             block.resolved = false;
-            // Unpicked state should return to the default local-side choice.
-            block.choice = conflict_resolver::ConflictChoice::Ours;
+            // A genuinely unpicked block has no implicit source. The output
+            // projection renders its dedicated merge-conflict placeholder.
+            block.choice = conflict_resolver::ConflictChoice::empty();
             return true;
         }
         seen_conflict_ix = seen_conflict_ix.saturating_add(1);
@@ -1782,83 +1820,39 @@ pub(super) fn apply_three_way_empty_base_provenance_hints(
                         block_ix,
                     )
                 {
-                    match block.choice {
-                        conflict_resolver::ConflictChoice::Base => {}
-                        conflict_resolver::ConflictChoice::Ours => {
-                            let take = usize::min(
-                                range.end.saturating_sub(range.start),
-                                usize::try_from(b_count).unwrap_or(0),
-                            );
-                            for off in 0..take {
-                                if let Some(m) = meta.get_mut(range.start + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::B;
-                                    m.input_line = Some(
-                                        b_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
+                    let mut output_offset = 0usize;
+                    for source in block.choice.iter() {
+                        let (source_count, resolved_source, input_line) = match source {
+                            gitcomet_core::conflict_output::ConflictOutputSource::Base => {
+                                (a_count, conflict_resolver::ResolvedLineSource::A, a_line)
+                            }
+                            gitcomet_core::conflict_output::ConflictOutputSource::Ours => {
+                                (b_count, conflict_resolver::ResolvedLineSource::B, b_line)
+                            }
+                            gitcomet_core::conflict_output::ConflictOutputSource::Theirs => {
+                                (c_count, conflict_resolver::ResolvedLineSource::C, c_line)
+                            }
+                        };
+                        let remaining = range
+                            .end
+                            .saturating_sub(range.start.saturating_add(output_offset));
+                        let take =
+                            usize::min(remaining, usize::try_from(source_count).unwrap_or(0));
+                        for off in 0..take {
+                            if let Some(m) = meta.get_mut(range.start + output_offset + off)
+                                && matches!(
+                                    m.source,
+                                    conflict_resolver::ResolvedLineSource::A
+                                        | conflict_resolver::ResolvedLineSource::Manual
+                                )
+                            {
+                                m.source = resolved_source;
+                                m.input_line = Some(
+                                    input_line.saturating_add(u32::try_from(off).unwrap_or(0)),
+                                );
                             }
                         }
-                        conflict_resolver::ConflictChoice::Theirs => {
-                            let take = usize::min(
-                                range.end.saturating_sub(range.start),
-                                usize::try_from(c_count).unwrap_or(0),
-                            );
-                            for off in 0..take {
-                                if let Some(m) = meta.get_mut(range.start + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::C;
-                                    m.input_line = Some(
-                                        c_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
-                            }
-                        }
-                        conflict_resolver::ConflictChoice::Both => {
-                            let total = range.end.saturating_sub(range.start);
-                            let ours_take =
-                                usize::min(total, usize::try_from(b_count).unwrap_or(0));
-                            for off in 0..ours_take {
-                                if let Some(m) = meta.get_mut(range.start + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::B;
-                                    m.input_line = Some(
-                                        b_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
-                            }
-
-                            let theirs_take = total.saturating_sub(ours_take);
-                            for off in 0..theirs_take {
-                                if let Some(m) = meta.get_mut(range.start + ours_take + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::C;
-                                    m.input_line = Some(
-                                        c_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
-                            }
-                        }
+                        output_offset = output_offset.saturating_add(take);
                     }
                 }
 
@@ -1954,101 +1948,116 @@ pub(super) fn apply_conflict_choice_provenance_hints_for_ranges(
                 };
 
                 if let Some(range) = block_ranges.get(block_ix).cloned() {
-                    match (view_mode, block.choice) {
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Base,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::A,
-                                a_line,
-                                a_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Ours,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Theirs,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::C,
-                                c_line,
-                                c_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Both,
-                        ) => {
-                            assign_both_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                                conflict_resolver::ResolvedLineSource::C,
-                                c_line,
-                                c_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Theirs,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Both,
-                        ) => {
-                            assign_both_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::A,
-                                a_line,
-                                a_count,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                            );
-                        }
-                        // In two-way mode, Base falls back to local-side semantics.
-                        (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Base,
-                        )
-                        | (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Ours,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::A,
-                                a_line,
-                                a_count,
-                            );
+                    if !block.resolved && block.choice.is_empty() {
+                        assign_range(
+                            meta,
+                            range,
+                            conflict_resolver::ResolvedLineSource::Manual,
+                            0,
+                            0,
+                        );
+                    } else {
+                        match (view_mode, block.choice) {
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Base,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::A,
+                                    a_line,
+                                    a_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Ours,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Theirs,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::C,
+                                    c_line,
+                                    c_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Both,
+                            ) => {
+                                assign_both_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                    conflict_resolver::ResolvedLineSource::C,
+                                    c_line,
+                                    c_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Theirs,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Both,
+                            ) => {
+                                assign_both_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::A,
+                                    a_line,
+                                    a_count,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                );
+                            }
+                            // In two-way mode, Base falls back to local-side semantics.
+                            (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Base,
+                            )
+                            | (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Ours,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::A,
+                                    a_line,
+                                    a_count,
+                                );
+                            }
+                            _ => {
+                                // Arbitrary ordered combinations are rendered
+                                // correctly; this compact hint table treats their
+                                // mixed provenance as manual.
+                            }
                         }
                     }
                 }
@@ -2085,28 +2094,6 @@ pub(super) fn apply_conflict_choice_provenance_hints(
         block_ranges.as_slice(),
         view_mode,
     );
-}
-
-pub(super) fn replacement_lines_for_conflict_block(
-    block: &conflict_resolver::ConflictBlock,
-    choice: conflict_resolver::ConflictChoice,
-) -> Option<Vec<String>> {
-    match choice {
-        conflict_resolver::ConflictChoice::Base => {
-            Some(split_text_lines_owned(block.base.as_deref()?))
-        }
-        conflict_resolver::ConflictChoice::Ours => Some(split_text_lines_owned(&block.ours)),
-        conflict_resolver::ConflictChoice::Theirs => Some(split_text_lines_owned(&block.theirs)),
-        conflict_resolver::ConflictChoice::Both => {
-            let mut resolved_block = block.clone();
-            resolved_block.choice = conflict_resolver::ConflictChoice::Both;
-            resolved_block.resolved = true;
-            let merged = conflict_resolver::generate_resolved_text(&[
-                conflict_resolver::ConflictSegment::Block(resolved_block),
-            ]);
-            Some(split_text_lines_owned(&merged))
-        }
-    }
 }
 
 pub(super) fn replace_output_lines_in_range(
@@ -2200,6 +2187,7 @@ pub(super) struct FocusedMergetoolSavePayload {
 pub(super) fn build_focused_mergetool_save_payload(
     marker_segments: &[ConflictSegment],
     block_region_indices: &[usize],
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
     materialized_output_text: Option<&str>,
     labels: gitcomet_core::conflict_output::ConflictMarkerLabels<'_>,
 ) -> FocusedMergetoolSavePayload {
@@ -2219,6 +2207,7 @@ pub(super) fn build_focused_mergetool_save_payload(
         if let Some(updates) = conflict_resolver::derive_region_resolution_updates_from_output(
             marker_segments,
             block_region_indices,
+            block_map,
             output_text,
         ) {
             let mut save_segments = marker_segments.to_vec();
@@ -2230,8 +2219,31 @@ pub(super) fn build_focused_mergetool_save_payload(
                 &mut save_segments,
                 &ordered_resolutions,
             );
+            let mut output = output_text.to_string();
+            let blocks: Vec<_> = marker_segments
+                .iter()
+                .filter_map(|segment| match segment {
+                    ConflictSegment::Block(block) => Some(block),
+                    ConflictSegment::Text(_) => None,
+                })
+                .collect();
+            for ((block, range), resolution) in blocks
+                .into_iter()
+                .zip(block_map.ranges())
+                .zip(&ordered_resolutions)
+                .rev()
+            {
+                if matches!(
+                    resolution,
+                    gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
+                ) {
+                    let marker_text =
+                        render_preserve_markers(&[ConflictSegment::Block(block.clone())]);
+                    output.replace_range(range.clone(), &marker_text);
+                }
+            }
             return FocusedMergetoolSavePayload {
-                output: render_preserve_markers(&save_segments),
+                output,
                 total_conflicts: conflict_resolver::conflict_count(&save_segments),
                 resolved_conflicts: conflict_resolver::resolved_conflict_count(&save_segments),
             };
@@ -2679,6 +2691,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolved_output_modified: bool,
     pub(in crate::view) conflict_resolved_output_projection:
         Option<conflict_resolver::ResolvedOutputProjection>,
+    /// Byte ownership for displayed conflict blocks in the live output.
+    pub(in crate::view) conflict_resolved_output_block_map:
+        conflict_resolver::ResolvedOutputBlockMap,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) conflict_resolved_preview_highlight_provider_theme_epoch: u64,

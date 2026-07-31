@@ -122,6 +122,9 @@ pub enum RepoWatchDegradedReason {
     WatchLimitReached { unwatched_dirs: usize },
 }
 
+// Dispatch keeps internal messages inline so the hot reducer path does not
+// require an additional allocation for every effect completion.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Msg {
     OpenRepo(PathBuf),
@@ -711,6 +714,20 @@ pub enum Msg {
         region_index: usize,
         choice: ConflictRegionChoice,
     },
+    /// Toggle one merge source, appending it after already-selected sources.
+    ConflictToggleRegionSource {
+        repo_id: RepoId,
+        path: RepoPath,
+        region_index: usize,
+        source: gitcomet_core::merge::MergeSource,
+    },
+    /// Replace a region's complete ordered source selection.
+    ConflictReplaceRegionSelection {
+        repo_id: RepoId,
+        path: RepoPath,
+        region_index: usize,
+        selection: gitcomet_core::merge::OrderedSelection,
+    },
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
         path: RepoPath,
@@ -726,8 +743,8 @@ pub enum Msg {
         repo_id: RepoId,
         path: RepoPath,
     },
-    /// section 30 split: rewrite one conflict-marker block into 2–3 blocks at
-    /// block-local line boundaries and persist the rewritten marker text.
+    /// section 30 split: rewrite one in-memory conflict block into 2–3 blocks
+    /// at block-local line boundaries.
     ConflictSplitRegion {
         repo_id: RepoId,
         path: RepoPath,

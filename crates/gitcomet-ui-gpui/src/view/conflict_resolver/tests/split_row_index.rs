@@ -1223,6 +1223,36 @@ fn resolved_output_projection_matches_generated_text_lines() {
 }
 
 #[test]
+fn resolved_output_projection_uses_one_non_source_row_for_unresolved_block() {
+    let segments = vec![
+        ConflictSegment::Text("head\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: Some("base one\nbase two\n".into()),
+            ours: "local one\nlocal two\n".into(),
+            theirs: "remote one\nremote two\n".into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+        }),
+        ConflictSegment::Text("tail\n".into()),
+    ];
+
+    let projection = ResolvedOutputProjection::from_segments(&segments);
+
+    assert_eq!(
+        projection
+            .line_text(&segments, 1)
+            .expect("unresolved placeholder row")
+            .as_ref(),
+        UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER
+    );
+    assert_eq!(projection.conflict_line_range(0), Some(1..2));
+    assert_eq!(
+        generate_resolved_text(&segments),
+        "head\n<Merge Conflict>\ntail\n"
+    );
+}
+
+#[test]
 fn resolved_output_projection_merges_adjacent_segments_without_newlines() {
     let segments = vec![
         ConflictSegment::Text("prefix ".into()),
@@ -1431,6 +1461,7 @@ fn resolved_output_projection_deep_range_walk_matches_point_lookups() {
 #[test]
 fn derive_region_resolution_updates_from_segments_uses_block_choices() {
     use gitcomet_core::conflict_session::ConflictRegionResolution as R;
+    use gitcomet_core::merge::{MergeSource, OrderedSelection};
 
     let segments = vec![
         ConflictSegment::Block(ConflictBlock {
@@ -1461,6 +1492,16 @@ fn derive_region_resolution_updates_from_segments_uses_block_choices() {
 
     assert_eq!(
         updates,
-        vec![(7, R::Unresolved), (11, R::PickBoth), (19, R::PickBase)]
+        vec![
+            (7, R::Unresolved),
+            (
+                11,
+                R::Sources(OrderedSelection::from_sources([
+                    MergeSource::A,
+                    MergeSource::B,
+                ])),
+            ),
+            (19, R::Sources(MergeSource::A.into())),
+        ]
     );
 }

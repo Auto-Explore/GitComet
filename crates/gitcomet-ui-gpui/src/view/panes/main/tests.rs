@@ -19,7 +19,7 @@ use super::{
     resolved_output_marker_for_line, resolved_output_markers_for_text,
     resolved_output_snapshot_is_modified, split_target_conflict_block_into_subchunks,
     versioned_cached_diff_styled_text_is_current,
-    versioned_query_cached_diff_styled_text_is_current,
+    versioned_query_cached_diff_styled_text_is_current, worktree_output_requires_protection,
 };
 use crate::kit::text_model::TextModel;
 use crate::theme::AppTheme;
@@ -80,6 +80,95 @@ fn specialized_conflict_strategies_require_full_side_payloads() {
 }
 
 #[test]
+fn ordinary_git_markers_do_not_protect_output_when_they_reconstruct_the_stages() {
+    let current = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\nafter\n";
+    let projection = "before\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nafter\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(current),
+        Some(projection),
+        Some("before\nours\nafter\n"),
+        Some("before\ntheirs\nafter\n"),
+    ));
+}
+
+#[test]
+fn manually_edited_worktree_output_is_protected_from_stage_projection() {
+    let projection = concat!(
+        "before\n",
+        "<<<<<<< ours\n",
+        "ours one\nours two\n",
+        "=======\n",
+        "theirs one\ntheirs two\n",
+        ">>>>>>> theirs\n",
+        "after\n",
+    );
+    let partially_resolved = concat!(
+        "before\n",
+        "manual one\n",
+        "<<<<<<< HEAD\n",
+        "ours two\n",
+        "=======\n",
+        "theirs two\n",
+        ">>>>>>> topic\n",
+        "after\n",
+    );
+
+    assert!(worktree_output_requires_protection(
+        Some(partially_resolved),
+        Some(projection),
+        Some("before\nours one\nours two\nafter\n"),
+        Some("before\ntheirs one\ntheirs two\nafter\n"),
+    ));
+    assert!(worktree_output_requires_protection(
+        Some("before\nmanually merged\nafter\n"),
+        Some(projection),
+        Some("before\nours one\nours two\nafter\n"),
+        Some("before\ntheirs one\ntheirs two\nafter\n"),
+    ));
+}
+
+#[test]
+fn mixed_line_ending_worktree_output_is_protected_from_stage_projection() {
+    // Reconstructing this document's sides reproduces the stages byte for byte,
+    // so only the mixed terminators distinguish it from the projection.
+    let current = "a\r\n<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> topic\n";
+    let projection = "a\n<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs\n";
+
+    assert!(worktree_output_requires_protection(
+        Some(current),
+        Some(projection),
+        Some("a\r\nx\n"),
+        Some("a\r\ny\n"),
+    ));
+}
+
+#[test]
+fn uniform_crlf_worktree_output_stays_interactive() {
+    let current = "a\r\n<<<<<<< HEAD\r\nx\r\n=======\r\ny\r\n>>>>>>> topic\r\n";
+    let projection = "a\r\n<<<<<<< ours\r\nx\r\n=======\r\ny\r\n>>>>>>> theirs\r\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(current),
+        Some(projection),
+        Some("a\r\nx\r\n"),
+        Some("a\r\ny\r\n"),
+    ));
+}
+
+#[test]
+fn identical_current_and_projection_remain_interactive_without_stage_payloads() {
+    let markers = "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(markers),
+        Some(markers),
+        None,
+        None,
+    ));
+}
+
+#[test]
 fn focused_mergetool_output_writes_exact_binary_bytes_and_creates_parent() {
     let dir = tempfile::tempdir().expect("temp dir");
     let output = dir.path().join("nested/result.bin");
@@ -125,6 +214,17 @@ fn focused_mergetool_marker_labels() -> gitcomet_core::conflict_output::Conflict
         remote: "REMOTE",
         base: "BASE",
     }
+}
+
+fn apply_mapped_output_test_edit(
+    map: &mut conflict_resolver::ResolvedOutputBlockMap,
+    output: &mut String,
+    range: std::ops::Range<usize>,
+    replacement: &str,
+) {
+    let inserted = range.start..range.start + replacement.len();
+    assert!(map.apply_edit_delta(range.clone(), inserted));
+    output.replace_range(range, replacement);
 }
 
 fn repo_with_conflict_file(
@@ -323,10 +423,12 @@ fn focused_mergetool_save_payload_rehydrates_unedited_materialized_conflicts() {
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
+    let block_map = conflict_resolver::ResolvedOutputBlockMap::from_segments(&segments);
 
     let payload = build_focused_mergetool_save_payload(
         &segments,
         &[0],
+        &block_map,
         Some("ours\n"),
         focused_mergetool_marker_labels(),
     );
@@ -360,10 +462,13 @@ fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
         }),
         ConflictSegment::Text("bottom\n".to_string().into()),
     ];
+    let mut block_map = conflict_resolver::ResolvedOutputBlockMap::from_segments(&segments);
+    assert!(block_map.apply_edit_delta(4..11, 4..13));
 
     let payload = build_focused_mergetool_save_payload(
         &segments,
         &[0, 1],
+        &block_map,
         Some("top\nmanual-1\nmiddle\nours-2\nbottom\n"),
         focused_mergetool_marker_labels(),
     );
@@ -387,6 +492,71 @@ fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
 }
 
 #[test]
+fn focused_mergetool_save_payload_preserves_edited_context() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-1\n".into(),
+            theirs: "theirs-1\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+        ConflictSegment::Text("middle\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours-2\n".into(),
+            theirs: "theirs-2\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        }),
+        ConflictSegment::Text("bottom\n".into()),
+    ];
+    let mut output = conflict_resolver::generate_resolved_text(&segments);
+    let mut block_map = conflict_resolver::ResolvedOutputBlockMap::from_segments(&segments);
+
+    apply_mapped_output_test_edit(&mut block_map, &mut output, 0..4, "TOP EDIT\n");
+    let first = block_map.ranges()[0].clone();
+    apply_mapped_output_test_edit(&mut block_map, &mut output, first, "manual-1\n");
+    let middle = output.find("middle\n").expect("middle context");
+    apply_mapped_output_test_edit(
+        &mut block_map,
+        &mut output,
+        middle..middle + "middle\n".len(),
+        "MIDDLE EDIT\n",
+    );
+    let bottom = output.find("bottom\n").expect("bottom context");
+    apply_mapped_output_test_edit(
+        &mut block_map,
+        &mut output,
+        bottom..bottom + "bottom\n".len(),
+        "BOTTOM EDIT\n",
+    );
+
+    let payload = build_focused_mergetool_save_payload(
+        &segments,
+        &[0, 1],
+        &block_map,
+        Some(&output),
+        focused_mergetool_marker_labels(),
+    );
+    assert_eq!(
+        payload.output,
+        concat!(
+            "TOP EDIT\n",
+            "manual-1\n",
+            "MIDDLE EDIT\n",
+            "<<<<<<< LOCAL\n",
+            "ours-2\n",
+            "=======\n",
+            "theirs-2\n",
+            ">>>>>>> REMOTE\n",
+            "BOTTOM EDIT\n",
+        ),
+    );
+}
+
+#[test]
 fn focused_mergetool_save_payload_marks_manual_output_as_resolved() {
     let segments = vec![ConflictSegment::Block(ConflictBlock {
         base: None,
@@ -395,10 +565,13 @@ fn focused_mergetool_save_payload_marks_manual_output_as_resolved() {
         choice: ConflictChoice::Ours,
         resolved: false,
     })];
+    let mut block_map = conflict_resolver::ResolvedOutputBlockMap::from_segments(&segments);
+    assert!(block_map.apply_edit_delta(0..5, 0..7));
 
     let payload = build_focused_mergetool_save_payload(
         &segments,
         &[0],
+        &block_map,
         Some("manual\n"),
         focused_mergetool_marker_labels(),
     );
@@ -1142,7 +1315,10 @@ fn build_resolved_output_conflict_markers_matches_combined_conflict_marker_case(
         .flatten()
         .filter(|m| m.conflict_ix == 0 && m.is_start)
         .count();
-    assert_eq!(starts, 2, "expected two marker starts for impl Color case");
+    assert_eq!(
+        starts, 1,
+        "an unsplit unresolved block should have one placeholder marker"
+    );
 }
 
 #[test]
@@ -1162,8 +1338,8 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
         .filter(|m| m.conflict_ix == 0 && m.is_start)
         .count();
     assert_eq!(
-        before_starts, 2,
-        "fixture should begin with two close markers"
+        before_starts, 1,
+        "the unsplit block should begin as one unresolved placeholder"
     );
     let streamed_markers_before = build_resolved_output_conflict_markers_from_block_ranges(
         &segments,
@@ -1189,8 +1365,17 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
     assert_eq!(region_indices, vec![0, 0]);
     let output_after = conflict_resolver::generate_resolved_text(&segments);
     assert_eq!(
-        output_after, output_before,
-        "split should preserve output text"
+        output_before
+            .matches(conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER)
+            .count(),
+        1,
+    );
+    assert_eq!(
+        output_after
+            .matches(conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER)
+            .count(),
+        2,
+        "each split unresolved block should receive its own placeholder row"
     );
     let projection_after = conflict_resolver::ResolvedOutputProjection::from_segments(&segments);
     let streamed_markers_after = build_resolved_output_conflict_markers_from_block_ranges(
@@ -1329,7 +1514,7 @@ fn non_contiguous_matching_blocks_do_not_share_choice_group() {
             base: Some("base\n".to_string().into()),
             ours: "ours\n".to_string().into(),
             theirs: "theirs\n".to_string().into(),
-            choice: ConflictChoice::Ours,
+            choice: ConflictChoice::empty(),
             resolved: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
@@ -1363,7 +1548,7 @@ fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
             base: Some("base\n".to_string().into()),
             ours: "ours\n".to_string().into(),
             theirs: "theirs\n".to_string().into(),
-            choice: ConflictChoice::Ours,
+            choice: ConflictChoice::empty(),
             resolved: false,
         }),
     ];
@@ -1403,7 +1588,7 @@ fn pick_sequence_is_reversible_to_original_unpicked_state() {
             base: Some("base\n".to_string().into()),
             ours: "ours\n".to_string().into(),
             theirs: "theirs\n".to_string().into(),
-            choice: ConflictChoice::Ours,
+            choice: ConflictChoice::empty(),
             resolved: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
@@ -1469,6 +1654,10 @@ fn pick_sequence_is_reversible_to_original_unpicked_state() {
         conflict_resolver::generate_resolved_text(&segments),
         conflict_resolver::generate_resolved_text(&original)
     );
+    assert_eq!(
+        conflict_resolver::generate_resolved_text(&segments),
+        "pre\n<Merge Conflict>\npost\n"
+    );
 }
 
 #[test]
@@ -1480,7 +1669,7 @@ fn pick_and_deselect_multiple_orders_always_restore_original_state() {
                 base: Some("base\n".to_string().into()),
                 ours: "ours\n".to_string().into(),
                 theirs: "theirs\n".to_string().into(),
-                choice: ConflictChoice::Ours,
+                choice: ConflictChoice::empty(),
                 resolved: false,
             }),
             ConflictSegment::Text("post\n".to_string().into()),

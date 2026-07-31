@@ -435,7 +435,7 @@ pub(super) struct SelectionState {
     pub(super) range: Range<usize>,
     pub(super) reversed: bool,
     pub(super) marked_range: Option<Range<usize>>,
-    pub(super) pending_text_edit_delta: Option<(Range<usize>, Range<usize>)>,
+    pub(super) pending_text_edit_deltas: Vec<(Range<usize>, Range<usize>)>,
     pub(super) undo_stack: Vec<UndoSnapshot>,
     pub(super) redo_stack: Vec<UndoSnapshot>,
 }
@@ -446,7 +446,7 @@ impl SelectionState {
             range: 0..0,
             reversed: false,
             marked_range: None,
-            pending_text_edit_delta: None,
+            pending_text_edit_deltas: Vec::new(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }

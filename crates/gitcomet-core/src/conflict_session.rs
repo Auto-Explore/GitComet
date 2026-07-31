@@ -1,4 +1,9 @@
 use crate::domain::FileConflictKind;
+use crate::merge::{
+    ConflictStyle, InteractiveMergePlanBudget, MergeOptions, MergePlan, MergeSource,
+    OrderedSelection, render_merge_plan, try_build_interactive_merge_plan_with_optional_base,
+};
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -29,6 +34,7 @@ pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
     ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
     ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_segments,
+    reconstruct_conflict_marker_sides,
 };
 pub use region_edit::{
     ConflictRegionEditOutcome, ConflictRegionSplitBoundaries, join_conflict_regions_text,
@@ -302,6 +308,10 @@ pub enum ConflictRegionResolution {
     PickTheirs,
     /// User picked both (ours then theirs).
     PickBoth,
+    /// User selected an ordered set of merge-plan sources.
+    ///
+    /// An empty selection is equivalent to [`Unresolved`](Self::Unresolved).
+    Sources(OrderedSelection),
     /// User manually edited the output for this region.
     ManualEdit(String),
     /// Automatically resolved by a safe rule.
@@ -317,7 +327,11 @@ pub enum ConflictRegionResolution {
 impl ConflictRegionResolution {
     /// Returns `true` if this region has been resolved (any way).
     pub fn is_resolved(&self) -> bool {
-        !matches!(self, ConflictRegionResolution::Unresolved)
+        match self {
+            ConflictRegionResolution::Unresolved => false,
+            ConflictRegionResolution::Sources(selection) => !selection.is_empty(),
+            _ => true,
+        }
     }
 }
 
@@ -446,6 +460,15 @@ pub struct ConflictRegion {
     pub resolution: ConflictRegionResolution,
 }
 
+/// Ordered line coordinates occupied by one conflict in reconstructed
+/// base/ours/theirs source space.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConflictRegionSourceRanges {
+    pub base: Option<Range<usize>>,
+    pub ours: Range<usize>,
+    pub theirs: Range<usize>,
+}
+
 impl ConflictRegion {
     /// Returns the resolved text for this region based on its resolution state.
     /// Returns `None` if unresolved.
@@ -456,6 +479,17 @@ impl ConflictRegion {
             ConflictRegionResolution::PickOurs => Some(self.ours.as_str()),
             ConflictRegionResolution::PickTheirs => Some(self.theirs.as_str()),
             ConflictRegionResolution::PickBoth => None, // caller must concat ours+theirs
+            ConflictRegionResolution::Sources(selection) => {
+                let [source] = selection.as_slice() else {
+                    return None;
+                };
+                match source {
+                    MergeSource::A => self.base.as_deref().or(Some(self.ours.as_str())),
+                    MergeSource::B if self.base.is_some() => Some(self.ours.as_str()),
+                    MergeSource::B => Some(self.theirs.as_str()),
+                    MergeSource::C => Some(self.theirs.as_str()),
+                }
+            }
             ConflictRegionResolution::ManualEdit(text) => Some(text.as_str()),
             ConflictRegionResolution::AutoResolved { content, .. } => Some(content.as_str()),
         }
@@ -539,8 +573,35 @@ pub struct ConflictSession {
     /// `None` means the current payload was not loaded alongside the session.
     /// `Some(ConflictPayload::Absent)` means it was loaded and is absent.
     pub current: Option<ConflictPayload>,
+    /// Marker-backed resolver geometry.
+    ///
+    /// Unlike [`current`](Self::current), this is an in-memory projection
+    /// derived from immutable stages (or a marker-backed large-file fallback).
+    /// Structural split/join edits update this projection without pretending
+    /// that the worktree changed before Save.
+    pub marker_projection: Option<Arc<str>>,
     /// Parsed conflict regions (populated for marker-based text conflicts).
     pub regions: Vec<ConflictRegion>,
+    /// Source coordinates corresponding positionally to [`regions`](Self::regions).
+    pub region_source_ranges: Vec<ConflictRegionSourceRanges>,
+    /// Shared KDiff3-compatible plan for full-text sessions.
+    pub merge_plan: Option<MergePlan>,
+    /// Why a full text session has no merge plan.
+    pub merge_plan_fallback: Option<MergePlanFallbackReason>,
+    /// Mapping from `regions` to merge-plan block indices.
+    pub region_plan_blocks: Vec<usize>,
+    /// Whether split/join changed the marker-block geometry in memory.
+    ///
+    /// Same-path reloads preserve this projection so a watcher refresh cannot
+    /// discard structural edits before the user saves them.
+    pub has_pending_structural_edits: bool,
+}
+
+/// Reason an interactive full-text session retained marker-backed geometry
+/// instead of constructing an aligned merge plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MergePlanFallbackReason {
+    BudgetExceeded,
 }
 
 impl ConflictSession {
@@ -608,8 +669,189 @@ impl ConflictSession {
             ours,
             theirs,
             current,
+            marker_projection: None,
             regions,
+            region_source_ranges: Vec::new(),
+            merge_plan: None,
+            merge_plan_fallback: None,
+            region_plan_blocks: Vec::new(),
+            has_pending_structural_edits: false,
         }
+    }
+
+    fn coarse_marker_projection(
+        base: Option<&str>,
+        ours: &str,
+        theirs: &str,
+        options: &MergeOptions,
+    ) -> Arc<str> {
+        use crate::conflict_output::{
+            ConflictMarkerLabels, ConflictOutputBlockRef, ConflictOutputChoice,
+            render_unresolved_marker_block,
+        };
+
+        let labels = ConflictMarkerLabels {
+            local: options.labels.ours.as_deref().unwrap_or("ours"),
+            remote: options.labels.theirs.as_deref().unwrap_or("theirs"),
+            base: options.labels.base.as_deref().unwrap_or("base"),
+        };
+        Arc::from(render_unresolved_marker_block(
+            ConflictOutputBlockRef {
+                base,
+                ours,
+                theirs,
+                choice: ConflictOutputChoice::empty(),
+                resolved: false,
+            },
+            labels,
+        ))
+    }
+
+    /// Build a fresh full-text session from Git stage inputs.
+    ///
+    /// Worktree conflict markers are deliberately not used as merge
+    /// boundaries. The generated marker text is an in-memory projection of
+    /// the same plan used by the headless merger.
+    pub fn from_stage_merge_plan(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+        options: &MergeOptions,
+    ) -> Self {
+        Self::from_stage_merge_plan_with_current(
+            path,
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            None,
+            options,
+        )
+    }
+
+    /// Build a fresh full-text session while retaining the already-loaded
+    /// worktree payload independently from its stage-derived marker geometry.
+    pub fn from_stage_merge_plan_with_current(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+        current: Option<ConflictPayload>,
+        options: &MergeOptions,
+    ) -> Self {
+        let mut session =
+            Self::new_with_optional_current(path, conflict_kind, base, ours, theirs, current);
+        if session.strategy != ConflictResolverStrategy::FullTextResolver {
+            return session;
+        }
+
+        let ConflictPayload::Text(ours_text) = &session.ours else {
+            return session;
+        };
+        let ConflictPayload::Text(theirs_text) = &session.theirs else {
+            return session;
+        };
+        let base_text = match &session.base {
+            ConflictPayload::Text(text) => Some(text.as_ref()),
+            ConflictPayload::Absent => None,
+            ConflictPayload::Binary(_) => return session,
+        };
+
+        let plan = try_build_interactive_merge_plan_with_optional_base(
+            base_text,
+            ours_text,
+            theirs_text,
+            options,
+            InteractiveMergePlanBudget::default(),
+        );
+        let marker_text = if let Some(plan) = plan.as_ref() {
+            let mut marker_options = options.clone();
+            marker_options.style = if plan.has_base() {
+                ConflictStyle::Diff3
+            } else {
+                ConflictStyle::Merge
+            };
+            Arc::from(render_merge_plan(plan, &marker_options).output)
+        } else {
+            session.merge_plan_fallback = Some(MergePlanFallbackReason::BudgetExceeded);
+            session
+                .current
+                .as_ref()
+                .and_then(ConflictPayload::as_text)
+                .filter(|current| {
+                    marker_parse::parse_conflict_marker_ranges(current)
+                        .iter()
+                        .any(|segment| matches!(segment, ParsedConflictSegmentRanges::Conflict(_)))
+                })
+                .map(Arc::<str>::from)
+                .unwrap_or_else(|| {
+                    Self::coarse_marker_projection(base_text, ours_text, theirs_text, options)
+                })
+        };
+        session.marker_projection = Some(Arc::clone(&marker_text));
+        session.parse_regions_from_shared_text(marker_text);
+        if let Some(plan) = plan {
+            session.region_plan_blocks = plan.unresolved_blocks.clone();
+            debug_assert_eq!(
+                session.regions.len(),
+                session.region_plan_blocks.len(),
+                "each unresolved plan block should render as one marker region"
+            );
+            session.region_source_ranges = session
+                .region_plan_blocks
+                .iter()
+                .filter_map(|block_index| plan.blocks.get(*block_index))
+                .map(|block| ConflictRegionSourceRanges {
+                    base: plan.block_ancestor_range(block),
+                    ours: plan.block_source_line_range(block, plan.local_source()),
+                    theirs: plan.block_source_line_range(block, plan.remote_source()),
+                })
+                .collect();
+            session.merge_plan = Some(plan);
+        }
+        session
+    }
+
+    /// Build a fresh full-text session using default merge options.
+    pub fn from_stage_inputs(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+    ) -> Self {
+        Self::from_stage_merge_plan(
+            path,
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            &MergeOptions::default(),
+        )
+    }
+
+    /// Build a default full-text stage session while retaining a loaded
+    /// worktree payload.
+    pub fn from_stage_inputs_with_current(
+        path: PathBuf,
+        conflict_kind: FileConflictKind,
+        base: ConflictPayload,
+        ours: ConflictPayload,
+        theirs: ConflictPayload,
+        current: Option<ConflictPayload>,
+    ) -> Self {
+        Self::from_stage_merge_plan_with_current(
+            path,
+            conflict_kind,
+            base,
+            ours,
+            theirs,
+            current,
+            &MergeOptions::default(),
+        )
     }
 
     /// Create a new session from the three file-level payloads.
@@ -652,6 +894,7 @@ impl ConflictSession {
             theirs,
             ConflictPayload::Text(merged_text.clone()),
         );
+        session.marker_projection = Some(Arc::clone(&merged_text));
         session.parse_regions_from_shared_text(merged_text);
         session
     }
@@ -683,7 +926,11 @@ impl ConflictSession {
     /// Parse marker-based conflict regions from shared merged text and replace
     /// the current region list without copying each block payload.
     pub fn parse_regions_from_shared_text(&mut self, merged_text: Arc<str>) -> usize {
+        self.region_source_ranges = marker_parse::marker_region_source_ranges(merged_text.as_ref());
         self.regions = marker_parse::parse_conflict_regions_from_shared_text(merged_text);
+        if self.merge_plan.is_none() {
+            self.region_plan_blocks.clear();
+        }
         if self.regions.is_empty()
             && let Some(region) = Self::synthetic_region_for_strategy(
                 self.strategy,
@@ -695,6 +942,306 @@ impl ConflictSession {
             self.regions.push(region);
         }
         self.regions.len()
+    }
+
+    fn ordered_selection_for_resolution(
+        &self,
+        resolution: &ConflictRegionResolution,
+    ) -> Option<OrderedSelection> {
+        let has_base = self.merge_plan.as_ref().is_none_or(MergePlan::has_base);
+        match resolution {
+            ConflictRegionResolution::Unresolved => Some(OrderedSelection::new()),
+            ConflictRegionResolution::PickBase if has_base => Some(MergeSource::A.into()),
+            ConflictRegionResolution::PickBase => None,
+            ConflictRegionResolution::PickOurs => Some(
+                if has_base {
+                    MergeSource::B
+                } else {
+                    MergeSource::A
+                }
+                .into(),
+            ),
+            ConflictRegionResolution::PickTheirs => Some(
+                if has_base {
+                    MergeSource::C
+                } else {
+                    MergeSource::B
+                }
+                .into(),
+            ),
+            ConflictRegionResolution::PickBoth => {
+                Some(OrderedSelection::from_sources(if has_base {
+                    [MergeSource::B, MergeSource::C]
+                } else {
+                    [MergeSource::A, MergeSource::B]
+                }))
+            }
+            ConflictRegionResolution::Sources(selection) => Some(selection.clone()),
+            ConflictRegionResolution::ManualEdit(_)
+            | ConflictRegionResolution::AutoResolved { .. } => None,
+        }
+    }
+
+    fn resolution_for_selection(selection: &OrderedSelection) -> ConflictRegionResolution {
+        if selection.is_empty() {
+            ConflictRegionResolution::Unresolved
+        } else {
+            ConflictRegionResolution::Sources(selection.clone())
+        }
+    }
+
+    /// Replace one region's ordered source selection.
+    ///
+    /// Selecting a source discards manual block content. An empty selection
+    /// returns the block to unresolved.
+    pub fn replace_region_selection(
+        &mut self,
+        region_index: usize,
+        selection: OrderedSelection,
+    ) -> bool {
+        let Some(region) = self.regions.get(region_index) else {
+            return false;
+        };
+        if selection.iter().any(|source| {
+            self.merge_plan
+                .as_ref()
+                .is_some_and(|plan| plan.source_text(source).is_none())
+        }) {
+            return false;
+        }
+        let next = Self::resolution_for_selection(&selection);
+        if region.resolution == next {
+            return false;
+        }
+        self.regions[region_index].resolution = next;
+        if let Some(block_index) = self.region_plan_blocks.get(region_index).copied()
+            && let Some(plan) = self.merge_plan.as_mut()
+        {
+            plan.replace_selection(block_index, selection);
+        }
+        true
+    }
+
+    /// Toggle a source in one region, appending newly selected sources.
+    pub fn toggle_region_source(&mut self, region_index: usize, source: MergeSource) -> bool {
+        let Some(region) = self.regions.get(region_index) else {
+            return false;
+        };
+        let mut selection = self
+            .ordered_selection_for_resolution(&region.resolution)
+            .unwrap_or_default();
+        selection.toggle(source);
+        self.replace_region_selection(region_index, selection)
+    }
+
+    /// Synchronize plan decisions after legacy resolution or autosolve paths.
+    pub fn sync_merge_plan_from_regions(&mut self) {
+        let decisions: Vec<(usize, ConflictRegionResolution)> = self
+            .region_plan_blocks
+            .iter()
+            .copied()
+            .zip(self.regions.iter().map(|region| region.resolution.clone()))
+            .collect();
+        for (block_index, resolution) in decisions {
+            let selection = self.ordered_selection_for_resolution(&resolution);
+            let Some(plan) = self.merge_plan.as_mut() else {
+                break;
+            };
+            match resolution {
+                ConflictRegionResolution::ManualEdit(content)
+                | ConflictRegionResolution::AutoResolved { content, .. } => {
+                    plan.set_manual_content(block_index, content);
+                }
+                _ => {
+                    if let Some(selection) = selection {
+                        plan.replace_selection(block_index, selection);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reconcile the shared plan after one marker region was split in memory.
+    ///
+    /// Each new region receives its own plan block so later source toggles
+    /// remain independent and plan-level unresolved counts stay authoritative.
+    pub fn reconcile_merge_plan_after_split(
+        &mut self,
+        previous_mapping: &[usize],
+        region_index: usize,
+        parts: usize,
+    ) -> bool {
+        if parts < 2 || previous_mapping.len().checked_add(parts - 1) != Some(self.regions.len()) {
+            return false;
+        }
+        let Some(block_index) = previous_mapping.get(region_index).copied() else {
+            return false;
+        };
+        let Some(regions) = self.regions.get(region_index..region_index + parts) else {
+            return false;
+        };
+        let has_base = self.merge_plan.as_ref().is_some_and(MergePlan::has_base);
+        let line_count = |text: &str| {
+            if text.is_empty() {
+                0
+            } else {
+                text.lines().count()
+            }
+        };
+        let counts: Vec<[usize; 3]> = regions
+            .iter()
+            .map(|region| {
+                if has_base {
+                    [
+                        region.base.as_deref().map_or(0, line_count),
+                        line_count(&region.ours),
+                        line_count(&region.theirs),
+                    ]
+                } else {
+                    [line_count(&region.ours), line_count(&region.theirs), 0]
+                }
+            })
+            .collect();
+        let Some(plan) = self.merge_plan.as_mut() else {
+            return false;
+        };
+        let Some(inserted) = plan.split_block_by_source_line_counts(block_index, &counts) else {
+            return false;
+        };
+        debug_assert_eq!(inserted, parts);
+        let shift = parts - 1;
+        let mut mapping = Vec::with_capacity(self.regions.len());
+        for (previous_region, previous_block) in previous_mapping.iter().copied().enumerate() {
+            if previous_region == region_index {
+                mapping.extend(block_index..block_index + parts);
+            } else {
+                mapping.push(if previous_block > block_index {
+                    previous_block.saturating_add(shift)
+                } else {
+                    previous_block
+                });
+            }
+        }
+        self.region_plan_blocks = mapping;
+        true
+    }
+
+    /// Reconcile the shared plan after two adjacent marker regions were joined.
+    ///
+    /// Automatic context blocks between the two conflicts become part of the
+    /// new unresolved block, matching the joined marker payload.
+    pub fn reconcile_merge_plan_after_join(
+        &mut self,
+        previous_mapping: &[usize],
+        region_index: usize,
+    ) -> bool {
+        if previous_mapping.len().checked_sub(1) != Some(self.regions.len()) {
+            return false;
+        }
+        let Some(first_block) = previous_mapping.get(region_index).copied() else {
+            return false;
+        };
+        let Some(last_block) = previous_mapping.get(region_index + 1).copied() else {
+            return false;
+        };
+        if first_block > last_block {
+            return false;
+        }
+        let Some(plan) = self.merge_plan.as_mut() else {
+            return false;
+        };
+        let Some(removed) = plan.join_block_range(first_block, last_block) else {
+            return false;
+        };
+
+        let mut mapping = Vec::with_capacity(self.regions.len());
+        for (previous_region, previous_block) in previous_mapping.iter().copied().enumerate() {
+            if previous_region == region_index {
+                mapping.push(first_block);
+                continue;
+            }
+            if previous_region == region_index + 1 {
+                continue;
+            }
+            mapping.push(if previous_block > last_block {
+                previous_block.saturating_sub(removed)
+            } else if previous_block >= first_block {
+                first_block
+            } else {
+                previous_block
+            });
+        }
+        self.region_plan_blocks = mapping;
+        true
+    }
+
+    /// Restore region decisions conservatively across a plan refresh.
+    pub fn restore_plan_decisions_from(&mut self, previous: &ConflictSession) {
+        let Some(previous_plan) = previous.merge_plan.as_ref() else {
+            return;
+        };
+        let Some(plan) = self.merge_plan.as_ref() else {
+            return;
+        };
+        let previous_mapped: Vec<_> = previous
+            .region_plan_blocks
+            .iter()
+            .copied()
+            .zip(previous.regions.iter())
+            .filter_map(|(block_index, region)| {
+                previous_plan
+                    .blocks
+                    .get(block_index)
+                    .map(|block| (block.id.fingerprint, region.resolution.clone()))
+            })
+            .collect();
+        let current_fingerprints: Vec<_> = self
+            .region_plan_blocks
+            .iter()
+            .filter_map(|block_index| {
+                plan.blocks
+                    .get(*block_index)
+                    .map(|block| block.id.fingerprint)
+            })
+            .collect();
+
+        let same_sequence = previous_mapped.len() == self.regions.len()
+            && current_fingerprints.len() == self.regions.len()
+            && previous_mapped
+                .iter()
+                .map(|(fingerprint, _)| *fingerprint)
+                .eq(current_fingerprints.iter().copied());
+        if same_sequence {
+            for (region, (_, resolution)) in self.regions.iter_mut().zip(previous_mapped) {
+                region.resolution = resolution;
+            }
+            self.sync_merge_plan_from_regions();
+            return;
+        }
+
+        // A changed sequence invalidates occurrence numbers. Restore only a
+        // fingerprint that identifies exactly one mapped conflict in each
+        // plan, and explicitly leave every ambiguous duplicate unresolved.
+        let mut previous_counts = BTreeMap::<u64, usize>::new();
+        let mut current_counts = BTreeMap::<u64, usize>::new();
+        for (fingerprint, _) in &previous_mapped {
+            *previous_counts.entry(*fingerprint).or_default() += 1;
+        }
+        for fingerprint in &current_fingerprints {
+            *current_counts.entry(*fingerprint).or_default() += 1;
+        }
+        let previous_unique: BTreeMap<_, _> = previous_mapped
+            .into_iter()
+            .filter(|(fingerprint, _)| previous_counts.get(fingerprint) == Some(&1))
+            .collect();
+        for (region, fingerprint) in self.regions.iter_mut().zip(current_fingerprints) {
+            region.resolution = previous_unique
+                .get(&fingerprint)
+                .filter(|_| current_counts.get(&fingerprint) == Some(&1))
+                .cloned()
+                .unwrap_or(ConflictRegionResolution::Unresolved);
+        }
+        self.sync_merge_plan_from_regions();
     }
 
     /// Returns the base side bytes (stage 1 payload), when present.
@@ -720,6 +1267,11 @@ impl ConflictSession {
     /// Returns the loaded current merged/worktree bytes, when available.
     pub fn current_bytes(&self) -> Option<&[u8]> {
         self.current.as_ref().and_then(ConflictPayload::as_bytes)
+    }
+
+    /// Returns the marker-backed resolver projection, when available.
+    pub fn marker_projection_text(&self) -> Option<&str> {
+        self.marker_projection.as_deref()
     }
 
     /// Total number of conflict regions.
@@ -909,17 +1461,22 @@ impl ConflictSession {
         }
 
         let mut count = 0;
-        for region in &mut self.regions {
-            if region.resolution.is_resolved() {
+        for region_index in 0..self.regions.len() {
+            if self.regions[region_index].resolution.is_resolved() {
                 continue;
             }
-            if let Some(merged) = history_merge_region(
-                region.base.as_deref(),
-                &region.ours,
-                &region.theirs,
-                options,
-            ) {
-                region.resolution = ConflictRegionResolution::AutoResolved {
+            let local = {
+                let region = &self.regions[region_index];
+                history_merge_region(
+                    region.base.as_deref(),
+                    &region.ours,
+                    &region.theirs,
+                    options,
+                )
+            };
+            let merged = local.or_else(|| self.history_merge_plan_region(region_index, options));
+            if let Some(merged) = merged {
+                self.regions[region_index].resolution = ConflictRegionResolution::AutoResolved {
                     confidence: AutosolveRule::HistoryMerged.confidence(),
                     rule: AutosolveRule::HistoryMerged,
                     content: merged,
@@ -928,6 +1485,38 @@ impl ConflictSession {
             }
         }
         count
+    }
+
+    /// KDiff3 can narrow an append/append conflict to only the new history
+    /// entries, leaving the section header in an automatic context block.
+    /// Run the history rule on the full stages, then carve the target block's
+    /// content back out of that result. Restrict this fallback to a single
+    /// original conflict so unrelated unresolved blocks can never be consumed.
+    fn history_merge_plan_region(
+        &self,
+        region_index: usize,
+        options: &HistoryAutosolveOptions,
+    ) -> Option<String> {
+        const PLACEHOLDER: &str = "\u{1f}gitcomet-history-merge-block\u{1f}";
+
+        let plan = self.merge_plan.as_ref()?;
+        if plan.original_conflict_block_indices().len() != 1 {
+            return None;
+        }
+        let block_index = *self.region_plan_blocks.get(region_index)?;
+        let mut projection = plan.clone();
+        projection.set_manual_content(block_index, PLACEHOLDER.to_owned());
+        let projected = render_merge_plan(&projection, &MergeOptions::default()).output;
+        let marker = projected.find(PLACEHOLDER)?;
+        let prefix = &projected[..marker];
+        let region = self.regions.get(region_index)?;
+        history::history_merge_region_with_context(
+            prefix,
+            region.base.as_deref(),
+            &region.ours,
+            &region.theirs,
+            options,
+        )
     }
 
     /// Check whether the resolved output still contains unresolved conflict markers.

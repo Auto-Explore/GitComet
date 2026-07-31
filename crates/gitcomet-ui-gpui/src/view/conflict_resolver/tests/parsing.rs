@@ -5,9 +5,18 @@ fn parses_and_generates_conflicts() {
     let input = "a\n<<<<<<< HEAD\none\ntwo\n=======\nuno\ndos\n>>>>>>> other\nb\n";
     let mut segments = parse_conflict_markers(input);
     assert_eq!(conflict_count(&segments), 1);
+    let initial_block = segments
+        .iter()
+        .find_map(|segment| match segment {
+            ConflictSegment::Block(block) => Some(block),
+            ConflictSegment::Text(_) => None,
+        })
+        .expect("conflict block");
+    assert!(initial_block.choice.is_empty());
+    assert!(!initial_block.resolved);
 
-    let ours = generate_resolved_text(&segments);
-    assert_eq!(ours, "a\none\ntwo\nb\n");
+    let unresolved = generate_resolved_text(&segments);
+    assert_eq!(unresolved, "a\n<Merge Conflict>\nb\n");
 
     {
         let ConflictSegment::Block(block) = segments
@@ -18,6 +27,7 @@ fn parses_and_generates_conflicts() {
             panic!("expected a conflict block");
         };
         block.choice = ConflictChoice::Theirs;
+        block.resolved = true;
     }
 
     let theirs = generate_resolved_text(&segments);
@@ -32,6 +42,7 @@ fn parses_and_generates_conflicts() {
             panic!("expected a conflict block");
         };
         block.choice = ConflictChoice::Both;
+        block.resolved = true;
     }
     let both = generate_resolved_text(&segments);
     assert_eq!(both, "a\none\ntwo\nuno\ndos\nb\n");
@@ -113,8 +124,20 @@ fn bootstrap_resolved_output_text_materializes_conflicted_output() {
     let output = bootstrap_resolved_output_text(&segments, None, None, None);
 
     assert!(matches!(output, ResolvedOutputText::Owned(_)));
-    assert_eq!(output.as_str(), "a\none\nb\n");
+    assert_eq!(output.as_str(), "a\n<Merge Conflict>\nb\n");
     assert_eq!(output.line_count(), 3);
+}
+
+#[test]
+fn unresolved_placeholder_preserves_crlf_output_rows() {
+    let segments = parse_conflict_markers(
+        "a\r\n<<<<<<< ours\r\none\r\n=======\r\nuno\r\n>>>>>>> theirs\r\nb\r\n",
+    );
+
+    assert_eq!(
+        generate_resolved_text(&segments),
+        "a\r\n<Merge Conflict>\r\nb\r\n"
+    );
 }
 
 #[test]
@@ -164,9 +187,9 @@ fn empty_conflict_blocks_parse_and_generate() {
         .unwrap();
     assert_eq!(block.ours, "");
     assert_eq!(block.theirs, "");
-    // Default choice is Ours, generating empty content in place of the conflict
+    // With no selected source, even an empty conflict has an explicit row.
     let resolved = generate_resolved_text(&segments);
-    assert_eq!(resolved, "a\nb\n");
+    assert_eq!(resolved, "a\n<Merge Conflict>\nb\n");
 }
 
 #[test]
@@ -323,10 +346,7 @@ dangling
     assert_eq!(block.theirs, "ok theirs\n");
     // The malformed part should be preserved as trailing text
     let resolved = generate_resolved_text(&segments);
-    assert!(
-        resolved.contains("ok ours"),
-        "resolved should contain the valid conflict's choice"
-    );
+    assert!(resolved.contains("<Merge Conflict>"));
     assert!(
         resolved.contains("missing end"),
         "malformed content should be preserved as text"
@@ -439,6 +459,7 @@ fn populate_bases_converts_two_way_to_three_way_compatible() {
         .find(|s| matches!(s, ConflictSegment::Block(_)))
     {
         b.choice = ConflictChoice::Base;
+        b.resolved = true;
     }
     let resolved = generate_resolved_text(&segments);
     assert_eq!(resolved, "a\norig\nb\n");
@@ -756,7 +777,7 @@ fn resolved_output_gutter_row_packs_marker_bits() {
 
     let marker = ResolvedOutputGutterRow::new(ResolvedLineSource::B, Some(17), true, false, true);
     assert_eq!(marker.source(), ResolvedLineSource::B);
-    assert_eq!(marker.badge_char(), 'B');
+    assert_eq!(marker.badge_char(), '?');
     assert_eq!(marker.marker_conflict_ix(), Some(17));
     assert!(marker.has_marker());
     assert!(marker.is_start());

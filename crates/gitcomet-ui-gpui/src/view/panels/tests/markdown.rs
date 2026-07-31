@@ -1658,7 +1658,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
-                pane.conflict_resolver.active_conflict = 0;
+                pane.conflict_resolver.active_conflict = Some(0);
                 pane.conflict_resolver.nav_anchor = None;
                 cx.notify();
             });
@@ -1705,7 +1705,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             ConflictResolverViewMode::TwoWayDiff
         );
         assert!(!pane.reveal_whitespace_chars);
-        assert_eq!(pane.conflict_resolver.active_conflict, 0);
+        assert_eq!(pane.conflict_resolver.active_conflict, Some(0));
         assert!(
             pane.conflict_resolver.nav_anchor.is_none(),
             "preview hotkeys should not mutate conflict navigation state"
@@ -1716,7 +1716,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
                 pane.conflict_resolver.resolver_preview_mode = ConflictResolverPreviewMode::Preview;
-                pane.conflict_resolver.active_conflict = 1;
+                pane.conflict_resolver.active_conflict = Some(1);
                 cx.notify();
             });
         });
@@ -1736,7 +1736,7 @@ fn conflict_markdown_preview_hides_text_controls_and_ignores_text_hotkeys(
             ConflictResolverViewMode::TwoWayDiff
         );
         assert!(!pane.reveal_whitespace_chars);
-        assert_eq!(pane.conflict_resolver.active_conflict, 1);
+        assert_eq!(pane.conflict_resolver.active_conflict, Some(1));
         assert!(
             pane.conflict_resolver.nav_anchor.is_none(),
             "preview hotkeys should not mutate conflict navigation state",
@@ -1800,14 +1800,19 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                 theirs_text.clone(),
                 current_text.clone(),
             );
-            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+            let mut session = ConflictSession::from_merged_text(
                 file_rel.clone(),
                 gitcomet_core::domain::FileConflictKind::BothModified,
                 ConflictPayload::Text(base_text.clone().into()),
                 ConflictPayload::Text(ours_text.clone().into()),
                 ConflictPayload::Text(theirs_text.clone().into()),
                 &current_text,
-            ));
+            );
+            for region in &mut session.regions {
+                region.resolution =
+                    gitcomet_core::conflict_session::ConflictRegionResolution::PickOurs;
+            }
+            repo.conflict_state.conflict_session = Some(session);
 
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
@@ -1830,6 +1835,17 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
             )
         },
     );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let output = pane.conflict_resolver_input.read(app).text().to_string();
+        assert!(
+            output.lines().any(|line| line.len() >= 240),
+            "resolved output should retain the selected long markdown source; output_len={} longest_line={}",
+            output.len(),
+            output.lines().map(str::len).max().unwrap_or_default(),
+        );
+    });
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {

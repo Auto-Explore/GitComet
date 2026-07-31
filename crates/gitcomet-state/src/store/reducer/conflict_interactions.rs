@@ -4,10 +4,12 @@ use crate::msg::{
     ConflictRegionResolutionUpdate, Effect, RepoPath,
 };
 use gitcomet_core::conflict_session::{
-    ConflictPayload, ConflictRegionEditOutcome, ConflictRegionResolution,
-    ConflictRegionSplitBoundaries, ConflictResolverStrategy, HistoryAutosolveOptions,
-    RegexAutosolveOptions, join_conflict_regions_text, split_conflict_region_text,
+    AutosolveConfidence, AutosolveRule, ConflictRegion, ConflictRegionEditOutcome,
+    ConflictRegionResolution, ConflictRegionSplitBoundaries, ConflictResolverStrategy,
+    HistoryAutosolveOptions, RegexAutosolveOptions, join_conflict_regions_text,
+    split_conflict_region_text,
 };
+use gitcomet_core::merge::{MergeSource, OrderedSelection};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -48,6 +50,7 @@ pub(super) fn apply_bulk_choice(
 
     let applied = apply_bulk_choice_to_session(session, choice);
     if applied > 0 {
+        session.sync_merge_plan_from_regions();
         repo_state.bump_conflict_rev();
     }
     Vec::new()
@@ -61,6 +64,56 @@ pub(super) fn set_region_choice(
     choice: ConflictRegionChoice,
 ) -> Vec<Effect> {
     set_region_choice_inline(state, repo_id, path, region_index, choice);
+    Vec::new()
+}
+
+pub(super) fn toggle_region_source(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    source: MergeSource,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path.as_path() {
+        return Vec::new();
+    }
+    if session.toggle_region_source(region_index, source) {
+        repo_state.bump_conflict_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn replace_region_selection(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    region_index: usize,
+    selection: OrderedSelection,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path.as_path() {
+        return Vec::new();
+    }
+    if session.replace_region_selection(region_index, selection) {
+        repo_state.bump_conflict_rev();
+    }
     Vec::new()
 }
 
@@ -102,6 +155,7 @@ pub(super) fn set_region_choice_inline(
 
     if region.resolution != next_resolution {
         region.resolution = next_resolution;
+        session.sync_merge_plan_from_regions();
         repo_state.bump_conflict_rev();
     }
 }
@@ -112,9 +166,123 @@ enum ConflictRegionEdit {
     Join,
 }
 
-/// section 30 split: rewrite conflict block `region_index` into 2–3 blocks at the
-/// given block-local boundaries; the split parts open Unresolved and every
-/// other region keeps its resolution (indices shift past the split).
+#[derive(Clone)]
+enum SplitResolutionCarry {
+    Same(ConflictRegionResolution),
+    Sources(OrderedSelection),
+    Auto {
+        rule: AutosolveRule,
+        confidence: AutosolveConfidence,
+        sources: OrderedSelection,
+    },
+}
+
+fn region_text_for_selection(
+    region: &ConflictRegion,
+    selection: &OrderedSelection,
+) -> Option<String> {
+    let mut text = String::new();
+    for source in selection.iter() {
+        match (region.base.is_some(), source) {
+            (true, MergeSource::A) => text.push_str(region.base.as_deref()?),
+            (true, MergeSource::B) => text.push_str(region.ours.as_str()),
+            (true, MergeSource::C) => text.push_str(region.theirs.as_str()),
+            (false, MergeSource::A) => text.push_str(region.ours.as_str()),
+            (false, MergeSource::B) => text.push_str(region.theirs.as_str()),
+            (false, MergeSource::C) => return None,
+        }
+    }
+    Some(text)
+}
+
+fn unique_selection_for_region_content(
+    region: &ConflictRegion,
+    content: &str,
+) -> Option<OrderedSelection> {
+    let sources: &[MergeSource] = if region.base.is_some() {
+        &[MergeSource::A, MergeSource::B, MergeSource::C]
+    } else {
+        &[MergeSource::A, MergeSource::B]
+    };
+    let mut matches = Vec::new();
+    for &first in sources {
+        let single = OrderedSelection::from(first);
+        if region_text_for_selection(region, &single).as_deref() == Some(content) {
+            matches.push(single);
+        }
+        for &second in sources {
+            if first == second {
+                continue;
+            }
+            let pair = OrderedSelection::from_sources([first, second]);
+            if region_text_for_selection(region, &pair).as_deref() == Some(content) {
+                matches.push(pair);
+            }
+            for &third in sources {
+                if third == first || third == second {
+                    continue;
+                }
+                let triple = OrderedSelection::from_sources([first, second, third]);
+                if region_text_for_selection(region, &triple).as_deref() == Some(content) {
+                    matches.push(triple);
+                }
+            }
+        }
+    }
+    (matches.len() == 1).then(|| matches.remove(0))
+}
+
+fn split_resolution_carry(region: &ConflictRegion) -> Option<SplitResolutionCarry> {
+    match &region.resolution {
+        ConflictRegionResolution::Unresolved
+        | ConflictRegionResolution::PickBase
+        | ConflictRegionResolution::PickOurs
+        | ConflictRegionResolution::PickTheirs
+        | ConflictRegionResolution::PickBoth
+        | ConflictRegionResolution::Sources(_) => {
+            Some(SplitResolutionCarry::Same(region.resolution.clone()))
+        }
+        ConflictRegionResolution::ManualEdit(content) => {
+            unique_selection_for_region_content(region, content).map(SplitResolutionCarry::Sources)
+        }
+        ConflictRegionResolution::AutoResolved {
+            rule,
+            confidence,
+            content,
+        } => unique_selection_for_region_content(region, content).map(|sources| {
+            SplitResolutionCarry::Auto {
+                rule: *rule,
+                confidence: *confidence,
+                sources,
+            }
+        }),
+    }
+}
+
+fn split_child_resolution(
+    carry: &SplitResolutionCarry,
+    child: &ConflictRegion,
+) -> ConflictRegionResolution {
+    match carry {
+        SplitResolutionCarry::Same(resolution) => resolution.clone(),
+        SplitResolutionCarry::Sources(selection) => {
+            ConflictRegionResolution::Sources(selection.clone())
+        }
+        SplitResolutionCarry::Auto {
+            rule,
+            confidence,
+            sources,
+        } => ConflictRegionResolution::AutoResolved {
+            rule: *rule,
+            confidence: *confidence,
+            content: region_text_for_selection(child, sources).unwrap_or_default(),
+        },
+    }
+}
+
+/// Rewrite conflict block `region_index` into 2–3 in-memory blocks at the
+/// given block-local boundaries. Split parts inherit the source selection and
+/// every other region keeps its resolution (indices shift past the split).
 pub(super) fn split_region(
     state: &mut AppState,
     repo_id: RepoId,
@@ -138,9 +306,9 @@ pub(super) fn split_region(
     )
 }
 
-/// section 30 join: merge conflict blocks `region_index` and `region_index + 1`
-/// (context between them is absorbed into every side); the joined region
-/// opens Unresolved and later regions shift down by one.
+/// Merge conflict blocks `region_index` and `region_index + 1` in memory
+/// (context between them is absorbed into every side). The joined region opens
+/// unresolved and later regions shift down by one.
 pub(super) fn join_regions(
     state: &mut AppState,
     repo_id: RepoId,
@@ -179,8 +347,22 @@ fn edit_regions(
     if session.strategy != ConflictResolverStrategy::FullTextResolver {
         return Vec::new();
     }
-    let Some(ConflictPayload::Text(current)) = session.current.as_ref() else {
+    let Some(current) = session.marker_projection.as_ref() else {
         return Vec::new();
+    };
+    let split_carry = match edit {
+        ConflictRegionEdit::Split(_) => {
+            let Some(region) = session.regions.get(region_index) else {
+                return Vec::new();
+            };
+            let Some(carry) = split_resolution_carry(region) else {
+                // Free-form output has no provable child ownership. Preserve
+                // it intact instead of cloning or discarding it.
+                return Vec::new();
+            };
+            Some(carry)
+        }
+        ConflictRegionEdit::Join => None,
     };
 
     let Some(ConflictRegionEditOutcome { new_text, parts }) = (match edit {
@@ -192,25 +374,48 @@ fn edit_regions(
         return Vec::new();
     };
 
-    // Explicit resolution carry-over: the edited region(s) open Unresolved,
-    // everything else keeps its resolution at its shifted index. The reload
-    // restore path is content-based and would drop nothing here either, but
-    // doing it inline keeps the reducer deterministic and reload-free.
+    // Explicit resolution carry-over: split parts preserve the original
+    // selection; a joined block opens unresolved. Everything else keeps its
+    // resolution at its shifted index.
     let old: Vec<ConflictRegionResolution> = session
         .regions
         .iter()
         .map(|region| region.resolution.clone())
         .collect();
+    let old_plan_blocks = session.region_plan_blocks.clone();
     let shared: std::sync::Arc<str> = std::sync::Arc::from(new_text.as_str());
-    session.current = Some(ConflictPayload::Text(std::sync::Arc::clone(&shared)));
+    session.marker_projection = Some(std::sync::Arc::clone(&shared));
     session.parse_regions_from_shared_text(std::sync::Arc::clone(&shared));
+    if !old_plan_blocks.is_empty() {
+        let reconciled = match edit {
+            ConflictRegionEdit::Split(_) => {
+                session.reconcile_merge_plan_after_split(&old_plan_blocks, region_index, parts)
+            }
+            ConflictRegionEdit::Join => {
+                session.reconcile_merge_plan_after_join(&old_plan_blocks, region_index)
+            }
+        };
+        if !reconciled {
+            // An unusual independently-cut row cannot be represented as
+            // contiguous aligned blocks. Keep the marker session correct and
+            // avoid exposing a stale plan until the next stage refresh.
+            session.merge_plan = None;
+            session.region_plan_blocks.clear();
+        }
+    }
     for (ix, region) in session.regions.iter_mut().enumerate() {
         region.resolution = if ix < region_index {
             old.get(ix)
                 .cloned()
                 .unwrap_or(ConflictRegionResolution::Unresolved)
         } else if ix < region_index + parts {
-            ConflictRegionResolution::Unresolved
+            match edit {
+                ConflictRegionEdit::Split(_) => split_carry
+                    .as_ref()
+                    .map(|carry| split_child_resolution(carry, region))
+                    .unwrap_or(ConflictRegionResolution::Unresolved),
+                ConflictRegionEdit::Join => ConflictRegionResolution::Unresolved,
+            }
         } else {
             // Split consumed 1 old region for `parts` new ones; join consumed
             // 2 old regions for 1 new one.
@@ -223,37 +428,14 @@ fn edit_regions(
                 .unwrap_or(ConflictRegionResolution::Unresolved)
         };
     }
+    session.sync_merge_plan_from_regions();
+    session.has_pending_structural_edits = true;
 
-    // Keep the loaded conflict file's current text in step so the view's
-    // source hash changes and it rebuilds from the new segmentation. Mutate
-    // the file in place — rebuilding from the session would clobber side
-    // texts under CurrentOnly load mode.
-    let loaded_file_updated = if let crate::model::Loadable::Ready(Some(file)) =
-        &repo_state.conflict_state.conflict_file
-        && file.path.as_path() == path.as_path()
-    {
-        let mut file = file.clone();
-        file.current = Some(std::sync::Arc::clone(&shared));
-        file.current_bytes = None;
-        repo_state.set_conflict_file(crate::model::Loadable::Ready(Some(file)));
-        true
-    } else {
-        false
-    };
-    // `set_conflict_file` already publishes the session edit. If there was no
-    // matching loaded file to update, publish the session mutation directly.
-    if !loaded_file_updated {
-        repo_state.bump_conflict_rev();
-    }
-
-    // Persist the rewritten marker text; resolved regions stay markers on
-    // disk — Save remains the materialization point for resolutions.
-    vec![Effect::SaveWorktreeFile {
-        repo_id,
-        path: path.to_path_buf(),
-        contents: new_text,
-        stage: false,
-    }]
+    // The worktree is intentionally untouched until Save. The revision is
+    // sufficient for embedded and focused views to rebuild from session text;
+    // the pending-structure bit keeps that projection across same-path reloads.
+    repo_state.bump_conflict_rev();
+    Vec::new()
 }
 
 pub(super) fn sync_region_resolutions(
@@ -298,6 +480,7 @@ pub(super) fn sync_region_resolutions(
     }
 
     if changed > 0 {
+        session.sync_merge_plan_from_regions();
         repo_state.bump_conflict_rev();
     }
     Vec::new()
@@ -325,6 +508,7 @@ pub(super) fn apply_autosolve(
 
     let stats = apply_autosolve_to_session(session, mode, whitespace_normalize);
     if stats.total_resolved() > 0 {
+        session.sync_merge_plan_from_regions();
         repo_state.bump_conflict_rev();
     }
     Vec::new()
@@ -356,6 +540,7 @@ pub(super) fn reset_resolutions_inline(state: &mut AppState, repo_id: RepoId, pa
 
     let reset_count = reset_session_resolutions(session);
     if reset_count > 0 {
+        session.sync_merge_plan_from_regions();
         repo_state.bump_conflict_rev();
     }
 }

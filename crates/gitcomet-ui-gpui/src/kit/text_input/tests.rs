@@ -95,6 +95,52 @@ fn compute_line_starts_and_line_text_handle_trailing_newline() {
 }
 
 #[test]
+fn line_text_for_index_excludes_crlf_terminators() {
+    let text = "alpha\r\nbeta\r\n";
+    let starts = compute_line_starts(text);
+    assert_eq!(starts, vec![0, 7, 13]);
+    assert_eq!(line_text_for_index(text, starts.as_slice(), 0), "alpha");
+    assert_eq!(line_text_for_index(text, starts.as_slice(), 1), "beta");
+    assert_eq!(line_text_for_index(text, starts.as_slice(), 2), "");
+}
+
+#[gpui::test]
+fn multiline_crlf_plain_layout_draws_without_painting_carriage_returns(
+    cx: &mut gpui::TestAppContext,
+) {
+    let text = "[server]\r\nhost=local-api.internal\r\nport=8181\r\n";
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                soft_wrap: false,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| input.set_text(text, cx));
+        let _ = window.draw(app);
+
+        let input = input.read(app);
+        assert_eq!(input.text(), text);
+        let TextInputLayout::Plain(lines) = input
+            .layout
+            .last
+            .as_ref()
+            .expect("expected plain text input layout")
+        else {
+            panic!("expected plain text input layout");
+        };
+        assert_eq!(lines[0].text.as_ref(), "[server]");
+        assert_eq!(lines[1].text.as_ref(), "host=local-api.internal");
+    });
+}
+
+#[test]
 fn wrapped_line_index_for_y_handles_row_boundaries() {
     let row_counts = vec![2, 1, 3];
     let y_offsets = vec![px(0.0), px(20.0), px(30.0)];
@@ -1877,6 +1923,41 @@ fn redo_restores_text_after_undo(cx: &mut gpui::TestAppContext) {
             input.redo(&Redo, window, cx);
             assert_eq!(input.text(), "beta");
             assert!(input.selection.redo_stack.is_empty());
+        });
+    });
+}
+
+#[gpui::test]
+fn edit_delta_queue_retains_multiple_edits_and_undo_redo(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: false,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("abcd", cx);
+            input.replace_utf8_range(1..2, "XX", cx);
+            input.replace_utf8_range(3..4, "", cx);
+            assert_eq!(input.text(), "aXXd");
+            assert_eq!(
+                input.drain_recent_utf8_edit_deltas(),
+                vec![(1..2, 1..3), (3..4, 3..3)],
+            );
+
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), "aXXcd");
+            assert_eq!(input.drain_recent_utf8_edit_deltas(), vec![(3..3, 3..4)],);
+
+            input.redo(&Redo, window, cx);
+            assert_eq!(input.text(), "aXXd");
+            assert_eq!(input.drain_recent_utf8_edit_deltas(), vec![(3..4, 3..3)],);
         });
     });
 }

@@ -2736,6 +2736,7 @@ fn conflict_choice_label(choice: conflict_resolver::ConflictChoice) -> &'static 
         conflict_resolver::ConflictChoice::Ours => "Local (B)",
         conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
         conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+        _ => "Ordered source selection",
     }
 }
 

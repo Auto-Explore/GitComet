@@ -133,6 +133,65 @@ fn build_three_way_conflict_maps_without_line_maps_keeps_only_compact_metadata()
 }
 
 #[test]
+fn merge_plan_ranges_keep_three_two_input_conflicts_separate() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+
+    let local = concat!(
+        "pub fn stage_ingest(input: &[u8]) -> Vec<u8> {\n",
+        "    let cfg = Stage { name: \"ingest\", batch: 64, retries: 0 };\n",
+        "    let mut out = Vec::with_capacity(input.len());\n",
+        "    for chunk in input.chunks(cfg.batch) {\n",
+        "        out.extend_from_slice(chunk);\n",
+        "        out.push(0 as u8);\n",
+        "    }\n",
+        "    out\n",
+        "}\n",
+    );
+    let remote = concat!(
+        "pub fn stage_ingest(input: &[u8]) -> Vec<u8> {\n",
+        "    let cfg = Stage { name: \"ingest\", batch: 128, retries: 3 };\n",
+        "    let mut out = Vec::new();\n",
+        "    for (seq, chunk) in input.chunks(cfg.batch).enumerate() {\n",
+        "        out.push(seq as u8);\n",
+        "        out.extend_from_slice(chunk);\n",
+        "    }\n",
+        "    out.push(cfg.retries as u8);\n",
+        "    out\n",
+        "}\n",
+    );
+    let session = ConflictSession::from_stage_inputs(
+        "pipeline.rs".into(),
+        FileConflictKind::BothAdded,
+        ConflictPayload::Absent,
+        ConflictPayload::Text(local.into()),
+        ConflictPayload::Text(remote.into()),
+    );
+
+    assert_eq!(
+        session.regions.len(),
+        3,
+        "the equal extend/close lines separate three conflict regions"
+    );
+    let visible_regions = [0, 1, 2];
+    let ranges = merge_plan_aligned_conflict_ranges(&session, &visible_regions)
+        .expect("full text sessions carry exact merge-plan ranges");
+    let plan = session.merge_plan.as_ref().expect("merge plan");
+    let expected: Vec<_> = session
+        .region_plan_blocks
+        .iter()
+        .map(|block_index| plan.blocks[*block_index].rows.clone())
+        .collect();
+
+    assert_eq!(ranges, expected);
+    assert_eq!(ranges.len(), 3);
+    assert!(
+        ranges.windows(2).all(|pair| pair[0].end < pair[1].start),
+        "each active highlight must leave the equal separator row unhighlighted"
+    );
+}
+
+#[test]
 fn two_way_visible_indices_hide_only_resolved_conflict_rows() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),

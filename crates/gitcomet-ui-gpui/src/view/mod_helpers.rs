@@ -1272,6 +1272,10 @@ pub(super) struct ConflictResolverUiState {
     pub(super) loaded_file: Option<gitcomet_state::model::ConflictFile>,
     pub(super) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(super) source_hash: Option<u64>,
+    /// The editable output contains preserved worktree text whose conflict
+    /// spans could not be mapped safely onto the stage projection.
+    pub(super) output_is_protected: bool,
+    /// Marker-backed geometry used for reset and source-region rendering.
     pub(super) current: Option<std::sync::Arc<str>>,
     pub(super) marker_segments: Vec<conflict_resolver::ConflictSegment>,
     /// section 30 collapsed context mode: fold unchanged runs in the source columns.
@@ -1293,7 +1297,14 @@ pub(super) struct ConflictResolverUiState {
     /// kept separate from display blocks, whose base may be populated from
     /// the shared ancestor for picking.
     pub(super) conflict_region_marker_has_base: Vec<bool>,
-    pub(super) active_conflict: usize,
+    /// Actionable conflict block currently selected in the displayed marker
+    /// projection. Semantic targets without a displayed block leave this unset.
+    pub(super) active_conflict: Option<usize>,
+    /// Ordered semantic resolver navigation targets.
+    pub(super) nav_targets: Vec<conflict_resolver::ConflictNavTarget>,
+    /// Aligned source rows retained for every original session region before
+    /// manual/automatic resolutions are materialized into plain display text.
+    pub(super) original_region_aligned_ranges: Vec<Option<Range<usize>>>,
     pub(super) hovered_conflict: Option<(usize, ThreeWayColumn)>,
     /// section 30 split: in-progress or completed drag selection of aligned rows
     /// inside one conflict block, used to split that block at the selection
@@ -1310,6 +1321,11 @@ pub(super) struct ConflictResolverUiState {
     /// section 30 aligned row space: maps visual rows to per-side lines. Identity
     /// (row == line) when alignment is unavailable.
     pub(super) three_way_aligned: conflict_resolver::ThreeWayAlignedMap,
+    /// Exact merge-plan row ranges for the currently visible marker blocks.
+    ///
+    /// `None` is the legacy/current-only fallback where ranges must be
+    /// estimated from marker text.
+    pub(super) merge_plan_aligned_conflict_ranges: Option<Vec<Range<usize>>>,
     /// Whether the three-way visible projection/ranges have been built at
     /// least once for the current conflict source.
     pub(super) three_way_visible_state_ready: bool,
@@ -1336,7 +1352,7 @@ pub(super) struct ConflictResolverUiState {
     /// Bounded on-demand word highlights for giant block-local two-way rows.
     pub(super) two_way_split_word_highlight_cache:
         conflict_resolver::ConflictSplitWordHighlightCache,
-    pub(super) nav_anchor: Option<usize>,
+    pub(super) nav_anchor: Option<conflict_resolver::ConflictNavAnchor>,
     pub(super) hide_resolved: bool,
     /// True when any conflict side contains non-UTF8 binary data.
     pub(super) is_binary_conflict: bool,
@@ -1389,11 +1405,14 @@ impl Default for ConflictResolverUiState {
             context_fold_reveals: std::collections::HashMap::default(),
             conflict_syntax_language: None,
             source_hash: None,
+            output_is_protected: false,
             current: None,
             marker_segments: Vec::new(),
             conflict_region_indices: Vec::new(),
             conflict_region_marker_has_base: Vec::new(),
-            active_conflict: 0,
+            active_conflict: None,
+            nav_targets: Vec::new(),
+            original_region_aligned_ranges: Vec::new(),
             hovered_conflict: None,
             row_selection: None,
             mode_state: ConflictModeState::default(),
@@ -1402,6 +1421,7 @@ impl Default for ConflictResolverUiState {
             three_way_line_starts: ThreeWaySides::default(),
             three_way_len: 0,
             three_way_aligned: conflict_resolver::ThreeWayAlignedMap::default(),
+            merge_plan_aligned_conflict_ranges: None,
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             three_way_horizontal_measure_rows: [0; 3],
@@ -1494,6 +1514,115 @@ impl ConflictResolverUiState {
 
     pub(super) fn dispatch_path(&self) -> Option<gitcomet_state::msg::RepoPath> {
         self.shared_path.clone()
+    }
+
+    pub(super) fn selected_nav_target_index(&self) -> Option<usize> {
+        let anchor = self.nav_anchor?;
+        self.nav_targets
+            .iter()
+            .position(|target| target.id == anchor.id)
+    }
+
+    fn nav_target_matches_display(
+        &self,
+        target: &conflict_resolver::ConflictNavTarget,
+        display_conflict_index: usize,
+    ) -> bool {
+        target.display_conflict_index == Some(display_conflict_index)
+            || target.region_index.is_some_and(|region_index| {
+                self.conflict_region_indices
+                    .get(display_conflict_index)
+                    .copied()
+                    == Some(region_index)
+            })
+            || matches!(
+                target.id,
+                conflict_resolver::ConflictNavTargetId::DisplayBlock(index)
+                    if index == display_conflict_index
+            )
+    }
+
+    pub(super) fn select_nav_target(&mut self, target_index: usize) -> bool {
+        let Some(target) = self.nav_targets.get(target_index) else {
+            return false;
+        };
+        self.nav_anchor = Some(target.anchor());
+        self.active_conflict = target.display_conflict_index;
+        true
+    }
+
+    pub(super) fn select_display_conflict(&mut self, display_conflict_index: usize) -> bool {
+        let Some(target_index) = self
+            .nav_targets
+            .iter()
+            .position(|target| self.nav_target_matches_display(target, display_conflict_index))
+        else {
+            return false;
+        };
+        self.nav_anchor = Some(self.nav_targets[target_index].anchor());
+        self.active_conflict = Some(display_conflict_index);
+        true
+    }
+
+    pub(super) fn reconcile_nav_targets(
+        &mut self,
+        targets: Vec<conflict_resolver::ConflictNavTarget>,
+    ) {
+        let previous_targets = std::mem::replace(&mut self.nav_targets, targets);
+        let previous_active = self.active_conflict;
+        let selected = conflict_resolver::reconcile_conflict_nav_target_index(
+            self.nav_anchor,
+            &previous_targets,
+            &self.nav_targets,
+        );
+        let Some(selected) = selected else {
+            self.nav_anchor = None;
+            self.active_conflict = None;
+            return;
+        };
+        let target = &self.nav_targets[selected];
+        self.nav_anchor = Some(target.anchor());
+        self.active_conflict = previous_active
+            .filter(|display| self.nav_target_matches_display(target, *display))
+            .or(target.display_conflict_index);
+    }
+
+    pub(super) fn output_line_for_nav_target_provenance(
+        &self,
+        target: &conflict_resolver::ConflictNavTarget,
+    ) -> Option<usize> {
+        let aligned_rows = target.aligned_rows.as_ref()?;
+        self.resolved_outline.meta.iter().find_map(|meta| {
+            let side = match (self.view_mode, meta.source) {
+                (ConflictResolverViewMode::ThreeWay, conflict_resolver::ResolvedLineSource::A) => {
+                    ThreeWayColumn::Base
+                }
+                (ConflictResolverViewMode::ThreeWay, conflict_resolver::ResolvedLineSource::B) => {
+                    ThreeWayColumn::Ours
+                }
+                (ConflictResolverViewMode::ThreeWay, conflict_resolver::ResolvedLineSource::C) => {
+                    ThreeWayColumn::Theirs
+                }
+                (
+                    ConflictResolverViewMode::TwoWayDiff,
+                    conflict_resolver::ResolvedLineSource::A,
+                ) => ThreeWayColumn::Ours,
+                (
+                    ConflictResolverViewMode::TwoWayDiff,
+                    conflict_resolver::ResolvedLineSource::B,
+                ) => ThreeWayColumn::Theirs,
+                (
+                    ConflictResolverViewMode::TwoWayDiff,
+                    conflict_resolver::ResolvedLineSource::C,
+                )
+                | (_, conflict_resolver::ResolvedLineSource::Manual) => return None,
+            };
+            let source_line = usize::try_from(meta.input_line?).ok()?.checked_sub(1)?;
+            let aligned_row = self.three_way_row_for_side_line(side, source_line);
+            (aligned_rows.contains(&aligned_row)
+                || (aligned_rows.is_empty() && aligned_rows.start == aligned_row))
+                .then_some(meta.output_line as usize)
+        })
     }
 
     pub(super) fn cached_loaded_file_for_target(
@@ -1867,6 +1996,7 @@ impl ConflictResolverUiState {
             conflict_resolver::ConflictChoice::Base | conflict_resolver::ConflictChoice::Both => {
                 None
             }
+            _ => None,
         }
     }
 
@@ -1909,6 +2039,13 @@ impl ConflictResolverUiState {
                 )
             }
         }
+    }
+
+    /// Find the visible row for an aligned merge-plan row. Context hidden by a
+    /// fold maps to the fold summary row.
+    pub(super) fn visible_index_for_aligned_row(&self, row: usize) -> Option<usize> {
+        self.three_way_visible_projection()
+            .visible_index_for_source_line(row)
     }
 
     // ----- Two-way split dispatch (giant vs eager) -----
@@ -2049,6 +2186,7 @@ impl ConflictResolverUiState {
     }
 
     /// Map a two-way split visible index back to its conflict index.
+    #[cfg(test)]
     pub(super) fn two_way_split_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => s
@@ -2059,6 +2197,7 @@ impl ConflictResolverUiState {
     }
 
     /// Build unresolved conflict navigation entries for two-way split view.
+    #[cfg(test)]
     pub(super) fn two_way_split_nav_entries(&self) -> Vec<usize> {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => {
@@ -2074,6 +2213,7 @@ impl ConflictResolverUiState {
 
     /// Build unresolved conflict navigation entries for the current two-way
     /// conflict diff view.
+    #[cfg(test)]
     pub(super) fn two_way_nav_entries(&self) -> Vec<usize> {
         if self.two_way_uses_aligned_rows() {
             return conflict_resolver::unresolved_conflict_indices(&self.marker_segments)
@@ -2085,6 +2225,7 @@ impl ConflictResolverUiState {
     }
 
     /// Map a two-way visible index to its conflict index.
+    #[cfg(test)]
     pub(super) fn two_way_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
         if self.two_way_uses_aligned_rows() {
             return match self.three_way_visible_item(visible_ix)? {
@@ -2300,43 +2441,32 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Ours),
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
-        // section 30 aligned row space: conflict ranges live in aligned rows, shared
-        // by every column. Each block covers the union of its per-side
-        // estimated ranges mapped through the alignment, clamped monotonic.
         let block_count = maps.conflict_ranges[1].len();
-        let mut aligned_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(block_count);
-        for block_ix in 0..block_count {
-            let mut start = usize::MAX;
-            let mut end = 0usize;
-            for side in 0..3 {
-                let side_range = &maps.conflict_ranges[side][block_ix];
-                if side_range.is_empty() {
-                    // A side without content contributes no aligned rows to
-                    // the shared block extent.
-                    continue;
-                }
-                let mapped = self
-                    .three_way_aligned
-                    .aligned_range_for_side_range(side, side_range.clone());
-                start = start.min(mapped.start);
-                end = end.max(mapped.end);
-            }
-            if start == usize::MAX {
-                start = end;
-            }
-            if let Some(prev) = aligned_ranges.last() {
-                start = start.max(prev.end);
-                end = end.max(start);
-            }
-            // A zero-length extent is legitimate: a conflict empty on all three
-            // sides (e.g. `<<<<<<<\n=======\n>>>>>>>`) has nothing to show, and a
-            // split sub-block can map entirely within its predecessor's extent —
-            // the monotonic clamp then collapses it into the neighbor's rows.
-            // Such a block renders none of its own rows, which is fine; the
-            // conflict group it belongs to is still reachable. Never fabricate a
-            // row to avoid the empty range.
-            aligned_ranges.push(start..end);
-        }
+        let exact_plan_ranges = self
+            .merge_plan_aligned_conflict_ranges
+            .as_ref()
+            .filter(|ranges| {
+                ranges.len() == block_count
+                    && ranges
+                        .iter()
+                        .all(|range| range.start <= range.end && range.end <= self.three_way_len)
+                    && ranges.windows(2).all(|pair| pair[0].end <= pair[1].start)
+            })
+            .cloned();
+        let aligned_ranges = exact_plan_ranges.unwrap_or_else(|| {
+            // Legacy/current-only fallback: project marker-text offsets back
+            // through the side alignment. Marker text is output space rather
+            // than source space, so this is necessarily an estimate.
+            conflict_resolver::project_conflict_ranges_to_aligned_rows(
+                &self.marker_segments,
+                &self.three_way_aligned,
+                [
+                    self.three_way_line_count(ThreeWayColumn::Base),
+                    self.three_way_line_count(ThreeWayColumn::Ours),
+                    self.three_way_line_count(ThreeWayColumn::Theirs),
+                ],
+            )
+        });
         let three_way_visible_projection =
             conflict_resolver::build_three_way_visible_projection_with_options(
                 self.three_way_len,
@@ -2445,8 +2575,9 @@ mod conflict_resolver_ui_state_tests {
         Loadable, ThreeWayColumn, ThreeWaySides,
     };
     use crate::view::conflict_resolver::{
-        self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
-        ConflictSplitRowIndex, ThreeWayVisibleItem, TwoWaySplitProjection,
+        self, ConflictBlock, ConflictChoice, ConflictNavTarget, ConflictNavTargetId,
+        ConflictResolverViewMode, ConflictSegment, ConflictSplitRowIndex, ResolvedLineMeta,
+        ResolvedLineSource, ThreeWayVisibleItem, TwoWaySplitProjection,
     };
 
     #[test]
@@ -2591,6 +2722,63 @@ mod conflict_resolver_ui_state_tests {
         );
         assert_eq!(state.conflict_has_base, maps.conflict_has_base);
         assert_eq!(state.conflict_choices, vec![ConflictChoice::Theirs]);
+    }
+
+    #[test]
+    fn merge_plan_ranges_override_marker_output_offset_estimates() {
+        let block = |ours: &str, theirs: &str| {
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: ours.into(),
+                theirs: theirs.into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            })
+        };
+        let exact_ranges = vec![1..3, 4..5, 6..8];
+        let mut state = ConflictResolverUiState {
+            // These text segments are merged-output projections whose line
+            // counts do not represent positions in both immutable sources.
+            marker_segments: vec![
+                ConflictSegment::Text("one-sided resolved output\n".into()),
+                block("local-a\nlocal-b\n", "remote-a\n"),
+                ConflictSegment::Text("another selected-side line\n".into()),
+                block("local-c\n", "remote-c\nremote-extra\n"),
+                ConflictSegment::Text("selected output before final block\n".into()),
+                block("local-d\nlocal-e\n", "remote-d\n"),
+            ],
+            three_way_len: 9,
+            merge_plan_aligned_conflict_ranges: Some(exact_ranges.clone()),
+            ..Default::default()
+        };
+
+        state.rebuild_three_way_visible_state();
+
+        assert_eq!(state.three_way_conflict_ranges.base, exact_ranges);
+        assert_eq!(
+            state.three_way_conflict_ranges.ours,
+            state.three_way_conflict_ranges.base
+        );
+        assert_eq!(
+            state.three_way_conflict_ranges.theirs,
+            state.three_way_conflict_ranges.base
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 1),
+            Some(0)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 3),
+            None
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 4),
+            Some(1)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 7),
+            Some(2)
+        );
     }
 
     #[test]
@@ -3430,6 +3618,118 @@ mod conflict_resolver_ui_state_tests {
         assert!(!state.conflict_blocks_have_joinable_context(0, 1));
         assert!(!state.conflict_blocks_have_joinable_context(0, 2));
     }
+
+    #[test]
+    fn semantic_selection_clears_actions_on_automatic_targets_and_click_restores_them() {
+        let automatic_id = ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+            fingerprint: 1,
+            occurrence: 0,
+        });
+        let conflict_id = ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+            fingerprint: 2,
+            occurrence: 0,
+        });
+        let mut state = ConflictResolverUiState {
+            conflict_region_indices: vec![0],
+            nav_targets: vec![
+                ConflictNavTarget {
+                    id: automatic_id,
+                    order: 0,
+                    aligned_rows: Some(1..2),
+                    region_index: None,
+                    display_conflict_index: None,
+                    is_delta: true,
+                    original_conflict: false,
+                    unresolved: false,
+                },
+                ConflictNavTarget {
+                    id: conflict_id,
+                    order: 1,
+                    aligned_rows: Some(3..4),
+                    region_index: Some(0),
+                    display_conflict_index: Some(0),
+                    is_delta: true,
+                    original_conflict: true,
+                    unresolved: true,
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert!(state.select_nav_target(0));
+        assert_eq!(state.nav_anchor.unwrap().id, automatic_id);
+        assert_eq!(state.active_conflict, None);
+
+        assert!(state.select_display_conflict(0));
+        assert_eq!(state.nav_anchor.unwrap().id, conflict_id);
+        assert_eq!(state.active_conflict, Some(0));
+    }
+
+    #[test]
+    fn exact_provenance_projects_target_rows_after_output_line_shifts() {
+        let target = ConflictNavTarget {
+            id: ConflictNavTargetId::DisplayBlock(0),
+            order: 0,
+            aligned_rows: Some(2..4),
+            region_index: None,
+            display_conflict_index: None,
+            is_delta: true,
+            original_conflict: false,
+            unresolved: false,
+        };
+        let anchor = target.anchor();
+        let mut state = ConflictResolverUiState {
+            view_mode: ConflictResolverViewMode::ThreeWay,
+            resolved_outline: super::ResolvedOutlineData {
+                meta: vec![ResolvedLineMeta {
+                    output_line: 5,
+                    source: ResolvedLineSource::B,
+                    input_line: Some(3),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            state.output_line_for_nav_target_provenance(&target),
+            Some(5)
+        );
+        state.resolved_outline.meta[0].output_line = 11;
+        assert_eq!(
+            state.output_line_for_nav_target_provenance(&target),
+            Some(11),
+            "surrounding output insertions shift only the projection"
+        );
+        assert_eq!(target.anchor(), anchor, "the semantic anchor is unchanged");
+    }
+
+    #[test]
+    fn deletion_and_untraceable_manual_output_have_no_output_projection() {
+        let deletion = ConflictNavTarget {
+            id: ConflictNavTargetId::DisplayBlock(0),
+            order: 0,
+            aligned_rows: Some(8..9),
+            region_index: None,
+            display_conflict_index: None,
+            is_delta: true,
+            original_conflict: false,
+            unresolved: false,
+        };
+        let state = ConflictResolverUiState {
+            resolved_outline: super::ResolvedOutlineData {
+                meta: vec![ResolvedLineMeta {
+                    output_line: 3,
+                    source: ResolvedLineSource::Manual,
+                    input_line: None,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(state.output_line_for_nav_target_provenance(&deletion), None);
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -3576,12 +3876,6 @@ pub(super) enum PopoverKind {
     },
     MergeAbortConfirm {
         repo_id: RepoId,
-    },
-    ConflictSaveStageConfirm {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-        has_conflict_markers: bool,
-        unresolved_blocks: usize,
     },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,

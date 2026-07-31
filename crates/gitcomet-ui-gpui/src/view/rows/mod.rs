@@ -370,6 +370,8 @@ pub(in crate::view) use self::conflict_resolver::resolved_output_gutter_width;
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
+#[cfg(test)]
+pub(in crate::view) use diff_text::request_syntax_highlights_for_prepared_document_line_range;
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,
     DiffSyntaxMode, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, PrepareDiffSyntaxDocumentResult,

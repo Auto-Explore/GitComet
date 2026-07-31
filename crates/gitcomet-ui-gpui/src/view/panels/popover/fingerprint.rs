@@ -165,7 +165,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
-        | PopoverKind::ConflictSaveStageConfirm { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
@@ -323,7 +322,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
-        | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
@@ -671,18 +669,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::MergeAbortConfirm { repo_id } => {
             51u8.hash(hasher);
             repo_id.hash(hasher);
-        }
-        PopoverKind::ConflictSaveStageConfirm {
-            repo_id,
-            path,
-            has_conflict_markers,
-            unresolved_blocks,
-        } => {
-            52u8.hash(hasher);
-            repo_id.hash(hasher);
-            path.hash(hasher);
-            has_conflict_markers.hash(hasher);
-            unresolved_blocks.hash(hasher);
         }
         PopoverKind::CommitPrompt { repo_id } => {
             73u8.hash(hasher);

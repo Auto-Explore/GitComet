@@ -188,6 +188,9 @@ pub(super) fn line_text_for_index<'a>(text: &'a str, starts: &[usize], line_ix: 
         .min(text_len);
     if end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
         end -= 1;
+        if end > start && text.as_bytes().get(end - 1) == Some(&b'\r') {
+            end -= 1;
+        }
     }
     text.get(start..end).unwrap_or("")
 }

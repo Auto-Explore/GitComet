@@ -1379,6 +1379,7 @@ impl MainPaneView {
         let save_payload = build_focused_mergetool_save_payload(
             &self.conflict_resolver.marker_segments,
             &self.conflict_resolver.conflict_region_indices,
+            &self.conflict_resolved_output_block_map,
             materialized_output.as_deref(),
             ConflictMarkerLabels {
                 local: labels.local.as_str(),
@@ -1386,6 +1387,12 @@ impl MainPaneView {
                 base: labels.base.as_str(),
             },
         );
+        if save_payload.total_conflicts != save_payload.resolved_conflicts
+            || conflict_resolver::text_contains_conflict_markers(&save_payload.output)
+        {
+            cx.notify();
+            return;
+        }
         let output = save_payload.output;
         let exit_code = focused_mergetool_save_exit_code(
             save_payload.total_conflicts,
@@ -1560,9 +1567,16 @@ impl MainPaneView {
 
         let conflict_resolver_subscription =
             cx.observe(&conflict_resolver_input, |this, input, cx| {
-                let (output_snapshot, edit_delta) = input.update(cx, |input, _| {
-                    (input.text_snapshot(), input.take_recent_utf8_edit_delta())
+                let (output_snapshot, edit_deltas) = input.update(cx, |input, _| {
+                    (input.text_snapshot(), input.drain_recent_utf8_edit_deltas())
                 });
+                let outline_edit_delta = (edit_deltas.len() == 1)
+                    .then(|| edit_deltas.first().cloned())
+                    .flatten();
+                this.apply_conflict_resolved_output_edit_deltas(
+                    edit_deltas,
+                    output_snapshot.as_ref(),
+                );
                 let source_revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
                 let output_modified = resolved_output_snapshot_is_modified(
                     this.conflict_resolved_output_saved_snapshot.as_ref(),
@@ -1575,7 +1589,7 @@ impl MainPaneView {
                 let outline_delta = resolved_outline_delta_for_snapshot_transition(
                     &this.conflict_resolved_preview_text,
                     &output_snapshot,
-                    edit_delta,
+                    outline_edit_delta,
                 );
 
                 let path = this.conflict_resolver.path.clone();
@@ -1593,6 +1607,10 @@ impl MainPaneView {
                     outline_delta,
                     cx,
                 );
+                // The Save gates derive effective resolutions from the live
+                // editor text, so the containing toolbar must re-render for
+                // every edit even while session state remains deferred.
+                cx.notify();
             });
 
         let diff_search_scroll = ScrollHandle::new();
@@ -1888,6 +1906,8 @@ impl MainPaneView {
             conflict_resolved_output_saved_snapshot: None,
             conflict_resolved_output_modified: false,
             conflict_resolved_output_projection: None,
+            conflict_resolved_output_block_map: conflict_resolver::ResolvedOutputBlockMap::default(
+            ),
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
             conflict_resolved_preview_highlight_provider_theme_epoch: 1,
@@ -2101,6 +2121,50 @@ impl MainPaneView {
         self.conflict_resolved_output_projection.is_some()
     }
 
+    pub(in crate::view) fn rebuild_conflict_resolved_output_block_map(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.output_is_protected {
+            self.conflict_resolved_output_block_map =
+                conflict_resolver::ResolvedOutputBlockMap::default();
+            return;
+        }
+        let map = conflict_resolver::ResolvedOutputBlockMap::from_segments(
+            &self.conflict_resolver.marker_segments,
+        );
+        if self.conflict_resolved_output_is_streamed()
+            || self.conflict_resolver_input.read_with(cx, |input, _| {
+                map.is_valid_for(&self.conflict_resolver.marker_segments, input.text())
+            })
+        {
+            self.conflict_resolved_output_block_map = map;
+        } else {
+            self.conflict_resolved_output_block_map =
+                conflict_resolver::ResolvedOutputBlockMap::default();
+        }
+    }
+
+    pub(super) fn apply_conflict_resolved_output_edit_deltas(
+        &mut self,
+        edit_deltas: Vec<(Range<usize>, Range<usize>)>,
+        output_text: &str,
+    ) {
+        if edit_deltas.is_empty() {
+            return;
+        }
+        if !self
+            .conflict_resolved_output_block_map
+            .apply_edit_deltas(edit_deltas)
+            || !self
+                .conflict_resolved_output_block_map
+                .is_valid_for(&self.conflict_resolver.marker_segments, output_text)
+        {
+            self.conflict_resolved_output_block_map =
+                conflict_resolver::ResolvedOutputBlockMap::default();
+        }
+    }
+
     pub(in crate::view) fn conflict_resolved_output_is_modified(&self) -> bool {
         self.conflict_resolved_output_modified
     }
@@ -2122,6 +2186,10 @@ impl MainPaneView {
         projection: conflict_resolver::ResolvedOutputProjection,
         path: Option<&std::path::PathBuf>,
     ) {
+        self.conflict_resolved_output_block_map =
+            conflict_resolver::ResolvedOutputBlockMap::from_segments(
+                &self.conflict_resolver.marker_segments,
+            );
         self.conflict_resolved_output_projection = Some(projection.clone());
         self.conflict_resolved_preview_path = path.cloned();
         self.conflict_resolved_preview_source_revision = None;
@@ -2180,13 +2248,16 @@ impl MainPaneView {
         // large to pull into the editable buffer. Above the threshold the output
         // stays in read-only streamed mode (rendered from the projection); the
         // edit affordances are gated on `!conflict_resolved_output_is_streamed`.
-        if self
+        let exceeds_editable_budget = self
             .conflict_resolved_output_projection
             .as_ref()
             .is_some_and(|projection| {
                 projection.len() > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES
             })
-        {
+            || conflict_resolver::single_source_output_line_upper_bound(
+                &self.conflict_resolver.marker_segments,
+            ) > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES;
+        if exceeds_editable_budget {
             return;
         }
 
@@ -2206,6 +2277,7 @@ impl MainPaneView {
             Some(self.conflict_resolver_input.read_with(cx, |input, _| {
                 ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
             }));
+        self.rebuild_conflict_resolved_output_block_map(cx);
         self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
     }
 
@@ -4246,7 +4318,7 @@ impl MainPaneView {
         // *other* pane to it — the pane the user right-clicked is already in
         // view and must not jump under the open menu. Reveals are non-strict:
         // nothing scrolls when the target rows are already fully visible.
-        self.conflict_resolver.active_conflict = conflict_ix;
+        self.conflict_resolver_select_conflict(conflict_ix, cx);
         if output_line_ix.is_some() {
             // Invoked from the resolved output: reveal the source columns.
             if let Some(vi) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) {

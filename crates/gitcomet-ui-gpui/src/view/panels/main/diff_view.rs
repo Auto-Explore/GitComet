@@ -267,8 +267,9 @@ impl MainPaneView {
         // mid-edit). Two deliberate carve-outs:
         //   * Ctrl+1/2/3 pick aliases are chords with no text-input collision,
         //     so they stay live while editing (kdiff3 parity).
-        //   * Ctrl+Home/End/PgUp/PgDn are intentionally NOT handled here, so the
-        //     editor keeps them for cursor movement (kdiff3 parity).
+        //   * GitComet's Ctrl+Home/End/PgUp/PgDn resolver bindings are
+        //     intentionally NOT handled here, so the editor keeps them for
+        //     cursor movement.
         if self
             .conflict_resolver_input
             .read(cx)
@@ -280,7 +281,7 @@ impl MainPaneView {
                 && !mods.alt
                 && !mods.function
                 && !mods.shift
-                && self.conflict_resolver_conflict_count() > 0
+                && self.conflict_resolver.active_conflict.is_some()
                 && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
                     key,
                     self.conflict_resolver.view_mode,
@@ -781,7 +782,7 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
-            && self.conflict_resolver_conflict_count() > 0
+            && self.conflict_resolver.active_conflict.is_some()
         {
             if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(
                 key,
@@ -805,7 +806,7 @@ impl MainPaneView {
             && !mods.alt
             && !mods.function
             && !mods.shift
-            && self.conflict_resolver_conflict_count() > 0
+            && self.conflict_resolver.active_conflict.is_some()
             && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
                 key,
                 self.conflict_resolver.view_mode,
@@ -815,16 +816,15 @@ impl MainPaneView {
             handled = true;
         }
 
-        // section 30: kdiff3-compatible delta navigation — Ctrl+Home/End jump to the
-        // first/last delta, Ctrl+PgUp/PgDn to the previous/next unresolved
-        // conflict.
+        // GitComet resolver navigation: Ctrl+Home/End jump to the first/last
+        // delta, Ctrl+PgUp/PgDn to the previous/next unresolved conflict.
         if !handled
             && conflict_resolver_active
             && (mods.control || mods.platform)
             && !mods.alt
             && !mods.function
             && !mods.shift
-            && self.conflict_resolver_conflict_count() > 0
+            && !self.conflict_resolver.nav_targets.is_empty()
         {
             match key {
                 "home" => {

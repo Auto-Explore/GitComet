@@ -21,6 +21,7 @@ pub(super) fn mark_block_resolved(segments: &mut [ConflictSegment], target: usiz
 }
 
 mod block_diff;
+mod navigation;
 mod parsing;
 mod resolution;
 mod split_row_index;
