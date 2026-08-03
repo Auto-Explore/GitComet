@@ -462,6 +462,13 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
                 top_border.hash(&mut h);
                 collapsed.hash(&mut h);
             }
+            BranchSidebarRow::FilterGroupHeader { section } => {
+                match section {
+                    BranchSection::Local => 0u8,
+                    BranchSection::Remote => 1u8,
+                }
+                .hash(&mut h);
+            }
             BranchSidebarRow::Placeholder { section, message } => {
                 match section {
                     BranchSection::Local => 0u8,
