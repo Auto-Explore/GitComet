@@ -3,12 +3,20 @@ use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
+static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
+static CRASH_LOGGER: CrashLogger = CrashLogger;
 const CRASH_ISSUE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new");
 const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
 const PENDING_REPORT_FILE: &str = "pending-report-path.txt";
+const STARTUP_REPORT_FILE: &str = "pending-startup-report.log";
+const SESSION_MARKER_FILE: &str = "session-in-progress.log";
+const LAST_OPERATION_FILE: &str = "last-operation.log";
+const RUNTIME_ERROR_FILE: &str = "last-runtime-error.log";
 const MAX_TITLE_CHARS: usize = 96;
 const MAX_BACKTRACE_CHARS: usize = 2_400;
 #[cfg(windows)]
@@ -21,7 +29,18 @@ pub struct StartupCrashReport {
     pub crash_log_path: PathBuf,
 }
 
+struct AbnormalExitLog {
+    marker_path: PathBuf,
+    last_operation_path: PathBuf,
+    runtime_error_path: PathBuf,
+    contents: String,
+}
+
 pub fn install() {
+    if log::set_logger(&CRASH_LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Error);
+    }
+
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         write_panic_log(info);
@@ -29,17 +48,403 @@ pub fn install() {
     }));
 }
 
-pub fn take_startup_report() -> Option<StartupCrashReport> {
-    let dir = crash_dir()?;
-    take_startup_report_from_dir(&dir)
+struct CrashLogger;
+
+impl log::Log for CrashLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Error
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+
+        // Keep GPUI's existing terminal diagnostics visible while also making
+        // them durable enough to survive an event-loop or native process exit.
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(stderr, "{}", record.args());
+        write_runtime_error_log(record);
+    }
+
+    fn flush(&self) {}
 }
 
-fn take_startup_report_from_dir(dir: &Path) -> Option<StartupCrashReport> {
+fn write_runtime_error_log(record: &log::Record<'_>) {
+    if !SESSION_ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
+    let Ok(_guard) = WRITING_RUNTIME_ERROR_LOG.lock() else {
+        return;
+    };
+    let Some(dir) = crash_dir() else {
+        return;
+    };
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+
+    let location = record
+        .file()
+        .map(|file| match record.line() {
+            Some(line) => format!("{file}#L{line}"),
+            None => file.to_string(),
+        })
+        .unwrap_or_else(|| "<unknown log call site>".to_string());
+    let message = single_line_text(&record.args().to_string());
+    let info = if record.target().is_empty() {
+        "An error was emitted through the application logging facade.".to_string()
+    } else {
+        format!("An error was emitted by log target {}.", record.target())
+    };
+    let backtrace = Backtrace::force_capture().to_string();
+    let _ = write_runtime_error_log_in_dir(&dir, &location, &message, &info, &backtrace);
+}
+
+fn write_runtime_error_log_in_dir(
+    dir: &Path,
+    location: &str,
+    message: &str,
+    info: &str,
+    backtrace: &str,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = runtime_error_path(dir);
+    let has_existing_log = std::fs::metadata(&path)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    if has_existing_log {
+        writeln!(file)?;
+    }
+    writeln!(file, "=== GitComet runtime error ===")?;
+    writeln!(file, "failure_kind=runtime-error")?;
+    writeln!(file, "timestamp_unix_ms={}", unix_time_ms())?;
+    writeln!(
+        file,
+        "crate={} version={}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    )?;
+    writeln!(
+        file,
+        "thread={}",
+        std::thread::current().name().unwrap_or("<unnamed>")
+    )?;
+    writeln!(file, "location={}", single_line_text(location))?;
+    writeln!(file, "message={}", single_line_text(message))?;
+    writeln!(file, "info={}", single_line_text(info))?;
+    writeln!(file, "backtrace:")?;
+    writeln!(file, "{backtrace}")?;
+    file.flush()?;
+    file.sync_data()
+}
+
+/// Records entry to the UI event loop. A stale marker lets the next launch
+/// report native aborts and signals without attempting I/O in a signal handler.
+pub fn begin_session() -> std::io::Result<()> {
+    let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
+    begin_session_in_dir(&dir)?;
+    SESSION_ACTIVE.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    remove_file_if_exists(&last_operation_path(dir))?;
+    remove_file_if_exists(&runtime_error_path(dir))?;
+
+    let mut file = File::create(session_marker_path(dir))?;
+    writeln!(file, "=== GitComet abnormal exit candidate ===")?;
+    writeln!(file, "failure_kind=abnormal-exit")?;
+    writeln!(file, "failure_context=")?;
+    writeln!(file, "copy_source=")?;
+    writeln!(file, "timestamp_unix_ms={}", unix_time_ms())?;
+    writeln!(
+        file,
+        "crate={} version={}",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION")
+    )?;
+    writeln!(
+        file,
+        "thread={}",
+        std::thread::current().name().unwrap_or("<unnamed>")
+    )?;
+    writeln!(file, "message=GitComet did not exit cleanly")?;
+    writeln!(
+        file,
+        "info=The previous UI process ended before it completed its shutdown sequence."
+    )?;
+    writeln!(file, "os={}", std::env::consts::OS)?;
+    writeln!(file, "arch={}", std::env::consts::ARCH)?;
+    writeln!(file, "display={}", env_value("DISPLAY"))?;
+    writeln!(file, "wayland_display={}", env_value("WAYLAND_DISPLAY"))?;
+    file.flush()?;
+    file.sync_data()
+}
+
+/// Clears the current session marker after the UI event loop returns normally.
+pub fn finish_session() -> std::io::Result<()> {
+    SESSION_ACTIVE.store(false, Ordering::SeqCst);
+    let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
+    finish_session_in_dir(&dir)
+}
+
+fn finish_session_in_dir(dir: &Path) -> std::io::Result<()> {
+    remove_file_if_exists(&session_marker_path(dir))?;
+    remove_file_if_exists(&last_operation_path(dir))?;
+    remove_file_if_exists(&runtime_error_path(dir))
+}
+
+/// Records a handled UI launch or event-loop failure for the next startup
+/// report. Unlike a panic hook, this covers errors returned by GPUI after the
+/// session marker was created.
+#[track_caller]
+pub fn record_session_failure(context: &str, message: &str) -> std::io::Result<()> {
+    let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
+    let caller = std::panic::Location::caller();
+    let location = format!("{}#L{}", caller.file(), caller.line());
+    let backtrace = Backtrace::force_capture().to_string();
+    record_session_failure_in_dir_with_diagnostics(
+        &dir,
+        context,
+        message,
+        Some(&location),
+        Some(&backtrace),
+    )
+}
+
+#[cfg(test)]
+fn record_session_failure_in_dir(dir: &Path, context: &str, message: &str) -> std::io::Result<()> {
+    record_session_failure_in_dir_with_diagnostics(dir, context, message, None, None)
+}
+
+fn record_session_failure_in_dir_with_diagnostics(
+    dir: &Path,
+    context: &str,
+    message: &str,
+    location: Option<&str>,
+    backtrace: Option<&str>,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(session_marker_path(dir))?;
+    writeln!(file, "failure_kind=returned-error")?;
+    writeln!(file, "failure_context={}", single_line_text(context))?;
+    writeln!(file, "timestamp_unix_ms={}", unix_time_ms())?;
+    if let Some(location) = location {
+        writeln!(file, "location={}", single_line_text(location))?;
+    }
+    writeln!(file, "message={}", single_line_text(message))?;
+    writeln!(
+        file,
+        "info=GitComet could not complete its GPUI launch or event loop."
+    )?;
+    if let Some(backtrace) = backtrace {
+        writeln!(file, "backtrace:")?;
+        writeln!(file, "{backtrace}")?;
+    }
+    file.flush()?;
+    file.sync_data()
+}
+
+pub fn take_startup_report() -> Option<StartupCrashReport> {
+    let dir = crash_dir()?;
+    take_startup_report_from_crash_dir(&dir)
+}
+
+fn take_startup_report_from_crash_dir(dir: &Path) -> Option<StartupCrashReport> {
+    let report_path = startup_report_path(dir);
+    let mut report_log = match std::fs::read_to_string(&report_path) {
+        Ok(report_log) => report_log,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            eprintln!(
+                "Failed to read pending GitComet crash report {}: {err}",
+                report_path.display()
+            );
+            return None;
+        }
+    };
+    let session_log = read_abnormal_exit_log(
+        &session_marker_path(dir),
+        &last_operation_path(dir),
+        &runtime_error_path(dir),
+    )
+    .map(|contents| AbnormalExitLog {
+        marker_path: session_marker_path(dir),
+        last_operation_path: last_operation_path(dir),
+        runtime_error_path: runtime_error_path(dir),
+        contents,
+    });
     let pending_path = pending_report_path(dir);
-    let crash_log_path = read_pending_report_path(&pending_path)?;
-    let _ = std::fs::remove_file(&pending_path);
-    let crash_log = std::fs::read_to_string(&crash_log_path).ok()?;
-    Some(build_startup_report(crash_log_path, &crash_log))
+    let (panic_log, pending_panic_read_failed) = match read_pending_panic_log(&pending_path) {
+        Ok(panic_log) => (panic_log, false),
+        Err(err) => {
+            eprintln!(
+                "Failed to read GitComet pending panic report {}: {err}",
+                pending_path.display()
+            );
+            (None, true)
+        }
+    };
+    if !pending_panic_read_failed && panic_log.is_none() && pending_path.exists() {
+        let _ = std::fs::remove_file(&pending_path);
+    }
+
+    if session_log.is_none() && panic_log.is_none() {
+        return (!report_log.trim().is_empty())
+            .then(|| build_startup_report(report_path, &report_log));
+    }
+
+    if let Some(session_log) = &session_log {
+        append_report_log(&mut report_log, &session_log.contents);
+    }
+    // Preserve the existing panic-over-session priority when both reports are
+    // available while retaining the session's last-operation diagnostics.
+    if let Some(panic_log) = &panic_log {
+        append_report_log(&mut report_log, &panic_log.contents);
+    }
+
+    let report_path = match write_startup_report_snapshot(dir, &report_log) {
+        Ok(report_path) => report_path,
+        Err(err) => {
+            eprintln!("Failed to persist GitComet startup crash report: {err}");
+            return None;
+        }
+    };
+    if let Some(session_log) = &session_log {
+        if let Err(err) = remove_file_if_exists(&session_log.marker_path) {
+            eprintln!(
+                "Failed to clear recovered GitComet session marker {}: {err}",
+                session_log.marker_path.display()
+            );
+        } else {
+            if let Err(err) = remove_file_if_exists(&session_log.last_operation_path) {
+                eprintln!(
+                    "Failed to clear recovered GitComet last-operation diagnostics {}: {err}",
+                    session_log.last_operation_path.display()
+                );
+            }
+            if let Err(err) = remove_file_if_exists(&session_log.runtime_error_path) {
+                eprintln!(
+                    "Failed to clear recovered GitComet runtime-error diagnostics {}: {err}",
+                    session_log.runtime_error_path.display()
+                );
+            }
+        }
+    }
+    if let Some(panic_log) = &panic_log {
+        let _ = std::fs::remove_file(&pending_path);
+        if let Err(err) = remove_file_if_exists(&panic_log.path) {
+            eprintln!(
+                "Failed to clear snapshotted GitComet panic log {}: {err}",
+                panic_log.path.display()
+            );
+        }
+    }
+    Some(build_startup_report(report_path, &report_log))
+}
+
+fn read_abnormal_exit_log(
+    marker: &Path,
+    last_operation_path: &Path,
+    runtime_error_path: &Path,
+) -> Option<String> {
+    let mut session_log = match std::fs::read_to_string(marker) {
+        Ok(session_log) => session_log,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            eprintln!(
+                "Failed to read GitComet session marker {}: {err}",
+                marker.display()
+            );
+            return None;
+        }
+    };
+    if session_log.trim().is_empty() {
+        return None;
+    }
+    match std::fs::read_to_string(last_operation_path) {
+        Ok(last_operation) => {
+            let _ = writeln!(session_log, "\n=== GitComet operation context ===");
+            let _ = write!(session_log, "{last_operation}");
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            eprintln!(
+                "Failed to read GitComet last-operation diagnostics {}: {err}",
+                last_operation_path.display()
+            );
+        }
+    }
+    match std::fs::read_to_string(runtime_error_path) {
+        Ok(runtime_error) => append_report_log(&mut session_log, &runtime_error),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            eprintln!(
+                "Failed to read GitComet runtime-error diagnostics {}: {err}",
+                runtime_error_path.display()
+            );
+        }
+    }
+    Some(session_log)
+}
+
+struct PendingPanicLog {
+    path: PathBuf,
+    contents: String,
+}
+
+fn read_pending_panic_log(pending_path: &Path) -> std::io::Result<Option<PendingPanicLog>> {
+    let Some(crash_log_path) = read_pending_report_path(pending_path)? else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(&crash_log_path) {
+        Ok(contents) => Ok(Some(PendingPanicLog {
+            path: crash_log_path,
+            contents,
+        })),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
+fn append_report_log(destination: &mut String, report_log: &str) {
+    if !destination.is_empty() && !destination.ends_with('\n') {
+        destination.push('\n');
+    }
+    if !destination.trim().is_empty() {
+        destination.push('\n');
+    }
+    destination.push_str(report_log);
+    if !destination.ends_with('\n') {
+        destination.push('\n');
+    }
+}
+
+fn write_startup_report_snapshot(dir: &Path, report_log: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let report_path = startup_report_path(dir);
+    let temporary_path = dir.join(format!(
+        ".{STARTUP_REPORT_FILE}-{}-{}.tmp",
+        std::process::id(),
+        unix_time_ms()
+    ));
+    let result = (|| -> std::io::Result<()> {
+        let mut file = File::create(&temporary_path)?;
+        file.write_all(report_log.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary_path, &report_path)
+    })();
+    if let Err(err) = result {
+        let _ = std::fs::remove_file(&temporary_path);
+        return Err(err);
+    }
+    Ok(report_path)
 }
 
 fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
@@ -67,6 +472,7 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
     };
 
     let _ = writeln!(file, "=== GitComet crash (panic) ===");
+    let _ = writeln!(file, "failure_kind=panic");
     let _ = writeln!(file, "timestamp_unix_ms={}", unix_time_ms());
     let _ = writeln!(
         file,
@@ -96,12 +502,29 @@ fn write_panic_log(info: &std::panic::PanicHookInfo<'_>) {
     let bt = Backtrace::force_capture();
     let _ = writeln!(file, "backtrace:\n{bt}");
     let _ = writeln!(file);
-    let _ = file.flush();
+    if file.flush().is_err() || file.sync_data().is_err() {
+        return;
+    }
     let _ = write_pending_report_path(&pending_report_path(&dir), &path);
 }
 
 fn crash_dir() -> Option<PathBuf> {
     crash_dir_base().map(|base| base.join("gitcomet").join("crashes"))
+}
+
+fn crash_directory_unavailable_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "GitComet crash state directory is unavailable because XDG_STATE_HOME and HOME are unset",
+    )
+}
+
+fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 fn non_empty_path(value: Option<&str>) -> Option<PathBuf> {
@@ -172,6 +595,29 @@ fn pending_report_path(dir: &Path) -> PathBuf {
     dir.join(PENDING_REPORT_FILE)
 }
 
+fn startup_report_path(dir: &Path) -> PathBuf {
+    dir.join(STARTUP_REPORT_FILE)
+}
+
+fn session_marker_path(dir: &Path) -> PathBuf {
+    dir.join(SESSION_MARKER_FILE)
+}
+
+fn last_operation_path(dir: &Path) -> PathBuf {
+    dir.join(LAST_OPERATION_FILE)
+}
+
+fn runtime_error_path(dir: &Path) -> PathBuf {
+    dir.join(RUNTIME_ERROR_FILE)
+}
+
+fn env_value(name: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "<unset>".to_string())
+}
+
 fn write_pending_report_path(marker: &Path, crash_log_path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -205,17 +651,21 @@ fn write_pending_report_path(marker: &Path, crash_log_path: &Path) -> std::io::R
     }
 }
 
-fn read_pending_report_path(marker: &Path) -> Option<PathBuf> {
+fn read_pending_report_path(marker: &Path) -> std::io::Result<Option<PathBuf>> {
     #[cfg(unix)]
     {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt as _;
 
-        let bytes = std::fs::read(marker).ok()?;
+        let bytes = match std::fs::read(marker) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
         if bytes.is_empty() {
-            return None;
+            return Ok(None);
         }
-        Some(PathBuf::from(OsString::from_vec(bytes)))
+        Ok(Some(PathBuf::from(OsString::from_vec(bytes))))
     }
 
     #[cfg(windows)]
@@ -223,7 +673,11 @@ fn read_pending_report_path(marker: &Path) -> Option<PathBuf> {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt as _;
 
-        let raw = std::fs::read_to_string(marker).ok()?;
+        let raw = match std::fs::read_to_string(marker) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
         let value = raw.trim();
         if let Some(hex) = value.strip_prefix(PENDING_REPORT_PATH_WIDE_PREFIX)
             && let Some(bytes) = hex_decode(hex)
@@ -233,22 +687,28 @@ fn read_pending_report_path(marker: &Path) -> Option<PathBuf> {
             for chunk in bytes.chunks_exact(2) {
                 wide.push(u16::from_le_bytes([chunk[0], chunk[1]]));
             }
-            return Some(PathBuf::from(OsString::from_wide(&wide)));
+            return Ok(Some(PathBuf::from(OsString::from_wide(&wide))));
         }
         if value.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(PathBuf::from(value))
+            Ok(Some(PathBuf::from(value)))
         }
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        std::fs::read_to_string(marker)
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from)
+        let raw = match std::fs::read_to_string(marker) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let value = raw.trim();
+        if value.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(PathBuf::from(value)))
+        }
     }
 }
 
@@ -297,7 +757,7 @@ fn build_startup_report(crash_log_path: PathBuf, crash_log: &str) -> StartupCras
         .as_deref()
         .map(single_line_text)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown panic".to_string());
+        .unwrap_or_else(|| "unknown failure".to_string());
     let summary_location = parsed
         .location
         .as_deref()
@@ -318,6 +778,7 @@ fn build_startup_report(crash_log_path: PathBuf, crash_log: &str) -> StartupCras
 
 #[derive(Default)]
 struct ParsedCrashLog {
+    failure_kind: Option<String>,
     timestamp_unix_ms: Option<String>,
     crate_name: Option<String>,
     crate_version: Option<String>,
@@ -325,6 +786,9 @@ struct ParsedCrashLog {
     location: Option<String>,
     message: Option<String>,
     info: Option<String>,
+    failure_context: Option<String>,
+    copy_source: Option<String>,
+    clipboard_backend: Option<String>,
     backtrace: String,
 }
 
@@ -334,6 +798,26 @@ fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
 
     for raw_line in crash_log.lines() {
         let line = raw_line.trim_end_matches('\r');
+
+        if line == "=== GitComet operation context ===" {
+            in_backtrace = false;
+            continue;
+        }
+
+        if line.starts_with("=== GitComet ") && line.ends_with(" ===") {
+            reset_parsed_failure(&mut parsed);
+            parsed.failure_kind = if line.contains("panic") {
+                Some("panic".to_string())
+            } else if line.contains("runtime error") {
+                Some("runtime-error".to_string())
+            } else if line.contains("abnormal exit") {
+                Some("abnormal-exit".to_string())
+            } else {
+                None
+            };
+            in_backtrace = false;
+            continue;
+        }
 
         if in_backtrace {
             parsed.backtrace.push_str(line);
@@ -358,6 +842,11 @@ fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
 
         if let Some(rest) = line.strip_prefix("timestamp_unix_ms=") {
             parsed.timestamp_unix_ms = Some(rest.trim().to_string());
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("failure_kind=") {
+            parsed.failure_kind = Some(rest.trim().to_string());
             continue;
         }
 
@@ -388,10 +877,37 @@ fn parse_crash_log(crash_log: &str) -> ParsedCrashLog {
 
         if let Some(rest) = line.strip_prefix("info=") {
             parsed.info = Some(rest.trim().to_string());
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("failure_context=") {
+            parsed.failure_context = Some(rest.trim().to_string());
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("copy_source=") {
+            parsed.copy_source = Some(rest.trim().to_string());
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("clipboard_backend=") {
+            parsed.clipboard_backend = Some(rest.trim().to_string());
         }
     }
 
     parsed
+}
+
+fn reset_parsed_failure(parsed: &mut ParsedCrashLog) {
+    parsed.failure_kind = None;
+    parsed.timestamp_unix_ms = None;
+    parsed.crate_name = None;
+    parsed.crate_version = None;
+    parsed.thread = None;
+    parsed.location = None;
+    parsed.message = None;
+    parsed.info = None;
+    parsed.backtrace.clear();
 }
 
 fn build_issue_url(title: &str, body: &str) -> String {
@@ -404,13 +920,16 @@ fn build_issue_url(title: &str, body: &str) -> String {
 }
 
 fn build_issue_title(parsed: &ParsedCrashLog) -> String {
-    let panic_message = parsed
+    let failure_message = parsed
         .message
         .as_deref()
         .map(single_line_text)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown panic".to_string());
-    format!("Crash: {}", truncate_chars(&panic_message, MAX_TITLE_CHARS))
+        .unwrap_or_else(|| "unknown failure".to_string());
+    format!(
+        "Crash: {}",
+        truncate_chars(&failure_message, MAX_TITLE_CHARS)
+    )
 }
 
 fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
@@ -434,6 +953,11 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
         .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or("<unknown>");
+    let failure_kind = parsed
+        .failure_kind
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("<unknown>");
     let location = parsed
         .location
         .as_deref()
@@ -443,12 +967,22 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
         .message
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or("<unknown panic message>");
+        .unwrap_or("<unknown failure message>");
     let info = parsed
         .info
         .as_deref()
         .filter(|s| !s.is_empty())
-        .unwrap_or("<unknown panic info>");
+        .unwrap_or("<unknown failure info>");
+    let copy_source = parsed
+        .copy_source
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("<no UI operation recorded>");
+    let failure_context = parsed
+        .failure_context
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("<unknown>");
 
     let backtrace = {
         let trimmed = parsed.backtrace.trim();
@@ -466,7 +1000,7 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
         body,
         "<!-- Please describe what you were doing right before the crash. -->"
     );
-    let _ = writeln!(body, "GitComet crashed with a panic.");
+    let _ = writeln!(body, "GitComet ended unexpectedly.");
     let _ = writeln!(body);
 
     let _ = writeln!(body, "## Environment");
@@ -477,18 +1011,28 @@ fn build_issue_body(parsed: &ParsedCrashLog, crash_log_path: &Path) -> String {
     let _ = writeln!(body, "- Arch: `{}`", std::env::consts::ARCH);
     let _ = writeln!(body, "- Crash timestamp (unix ms): `{timestamp}`");
     let _ = writeln!(body, "- Thread: `{thread}`");
-    let _ = writeln!(body, "- Panic location: `{location}`");
+    let _ = writeln!(body, "- Failure kind: `{failure_kind}`");
+    let _ = writeln!(body, "- Failure location: `{location}`");
+    let _ = writeln!(body, "- Failure context: `{failure_context}`");
+    let _ = writeln!(body, "- Last UI operation: `{copy_source}`");
+    if let Some(clipboard_backend) = parsed
+        .clipboard_backend
+        .as_deref()
+        .filter(|backend| !backend.is_empty())
+    {
+        let _ = writeln!(body, "- Clipboard backend: `{clipboard_backend}`");
+    }
     let _ = writeln!(body, "- Crash log path: `{}`", crash_log_path.display());
     let _ = writeln!(body);
 
-    let _ = writeln!(body, "## Panic Message");
+    let _ = writeln!(body, "## Failure Message");
     let _ = writeln!(body);
     let _ = writeln!(body, "```text");
     let _ = writeln!(body, "{message}");
     let _ = writeln!(body, "```");
     let _ = writeln!(body);
 
-    let _ = writeln!(body, "## Panic Info");
+    let _ = writeln!(body, "## Failure Info");
     let _ = writeln!(body);
     let _ = writeln!(body, "```text");
     let _ = writeln!(body, "{info}");
@@ -573,12 +1117,16 @@ thread=main
 location=src/main.rs#L42
 message=boom happened
 info=panic info
+failure_context=main GPUI window launch
+copy_source=commit-details-diff
+clipboard_backend=x11
 backtrace:
 frame 1
 frame 2
 "#;
 
         let parsed = parse_crash_log(log);
+        assert_eq!(parsed.failure_kind.as_deref(), Some("panic"));
         assert_eq!(parsed.timestamp_unix_ms.as_deref(), Some("123"));
         assert_eq!(parsed.crate_name.as_deref(), Some("gitcomet"));
         assert_eq!(parsed.crate_version.as_deref(), Some("0.1.0"));
@@ -586,6 +1134,12 @@ frame 2
         assert_eq!(parsed.location.as_deref(), Some("src/main.rs#L42"));
         assert_eq!(parsed.message.as_deref(), Some("boom happened"));
         assert_eq!(parsed.info.as_deref(), Some("panic info"));
+        assert_eq!(
+            parsed.failure_context.as_deref(),
+            Some("main GPUI window launch")
+        );
+        assert_eq!(parsed.copy_source.as_deref(), Some("commit-details-diff"));
+        assert_eq!(parsed.clipboard_backend.as_deref(), Some("x11"));
         assert!(parsed.backtrace.contains("frame 1"));
         assert!(parsed.backtrace.contains("frame 2"));
     }
@@ -623,13 +1177,13 @@ frame 2
     }
 
     #[test]
-    fn take_startup_report_from_dir_returns_none_without_pending_marker() {
+    fn take_startup_report_returns_none_without_recovery_state() {
         let dir = tempdir().expect("temp dir");
-        assert!(take_startup_report_from_dir(dir.path()).is_none());
+        assert!(take_startup_report_from_crash_dir(dir.path()).is_none());
     }
 
     #[test]
-    fn take_startup_report_from_dir_consumes_pending_marker_and_returns_report() {
+    fn panic_report_is_snapshotted_before_pending_marker_is_removed() {
         let dir = tempdir().expect("temp dir");
         let crash_log_path = dir.path().join("panic.log");
         let crash_log = r#"timestamp_unix_ms=123
@@ -646,29 +1200,376 @@ frame 2
         write_pending_report_path(&pending_report_path(dir.path()), &crash_log_path)
             .expect("write pending marker");
 
-        let report =
-            take_startup_report_from_dir(dir.path()).expect("startup report should be available");
-        assert_eq!(report.crash_log_path, crash_log_path);
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("startup report should be available");
+        assert_eq!(report.crash_log_path, startup_report_path(dir.path()));
         assert!(report.issue_url.contains("template=crash_report.md"));
         assert!(report.summary.contains("boom happened"));
         assert!(
             !pending_report_path(dir.path()).exists(),
-            "pending marker should be removed after consumption"
+            "the panic marker should be removed after a durable snapshot is written"
+        );
+        assert!(
+            !crash_log_path.exists(),
+            "the source panic log should be retired after it is snapshotted"
+        );
+        assert_eq!(
+            std::fs::read_to_string(startup_report_path(dir.path()))
+                .expect("read persisted startup report"),
+            crash_log
         );
     }
 
     #[test]
-    fn take_startup_report_from_dir_missing_log_clears_pending_marker() {
+    fn missing_panic_log_clears_pending_marker() {
         let dir = tempdir().expect("temp dir");
         let missing_log_path = dir.path().join("missing.log");
         write_pending_report_path(&pending_report_path(dir.path()), &missing_log_path)
             .expect("write pending marker");
 
-        assert!(take_startup_report_from_dir(dir.path()).is_none());
+        assert!(take_startup_report_from_crash_dir(dir.path()).is_none());
         assert!(
             !pending_report_path(dir.path()).exists(),
             "pending marker should be removed even when crash log is missing"
         );
+    }
+
+    #[test]
+    fn previous_session_report_is_snapshotted_before_marker_is_removed() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        let last_operation = last_operation_path(dir.path());
+        std::fs::write(
+            &marker,
+            "timestamp_unix_ms=123\ncrate=gitcomet version=0.1.0\n\
+             thread=main\nmessage=GitComet did not exit cleanly\n\
+             info=The previous UI process ended before shutdown.\n",
+        )
+        .expect("write session marker");
+        std::fs::write(
+            &last_operation,
+            "copy_source=commit-details-diff\ncopy_text_bytes=128\n",
+        )
+        .expect("write last operation");
+
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("stale session should produce a startup report");
+
+        assert_eq!(report.crash_log_path, startup_report_path(dir.path()));
+        assert!(report.summary.contains("did not exit cleanly"));
+        assert!(report.issue_url.contains("commit-details-diff"));
+        assert!(
+            !marker.exists(),
+            "session marker should be removed after its report is persisted"
+        );
+        assert!(
+            !last_operation.exists(),
+            "last-operation diagnostics should be included in the persisted report"
+        );
+        let startup_report =
+            std::fs::read_to_string(startup_report_path(dir.path())).expect("read startup report");
+        assert!(startup_report.contains("copy_source=commit-details-diff"));
+    }
+
+    #[test]
+    fn runtime_error_supplies_failure_location_message_and_backtrace() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        let last_operation = last_operation_path(dir.path());
+        std::fs::write(
+            &marker,
+            "=== GitComet abnormal exit candidate ===\n\
+             failure_kind=returned-error\nfailure_context=main GPUI event loop\n\
+             message=GPUI event loop ended unexpectedly\n",
+        )
+        .expect("write session marker");
+        std::fs::write(
+            &last_operation,
+            "copy_source=diff-context-menu\nclipboard_backend=x11\n",
+        )
+        .expect("write last operation");
+        write_runtime_error_log_in_dir(
+            dir.path(),
+            "crates/gpui_linux/src/linux/wayland/client.rs#L993",
+            "Io error: Connection reset by peer (os error 104)",
+            "An error was emitted by log target gpui_linux::linux::wayland::client.",
+            "runtime frame 1\nruntime frame 2",
+        )
+        .expect("write runtime error");
+
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("runtime error should produce a startup report");
+        let parsed = parse_crash_log(
+            &std::fs::read_to_string(&report.crash_log_path).expect("read startup report"),
+        );
+
+        assert_eq!(parsed.failure_kind.as_deref(), Some("runtime-error"));
+        assert_eq!(
+            parsed.location.as_deref(),
+            Some("crates/gpui_linux/src/linux/wayland/client.rs#L993")
+        );
+        assert_eq!(
+            parsed.message.as_deref(),
+            Some("Io error: Connection reset by peer (os error 104)")
+        );
+        assert_eq!(
+            parsed.failure_context.as_deref(),
+            Some("main GPUI event loop")
+        );
+        assert_eq!(parsed.copy_source.as_deref(), Some("diff-context-menu"));
+        assert_eq!(parsed.clipboard_backend.as_deref(), Some("x11"));
+        assert!(parsed.backtrace.contains("runtime frame 1"));
+        assert!(report.summary.contains("Connection reset by peer"));
+        assert!(report.issue_url.contains("wayland%2Fclient.rs%23L993"));
+        assert!(
+            report
+                .issue_url
+                .contains("Clipboard%20backend%3A%20%60x11%60")
+        );
+        assert!(!runtime_error_path(dir.path()).exists());
+    }
+
+    #[test]
+    fn newest_failure_after_a_backtrace_is_parsed_as_a_separate_event() {
+        let log = r#"=== GitComet crash (panic) ===
+failure_kind=panic
+location=src/old.rs#L1
+message=old panic
+backtrace:
+old frame
+
+=== GitComet abnormal exit candidate ===
+failure_kind=returned-error
+failure_context=main GPUI event loop
+copy_source=diff-context-menu
+message=generic event-loop failure
+
+=== GitComet runtime error ===
+failure_kind=runtime-error
+location=crates/gpui_linux/src/linux/wayland/client.rs#L993
+message=Io error: Connection reset by peer
+backtrace:
+new frame
+"#;
+
+        let parsed = parse_crash_log(log);
+        assert_eq!(parsed.failure_kind.as_deref(), Some("runtime-error"));
+        assert_eq!(
+            parsed.location.as_deref(),
+            Some("crates/gpui_linux/src/linux/wayland/client.rs#L993")
+        );
+        assert_eq!(
+            parsed.message.as_deref(),
+            Some("Io error: Connection reset by peer")
+        );
+        assert_eq!(parsed.copy_source.as_deref(), Some("diff-context-menu"));
+        assert_eq!(
+            parsed.failure_context.as_deref(),
+            Some("main GPUI event loop")
+        );
+        assert!(parsed.backtrace.contains("new frame"));
+        assert!(!parsed.backtrace.contains("old frame"));
+    }
+
+    #[test]
+    fn handled_launch_failure_is_reported_at_next_startup() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        std::fs::write(
+            &marker,
+            "timestamp_unix_ms=123\ncrate=gitcomet version=0.1.0\n\
+             thread=main\nmessage=GitComet did not exit cleanly\n",
+        )
+        .expect("write session marker");
+
+        record_session_failure_in_dir(
+            dir.path(),
+            "main GPUI window launch",
+            "main GPUI window launch failed: no compatible graphics device",
+        )
+        .expect("record launch failure");
+
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("handled launch failure should produce a startup report");
+
+        assert!(report.summary.contains("no compatible graphics device"));
+        assert!(report.issue_url.contains("main%20GPUI%20window%20launch"));
+        assert!(
+            !marker.exists(),
+            "session marker should be removed after its report is persisted"
+        );
+        assert!(
+            startup_report_path(dir.path()).exists(),
+            "the report must survive until the user handles the notification"
+        );
+    }
+
+    #[test]
+    fn handled_failure_diagnostics_include_observation_location_and_backtrace() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        std::fs::write(
+            &marker,
+            "=== GitComet abnormal exit candidate ===\nmessage=initial marker\n",
+        )
+        .expect("write session marker");
+        std::fs::write(
+            last_operation_path(dir.path()),
+            "copy_source=diff-context-menu\n",
+        )
+        .expect("write operation context");
+
+        record_session_failure_in_dir_with_diagnostics(
+            dir.path(),
+            "main GPUI window launch",
+            "no compatible graphics device",
+            Some("src/main.rs#L275"),
+            Some("observation frame 1\nobservation frame 2"),
+        )
+        .expect("record handled failure");
+
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("handled failure should produce a startup report");
+        let parsed = parse_crash_log(
+            &std::fs::read_to_string(&report.crash_log_path).expect("read startup report"),
+        );
+        assert_eq!(parsed.failure_kind.as_deref(), Some("returned-error"));
+        assert_eq!(parsed.location.as_deref(), Some("src/main.rs#L275"));
+        assert_eq!(parsed.copy_source.as_deref(), Some("diff-context-menu"));
+        assert!(parsed.backtrace.contains("observation frame 1"));
+    }
+
+    #[test]
+    fn pending_startup_report_survives_a_failed_relaunch() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        std::fs::write(
+            &marker,
+            "message=GitComet did not exit cleanly\ncopy_source=commit-details-diff\n",
+        )
+        .expect("write initial session marker");
+
+        take_startup_report_from_crash_dir(dir.path())
+            .expect("initial abnormal exit should create a startup report");
+        begin_session_in_dir(dir.path()).expect("begin retry session");
+        assert!(
+            startup_report_path(dir.path()).exists(),
+            "beginning a retry must not discard the prior report"
+        );
+        record_session_failure_in_dir(
+            dir.path(),
+            "main GPUI window launch",
+            "main GPUI window launch failed: no compatible graphics device",
+        )
+        .expect("record retry failure");
+
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("retry failure should preserve a startup report");
+        assert!(report.summary.contains("no compatible graphics device"));
+        let persisted =
+            std::fs::read_to_string(startup_report_path(dir.path())).expect("read startup report");
+        assert!(persisted.contains("copy_source=commit-details-diff"));
+        assert!(persisted.contains("no compatible graphics device"));
+    }
+
+    #[test]
+    fn clean_shutdown_keeps_unacknowledged_startup_report() {
+        let dir = tempdir().expect("temp dir");
+        std::fs::write(startup_report_path(dir.path()), "message=previous crash\n")
+            .expect("write startup report");
+        begin_session_in_dir(dir.path()).expect("begin session");
+
+        finish_session_in_dir(dir.path()).expect("finish session");
+
+        assert!(
+            startup_report_path(dir.path()).exists(),
+            "a report is retired only when the user handles the notification"
+        );
+    }
+
+    #[test]
+    fn begin_session_starts_with_fresh_diagnostics() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        let last_operation = last_operation_path(dir.path());
+        let runtime_error = runtime_error_path(dir.path());
+        std::fs::write(&marker, "message=previous abnormal exit\n").expect("write old marker");
+        std::fs::write(&last_operation, "copy_source=commit-details-diff\n")
+            .expect("write last-operation diagnostics");
+        std::fs::write(&runtime_error, "message=previous runtime error\n")
+            .expect("write runtime-error diagnostics");
+
+        begin_session_in_dir(dir.path()).expect("begin session");
+
+        let contents = std::fs::read_to_string(&marker).expect("read session marker");
+        assert!(contents.contains("=== GitComet abnormal exit candidate ==="));
+        assert!(
+            !contents.contains("previous abnormal exit"),
+            "a new session must replace an already-recovered marker"
+        );
+        assert!(!last_operation.exists());
+        assert!(!runtime_error.exists());
+    }
+
+    #[test]
+    fn panic_report_takes_precedence_over_previous_session_marker() {
+        let dir = tempdir().expect("temp dir");
+        let crash_log_path = dir.path().join("panic.log");
+        std::fs::write(&crash_log_path, "message=panic wins\n").expect("write panic log");
+        write_pending_report_path(&pending_report_path(dir.path()), &crash_log_path)
+            .expect("write pending marker");
+        let marker = session_marker_path(dir.path());
+        std::fs::write(&marker, "message=GitComet did not exit cleanly\n")
+            .expect("write session marker");
+
+        let panic_report = take_startup_report_from_crash_dir(dir.path())
+            .expect("panic report should be available");
+        assert!(panic_report.summary.contains("panic wins"));
+        assert!(
+            !marker.exists(),
+            "the stale marker should be removed after the combined report is persisted"
+        );
+        let persisted =
+            std::fs::read_to_string(startup_report_path(dir.path())).expect("read startup report");
+        assert!(
+            persisted.contains("message=GitComet did not exit cleanly"),
+            "the persisted panic report should retain the stale-session context"
+        );
+    }
+
+    #[test]
+    fn startup_recovery_consumes_the_previous_session_marker() {
+        let dir = tempdir().expect("temp dir");
+        let marker = session_marker_path(dir.path());
+        std::fs::write(&marker, "message=GitComet did not exit cleanly\n")
+            .expect("write previous session marker");
+
+        let report = take_startup_report_from_crash_dir(dir.path())
+            .expect("the marker should produce a startup report");
+        assert!(report.summary.contains("did not exit cleanly"));
+        assert!(
+            !marker.exists(),
+            "recovery should not use PID liveness checks"
+        );
+    }
+
+    #[test]
+    fn clean_shutdown_removes_session_diagnostics() {
+        let dir = tempdir().expect("temp dir");
+        begin_session_in_dir(dir.path()).expect("begin session");
+        let marker = session_marker_path(dir.path());
+        let last_operation = last_operation_path(dir.path());
+        let runtime_error = runtime_error_path(dir.path());
+        std::fs::write(&last_operation, "copy_source=commit-details-diff\n")
+            .expect("write operation diagnostics");
+        std::fs::write(&runtime_error, "message=current runtime error\n")
+            .expect("write current runtime error");
+
+        finish_session_in_dir(dir.path()).expect("finish current session");
+
+        assert!(!marker.exists());
+        assert!(!last_operation.exists());
+        assert!(!runtime_error.exists());
     }
 
     #[test]

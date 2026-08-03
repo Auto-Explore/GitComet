@@ -58,6 +58,12 @@ impl MainPaneView {
         self.diff_text_autoscroll_target = None;
     }
 
+    pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.clear_diff_text_selection();
+    }
+
     pub(in super::super::super) fn diff_text_selection_color(&self) -> gpui::Rgba {
         with_alpha(
             self.theme.colors.accent,
@@ -1287,7 +1293,7 @@ impl MainPaneView {
         let Some(text) = self.selected_diff_text_string() else {
             return;
         };
-        crate::clipboard::write_text(cx, text);
+        crate::clipboard::write_text(cx, text, self.diff_copy_source());
     }
 
     pub(in super::super::super) fn copy_diff_text_for_context_menu_to_clipboard(
@@ -1302,7 +1308,24 @@ impl MainPaneView {
         else {
             return;
         };
-        crate::clipboard::write_text(cx, text);
+        crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::DiffContextMenu);
+    }
+
+    fn diff_copy_source(&self) -> crate::clipboard::CopySource {
+        match self
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+        {
+            Some(DiffTarget::Commit { .. }) => crate::clipboard::CopySource::CommitDetailsDiff,
+            Some(DiffTarget::CommitRange { .. }) => crate::clipboard::CopySource::CommitRangeDiff,
+            Some(DiffTarget::WorkingTree {
+                area: DiffArea::Staged,
+                ..
+            }) => crate::clipboard::CopySource::StagedDiff,
+            Some(DiffTarget::WorkingTree { .. }) | None => {
+                crate::clipboard::CopySource::UnstagedDiff
+            }
+        }
     }
 
     pub(in super::super::super) fn open_diff_editor_context_menu(

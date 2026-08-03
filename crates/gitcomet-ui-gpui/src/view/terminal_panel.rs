@@ -377,7 +377,11 @@ impl TerminalViewportView {
                     self.copy_visible_screen()
                 };
                 if !text.is_empty() {
-                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                    crate::clipboard::write_text(
+                        cx,
+                        text,
+                        crate::clipboard::CopySource::TerminalShortcut,
+                    );
                 }
             }
             TerminalShortcutAction::Paste => {
@@ -386,9 +390,7 @@ impl TerminalViewportView {
                     .as_ref()
                     .map(|c| c.mode.contains(TerminalModes::BRACKETED_PASTE))
                     .unwrap_or(false);
-                if let Some(item) = cx.read_from_clipboard()
-                    && let Some(text) = item.text()
-                {
+                if let Some(text) = crate::clipboard::read_text(cx) {
                     let bytes = terminal_paste_bytes(&text, bracketed);
                     self.queue_input(bytes, cx);
                 }
@@ -1733,11 +1735,14 @@ impl GitCometView {
                                 }
                             }
                             TerminalBackendEvent::ClipboardStore(data) => {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(data));
+                                crate::clipboard::write_text(
+                                    cx,
+                                    data,
+                                    crate::clipboard::CopySource::TerminalProtocol,
+                                );
                             }
                             TerminalBackendEvent::ClipboardLoad => {
-                                if let Some(item) = cx.read_from_clipboard()
-                                    && let Some(text) = item.text()
+                                if let Some(text) = crate::clipboard::read_text(cx)
                                     && let Some(ref pty) = instance.pty_sender
                                 {
                                     pty.write(text.into_bytes());
@@ -2019,6 +2024,7 @@ impl GitCometView {
                 self.close_terminal_tab(repo_id, index, window, cx);
             }
             TerminalShutdownAction::CloseWindow => {
+                crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
                 window.remove_window();
             }
             TerminalShutdownAction::QuitApp => {
@@ -2033,6 +2039,7 @@ impl GitCometView {
                         });
                     }
                 }
+                crate::app::mark_clean_shutdown_from_view(cx);
                 cx.quit();
             }
         }
@@ -2092,7 +2099,7 @@ impl GitCometView {
         let Some(text) = viewport.read(cx).selected_text() else {
             return false;
         };
-        crate::clipboard::write_text(cx, text);
+        crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::TerminalContextMenu);
         true
     }
 
@@ -2102,7 +2109,7 @@ impl GitCometView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let Some(text) = crate::clipboard::read_text(cx) else {
             return false;
         };
         let Some(viewport) = self

@@ -21,7 +21,9 @@ mod ui_runtime;
 mod ui_scale;
 mod view;
 
-pub use app::{FocusedMergetoolConfig, run, run_focused_mergetool, run_with_startup_crash_report};
+pub use app::{
+    FocusedMergetoolConfig, UiRunOutcome, run, run_focused_mergetool, run_with_startup_crash_report,
+};
 pub use focused_diff::{FocusedDiffConfig, run_focused_diff};
 pub use launch_guard::UiLaunchError;
 pub use view::StartupCrashReport;

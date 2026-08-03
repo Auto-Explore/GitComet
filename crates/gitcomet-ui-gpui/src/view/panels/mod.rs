@@ -283,6 +283,9 @@ pub(in crate::view) enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    CopyDiffSelection {
+        text: String,
+    },
     CopyDiffText {
         visible_ix: usize,
         region: DiffTextRegion,

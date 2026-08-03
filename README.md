@@ -229,15 +229,30 @@ The full theme guide, including file locations, schema details, example bundles,
 
 ### Crash logs
 
-If the app crashes due to a Rust panic, GitComet writes a crash log to:
+GitComet writes panic logs and abnormal-exit recovery state to:
 
 - Linux: `$XDG_STATE_HOME/gitcomet/crashes/` (fallback: `~/.local/state/gitcomet/crashes/`)
 - macOS: `~/Library/Logs/gitcomet/crashes/`
 - Windows: `%LOCALAPPDATA%\gitcomet\crashes\` (fallback: `%APPDATA%\gitcomet\crashes\`)
 
-On next startup, GitComet can prompt you to report the crash as a prefilled
-GitHub issue in `Auto-Explore/GitComet`, including app version, platform,
-panic details, and a trimmed backtrace.
+On Linux, the directory normally is `~/.local/state/gitcomet/crashes/`.
+GitComet creates a process-specific `session-in-progress-<pid>.log` before it
+starts the GPUI runtime. A native abort, terminated UI, or GPUI event loop exit
+without an explicitly requested user shutdown leaves that marker behind; Rust
+panics also write `panic-*.log`. Error-level runtime diagnostics are mirrored to
+`last-runtime-error-<pid>.log`, including their source location and a backtrace,
+so fatal errors logged and consumed by the UI runtime remain reportable.
+Recovery ignores markers owned by still-running GitComet processes, so one open
+instance cannot consume another's crash state.
+On the next launch, GitComet snapshots recovered data as
+`pending-startup-report.log` and retains it until the user reports or dismisses
+the notification, so a failed WSLg relaunch cannot discard the report before
+its notification is visible.
+
+GitComet presents the report in the next UI launch and also prints its
+prefilled GitHub issue URL and log path to the launching terminal. The report
+includes app version, platform, structured failure details, and a trimmed
+backtrace.
 
 ### Prior work and ideas inspired by:
 

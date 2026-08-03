@@ -12,8 +12,8 @@ workspace = true
 
 [features]
 default = ["ui-gpui", "gix"]
-ui = ["dep:gitcomet-ui"]
-ui-gpui-runtime = ["ui", "dep:gitcomet-ui-gpui"]
+ui = ["ui-gpui"]
+ui-gpui-runtime = ["dep:gitcomet-ui-gpui"]
 ui-gpui = ["ui-gpui-runtime", "gitcomet-ui-gpui/syntax-all"]
 ui-gpui-syntax-common = [
     "ui-gpui-runtime",
@@ -31,8 +31,8 @@ gitcomet-core = { workspace = true }
 gitcomet-git = { workspace = true }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
-gitcomet-ui = { workspace = true, optional = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
+log = { workspace = true }
 mimalloc = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }

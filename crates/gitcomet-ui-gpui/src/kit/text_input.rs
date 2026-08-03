@@ -6,11 +6,11 @@ use crate::theme::AppTheme;
 use crate::view::components::CONTROL_HEIGHT_PX;
 use gpui::prelude::*;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba,
-    ScrollHandle, ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window,
-    WrappedLine, actions, anchored, deferred, div, fill, point, px, relative, size,
+    App, Bounds, Context, CursorStyle, Div, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IsZero, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ScrollHandle,
+    ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
+    actions, anchored, deferred, div, fill, point, px, relative, size,
 };
 use rustc_hash::FxHashMap as HashMap;
 #[cfg(any(test, feature = "benchmarks"))]

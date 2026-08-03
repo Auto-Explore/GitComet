@@ -571,7 +571,11 @@ impl MainPaneView {
                     handled = true;
                 }
                 "c" if mods.shift => {
-                    crate::clipboard::write_text(cx, path.display().to_string());
+                    crate::clipboard::write_text(
+                        cx,
+                        path.display().to_string(),
+                        crate::clipboard::CopySource::FilePathShortcut,
+                    );
                     handled = true;
                 }
                 _ => {}
