@@ -478,6 +478,11 @@ pub(crate) fn open_settings_window(cx: &mut App) {
         settings_window_options_for_scale(bounds, ui_scale_percent),
         move |window, cx| {
             ui_scale::apply_to_window(window, ui_scale_percent);
+            window.on_window_should_close(cx, |window, cx| {
+                crate::app::mark_clean_shutdown_if_last_window(cx);
+                window.remove_window();
+                false
+            });
             cx.new(|cx| SettingsWindowView::new(window, cx))
         },
     )
@@ -3303,6 +3308,7 @@ impl Render for SettingsWindowView {
         .window_control_area(WindowControlArea::Close)
         .on_click(cx.listener(|_this, _e: &ClickEvent, window, cx| {
             cx.stop_propagation();
+            crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
             window.remove_window();
         }));
 

@@ -1099,16 +1099,13 @@ impl PopoverHost {
                 cx.notify();
             }
             ContextMenuAction::ConflictResolverOutputCut { text } => {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_output_delete_selection(cx);
                 });
             }
             ContextMenuAction::ConflictResolverOutputPaste => {
-                if let Some(text) = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text().map(|s| s.to_string()))
-                {
+                if let Some(text) = crate::clipboard::read_text(cx) {
                     self.main_pane.update(cx, |pane, cx| {
                         pane.conflict_resolver_output_paste_text(&text, cx);
                     });
@@ -1116,7 +1113,15 @@ impl PopoverHost {
             }
             ContextMenuAction::CopyText { text } => {
                 window.activate_window();
-                crate::clipboard::write_text(cx, text);
+                crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
+            }
+            ContextMenuAction::CopyDiffSelection { text } => {
+                window.activate_window();
+                crate::clipboard::write_text(
+                    cx,
+                    text,
+                    crate::clipboard::CopySource::DiffContextMenu,
+                );
             }
             ContextMenuAction::CopyDiffText { visible_ix, region } => {
                 window.activate_window();

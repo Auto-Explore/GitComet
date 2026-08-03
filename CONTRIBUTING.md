@@ -6,8 +6,7 @@
 - `crates/gitcomet-git`: Git abstraction + no-op backend.
 - `crates/gitcomet-git-gix`: `gix`/gitoxide backend implementation.
 - `crates/gitcomet-state`: MVU state store, reducers, effects, conflict session management.
-- `crates/gitcomet-ui`: UI model/state (toolkit-independent).
-- `crates/gitcomet-ui-gpui`: gpui views/components (focused diff/merge windows, conflict resolver, word diff).
+- `crates/gitcomet-ui-gpui`: GPUI views/components (focused diff/merge windows, conflict resolver, word diff).
 - `crates/gitcomet`: binary entrypoint, CLI (clap), difftool/mergetool/setup/uninstall modes.
 
 ### Getting started

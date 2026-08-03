@@ -2591,8 +2591,7 @@ impl MainPaneView {
         self.diff_word_highlights_inflight = None;
         self.diff_file_stats.clear();
         self.clear_diff_text_style_caches();
-        self.diff_selection_anchor = None;
-        self.diff_selection_range = None;
+        self.clear_diff_selection_state();
         self.diff_preview_is_new_file = false;
 
         let Some((repo_id, diff_rev, diff_target, workdir, diff)) = next_cache_state else {

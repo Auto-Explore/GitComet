@@ -1609,7 +1609,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         diff_editor_unstaged_model,
         "C",
-        ContextMenuAction::CopyText { text } if text == "copied selection"
+        ContextMenuAction::CopyDiffSelection { text } if text == "copied selection"
     );
 
     let diff_editor_staged_model = cx.update(|_window, app| {
@@ -1643,7 +1643,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
     assert_shortcut_action!(
         diff_editor_staged_model,
         "C",
-        ContextMenuAction::CopyText { text } if text == "staged copy"
+        ContextMenuAction::CopyDiffSelection { text } if text == "staged copy"
     );
 
     let diff_hunk_unstaged_model = cx.update(|_window, app| {
@@ -1978,6 +1978,122 @@ fn commit_details_file_navigation_scrolls_selected_row_into_view(cx: &mut gpui::
     assert!(
         offset_y < px(0.0),
         "expected commit-details file navigation to scroll the selected row into view (offset_y={offset_y:?})",
+    );
+}
+
+#[gpui::test]
+fn commit_diff_target_change_clears_text_selection_and_ctrl_c_copies_new_selection(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = crate::test_support::lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70511);
+    let commit_id = CommitId("fedcba0987654322".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_commit_diff_selection_lifecycle",
+        std::process::id()
+    ));
+    let first_path = std::path::PathBuf::from("src/commit_details/first.rs");
+    let second_path = std::path::PathBuf::from("src/commit_details/second.rs");
+    let first_target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(first_path),
+    };
+    let second_target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(second_path),
+    };
+
+    let mut first_repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    first_repo.diff_state.diff_target = Some(first_target.clone());
+    first_repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(first_target).into());
+    first_repo.diff_state.diff_rev = 1;
+    first_repo.diff_state.diff_state_rev = first_repo.diff_state.diff_state_rev.wrapping_add(1);
+
+    apply_state(cx, &view, app_state_with_active_repo(first_repo.clone()));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    set_diff_text_selection_on_row(cx, &view, 4);
+    assert!(
+        diff_text_has_selection(cx, &view),
+        "expected the first commit file to have an active text selection"
+    );
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("old selection".to_string()));
+
+    let mut closed_repo = first_repo.clone();
+    closed_repo.diff_state.diff_target = None;
+    closed_repo.diff_state.diff = Loadable::NotLoaded;
+    closed_repo.diff_state.diff_rev = 2;
+    closed_repo.diff_state.diff_state_rev = closed_repo.diff_state.diff_state_rev.wrapping_add(1);
+    apply_state(cx, &view, app_state_with_active_repo(closed_repo));
+
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "closing a commit file diff must clear its text selection"
+    );
+    assert_eq!(diff_selection_anchor(cx, &view), None);
+    assert_eq!(diff_selection_range(cx, &view), None);
+
+    let mut second_repo = first_repo;
+    second_repo.diff_state.diff_target = Some(second_target.clone());
+    second_repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(second_target).into());
+    second_repo.diff_state.diff_rev = 3;
+    second_repo.diff_state.diff_state_rev = second_repo.diff_state.diff_state_rev.wrapping_add(1);
+    apply_state(cx, &view, app_state_with_active_repo(second_repo));
+
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "opening another commit file diff must not restore the old selection"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rebuild_diff_cache(cx);
+                pane.ensure_diff_visible_indices();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    draw_and_drain_test_window(cx);
+    focus_diff_panel(cx, &view);
+    set_diff_text_selection_on_row(cx, &view, 5);
+    cx.simulate_keystrokes("ctrl-c");
+
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("Ctrl-C should copy the new file's selection");
+    assert!(
+        !copied.is_empty() && copied != "old selection",
+        "Ctrl-C must replace old clipboard content with the new file's selection, got {copied:?}"
+    );
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.select_all_diff_text();
+                cx.notify();
+            });
+        });
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-c");
+
+    let copied_after_reselection = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .expect("Ctrl-C should copy the changed selection");
+    assert!(!copied_after_reselection.is_empty());
+    assert_ne!(
+        copied_after_reselection, copied,
+        "changing the selection in one file must replace the previous clipboard text"
     );
 }
 

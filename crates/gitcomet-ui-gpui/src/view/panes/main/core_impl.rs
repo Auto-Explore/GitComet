@@ -4648,8 +4648,7 @@ impl MainPaneView {
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
         if prev_diff_target != next_diff_target {
-            self.diff_selection_anchor = None;
-            self.diff_selection_range = None;
+            self.clear_diff_selection_state();
             self.diff_autoscroll_pending = next_diff_target.is_some();
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;

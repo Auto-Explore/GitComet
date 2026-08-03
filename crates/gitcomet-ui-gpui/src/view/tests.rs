@@ -184,6 +184,111 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
 }
 
 #[gpui::test]
+fn startup_crash_report_is_visible_after_relaunch(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(backend);
+    let config = GitCometViewConfig::normal(Some(StartupCrashReport {
+        issue_url: "https://example.invalid/crash-report".to_string(),
+        summary: "WSLg clipboard copy terminated unexpectedly".to_string(),
+        crash_log_path: PathBuf::from("/tmp/gitcomet-crash.log"),
+    }));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("startup_crash_report").is_some(),
+        "a recovered crash must render the report notification"
+    );
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app).startup_crash_report.is_some(),
+            "the recovered report must remain available until ignored"
+        );
+    });
+}
+
+#[gpui::test]
+fn ignoring_startup_crash_report_deletes_it_and_hides_notification(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let recovery_dir = tempfile::tempdir().expect("create recovery state directory");
+    let crash_log_path = recovery_dir.path().join("pending-startup-report.log");
+    std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
+
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(backend);
+    let config = GitCometViewConfig::normal(Some(StartupCrashReport {
+        issue_url: "https://example.invalid/crash-report".to_string(),
+        summary: "WSLg clipboard copy terminated unexpectedly".to_string(),
+        crash_log_path: crash_log_path.clone(),
+    }));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| {
+            this.ignore_startup_crash_report()
+                .expect("ignore startup crash report");
+        });
+    });
+
+    assert!(
+        !crash_log_path.exists(),
+        "ignoring the crash must delete its persisted report"
+    );
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app).startup_crash_report.is_none(),
+            "ignoring the crash must hide its notification"
+        );
+    });
+}
+
+#[gpui::test]
+fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let report_dir = tempfile::tempdir().expect("create report directory");
+    let crash_log_path = report_dir.path().join("pending-startup-report.log");
+    std::fs::write(&crash_log_path, "message=previous crash\n").expect("write crash report");
+
+    let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+    let (store, events) = AppStore::new(backend);
+    let config = GitCometViewConfig::normal(Some(StartupCrashReport {
+        issue_url: "https://example.invalid/crash-report".to_string(),
+        summary: "previous crash".to_string(),
+        crash_log_path: crash_log_path.clone(),
+    }));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        GitCometView::new_with_config(store, events, config, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| {
+            this.report_startup_crash_report_with(|url| {
+                assert_eq!(url, "https://example.invalid/crash-report");
+                Ok(())
+            })
+            .expect("open report URL");
+        });
+    });
+
+    assert!(
+        crash_log_path.exists(),
+        "opening the report page must retain the persisted crash report"
+    );
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app).startup_crash_report.is_some(),
+            "opening the report page must keep the notification visible"
+        );
+    });
+}
+
+#[gpui::test]
 fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);

@@ -32,7 +32,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 const WINDOW_MIN_WIDTH_PX: f32 = 820.0;
 const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
@@ -86,12 +86,37 @@ pub struct FocusedMergetoolConfig {
     pub label_base: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiRunOutcome {
+    CleanShutdown,
+    /// Retained for API compatibility. A successfully returned event loop is
+    /// now classified as a clean shutdown.
+    UnexpectedEventLoopExit,
+}
+
 #[derive(Clone, Debug)]
 struct WindowLaunchConfig {
     title: String,
     app_id: String,
     view_config: GitCometViewConfig,
 }
+
+#[derive(Clone)]
+struct CleanShutdownTracker {
+    requested: Arc<AtomicBool>,
+}
+
+impl Default for CleanShutdownTracker {
+    fn default() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl gpui::Global for CleanShutdownTracker {}
+
+type ShutdownCallback = Arc<dyn Fn() + Send + Sync>;
 
 pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
     ui_scale::design_size_from_percent(WINDOW_MIN_WIDTH_PX, WINDOW_MIN_HEIGHT_PX, percent)
@@ -117,19 +142,46 @@ pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Siz
 }
 
 pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
-    run_with_startup_crash_report(backend, None, None)
+    run_with_startup_crash_report(backend, None, None).map(|_| ())
 }
 
 pub fn run_with_startup_crash_report(
     backend: Arc<dyn GitBackend>,
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
-) -> Result<(), UiLaunchError> {
+) -> Result<UiRunOutcome, UiLaunchError> {
+    run_with_startup_crash_report_and_shutdown_callback(
+        backend,
+        initial_path,
+        startup_crash_report,
+        None::<fn()>,
+    )
+}
+
+/// Runs the main window and invokes `on_shutdown` from GPUI's graceful-shutdown
+/// callback. On Windows GPUI terminates with `ExitProcess`, so callers cannot
+/// rely on [`run_with_startup_crash_report`] returning to perform cleanup.
+pub fn run_with_startup_crash_report_and_shutdown_callback(
+    backend: Arc<dyn GitBackend>,
+    initial_path: Option<PathBuf>,
+    startup_crash_report: Option<StartupCrashReport>,
+    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
+) -> Result<UiRunOutcome, UiLaunchError> {
     let launch = normal_launch_config(initial_path, startup_crash_report);
     ensure_graphics_device_available("main GPUI window launch")?;
+    let on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
     run_with_panic_guard("main GPUI window launch", move || {
-        run_windowed_app(backend, launch)
-    })
+        run_windowed_app(
+            backend,
+            launch,
+            CleanShutdownTracker::default(),
+            on_shutdown,
+        )
+    })?;
+    // A native abort or forced process termination cannot return from the GPUI
+    // event loop. Reaching this point is therefore a clean shutdown even when a
+    // platform-specific close path did not set CleanShutdownTracker.
+    Ok(UiRunOutcome::CleanShutdown)
 }
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
@@ -142,7 +194,7 @@ pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMerget
     let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
     let launch = focused_mergetool_launch_config(&config, Some(exit_code.clone()));
     if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
-        run_windowed_app(backend, launch)
+        run_windowed_app(backend, launch, CleanShutdownTracker::default(), None)
     }) {
         eprintln!("Failed to launch focused mergetool window: {err}");
         return FOCUSED_MERGETOOL_EXIT_ERROR;
@@ -327,7 +379,12 @@ pub(crate) fn window_system_menu_request(
     Some(WindowSystemMenuRequest { hwnd, x, y })
 }
 
-fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
+fn run_windowed_app(
+    backend: Arc<dyn GitBackend>,
+    launch: WindowLaunchConfig,
+    clean_shutdown_tracker: CleanShutdownTracker,
+    on_shutdown: Option<ShutdownCallback>,
+) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     let application = application().with_assets(GitCometAssets);
 
@@ -355,6 +412,14 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
     }
 
     application.run(move |cx: &mut App| {
+        cx.set_global(clean_shutdown_tracker);
+        if let Some(on_shutdown) = on_shutdown {
+            cx.on_app_quit(move |_cx| {
+                on_shutdown();
+                async {}
+            })
+            .detach();
+        }
         if let Err(err) = crate::bundled_fonts::register(cx) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
@@ -397,6 +462,7 @@ fn open_gitcomet_window(
     backend: Arc<dyn GitBackend>,
     launch: &WindowLaunchConfig,
 ) -> gpui::WindowHandle<GitCometView> {
+    clear_clean_shutdown_request(cx);
     let ui_session = session::load();
     let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
@@ -416,6 +482,7 @@ fn open_gitcomet_window(
     let app_id = launch.app_id.clone();
     let view_config = launch.view_config.clone();
     let ui_scale_percent = ui_scale.percent;
+    let intercept_native_close = view_config.view_mode == GitCometViewMode::Normal;
 
     cx.open_window(
         WindowOptions {
@@ -441,6 +508,12 @@ fn open_gitcomet_window(
         },
         move |window, cx| {
             ui_scale::apply_to_window(window, ui_scale_percent);
+            if intercept_native_close {
+                window.on_window_should_close(cx, |window, cx| {
+                    close_window_or_warn(window, cx);
+                    false
+                });
+            }
             let (store, events) = AppStore::new(Arc::clone(&backend));
             cx.new(|cx| {
                 GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
@@ -1014,8 +1087,50 @@ fn active_normal_gitcomet_window_blocks_non_repository_actions(cx: &mut App) -> 
         .unwrap_or(false)
 }
 
+fn mark_clean_shutdown<C>(cx: &mut C)
+where
+    C: BorrowAppContext,
+{
+    cx.update_default_global::<CleanShutdownTracker, _>(|tracker, _cx| {
+        tracker.requested.store(true, Ordering::SeqCst);
+    });
+}
+
+fn clear_clean_shutdown_request(cx: &mut App) {
+    if let Some(tracker) = cx.try_global::<CleanShutdownTracker>() {
+        tracker.requested.store(false, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn mark_clean_shutdown_if_last_window(cx: &mut App) {
+    if cx.windows().len() == 1 {
+        mark_clean_shutdown(cx);
+    }
+}
+
+pub(crate) fn mark_clean_shutdown_requested(cx: &mut App) {
+    mark_clean_shutdown(cx);
+}
+
+pub(crate) fn mark_clean_shutdown_if_last_window_from_view<T>(cx: &mut gpui::Context<T>)
+where
+    T: 'static,
+{
+    if cx.windows().len() == 1 {
+        mark_clean_shutdown(cx);
+    }
+}
+
+pub(crate) fn mark_clean_shutdown_from_view<T>(cx: &mut gpui::Context<T>)
+where
+    T: 'static,
+{
+    mark_clean_shutdown(cx);
+}
+
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
+        mark_clean_shutdown_if_last_window(cx);
         let _ = window.update(cx, |_root, window, _cx| {
             window.remove_window();
         });
@@ -1033,6 +1148,7 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
         })
         .unwrap_or(false);
     if !handled {
+        mark_clean_shutdown_if_last_window(cx);
         window.remove_window();
     }
 }
@@ -1052,6 +1168,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
         .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
         .collect();
     if entries.is_empty() {
+        mark_clean_shutdown(cx);
         cx.quit();
         return;
     }
@@ -1071,6 +1188,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
     }
 
     if running_command_count == 0 {
+        mark_clean_shutdown(cx);
         cx.quit();
         return;
     }
@@ -1097,6 +1215,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
             );
         });
     } else {
+        mark_clean_shutdown(cx);
         cx.quit();
     }
 }

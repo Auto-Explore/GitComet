@@ -658,7 +658,7 @@ impl GitCometView {
         match command_id {
             "new-window" => cx.defer(|cx| cx.dispatch_action(&NewWindow)),
             "open-settings" => cx.defer(crate::view::open_settings_window),
-            "quit" => cx.defer(|cx| cx.quit()),
+            "quit" => cx.defer(crate::app::quit_app_or_warn),
             "minimize-window" => cx.defer(|cx| {
                 if let Some(win) = cx.active_window() {
                     let _ = win.update(cx, |_root, win, _cx| win.minimize_window());
@@ -1346,6 +1346,7 @@ impl GitCometView {
                 cx.notify();
             }
             if should_quit {
+                crate::app::mark_clean_shutdown_from_view(cx);
                 cx.quit();
             }
         });
@@ -3130,8 +3131,31 @@ impl GitCometView {
         }
     }
 
-    fn open_external_url(&mut self, url: &str) -> Result<(), std::io::Error> {
-        platform_open::open_url(url)
+    fn report_startup_crash_report(&self) -> Result<(), std::io::Error> {
+        self.report_startup_crash_report_with(platform_open::open_url)
+    }
+
+    fn report_startup_crash_report_with(
+        &self,
+        open_url: impl FnOnce(&str) -> Result<(), std::io::Error>,
+    ) -> Result<(), std::io::Error> {
+        let Some(report) = self.startup_crash_report.as_ref() else {
+            return Ok(());
+        };
+        open_url(&report.issue_url)
+    }
+
+    fn ignore_startup_crash_report(&mut self) -> Result<(), std::io::Error> {
+        let Some(report) = self.startup_crash_report.as_ref() else {
+            return Ok(());
+        };
+        match std::fs::remove_file(&report.crash_log_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+        self.startup_crash_report = None;
+        Ok(())
     }
 
     fn defer_text_input_main_pane_action<F>(&self, cx: &mut gpui::Context<Self>, action: F)
@@ -3431,22 +3455,18 @@ impl Render for GitCometView {
         if let Some(report) = self.startup_crash_report.clone()
             && self.view_mode == GitCometViewMode::Normal
         {
-            let issue_url = report.issue_url.clone();
             let summary = report.summary.clone();
 
             let report_button =
                 components::Button::new("startup_crash_report_open", "Report Issue")
                     .style(components::ButtonStyle::Filled)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        match this.open_external_url(&issue_url) {
-                            Ok(()) => {
-                                this.push_toast(
-                                    components::ToastKind::Success,
-                                    "Opened crash report page in your browser.".to_string(),
-                                    cx,
-                                );
-                                this.startup_crash_report = None;
-                            }
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        match this.report_startup_crash_report() {
+                            Ok(()) => this.push_toast(
+                                components::ToastKind::Success,
+                                "Opened crash report page in your browser.".to_string(),
+                                cx,
+                            ),
                             Err(err) => {
                                 this.push_toast(
                                     components::ToastKind::Error,
@@ -3458,15 +3478,24 @@ impl Render for GitCometView {
                         cx.notify();
                     });
 
-            let dismiss_button = components::Button::new("startup_crash_report_dismiss", "Dismiss")
-                .style(components::ButtonStyle::Outlined)
-                .on_click(theme, cx, |this, _e, _w, cx| {
-                    this.startup_crash_report = None;
-                    cx.notify();
-                });
+            let ignore_button =
+                components::Button::new("startup_crash_report_ignore", "Ignore Crash")
+                    .style(components::ButtonStyle::Outlined)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        if let Err(err) = this.ignore_startup_crash_report() {
+                            this.push_toast(
+                                components::ToastKind::Error,
+                                format!("Could not clear crash report: {err}"),
+                                cx,
+                            );
+                        }
+                        cx.notify();
+                    });
 
             body = body.child(
                 div()
+                    .id("startup_crash_report")
+                    .debug_selector(|| "startup_crash_report".to_string())
                     .relative()
                     .px_2()
                     .py_1()
@@ -3506,7 +3535,7 @@ impl Render for GitCometView {
                                     .items_center()
                                     .gap_1()
                                     .child(report_button)
-                                    .child(dismiss_button),
+                                    .child(ignore_button),
                             ),
                     ),
             );
@@ -3925,6 +3954,7 @@ impl Render for GitCometView {
                     window.on_next_frame(|_window, cx| {
                         crate::startup_probe::mark_first_interactive();
                         if crate::startup_probe::should_exit_after_first_interactive() {
+                            crate::app::mark_clean_shutdown_requested(cx);
                             cx.quit();
                         }
                     });
