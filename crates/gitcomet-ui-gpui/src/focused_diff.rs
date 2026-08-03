@@ -6,6 +6,7 @@
 use crate::assets::GitCometAssets;
 use crate::launch_guard::run_with_panic_guard;
 use crate::theme::AppTheme;
+use crate::view::components;
 use gitcomet_state::session;
 use gpui::prelude::*;
 use gpui::{
@@ -380,38 +381,23 @@ impl Render for FocusedDiffView {
                             .child(SharedString::from(format!("{line_count} lines"))),
                     )
                     .child(
-                        div()
-                            .id("btn-whitespace-mode")
-                            .px(scaled_px(10.0))
-                            .py(scaled_px(4.0))
-                            .border_1()
-                            .border_color(theme.colors.border)
-                            .rounded(scaled_px(2.0))
-                            .cursor_pointer()
-                            .on_click(cx.listener(
-                                move |this, _e: &gpui::ClickEvent, _window, cx| {
-                                    this.set_diff_whitespace_mode(next_whitespace_mode, cx);
-                                },
-                            ))
-                            .child(SharedString::from(format!(
-                                "Whitespace: {}",
-                                self.diff_whitespace_mode.label()
-                            ))),
+                        components::Button::new(
+                            "btn-whitespace-mode",
+                            format!("Whitespace: {}", self.diff_whitespace_mode.label()),
+                        )
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(
+                            theme,
+                            cx,
+                            move |this, _e, _window, cx| {
+                                this.set_diff_whitespace_mode(next_whitespace_mode, cx);
+                            },
+                        ),
                     )
                     .child(
-                        div()
-                            .id("btn-close")
-                            .px(scaled_px(10.0))
-                            .py(scaled_px(4.0))
-                            .bg(theme.colors.accent)
-                            .text_color(theme.colors.accent_text)
-                            .rounded(scaled_px(2.0))
-                            .cursor_pointer()
-                            .font_weight(FontWeight::BOLD)
-                            .on_click(|_: &gpui::ClickEvent, _window, cx| {
-                                cx.dispatch_action(&Close);
-                            })
-                            .child("Close"),
+                        components::Button::new("btn-close", "Close")
+                            .style(components::ButtonStyle::Filled)
+                            .on_click(theme, cx, |this, _e, _window, cx| this.close(cx)),
                     ),
             )
             // Diff content
