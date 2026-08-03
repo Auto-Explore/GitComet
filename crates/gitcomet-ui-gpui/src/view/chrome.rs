@@ -433,7 +433,7 @@ impl Render for TitleBarView {
                     .start_slot(svg_icon(
                         "icons/menu.svg",
                         theme.colors.text,
-                        scaled_px(14.0),
+                        scaled_px(16.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
                     .borderless()
@@ -445,7 +445,12 @@ impl Render for TitleBarView {
                         let anchor = window_top_left_corner(window);
                         this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
                     })
+                    // Sized to the window controls' 32px hitbox so the 16px glyph
+                    // clears the same 8px on each side. The button's intrinsic
+                    // `icon_pad_x` is narrower; a fixed width plus the centered
+                    // content is what actually matches the two ends of the bar.
                     .h(scaled_px(26.0))
+                    .w(scaled_px(32.0))
                     .rounded(px(theme.radii.pill))
                     .gitcomet_tooltip(theme, "Application menu".into()),
             )
@@ -472,7 +477,7 @@ impl Render for TitleBarView {
                 div()
                     .id("repo_picker_btn")
                     .h(scaled_px(26.0))
-                    .w(scaled_px(26.0))
+                    .w(scaled_px(32.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -497,7 +502,7 @@ impl Render for TitleBarView {
                     .child(svg_icon(
                         "icons/chevron_down.svg",
                         theme.colors.text,
-                        scaled_px(14.0),
+                        scaled_px(16.0),
                     )),
             )
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
