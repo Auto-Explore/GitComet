@@ -235,31 +235,29 @@ fn main() {
                         summary: report.summary,
                         crash_log_path: report.crash_log_path,
                     });
-                let run_result = gitcomet_ui_gpui::run_with_startup_crash_report(
-                    backend,
-                    path.clone(),
-                    startup_report,
-                );
+                let run_result =
+                    gitcomet_ui_gpui::run_with_startup_crash_report_and_shutdown_callback(
+                        backend,
+                        path.clone(),
+                        startup_report,
+                        Some(|| {
+                            if let Err(err) = crashlog::finish_session() {
+                                eprintln!(
+                                    "Failed to clear GitComet crash-recovery marker during graceful shutdown: {err}"
+                                );
+                            }
+                        }),
+                    );
                 match run_result {
-                    Ok(gitcomet_ui_gpui::UiRunOutcome::CleanShutdown) => {
+                    Ok(
+                        gitcomet_ui_gpui::UiRunOutcome::CleanShutdown
+                        | gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit,
+                    ) => {
                         if let Err(err) = crashlog::finish_session() {
                             eprintln!(
                                 "Failed to clear GitComet crash-recovery marker after clean shutdown: {err}"
                             );
                         }
-                    }
-                    Ok(gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit) => {
-                        let message =
-                            "GPUI event loop ended without a user-requested clean shutdown";
-                        if let Err(err) =
-                            crashlog::record_session_failure("main GPUI event loop", message)
-                        {
-                            eprintln!(
-                                "Failed to preserve GitComet unexpected-exit recovery data: {err}"
-                            );
-                        }
-                        eprintln!("{message}; preserving crash recovery data for the next launch.");
-                        std::process::exit(exit_code::ERROR);
                     }
                     Err(err) => {
                         if let Err(record_err) = crashlog::record_session_failure(

@@ -60,13 +60,16 @@ impl log::Log for CrashLogger {
             return;
         }
 
-        // Keep GPUI's existing terminal diagnostics visible while also making
+        let message = record.args().to_string();
+        if !should_record_runtime_error(record.target(), &message) {
+            return;
+        }
+
+        // Keep actionable GPUI terminal diagnostics visible while also making
         // them durable enough to survive an event-loop or native process exit.
         let mut stderr = std::io::stderr().lock();
-        let _ = writeln!(stderr, "{}", record.args());
-        if should_record_runtime_error(record.target(), &record.args().to_string()) {
-            write_runtime_error_log(record);
-        }
+        let _ = writeln!(stderr, "{message}");
+        write_runtime_error_log(record);
     }
 
     fn flush(&self) {}

@@ -128,33 +128,6 @@ Verify:
 - The repo loads without crashing.
 - Closing and reopening the app from the same WSL shell continues to work.
 
-## Clipboard Crash Recovery Test
-
-With a repository that has at least one committed change and one staged change:
-
-1. Open a commit from the history list and select text in its diff.
-2. Press `Ctrl-C`.
-3. Open the staged-file diff, select text, and press `Ctrl-C`.
-4. Focus the commit-message input, select text, and press `Ctrl-C`.
-5. Right-click selected diff text and use the copy context-menu action.
-
-Verify:
-- All five copies succeed without terminating GitComet.
-- In a hybrid WSLg session, every clipboard write uses the X11 clipboard
-  bridge exclusively and does not also submit a Wayland clipboard request.
-- If GitComet terminates unexpectedly, its next launch displays a crash-report
-  link. The generated report identifies the last copy source without including
-  copied text. For a logged Wayland event-loop failure, it also includes the
-  original error, its GPUI source location, and a captured backtrace.
-- Until the user reports or dismisses the notification, recovery data is
-  available at
-  `${XDG_STATE_HOME:-$HOME/.local/state}/gitcomet/crashes/`. GitComet creates
-  `session-in-progress-<pid>.log` before GPUI starts; an abnormal termination
-  or event-loop exit without a user-requested shutdown leaves it in place, and
-  a restart snapshots it as `pending-startup-report.log`. Markers owned by a
-  still-running GitComet process are ignored. The launch terminal also prints
-  the report URL and snapshot path if WSLg cannot create a window.
-
 ## Repository Open Tests
 
 From the running app:

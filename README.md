@@ -246,7 +246,7 @@ Recovery ignores markers owned by still-running GitComet processes, so one open
 instance cannot consume another's crash state.
 On the next launch, GitComet snapshots recovered data as
 `pending-startup-report.log` and retains it until the user reports or dismisses
-the notification, so a failed WSLg relaunch cannot discard the report before
+the notification, so a failed subsequent launch cannot discard the report before
 its notification is visible.
 
 GitComet presents the report in the next UI launch and also prints its

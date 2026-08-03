@@ -89,6 +89,8 @@ pub struct FocusedMergetoolConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UiRunOutcome {
     CleanShutdown,
+    /// Retained for API compatibility. A successfully returned event loop is
+    /// now classified as a clean shutdown.
     UnexpectedEventLoopExit,
 }
 
@@ -104,12 +106,6 @@ struct CleanShutdownTracker {
     requested: Arc<AtomicBool>,
 }
 
-impl CleanShutdownTracker {
-    fn requested(&self) -> bool {
-        self.requested.load(Ordering::SeqCst)
-    }
-}
-
 impl Default for CleanShutdownTracker {
     fn default() -> Self {
         Self {
@@ -119,6 +115,8 @@ impl Default for CleanShutdownTracker {
 }
 
 impl gpui::Global for CleanShutdownTracker {}
+
+type ShutdownCallback = Arc<dyn Fn() + Send + Sync>;
 
 pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
     ui_scale::design_size_from_percent(WINDOW_MIN_WIDTH_PX, WINDOW_MIN_HEIGHT_PX, percent)
@@ -152,14 +150,38 @@ pub fn run_with_startup_crash_report(
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
 ) -> Result<UiRunOutcome, UiLaunchError> {
+    run_with_startup_crash_report_and_shutdown_callback(
+        backend,
+        initial_path,
+        startup_crash_report,
+        None::<fn()>,
+    )
+}
+
+/// Runs the main window and invokes `on_shutdown` from GPUI's graceful-shutdown
+/// callback. On Windows GPUI terminates with `ExitProcess`, so callers cannot
+/// rely on [`run_with_startup_crash_report`] returning to perform cleanup.
+pub fn run_with_startup_crash_report_and_shutdown_callback(
+    backend: Arc<dyn GitBackend>,
+    initial_path: Option<PathBuf>,
+    startup_crash_report: Option<StartupCrashReport>,
+    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
+) -> Result<UiRunOutcome, UiLaunchError> {
     let launch = normal_launch_config(initial_path, startup_crash_report);
     ensure_graphics_device_available("main GPUI window launch")?;
-    let clean_shutdown_tracker = CleanShutdownTracker::default();
-    let outcome_tracker = clean_shutdown_tracker.clone();
+    let on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
     run_with_panic_guard("main GPUI window launch", move || {
-        run_windowed_app(backend, launch, clean_shutdown_tracker)
+        run_windowed_app(
+            backend,
+            launch,
+            CleanShutdownTracker::default(),
+            on_shutdown,
+        )
     })?;
-    Ok(ui_run_outcome(outcome_tracker.requested()))
+    // A native abort or forced process termination cannot return from the GPUI
+    // event loop. Reaching this point is therefore a clean shutdown even when a
+    // platform-specific close path did not set CleanShutdownTracker.
+    Ok(UiRunOutcome::CleanShutdown)
 }
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
@@ -172,20 +194,12 @@ pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMerget
     let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
     let launch = focused_mergetool_launch_config(&config, Some(exit_code.clone()));
     if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
-        run_windowed_app(backend, launch, CleanShutdownTracker::default())
+        run_windowed_app(backend, launch, CleanShutdownTracker::default(), None)
     }) {
         eprintln!("Failed to launch focused mergetool window: {err}");
         return FOCUSED_MERGETOOL_EXIT_ERROR;
     }
     exit_code.load(Ordering::SeqCst)
-}
-
-fn ui_run_outcome(clean_shutdown_requested: bool) -> UiRunOutcome {
-    if clean_shutdown_requested {
-        UiRunOutcome::CleanShutdown
-    } else {
-        UiRunOutcome::UnexpectedEventLoopExit
-    }
 }
 
 fn normal_launch_config(
@@ -369,6 +383,7 @@ fn run_windowed_app(
     backend: Arc<dyn GitBackend>,
     launch: WindowLaunchConfig,
     clean_shutdown_tracker: CleanShutdownTracker,
+    on_shutdown: Option<ShutdownCallback>,
 ) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     let application = application().with_assets(GitCometAssets);
@@ -398,6 +413,13 @@ fn run_windowed_app(
 
     application.run(move |cx: &mut App| {
         cx.set_global(clean_shutdown_tracker);
+        if let Some(on_shutdown) = on_shutdown {
+            cx.on_app_quit(move |_cx| {
+                on_shutdown();
+                async {}
+            })
+            .detach();
+        }
         if let Err(err) = crate::bundled_fonts::register(cx) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
@@ -1759,12 +1781,6 @@ mod tests {
             WindowZoomAction::Zoom
         };
         assert_eq!(window_zoom_action(true), expected);
-    }
-
-    #[test]
-    fn ui_run_outcome_requires_an_explicit_clean_shutdown_request() {
-        assert_eq!(ui_run_outcome(false), UiRunOutcome::UnexpectedEventLoopExit);
-        assert_eq!(ui_run_outcome(true), UiRunOutcome::CleanShutdown);
     }
 
     #[test]
