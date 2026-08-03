@@ -10,6 +10,7 @@ pub fn shortcut_keys(label: &str, theme: AppTheme, scale: impl Into<UiScale>) ->
     let scale = scale.into();
     let chip_bg = theme.hover_overlay();
     div()
+        .debug_selector(|| "shortcut_keycaps".to_string())
         .flex()
         .items_center()
         .flex_shrink_0()

@@ -26,6 +26,7 @@ pub(super) struct TitleBarView {
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
+    app_menu_focus_handle: FocusHandle,
     repo_picker_open: bool,
     workspace_actions_enabled: bool,
     /// Painted bounds of the repository switcher chevron, so opening the picker
@@ -325,12 +326,14 @@ impl TitleBarView {
         theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         workspace_actions_enabled: bool,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
             theme,
             root_view,
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
+            app_menu_focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
             repo_picker_open: false,
             workspace_actions_enabled,
             repo_picker_toggle_bounds: Rc::new(Cell::new(None)),
@@ -339,6 +342,11 @@ impl TitleBarView {
 
     pub(super) fn repo_picker_toggle_bounds(&self) -> Option<Bounds<Pixels>> {
         self.repo_picker_toggle_bounds.get()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn app_menu_focus_handle_for_test(&self) -> FocusHandle {
+        self.app_menu_focus_handle.clone()
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -406,6 +414,7 @@ impl Render for TitleBarView {
         let app_menu_hover_bg = theme.titlebar_hover_overlay();
         let app_menu_active_bg = theme.titlebar_active_overlay();
         let bar_bg = title_bar_background(theme, window.is_window_active());
+        let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
         let menu_toggle = div()
             .id("app_menu")
@@ -414,42 +423,27 @@ impl Render for TitleBarView {
             .pl(scaled_px(2.0))
             .flex()
             .items_center()
-            .cursor(CursorStyle::PointingHand)
             .child(
-                div()
-                    .id("app_menu_btn")
-                    .h(scaled_px(26.0))
-                    .w(scaled_px(26.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(theme.radii.pill))
-                    .when(app_menu_open, move |s| s.bg(app_menu_open_bg))
-                    .hover(move |s| {
-                        if app_menu_open {
-                            s.bg(app_menu_open_bg)
-                        } else {
-                            s.bg(app_menu_hover_bg)
-                        }
-                    })
-                    .active(move |s| {
-                        if app_menu_open {
-                            s.bg(app_menu_open_active_bg)
-                        } else {
-                            s.bg(app_menu_active_bg)
-                        }
-                    })
-                    .child(svg_icon(
+                components::Button::new("app_menu_btn", "")
+                    .start_slot(svg_icon(
                         "icons/menu.svg",
                         theme.colors.text,
                         scaled_px(14.0),
-                    )),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .borderless()
+                    .selected(app_menu_open)
+                    .selected_bg(app_menu_open_bg)
+                    .focus_handle(app_menu_focus_handle)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.set_app_menu_open(true, cx);
+                        let anchor = window_top_left_corner(window);
+                        this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
+                    })
+                    .h(scaled_px(26.0))
+                    .rounded(px(theme.radii.pill))
+                    .gitcomet_tooltip(theme, "Application menu".into()),
             )
-            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
-                this.set_app_menu_open(true, cx);
-                let anchor = window_top_left_corner(window);
-                this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
-            }))
             .on_mouse_up(
                 MouseButton::Right,
                 cx.listener(|_this, e: &MouseUpEvent, window, cx| {

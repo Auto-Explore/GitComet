@@ -48,6 +48,27 @@ fn open_text_input_context_menu(cx: &mut gpui::VisualTestContext, position: gpui
     });
 }
 
+fn simulate_key_press(cx: &mut gpui::VisualTestContext, key: &str) {
+    let keystroke = gpui::Keystroke::parse(key)
+        .unwrap_or_else(|err| panic!("failed to parse test keystroke `{key}`: {err}"))
+        .with_simulated_ime();
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            }),
+            app,
+        );
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+            app,
+        );
+    });
+    cx.run_until_parked();
+}
+
 #[test]
 fn builds_pure_components_without_panics() {
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
@@ -3317,6 +3338,58 @@ fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
         assert!(
             crate::view::test_support::popover_is_open(view.read(app), app),
             "expected hamburger click to open the app menu"
+        );
+    });
+}
+
+#[gpui::test]
+fn titlebar_hamburger_opens_from_keyboard_and_restores_focus_on_escape(
+    cx: &mut gpui::TestAppContext,
+) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
+    });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-titlebar-menu-keyboard-test"),
+    );
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let app_menu_focus = cx.update(|_window, app| {
+        crate::view::test_support::app_menu_focus_handle(view.read(app), app)
+    });
+    cx.update(|window, app| window.focus(&app_menu_focus, app));
+
+    simulate_key_press(cx, "enter");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        assert!(
+            crate::view::test_support::popover_is_open(view.read(app), app),
+            "Enter on the shared titlebar Button should open the app menu"
+        );
+    });
+
+    simulate_key_press(cx, "escape");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        assert!(
+            !crate::view::test_support::popover_is_open(view.read(app), app),
+            "Escape should close the keyboard-opened app menu"
+        );
+        assert!(
+            app_menu_focus.is_focused(window),
+            "closing the app menu should restore focus to its shared Button"
         );
     });
 }

@@ -174,6 +174,9 @@ pub(in super::super) struct PopoverHost {
     /// opens; drafts are intentionally session-local.
     cherry_pick_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
+    /// Focus held by the App/Add Repository menu invoker, restored when that
+    /// menu is dismissed without replacing it with another prompt.
+    menu_invoker_focus: Option<FocusHandle>,
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
@@ -337,7 +340,9 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
 fn popover_is_context_menu(kind: &PopoverKind) -> bool {
     matches!(
         kind,
-        PopoverKind::PullPicker
+        PopoverKind::AppMenu
+            | PopoverKind::AddRepoMenu
+            | PopoverKind::PullPicker
             | PopoverKind::PushPicker
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
@@ -1485,6 +1490,7 @@ impl PopoverHost {
             popover_anchor: None,
             cherry_pick_mainline: None,
             context_menu_focus_handle,
+            menu_invoker_focus: None,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
@@ -1635,6 +1641,7 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
+        self.menu_invoker_focus = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
@@ -1756,6 +1763,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let menu_invoker_focus = self.menu_invoker_focus.take();
         let restore_diff_panel_focus = matches!(
             self.popover,
             Some(
@@ -1769,6 +1777,8 @@ impl PopoverHost {
         self.close_popover(cx);
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
+            window.focus(&focus, cx);
+        } else if let Some(focus) = menu_invoker_focus {
             window.focus(&focus, cx);
         }
     }
@@ -2706,6 +2716,12 @@ impl PopoverHost {
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
         }
+        self.menu_invoker_focus =
+            if matches!(&kind, PopoverKind::AppMenu | PopoverKind::AddRepoMenu) {
+                window.focused(cx)
+            } else {
+                None
+            };
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
             || matches!(
@@ -3819,8 +3835,9 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::AppMenu => app_menu::panel(self, cx),
-            PopoverKind::AddRepoMenu => add_repo_menu::panel(self, cx),
+            kind @ (PopoverKind::AppMenu | PopoverKind::AddRepoMenu) => {
+                self.context_menu_view(kind, cx)
+            }
             PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
                 rebase_onto_confirm::panel(self, repo_id, onto, cx)
             }

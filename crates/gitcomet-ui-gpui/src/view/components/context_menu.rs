@@ -5,7 +5,7 @@ use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, Rgba, SharedString, Stateful, WeakEntity, div, px};
 
 use super::control_height_md;
-use super::{TextTruncationProfile, TruncatedText, TruncatedTextTooltipMode};
+use super::{TextTruncationProfile, TruncatedText, TruncatedTextTooltipMode, shortcut_keys};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContextMenuText {
@@ -201,6 +201,7 @@ pub struct ContextMenuEntry {
     label: ContextMenuText,
     icon: ContextMenuIconSlot,
     shortcut: Option<SharedString>,
+    shortcut_keycaps: bool,
     selected: bool,
     disabled: bool,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
@@ -213,6 +214,7 @@ impl ContextMenuEntry {
             label: label.into(),
             icon: ContextMenuIconSlot::None,
             shortcut: None,
+            shortcut_keycaps: false,
             selected: false,
             disabled: false,
             tooltip_host: None,
@@ -226,6 +228,11 @@ impl ContextMenuEntry {
 
     pub fn shortcut(mut self, shortcut: Option<SharedString>) -> Self {
         self.shortcut = shortcut;
+        self
+    }
+
+    pub fn shortcut_keycaps(mut self, shortcut_keycaps: bool) -> Self {
+        self.shortcut_keycaps = shortcut_keycaps;
         self
     }
 
@@ -265,6 +272,7 @@ fn context_menu_entry<V: 'static>(
         label,
         icon,
         shortcut,
+        shortcut_keycaps,
         selected,
         disabled,
         tooltip_host,
@@ -361,7 +369,11 @@ fn context_menu_entry<V: 'static>(
         .text_color(theme.colors.text_muted);
 
     if let Some(shortcut) = shortcut {
-        end = end.child(shortcut);
+        end = if shortcut_keycaps {
+            end.child(shortcut_keys(shortcut.as_ref(), theme, ui_scale))
+        } else {
+            end.child(shortcut)
+        };
     }
     row = row.child(end);
 

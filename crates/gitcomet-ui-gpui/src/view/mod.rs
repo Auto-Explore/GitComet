@@ -1330,11 +1330,12 @@ impl GitCometView {
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
-        let title_bar = cx.new(|_cx| {
+        let title_bar = cx.new(|cx| {
             TitleBarView::new(
                 initial_theme,
                 weak_view.clone(),
                 titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
+                cx,
             )
         });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
