@@ -1062,7 +1062,12 @@ pub(super) struct HistoryStashIdsCache {
 impl GitCometView {
     #[cfg(any(test, feature = "benchmarks"))]
     pub(super) fn branch_sidebar_rows(repo: &RepoState) -> Vec<BranchSidebarRow> {
-        branch_sidebar::branch_sidebar_rows(repo, &std::collections::BTreeSet::new())
+        branch_sidebar::branch_sidebar_rows(
+            repo,
+            &std::collections::BTreeSet::new(),
+            &std::collections::BTreeSet::new(),
+            "",
+        )
     }
 
     #[cfg(test)]
@@ -1074,7 +1079,12 @@ impl GitCometView {
             .iter()
             .map(|item| (*item).to_string())
             .collect();
-        branch_sidebar::branch_sidebar_rows(repo, &collapsed_items)
+        branch_sidebar::branch_sidebar_rows(
+            repo,
+            &collapsed_items,
+            &std::collections::BTreeSet::new(),
+            "",
+        )
     }
 }
 

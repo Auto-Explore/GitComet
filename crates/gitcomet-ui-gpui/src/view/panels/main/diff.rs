@@ -688,6 +688,8 @@ impl MainPaneView {
 
                                     let columns_header = div()
                                         .id("diff_split_columns_header")
+                                        .debug_selector(|| "diff_split_columns_header".to_string())
+                                        .w_full()
                                         .h(components::control_height(ui_scale_percent))
                                         .flex()
                                         .items_center()
@@ -725,14 +727,15 @@ impl MainPaneView {
                                         .flex_col()
                                         .bg(theme.colors.window_bg)
                                         .font_family(editor_font_family.clone())
+                                        .child(columns_header)
                                         .child(
                                             div()
+                                                .relative()
                                                 .pr(shared_scrollbar_gutter)
                                                 .flex()
                                                 .flex_col()
-                                                .h_full()
+                                                .flex_1()
                                                 .min_h(px(0.0))
-                                                .child(columns_header)
                                                 .child(
                                                     div()
                                                         .flex_1()
@@ -833,19 +836,19 @@ impl MainPaneView {
                                                                     )
                                                                 }),
                                                         ),
-                                                ),
-                                        )
-                                        .when(vertical_sync_enabled, |d| {
-                                            d.child(
-                                                components::Scrollbar::new(
-                                                    "diff_scrollbar",
-                                                    self.diff_scroll.clone(),
                                                 )
-                                                .markers(markers)
-                                                .always_visible()
-                                                .render(theme),
-                                            )
-                                        })
+                                                .when(vertical_sync_enabled, |d| {
+                                                    d.child(
+                                                        components::Scrollbar::new(
+                                                            "diff_scrollbar",
+                                                            self.diff_scroll.clone(),
+                                                        )
+                                                        .markers(markers)
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    )
+                                                }),
+                                        )
                                         .into_any_element()
                                 }
                             }

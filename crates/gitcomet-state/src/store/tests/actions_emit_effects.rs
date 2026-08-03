@@ -980,7 +980,7 @@ fn rebase_emits_effect() {
 }
 
 #[test]
-fn create_and_delete_branch_emit_effects() {
+fn create_rename_and_delete_branch_emit_effects() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1009,6 +1009,25 @@ fn create_and_delete_branch_emit_effects() {
             name,
             target,
         }] if name == "feature" && target == "HEAD"
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RenameBranch {
+            repo_id: RepoId(1),
+            old_name: "feature".to_string(),
+            new_name: "renamed-feature".to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RenameBranch {
+            repo_id: RepoId(1),
+            old_name,
+            new_name,
+        }] if old_name == "feature" && new_name == "renamed-feature"
     ));
 
     let effects = reduce(
@@ -2929,6 +2948,73 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
             path: PathBuf::from("mods/sub"),
         })
     );
+}
+
+#[test]
+fn submodule_trust_check_pending_marks_and_clears_around_the_check() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+
+    // Triggering the add marks a pending check so the UI can show a spinner.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AddSubmodule {
+            repo_id,
+            url: "../local-sub".to_string(),
+            path: PathBuf::from("mods/sub"),
+            branch: None,
+            name: None,
+            force: false,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckSubmoduleAddTrust {
+            repo_id: RepoId(1),
+            ..
+        }]
+    ));
+    assert_eq!(
+        state.submodule_trust_check_pending,
+        Some(crate::model::SubmoduleTrustCheckState {
+            repo_id,
+            operation: crate::model::SubmoduleTrustCheckOperation::Add,
+        })
+    );
+
+    // The check resolving (here, into a prompt) clears the pending marker.
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::SubmoduleAddTrustChecked {
+            repo_id,
+            url: "../local-sub".to_string(),
+            path: PathBuf::from("mods/sub"),
+            branch: None,
+            name: None,
+            force: false,
+            result: Ok(gitcomet_core::services::SubmoduleTrustDecision::Prompt {
+                sources: vec![gitcomet_core::services::SubmoduleTrustTarget {
+                    submodule_path: PathBuf::from("mods/sub"),
+                    display_source: "../local-sub".to_string(),
+                    local_source_path: PathBuf::from("/tmp/local-sub"),
+                }],
+            }),
+        }),
+    );
+    assert!(state.submodule_trust_check_pending.is_none());
+    assert!(state.submodule_trust_prompt.is_some());
 }
 
 #[test]

@@ -679,7 +679,11 @@ impl MainPaneView {
                                 });
                             }
                         });
-                    } else if !markdown_preview_active && !self.is_file_preview_active() {
+                    // The markdown diff preview renders both layouts (see
+                    // `render_markdown_diff_preview`), so these switch it just
+                    // like the text diff. The single-pane file preview has no
+                    // old/new pair to split, so it stays excluded.
+                    } else if !self.is_file_preview_active() {
                         let new_mode = if key == "i" {
                             DiffViewMode::Inline
                         } else {
@@ -995,20 +999,31 @@ impl MainPaneView {
             .annotate_enabled
             .then(|| self.active_repo().map(|repo| &repo.history_state.blame))
             .flatten();
-        let (tooltip, errored): (SharedString, bool) = match blame_status {
-            Some(Loadable::Loading) => ("Loading blame…".into(), false),
-            Some(Loadable::Error(message)) => (
-                format!("Blame failed: {message}\nToggle off and on to retry").into(),
-                true,
-            ),
-            _ => (
-                format!(
-                    "Toggle blame annotations ({})",
-                    crate::view::shortcut_labels::alt_shortcut("B")
-                )
-                .into(),
+        // A rendered preview has no annotation gutter to draw into, so the
+        // toggle greys out there rather than silently doing nothing — matching
+        // Alt+B, which is inert for the same reason. Text mode still annotates.
+        let preview_blocks_blame = self.is_markdown_preview_active();
+        let (tooltip, errored): (SharedString, bool) = if preview_blocks_blame {
+            (
+                "Blame is unavailable in the rendered preview\nSwitch to Text to annotate".into(),
                 false,
-            ),
+            )
+        } else {
+            match blame_status {
+                Some(Loadable::Loading) => ("Loading blame…".into(), false),
+                Some(Loadable::Error(message)) => (
+                    format!("Blame failed: {message}\nToggle off and on to retry").into(),
+                    true,
+                ),
+                _ => (
+                    format!(
+                        "Toggle blame annotations ({})",
+                        crate::view::shortcut_labels::alt_shortcut("B")
+                    )
+                    .into(),
+                    false,
+                ),
+            }
         };
         let selected_bg = if errored {
             with_alpha(theme.colors.danger, if theme.is_dark { 0.30 } else { 0.20 })
@@ -1018,6 +1033,7 @@ impl MainPaneView {
         components::Button::new("diff_annotate", "Blame")
             .borderless()
             .style(components::ButtonStyle::Subtle)
+            .disabled(preview_blocks_blame)
             .selected(self.annotate_enabled)
             .selected_bg(selected_bg)
             .on_click(theme, cx, |this, _e, window, cx| {
@@ -2129,6 +2145,7 @@ impl MainPaneView {
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
                     .borderless()
+                    .rounded_left()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Inline)
                     .selected_bg(view_toggle_selected_bg)
@@ -2161,6 +2178,7 @@ impl MainPaneView {
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
                     .borderless()
+                    .rounded_right()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Split)
                     .selected_bg(view_toggle_selected_bg)
@@ -2196,6 +2214,7 @@ impl MainPaneView {
 
                 let view_toggle = div()
                     .id("diff_view_toggle")
+                    .debug_selector(|| "diff_view_toggle".to_string())
                     .flex()
                     .items_center()
                     .h(components::control_height(ui_scale_percent))
@@ -2204,7 +2223,6 @@ impl MainPaneView {
                     .border_color(view_toggle_border)
                     .bg(gpui::rgba(0x00000000))
                     .overflow_hidden()
-                    .p(px(1.0))
                     .child(diff_inline_btn)
                     .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
                     .child(diff_split_btn);
@@ -2338,6 +2356,8 @@ impl MainPaneView {
         }
 
         let header = div()
+            .debug_selector(|| "diff_file_header".to_string())
+            .w_full()
             .flex()
             .items_center()
             .justify_between()
@@ -2968,6 +2988,10 @@ impl MainPaneView {
 
                                             let columns_header = div()
                                                 .id("diff_split_columns_header")
+                                                .debug_selector(|| {
+                                                    "diff_split_columns_header".to_string()
+                                                })
+                                                .w_full()
                                                 .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
@@ -3007,14 +3031,15 @@ impl MainPaneView {
                                                 .flex_col()
                                                 .bg(theme.colors.window_bg)
                                                 .font_family(editor_font_family.clone())
+                                                .child(columns_header)
                                                 .child(
                                                     div()
+                                                        .relative()
                                                         .pr(shared_scrollbar_gutter)
                                                         .flex()
                                                         .flex_col()
-                                                        .h_full()
+                                                        .flex_1()
                                                         .min_h(px(0.0))
-                                                        .child(columns_header)
                                                         .child(
                                                             div()
                                                                 .flex_1()

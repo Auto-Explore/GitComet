@@ -12,6 +12,7 @@ impl GitCometView {
         let prev_banner_error = self.state.banner_error.clone();
         let prev_auth_prompt = self.state.auth_prompt.clone();
         let prev_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
+        let prev_submodule_trust_check = self.state.submodule_trust_check_pending.clone();
         let next_banner_error = next.banner_error.clone();
         let merge_view_active = active_merge_view_target(next.as_ref()).is_some();
         let mut follow_up_msgs = Vec::new();
@@ -154,6 +155,9 @@ impl GitCometView {
         }
 
         self.state = next;
+        self.command_palette.update(cx, |palette, cx| {
+            palette.set_has_active_repo(self.state.active_repo.is_some(), cx);
+        });
         match (self.sidebar_collapsed_before_merge_view, merge_view_active) {
             (None, true) => {
                 self.sidebar_collapsed_before_merge_view = Some(self.sidebar_collapsed);
@@ -180,6 +184,19 @@ impl GitCometView {
         }
         if prev_submodule_trust_prompt != self.state.submodule_trust_prompt {
             self.pending_submodule_trust_prompt = self.state.submodule_trust_prompt.clone();
+        }
+        if prev_submodule_trust_check != self.state.submodule_trust_check_pending {
+            // A newly-started check opens the spinner popover on the next render.
+            if self.state.submodule_trust_check_pending.is_some() {
+                self.pending_submodule_trust_check =
+                    self.state.submodule_trust_check_pending.clone();
+            } else if let Some(prev) = prev_submodule_trust_check.as_ref()
+                && self.state.submodule_trust_prompt.is_none()
+            {
+                // The check resolved without a prompt (silent proceed or error),
+                // so dismiss the spinner popover if it is still the one showing.
+                self.close_submodule_trust_spinner(prev.repo_id, cx);
+            }
         }
         if prev_had_repos && self.state.repos.is_empty() {
             self.popover_host

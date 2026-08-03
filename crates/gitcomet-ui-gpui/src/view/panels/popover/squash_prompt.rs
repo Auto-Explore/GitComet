@@ -10,8 +10,7 @@ pub(super) fn panel(
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
     // Recompute eligibility from live state each render: the selection or the
     // log may have changed while the prompt is open. Prefill of the inputs is
@@ -35,14 +34,7 @@ pub(super) fn panel(
             .flex()
             .flex_col()
             .w(scaled_px(420.0))
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .text_sm()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Squash commits"),
-            )
+            .child(popover_title("Squash commits"))
             .child(div().border_t_1().border_color(theme.colors.border))
             .child(
                 div()
@@ -94,14 +86,7 @@ pub(super) fn panel(
         .flex()
         .flex_col()
         .w(scaled_px(420.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child(format!("Squash {count} commits")),
-        )
+        .child(popover_title(format!("Squash {count} commits")))
         .child(div().border_t_1().border_color(theme.colors.border))
         .child(
             div()
@@ -147,33 +132,13 @@ pub(super) fn panel(
                         .child("Description"),
                 )
                 .child(
-                    div()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .child(
-                            restrict_scroll_to_vertical_axis(
-                                div()
-                                    .id("squash_description_scroll_surface")
-                                    .relative()
-                                    .w_full()
-                                    .min_w(px(0.0))
-                                    .max_h(scaled_px(180.0))
-                                    .pr(components::Scrollbar::visible_gutter(
-                                        description_scroll.clone(),
-                                        components::ScrollbarAxis::Vertical,
-                                    ))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&description_scroll),
-                            )
-                            .child(this.squash_description_input.clone()),
-                        )
-                        .child(
-                            components::Scrollbar::new(
-                                "squash_description_scrollbar",
-                                description_scroll,
-                            )
-                            .render(theme),
-                        ),
+                    components::ScrollContainer::vertical(
+                        "squash_description_scroll_surface",
+                        "squash_description_scrollbar",
+                        description_scroll,
+                        scaled_px(180.0),
+                    )
+                    .render(theme, this.squash_description_input.clone()),
                 ),
         )
         .when_some(message_hint, |el, hint| {

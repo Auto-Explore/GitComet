@@ -248,6 +248,7 @@ mod tests {
                     load_file_text: true,
                     load_file_image: false,
                     preview_text_side: None,
+                    load_submodule_summary: false,
                 }]
             ));
             assert_eq!(state.repos[0].diff_state.diff_target, Some(target.clone()));

@@ -1,6 +1,5 @@
 use crate::app::{
-    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRecentPicker, OpenRepository,
-    ResetUiScale,
+    CloseWindow, DecreaseUiScale, IncreaseUiScale, NewWindow, OpenRepository, ResetUiScale,
 };
 use crate::kit::{Scrollbar, ScrollbarAxis};
 use crate::theme::AppTheme;
@@ -217,7 +216,9 @@ pub use mod_helpers::{
 };
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 pub(crate) use panes::MainPaneView;
-use panes::{DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView};
+use panes::{
+    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryView, SidebarPaneView,
+};
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;
 use tooltip::GitCometTooltipExt;
@@ -257,6 +258,8 @@ const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const PANE_COLLAPSED_PX: f32 = 34.0;
 const PANE_COLLAPSE_ANIM_MS: u64 = 120;
+/// Fade-in/out duration for the collapsed-sidebar section popover.
+const COLLAPSED_POPOVER_FADE_MS: u64 = 110;
 const SIDEBAR_MIN_PX: f32 = 200.0;
 const DETAILS_MIN_PX: f32 = 280.0;
 const MAIN_MIN_PX: f32 = 280.0;
@@ -406,14 +409,6 @@ impl Element for UiScaleScrollCapture {
     }
 }
 
-pub(in crate::view) fn pane_resize_handles_width(
-    sidebar_collapsed: bool,
-    details_collapsed: bool,
-) -> Pixels {
-    let visible_handles = u8::from(!sidebar_collapsed).saturating_add(u8::from(!details_collapsed));
-    px(f32::from(visible_handles) * PANE_RESIZE_HANDLE_PX)
-}
-
 fn active_diff_target(state: &AppState) -> Option<(RepoId, DiffTarget)> {
     let repo_id = state.active_repo?;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
@@ -464,13 +459,13 @@ pub(in crate::view) fn pane_resize_drag_width_bounds_for_other_pane(
     other_width: Pixels,
     other_collapsed: bool,
     total_w: Pixels,
-    sidebar_collapsed: bool,
-    details_collapsed: bool,
+    _sidebar_collapsed: bool,
+    _details_collapsed: bool,
 ) -> (Pixels, Pixels) {
-    let handles_w = pane_resize_handles_width(sidebar_collapsed, details_collapsed);
     let main_min = px(MAIN_MIN_PX);
     let collapsed_w = px(PANE_COLLAPSED_PX);
-    let available_w = total_w - main_min - handles_w;
+    // Both pane resize handles overlay their boundaries and consume no layout width.
+    let available_w = total_w - main_min;
     let other_width = if other_collapsed {
         collapsed_w
     } else {
@@ -569,6 +564,23 @@ impl GitCometView {
         });
     }
 
+    /// Close the submodule trust popover only while it is showing its pending
+    /// spinner for `repo_id` (no trust prompt yet). Used when a background trust
+    /// check resolves to a silent proceed or an error, so the spinner does not
+    /// linger. A no-op if the user already dismissed it or another popover is up.
+    pub(in crate::view) fn close_submodule_trust_spinner(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let kind = PopoverKind::submodule(repo_id, SubmodulePopoverKind::TrustConfirm);
+        self.popover_host.update(cx, |host, cx| {
+            if host.is_kind_open(&kind) {
+                host.close_popover(cx);
+            }
+        });
+    }
+
     pub(in crate::view) fn open_popover_centered(
         &mut self,
         kind: PopoverKind,
@@ -597,175 +609,32 @@ impl GitCometView {
 
     fn open_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
         self.command_palette_open = true;
-        self.command_palette_subscription = None;
-        self.command_palette.restore_focus = window
+        let restore_focus = window
             .focused(cx)
             .or_else(|| self.pre_palette_focus.clone());
-
-        let theme = self.theme;
-        let query_input = cx.new(|cx| {
-            let mut input = components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Type to search commands...".into(),
-                    ..Default::default()
-                },
-                window,
-                cx,
-            );
-            input.set_theme(theme, cx);
-            input
-        });
-
-        self.command_palette_subscription =
-            Some(
-                cx.observe_in(&query_input, window, move |this, input, window, cx| {
-                    if !this.command_palette_open {
-                        return;
-                    }
-                    let escape_pressed = input.update(cx, |input, _| input.take_escape_pressed());
-                    if escape_pressed {
-                        this.close_command_palette(window, cx);
-                        return;
-                    }
-
-                    let query = input.read_with(cx, |input, _| input.text().trim().to_string());
-                    let has_repo = this.active_repo_id().is_some();
-                    let matches = this.command_palette.filtered_commands(has_repo, &query);
-
-                    let arrow_up = input.update(cx, |input, _| input.take_arrow_up_pressed());
-                    let shift_tab = input.update(cx, |input, _| input.take_shift_tab_pressed());
-                    if arrow_up || shift_tab {
-                        if matches.is_empty() {
-                            this.command_palette.selected_index = None;
-                        } else {
-                            let len = matches.len();
-                            this.command_palette.selected_index =
-                                Some(match this.command_palette.selected_index {
-                                    Some(i) if i > 0 => i - 1,
-                                    _ => len - 1,
-                                });
-                        }
-                        if let Some(sel) = this.command_palette.selected_index {
-                            let mut headers_before = 0usize;
-                            let mut cur = None;
-                            for cmd in matches.iter().take(sel.saturating_add(1)) {
-                                if cur != Some(cmd.category) {
-                                    cur = Some(cmd.category);
-                                    headers_before += 1;
-                                }
-                            }
-                            this.command_palette
-                                .scroll_handle
-                                .scroll_to_item(sel + headers_before);
-                        }
-                        cx.notify();
-                        return;
-                    }
-
-                    let arrow_down = input.update(cx, |input, _| input.take_arrow_down_pressed());
-                    let tab = input.update(cx, |input, _| input.take_tab_pressed());
-                    if arrow_down || tab {
-                        if matches.is_empty() {
-                            this.command_palette.selected_index = None;
-                        } else {
-                            let len = matches.len();
-                            this.command_palette.selected_index =
-                                Some(match this.command_palette.selected_index {
-                                    Some(i) if i + 1 < len => i + 1,
-                                    _ => 0,
-                                });
-                        }
-                        if let Some(sel) = this.command_palette.selected_index {
-                            let mut headers_before = 0usize;
-                            let mut cur = None;
-                            for cmd in matches.iter().take(sel.saturating_add(1)) {
-                                if cur != Some(cmd.category) {
-                                    cur = Some(cmd.category);
-                                    headers_before += 1;
-                                }
-                            }
-                            this.command_palette
-                                .scroll_handle
-                                .scroll_to_item(sel + headers_before);
-                        }
-                        cx.notify();
-                        return;
-                    }
-
-                    let enter_pressed = input.update(cx, |input, _| input.take_enter_pressed());
-                    if enter_pressed {
-                        let cmd_to_execute = this
-                            .command_palette
-                            .selected_index
-                            .and_then(|i| matches.get(i))
-                            .or_else(|| matches.first());
-                        if let Some(cmd) = cmd_to_execute {
-                            let command_id: SharedString = cmd.id.into();
-                            this.close_command_palette(window, cx);
-                            this.execute_command(&command_id, Some(window), cx);
-                        } else {
-                            cx.notify();
-                        }
-                        return;
-                    }
-
-                    if query != this.command_palette.previous_query.as_ref() {
-                        this.command_palette.selected_index =
-                            if matches.is_empty() { None } else { Some(0) };
-                        this.command_palette.previous_query = query.into();
-                        this.command_palette
-                            .scroll_handle
-                            .set_offset(point(px(0.0), px(0.0)));
-                    }
-                    cx.notify();
-                }),
-            );
-
-        self.command_palette.query_input = Some(query_input.clone());
-        self.command_palette.selected_index = None;
-        self.command_palette.previous_query = SharedString::default();
-        self.command_palette
-            .scroll_handle
-            .set_offset(point(px(0.0), px(0.0)));
-
-        let focus_handle = query_input.read_with(cx, |input, _| input.focus_handle());
-        window.focus(&focus_handle, cx);
-        cx.notify();
-    }
-
-    fn restore_command_palette_focus(
-        &self,
-        restore_focus: Option<FocusHandle>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
         let fallback_focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
-        if let Some(focus) = restore_focus {
-            window.focus(&focus, cx);
-        } else {
-            window.focus(&fallback_focus, cx);
-        }
+        let has_active_repo = self.active_repo_id().is_some();
+        self.command_palette.update(cx, |palette, cx| {
+            palette.open(restore_focus, fallback_focus, has_active_repo, window, cx);
+        });
     }
 
     fn close_command_palette(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
-        let palette_focus = self
-            .command_palette
-            .query_input
-            .as_ref()
-            .map(|input| input.read(cx).focus_handle());
-        let mut restore_focus = self.command_palette.restore_focus.take();
-        if restore_focus
-            .as_ref()
-            .zip(palette_focus.as_ref())
-            .is_some_and(|(restore_focus, palette_focus)| restore_focus == palette_focus)
-        {
-            restore_focus = None;
-        }
         self.command_palette_open = false;
-        self.command_palette_subscription = None;
-        self.command_palette.query_input = None;
-        self.restore_command_palette_focus(restore_focus, window, cx);
-        cx.notify();
+        self.command_palette
+            .update(cx, |palette, cx| palette.close(window, cx));
+    }
+
+    fn command_palette_did_close(
+        &mut self,
+        command: Option<&str>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.command_palette_open = false;
+        if let Some(command) = command {
+            self.execute_command(command, Some(window), cx);
+        }
     }
 
     pub(crate) fn toggle_command_palette(
@@ -778,253 +647,6 @@ impl GitCometView {
         } else {
             self.open_command_palette(window, cx);
         }
-    }
-
-    fn render_command_palette(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
-        let theme = self.theme;
-        let Some(ref query_input) = self.command_palette.query_input else {
-            return div().into_any_element();
-        };
-        if !self.command_palette_open {
-            return div().into_any_element();
-        }
-        let ui_scale = ui_scale::UiScale::current(cx);
-        let scaled_px = |value: f32| ui_scale.px(value);
-        let palette_width = scaled_px(560.0);
-        let palette_max_height = scaled_px(400.0);
-        let top_offset = scaled_px(80.0);
-        let item_height = scaled_px(32.0);
-
-        let query = query_input.read_with(cx, |input, _| input.text().trim().to_string());
-        let has_repo = self.active_repo_id().is_some();
-        let commands = self.command_palette.filtered_commands(has_repo, &query);
-
-        let mut list = div()
-            .id("command_palette_list")
-            .flex()
-            .flex_col()
-            .max_h(palette_max_height - item_height)
-            .overflow_y_scroll()
-            .track_scroll(&self.command_palette.scroll_handle)
-            .gap(px(0.0))
-            .items_start();
-        list = restrict_scroll_to_vertical_axis(list);
-        let selected_index = self.command_palette.selected_index;
-
-        let render_label = |label_str: &str, positions: &[usize]| -> AnyElement {
-            let label = label_str.to_string();
-            let highlight = gpui::HighlightStyle {
-                color: Some(theme.colors.accent.into()),
-                font_weight: Some(FontWeight::BOLD),
-                ..gpui::HighlightStyle::default()
-            };
-            // Merge the fuzzy matcher's per-character hits into contiguous
-            // highlight ranges.
-            let mut ranges: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = Vec::new();
-            for &pos in positions {
-                match ranges.last_mut() {
-                    Some((range, _)) if range.end == pos => range.end = pos + 1,
-                    _ => ranges.push((pos..pos + 1, highlight)),
-                }
-            }
-            let focus_range = ranges.first().map(|(range, _)| range.clone());
-            let mut text = components::TruncatedText::new(label)
-                .profile(components::TextTruncationProfile::End)
-                .text_color(theme.colors.text)
-                .text_sm();
-            if let Some(focus_range) = focus_range {
-                text = text.focus_range(Some(focus_range));
-            }
-            if ranges.is_empty() {
-                text = text.highlights([(0..0, highlight)]);
-            } else {
-                text = text.highlights(ranges);
-            }
-            text.render(cx).into_any_element()
-        };
-
-        let mut current_category = None;
-
-        for (i, cmd) in commands.iter().enumerate() {
-            if current_category != Some(cmd.category) {
-                current_category = Some(cmd.category);
-                list = list.child(
-                    div()
-                        .h(item_height)
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px_2()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.colors.text_muted)
-                        .child(cmd.category.to_string()),
-                );
-            }
-
-            // Text-alpha overlays keep the highlight visible on the elevated
-            // palette surface, unlike the canvas-tuned hover token.
-            let hover_overlay =
-                with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-            let selected_overlay =
-                with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
-            let label_row = div()
-                .h(item_height)
-                .w_full()
-                .flex()
-                .items_center()
-                .justify_between()
-                .px_2()
-                .rounded(px(theme.radii.row))
-                .hover(move |s| s.bg(hover_overlay))
-                .cursor(CursorStyle::PointingHand);
-
-            let label_row = if selected_index == Some(i) {
-                label_row.bg(selected_overlay)
-            } else {
-                label_row
-            };
-
-            let cmd_id: SharedString = cmd.id.into();
-            let cmd_id_for_click = cmd_id.clone();
-
-            let label_row = if let Some(shortcut_text) = cmd.shortcut.label() {
-                label_row
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(4.0))
-                            .overflow_hidden()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .child(render_label(cmd.label, &cmd.positions)),
-                    )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(shortcut_text),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                            this.close_command_palette(window, cx);
-                            this.execute_command(&cmd_id_for_click, Some(window), cx);
-                        }),
-                    )
-            } else {
-                label_row
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(render_label(cmd.label, &cmd.positions)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                            this.close_command_palette(window, cx);
-                            this.execute_command(&cmd_id, Some(window), cx);
-                        }),
-                    )
-            };
-
-            list = list.child(label_row);
-        }
-
-        if commands.is_empty() && !query.is_empty() {
-            list = list.child(
-                div()
-                    .h(item_height)
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .px_2()
-                    .text_sm()
-                    .text_color(theme.colors.text_muted)
-                    .child("No matching commands"),
-            );
-        }
-
-        let scrollbar_gutter = Scrollbar::visible_gutter(
-            self.command_palette.scroll_handle.clone(),
-            ScrollbarAxis::Vertical,
-        );
-        let list = list.pr(scrollbar_gutter);
-        let scrollbar = Scrollbar::new(
-            "command_palette_scrollbar",
-            self.command_palette.scroll_handle.clone(),
-        )
-        .render(theme);
-
-        let palette_body = div()
-            .rounded(px(theme.radii.popover))
-            .bg(theme.colors.surface_bg_elevated)
-            .border_1()
-            .border_color(theme.colors.border)
-            .shadow(crate::theme::shadow_modal(theme))
-            .overflow_hidden()
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .border_b_1()
-                    .border_color(theme.colors.border_variant)
-                    .child(query_input.clone()),
-            )
-            .child(
-                div()
-                    .id("command_palette_list_container")
-                    .relative()
-                    .w_full()
-                    .min_w(px(0.0))
-                    .child(list)
-                    .child(scrollbar),
-            );
-
-        let scrim = div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .bg(with_alpha(
-                theme.colors.shadow,
-                if theme.is_dark { 0.35 } else { 0.22 },
-            ))
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _: &MouseDownEvent, window, cx| {
-                    this.close_command_palette(window, cx);
-                }),
-            );
-
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .child(scrim)
-            .child(
-                div()
-                    .absolute()
-                    .top(top_offset)
-                    .left_0()
-                    .w_full()
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .w(palette_width)
-                            .max_w(palette_width)
-                            .child(palette_body),
-                    ),
-            )
-            .into_any_element()
     }
 
     fn execute_command(
@@ -1057,7 +679,11 @@ impl GitCometView {
             "reset-ui-scale" => cx.defer(|cx| cx.dispatch_action(&ResetUiScale)),
             "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
             "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
-            "open-recent" => cx.defer(|cx| cx.dispatch_action(&OpenRecentPicker)),
+            "switch-repository" => {
+                if let Some(window) = window {
+                    self.open_repository_switcher_centered(window, cx);
+                }
+            }
             "clone-repository" => {
                 if let Some(window) = window {
                     self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
@@ -1149,6 +775,32 @@ impl GitCometView {
                     self.open_popover_centered(
                         PopoverKind::BranchPicker {
                             purpose: BranchPickerPurpose::Delete,
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            }
+            "rename-branch" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                    && let Some(name) = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .and_then(|repo| match &repo.head_branch {
+                            Loadable::Ready(name) if name != "HEAD" && !name.is_empty() => {
+                                Some(name.clone())
+                            }
+                            _ => None,
+                        })
+                {
+                    self.open_popover_centered(
+                        PopoverKind::RenameBranchPrompt {
+                            repo_id,
+                            name,
+                            is_current_branch: true,
                         },
                         window,
                         cx,
@@ -1378,7 +1030,9 @@ impl GitCometView {
     /// Whether a popover, dialog, prompt, or context menu is currently open
     /// (all are tracked as a `PopoverKind` by the popover host).
     pub(in crate::view) fn is_overlay_open(&self, cx: &App) -> bool {
-        self.popover_host.read(cx).is_open()
+        // The collapsed-sidebar section popover covers the history view too, so it
+        // must suppress ref hovers the same way the popover host does.
+        self.popover_host.read(cx).is_open() || self.sidebar_collapsed_popover.is_some()
     }
 
     pub(in crate::view) fn show_history_refs_hover(
@@ -1564,6 +1218,7 @@ impl GitCometView {
 
         let restored_sidebar_width = ui_session.sidebar_width;
         let restored_details_width = ui_session.details_width;
+        let restored_sidebar_collapsed = ui_session.sidebar_collapsed.unwrap_or(false);
         let _ = crate::theme::ensure_user_themes_dir_exists();
         let theme_mode = ui_session
             .theme_mode
@@ -1698,11 +1353,12 @@ impl GitCometView {
         let weak_view = cx.weak_entity();
         let poller = Poller::start(Arc::clone(&store), events, ui_model.downgrade(), window, cx);
 
-        let title_bar = cx.new(|_cx| {
+        let title_bar = cx.new(|cx| {
             TitleBarView::new(
                 initial_theme,
                 weak_view.clone(),
                 titlebar_workspace_actions_enabled(view_mode, !initial_state.repos.is_empty()),
+                cx,
             )
         });
         let tooltip_host = cx.new(|_cx| TooltipHost::new(initial_theme));
@@ -1736,6 +1392,7 @@ impl GitCometView {
                 ui_model.clone(),
                 initial_theme,
                 ui_session.repo_sidebar_collapsed_items.clone(),
+                ui_session.repo_sidebar_pinned_branches.clone(),
                 weak_view.clone(),
                 tooltip_host.downgrade(),
                 cx,
@@ -1825,21 +1482,26 @@ impl GitCometView {
                 diff_word_wrap,
                 diff_show_line_numbers,
                 weak_view.clone(),
+                view_mode,
                 tooltip_host.downgrade(),
                 main_pane.clone(),
                 details_pane.clone(),
+                sidebar_pane.clone(),
+                ui_session.repo_sidebar_pinned_branches.clone(),
                 window,
                 cx,
             )
         });
 
-        let command_palette = command_palette::CommandPaletteState {
-            query_input: None,
-            restore_focus: None,
-            scroll_handle: ScrollHandle::new(),
-            selected_index: None,
-            previous_query: SharedString::default(),
-        };
+        let command_palette = cx.new(|cx| {
+            command_palette::CommandPaletteView::new(
+                initial_theme,
+                initial_state.active_repo.is_some(),
+                weak_view.clone(),
+                window,
+                cx,
+            )
+        });
 
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
@@ -1998,6 +1660,13 @@ impl GitCometView {
                 .max(DETAILS_MIN_PX);
         let initial_sidebar_width = scale.px(initial_sidebar_width_design);
         let initial_details_width = scale.px(initial_details_width_design);
+        // Reopen collapsed if the user quit while collapsed: the render width must
+        // also start at the collapsed strip so it doesn't flash open on launch.
+        let initial_sidebar_render_width = if restored_sidebar_collapsed {
+            scale.px(PANE_COLLAPSED_PX)
+        } else {
+            initial_sidebar_width
+        };
 
         let terminal_keystroke_interceptor = Self::install_terminal_keystroke_interceptor(cx);
 
@@ -2030,7 +1699,6 @@ impl GitCometView {
             popover_host,
             command_palette,
             command_palette_open: false,
-            command_palette_subscription: None,
             pre_palette_focus: None,
             focused_mergetool_bootstrap,
             submodule_diff_bootstrap: None,
@@ -2069,14 +1737,17 @@ impl GitCometView {
             open_repo_panel: false,
             open_repo_input,
             hover_resize_edge: None,
-            sidebar_collapsed: false,
+            sidebar_collapsed: restored_sidebar_collapsed,
+            sidebar_collapsed_popover: None,
+            sidebar_collapsed_popover_closing: None,
+            sidebar_collapsed_popover_anim_seq: 0,
             sidebar_collapsed_before_merge_view: None,
             details_collapsed: false,
             sidebar_width_design: initial_sidebar_width_design,
             details_width_design: initial_details_width_design,
             sidebar_width: initial_sidebar_width,
             details_width: initial_details_width,
-            sidebar_render_width: initial_sidebar_width,
+            sidebar_render_width: initial_sidebar_render_width,
             details_render_width: initial_details_width,
             sidebar_width_anim_seq: 0,
             details_width_anim_seq: 0,
@@ -2091,6 +1762,7 @@ impl GitCometView {
             pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
+            pending_submodule_trust_check: None,
             pending_worktree_branch_removals: HashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
@@ -2160,9 +1832,8 @@ impl GitCometView {
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
-        if let Some(ref query_input) = self.command_palette.query_input {
-            query_input.update(cx, |input, cx| input.set_theme(theme, cx));
-        }
+        self.command_palette
+            .update(cx, |palette, cx| palette.set_theme(theme, cx));
         self.open_repo_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.error_banner_input
@@ -2688,8 +2359,51 @@ impl GitCometView {
         });
     }
 
-    fn ease_out_cubic(t: f32) -> f32 {
-        1.0 - (1.0 - t).powi(3)
+    /// Evaluate a CSS-style `cubic-bezier(x1, y1, x2, y2)` timing function at
+    /// progress `t` in `[0, 1]`. Endpoints P0=(0,0) and P3=(1,1) are implicit.
+    ///
+    /// The curve is parametric in `s`, so for a given time `t` we first solve
+    /// `bezier_x(s) = t` (a few Newton-Raphson steps — the x-curve is monotonic
+    /// for the control points we use) and then read off `bezier_y(s)`.
+    fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, t: f32) -> f32 {
+        if t <= 0.0 {
+            return 0.0;
+        }
+        if t >= 1.0 {
+            return 1.0;
+        }
+
+        // B(s) = 3(1-s)^2 s c1 + 3(1-s) s^2 c2 + s^3, with c0 = 0, c3 = 1.
+        let bezier = |c1: f32, c2: f32, s: f32| {
+            let inv = 1.0 - s;
+            3.0 * inv * inv * s * c1 + 3.0 * inv * s * s * c2 + s * s * s
+        };
+        // B'(s) = 3(1-s)^2 c1 + 6(1-s) s (c2 - c1) + 3 s^2 (1 - c2).
+        let bezier_prime = |c1: f32, c2: f32, s: f32| {
+            let inv = 1.0 - s;
+            3.0 * inv * inv * c1 + 6.0 * inv * s * (c2 - c1) + 3.0 * s * s * (1.0 - c2)
+        };
+
+        let mut s = t;
+        for _ in 0..8 {
+            let x = bezier(x1, x2, s) - t;
+            if x.abs() < 1e-4 {
+                break;
+            }
+            let dx = bezier_prime(x1, x2, s);
+            if dx.abs() < 1e-6 {
+                break;
+            }
+            s = (s - x / dx).clamp(0.0, 1.0);
+        }
+
+        bezier(y1, y2, s)
+    }
+
+    /// Easing for pane collapse/expand: a "fast-out, slow-in" cubic bezier
+    /// (the Material standard curve) that reads smoothly in both directions.
+    fn pane_collapse_ease(t: f32) -> f32 {
+        Self::cubic_bezier(0.4, 0.0, 0.2, 1.0, t)
     }
 
     fn animate_sidebar_render_width_to(&mut self, target: Pixels, cx: &mut gpui::Context<Self>) {
@@ -2726,7 +2440,7 @@ impl GitCometView {
                     t = 1.0;
                 }
                 let t = t.clamp(0.0, 1.0);
-                let eased = Self::ease_out_cubic(t);
+                let eased = Self::pane_collapse_ease(t);
                 let mut done = t >= 1.0;
 
                 let _ = view.update(cx, |this, cx| {
@@ -2796,7 +2510,7 @@ impl GitCometView {
                     t = 1.0;
                 }
                 let t = t.clamp(0.0, 1.0);
-                let eased = Self::ease_out_cubic(t);
+                let eased = Self::pane_collapse_ease(t);
                 let mut done = t >= 1.0;
 
                 let _ = view.update(cx, |this, cx| {
@@ -2838,6 +2552,15 @@ impl GitCometView {
         }
 
         self.sidebar_collapsed = collapsed;
+        // The collapsed-rail popover only exists while collapsed; drop it (and any
+        // in-flight fade) instantly when the full sidebar comes back so it can't
+        // linger over the expanded pane.
+        if !collapsed {
+            self.sidebar_collapsed_popover = None;
+            self.sidebar_collapsed_popover_closing = None;
+            self.sidebar_collapsed_popover_anim_seq =
+                self.sidebar_collapsed_popover_anim_seq.wrapping_add(1);
+        }
         if matches!(
             self.pane_resize,
             Some(PaneResizeState {
@@ -2848,6 +2571,13 @@ impl GitCometView {
             self.pane_resize = None;
         }
         if !collapsed {
+            // Mark the sidebar as animating before clamping: the width reconcile
+            // in `clamp_pane_widths_to_window` snaps `sidebar_render_width` to the
+            // target whenever it isn't animating, which would collapse the open
+            // animation to a single frame (start == target). With the flag set it
+            // preserves the current (collapsed) render width so the animation below
+            // can grow it out.
+            self.sidebar_width_animating = true;
             self.clamp_pane_widths_to_window();
         }
 
@@ -2857,7 +2587,77 @@ impl GitCometView {
             self.sidebar_width
         };
         self.animate_sidebar_render_width_to(target, cx);
+        // Persist so the sidebar reopens in the same state next launch.
+        self.schedule_ui_settings_persist(cx);
         cx.notify();
+    }
+
+    /// Toggle the collapsed-sidebar popover for `section`. Clicking the icon of
+    /// the open section closes it; clicking a different one switches to it and
+    /// triggers any lazy data load that section needs.
+    pub(in crate::view) fn toggle_sidebar_collapsed_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.sidebar_collapsed_popover == Some(section) {
+            self.close_sidebar_collapsed_popover(cx);
+        } else {
+            self.open_sidebar_collapsed_popover(section, cx);
+        }
+    }
+
+    fn open_sidebar_collapsed_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.sidebar_collapsed_popover = Some(section);
+        self.sidebar_collapsed_popover_closing = None;
+        self.sidebar_collapsed_popover_anim_seq =
+            self.sidebar_collapsed_popover_anim_seq.wrapping_add(1);
+        self.sidebar_pane.update(cx, |pane, cx| {
+            pane.ensure_collapsed_section_data(section, cx);
+        });
+        cx.notify();
+    }
+
+    /// Begin dismissing the popover: hand the section to `..._closing` so it stays
+    /// mounted for the fade-out, then clear it after the fade with a seq-guarded
+    /// timer so a fresh open during the fade isn't clobbered.
+    pub(in crate::view) fn close_sidebar_collapsed_popover(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(section) = self.sidebar_collapsed_popover.take() else {
+            return;
+        };
+        self.sidebar_collapsed_popover_closing = Some(section);
+        self.sidebar_collapsed_popover_anim_seq =
+            self.sidebar_collapsed_popover_anim_seq.wrapping_add(1);
+        let seq = self.sidebar_collapsed_popover_anim_seq;
+        cx.notify();
+
+        // Time the fade-out on the app's executor rather than a bare
+        // `smol::Timer`, which would arm the global reactor and fire on its own
+        // thread — deterministic under test, identical in the running app.
+        let fade_out = cx
+            .background_executor()
+            .timer(Duration::from_millis(COLLAPSED_POPOVER_FADE_MS));
+        cx.spawn(
+            async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
+                fade_out.await;
+                let _ = view.update(cx, |this, cx| {
+                    if this.sidebar_collapsed_popover_anim_seq == seq
+                        && this.sidebar_collapsed_popover_closing.is_some()
+                    {
+                        this.sidebar_collapsed_popover_closing = None;
+                        cx.notify();
+                    }
+                });
+            },
+        )
+        .detach();
     }
 
     fn set_details_collapsed(&mut self, collapsed: bool, cx: &mut gpui::Context<Self>) {
@@ -2876,6 +2676,10 @@ impl GitCometView {
             self.pane_resize = None;
         }
         if !collapsed {
+            // Same reasoning as the sidebar: flag the animation before clamping so
+            // the width reconcile preserves the collapsed render width instead of
+            // snapping to the target and cancelling the open animation.
+            self.details_width_animating = true;
             self.clamp_pane_widths_to_window();
         }
 
@@ -2910,6 +2714,7 @@ impl GitCometView {
         let dragging = self.pane_resize.is_some_and(|state| state.handle == handle);
         div()
             .id(id)
+            .debug_selector(move || id.to_string())
             .group(id)
             .w(self.pane_resize_handle_width())
             .h_full()
@@ -3394,6 +3199,12 @@ impl GitCometView {
 
     #[cfg(test)]
     #[allow(dead_code)]
+    pub(crate) fn tooltip_host_for_test(&self) -> Entity<TooltipHost> {
+        self.tooltip_host.clone()
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn tooltip_text_for_test(&self, app: &App) -> Option<SharedString> {
         self.tooltip_host
             .read(app)
@@ -3530,6 +3341,21 @@ impl Render for GitCometView {
                     path,
                     branch,
                 },
+                self.last_mouse_pos,
+                window,
+                cx,
+            );
+        }
+
+        // A trust check just started: open the trust popover immediately in its
+        // pending/spinner state so there is no dead gap while the background
+        // check runs. It fills in with the real sources (or is closed on a
+        // silent proceed) when the check resolves — see `apply_state_snapshot`.
+        if let Some(check) = self.pending_submodule_trust_check.take()
+            && self.active_repo_id() == Some(check.repo_id)
+        {
+            self.open_popover_at(
+                PopoverKind::submodule(check.repo_id, SubmodulePopoverKind::TrustConfirm),
                 self.last_mouse_pos,
                 window,
                 cx,
@@ -4079,7 +3905,7 @@ impl Render for GitCometView {
             .top_0()
             .left_0()
             .size_full()
-            .child(self.render_command_palette(cx))
+            .child(self.command_palette.clone())
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_overlay_view(self.toast_host.clone()))

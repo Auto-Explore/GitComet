@@ -32,12 +32,21 @@ pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.10 })
 }
 
-pub(in crate::view) fn selected_branch_history_entry_text(
+/// Which ref a history row should mark as the one the sidebar selected.
+/// Carries the branch identity rather than its rendered label: the same branch
+/// is drawn as `main` or `HEAD → main` depending on the row, so matching on
+/// display text silently missed whichever form the row happened to use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedHistoryBranch {
+    pub(in crate::view) section: BranchSection,
+    pub(in crate::view) name: SharedString,
+}
+
+pub(in crate::view) fn selected_branch_for_history_row(
     selected_branch: Option<&SelectedBranch>,
     repo_id: RepoId,
-    is_head: bool,
     selected: bool,
-) -> Option<SharedString> {
+) -> Option<SelectedHistoryBranch> {
     if !selected {
         return None;
     }
@@ -47,12 +56,10 @@ pub(in crate::view) fn selected_branch_history_entry_text(
         return None;
     }
 
-    match selected_branch.section {
-        BranchSection::Local if is_head => Some(format!("HEAD → {}", selected_branch.name).into()),
-        BranchSection::Local | BranchSection::Remote => {
-            Some(SharedString::from(selected_branch.name.clone()))
-        }
-    }
+    Some(SelectedHistoryBranch {
+        section: selected_branch.section,
+        name: SharedString::from(selected_branch.name.clone()),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3510,7 +3517,6 @@ impl AutosquashMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
-    RecentRepositoryPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,
     },
@@ -3518,6 +3524,11 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         target: String,
         source_selectable: bool,
+    },
+    RenameBranchPrompt {
+        repo_id: RepoId,
+        name: String,
+        is_current_branch: bool,
     },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
@@ -4566,10 +4577,8 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
-    pub(super) command_palette: super::command_palette::CommandPaletteState,
+    pub(super) command_palette: Entity<super::command_palette::CommandPaletteView>,
     pub(super) command_palette_open: bool,
-    #[allow(dead_code)]
-    pub(super) command_palette_subscription: Option<gpui::Subscription>,
     pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
@@ -4616,6 +4625,15 @@ pub struct GitCometView {
     pub(super) hover_resize_edge: Option<ResizeEdge>,
 
     pub(super) sidebar_collapsed: bool,
+    /// Which sidebar section is currently shown in the collapsed-rail popover, if
+    /// any. Only meaningful while `sidebar_collapsed` is true.
+    pub(super) sidebar_collapsed_popover: Option<CollapsedSidebarSection>,
+    /// A section whose popover is fading out. Kept mounted (invisible input) for
+    /// the fade-out duration, then cleared by a timer keyed on the anim seq.
+    pub(super) sidebar_collapsed_popover_closing: Option<CollapsedSidebarSection>,
+    /// Bumped on every open/close transition; keys the fade animation (so it
+    /// restarts each time) and guards the close timer against races.
+    pub(super) sidebar_collapsed_popover_anim_seq: u64,
     pub(super) sidebar_collapsed_before_merge_view: Option<bool>,
     pub(super) details_collapsed: bool,
     pub(super) sidebar_width_design: f32,
@@ -4640,6 +4658,8 @@ pub struct GitCometView {
         Option<(RepoId, std::path::PathBuf, Option<String>)>,
     pub(super) pending_submodule_trust_prompt:
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
+    pub(super) pending_submodule_trust_check:
+        Option<gitcomet_state::model::SubmoduleTrustCheckState>,
     pub(super) pending_worktree_branch_removals: HashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

@@ -6,6 +6,7 @@ fn annotated_toggle(
     focus_handle: &FocusHandle,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
+    let scaled_px = super::popover_scaled_px_fn(cx);
     let border = if enabled {
         theme.colors.success
     } else {
@@ -32,19 +33,19 @@ fn annotated_toggle(
     .justify_start()
     .child(
         div()
-            .size(px(16.0))
+            .size(scaled_px(16.0))
             .flex()
             .items_center()
             .justify_center()
             .border_1()
             .border_color(border)
-            .rounded(px(4.0))
+            .rounded(scaled_px(theme.radii.control * 0.5))
             .bg(background)
             .when(enabled, |this| {
                 this.child(crate::view::icons::svg_icon(
                     "icons/check.svg",
                     theme.colors.success,
-                    px(10.0),
+                    scaled_px(10.0),
                 ))
             }),
     )

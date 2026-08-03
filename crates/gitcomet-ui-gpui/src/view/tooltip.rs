@@ -170,6 +170,8 @@ impl GitCometView {
                             this.details_pane.read(cx).saved_status_section_heights();
                         let repo_sidebar_collapsed_items =
                             this.sidebar_pane.read(cx).saved_sidebar_collapsed_items();
+                        let repo_sidebar_pinned_branches =
+                            this.sidebar_pane.read(cx).saved_sidebar_pinned_branches();
                         let font_preferences = crate::font_preferences::current(cx);
 
                         let settings = session::UiSettings {
@@ -181,7 +183,9 @@ impl GitCometView {
                             details_width: ui_scale::stored_design_units(
                                 Some(this.ui_scale().design_units_from_pixels(this.details_width)),
                             ),
+                            sidebar_collapsed: Some(this.sidebar_collapsed),
                             repo_sidebar_collapsed_items: Some(repo_sidebar_collapsed_items),
+                            repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches),
                             theme_mode: Some(this.theme_mode.key().to_string()),
                             ui_scale_percent: Some(this.ui_scale_percent),
                             ui_font_family: Some(font_preferences.ui_font_family),
@@ -191,6 +195,8 @@ impl GitCometView {
                             timezone: Some(this.timezone.key()),
                             show_timezone: Some(this.show_timezone),
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
+                            // Owned by the repository picker, not this snapshot.
+                            repo_picker_sort: None,
                             diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
                             diff_content_mode: Some(this.diff_content_mode.key().to_string()),
                             diff_whitespace_mode: Some(

@@ -9,6 +9,9 @@ const SPLASH_BACKDROP_PNG_BYTES: &[u8] =
 /// rounded surfaces floating on the shared window canvas, with the sidebar
 /// blended into that canvas.
 const CONTENT_CARD_GAP_PX: f32 = 8.0;
+/// Bottom margin the main content card leaves for the bottom bar. The collapsed
+/// section popover matches it so its top/bottom gaps read symmetric.
+const CONTENT_CARD_BOTTOM_MARGIN_PX: f32 = 2.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 struct SplashInteractiveColors {
@@ -882,6 +885,170 @@ impl GitCometView {
             .into_any_element()
     }
 
+    /// The vertical icon rail shown in place of the sidebar while it is collapsed.
+    /// An expand affordance sits at the top; below it, one toggle per section that
+    /// opens that section in a floating popover without expanding the sidebar.
+    fn collapsed_sidebar_rail(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let active = self.sidebar_collapsed_popover;
+        let icon_muted = theme.colors.text_muted;
+        let active_bg = theme.active_overlay();
+        let hover_bg = theme.hover_overlay();
+        let slot = scaled_px(28.0);
+
+        let icons = CollapsedSidebarSection::ALL.into_iter().map(|section| {
+            let is_active = active == Some(section);
+            let icon_color = if is_active {
+                theme.colors.text
+            } else {
+                icon_muted
+            };
+            div()
+                .id(section.element_id())
+                .flex()
+                .items_center()
+                .justify_center()
+                .size(slot)
+                .rounded(px(theme.radii.control))
+                .cursor(CursorStyle::PointingHand)
+                .when(is_active, |d| d.bg(active_bg))
+                .hover(move |d| if is_active { d } else { d.bg(hover_bg) })
+                .child(svg_icon(section.icon_path(), icon_color, scaled_px(16.0)))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e, _window, cx| {
+                        this.toggle_sidebar_collapsed_popover(section, cx);
+                    }),
+                )
+                .gitcomet_tooltip(theme, section.title().into())
+        });
+
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .w_full()
+            .h_full()
+            .pt(scaled_px(6.0))
+            .gap(scaled_px(3.0))
+            .children(icons)
+            .into_any_element()
+    }
+
+    /// The floating panel next to the collapsed rail that hosts one section's
+    /// content. Painted deferred so it sits above the main content card, which is
+    /// a later sibling in the row.
+    /// Transparent, occluding scrim covering the content area to the right of the
+    /// rail; a mouse-down on it dismisses the popover. Must be added as a direct
+    /// child of the (relative) content row — absolute children anchor to their
+    /// direct parent — before the panel, so panel clicks never reach it. Starting
+    /// at the rail's right edge keeps the rail icons clickable.
+    fn collapsed_sidebar_popover_scrim(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
+        div()
+            .id("collapsed_sidebar_popover_scrim")
+            .absolute()
+            .left(self.sidebar_render_width)
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .occlude()
+            .on_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
+                this.close_sidebar_collapsed_popover(cx);
+            }))
+            .into_any_element()
+    }
+
+    /// The floating panel hosting one section's content. Added as a direct child of
+    /// the content row (after the scrim), so it anchors to the row and paints above
+    /// both the scrim and the main card, while staying below the context-menu layer.
+    fn collapsed_sidebar_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        theme: AppTheme,
+        fade_in: bool,
+        anim_seq: u64,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let panel = div()
+            .id("collapsed_sidebar_popover")
+            .debug_selector(|| "collapsed_sidebar_popover".to_string())
+            .w_full()
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(theme.colors.surface_bg_elevated)
+            .shadow_lg()
+            // Claim clicks anywhere on the panel so its empty regions don't fall
+            // through to the dismiss scrim underneath.
+            .occlude()
+            // `occlude` only hides the panes underneath from hitbox-driven
+            // handlers; the history and diff canvases install window-level mouse
+            // listeners that see every event regardless of what is painted over
+            // them. Rows claim their own right-click (they stop propagation), so
+            // this catches the gaps — the header, the padding, an empty section —
+            // which would otherwise open a commit menu through the popover. It
+            // opens the section's own menu instead, which is the only way to
+            // reach the worktree/stash/submodule section actions while collapsed.
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    let Some((invoker, kind)) = this
+                        .active_repo_id()
+                        .and_then(|repo_id| section.section_menu(repo_id))
+                    else {
+                        return;
+                    };
+                    this.set_active_context_menu_invoker(Some(invoker), cx);
+                    this.open_popover_at(kind, e.position, window, cx);
+                }),
+            )
+            .child(self.sidebar_pane.clone())
+            // Use the same preferred-size bounds for every collapsed-sidebar
+            // popover. Section content chooses the intrinsic height between them.
+            .min_h(gpui::relative(1.0 / 3.0))
+            .max_h(gpui::relative(1.0))
+            .overflow_hidden();
+
+        // Full-height reference box: the panel's relative min/max resolve against
+        // its (definite) height, and the panel is anchored to its top. Positioned
+        // to match the content card's frame (top flush, bottom margin) so the gaps
+        // read symmetric.
+        div()
+            .absolute()
+            .left(self.sidebar_render_width)
+            .ml(scaled_px(6.0))
+            .top(scaled_px(4.0))
+            .bottom(scaled_px(4.0) + px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+            .w(scaled_px(268.0))
+            .flex()
+            .flex_col()
+            .child(panel)
+            // Fade in on open, out on close. `anim_seq` changes each transition so
+            // the animation restarts (and plays the opposite direction) each time.
+            .with_animation(
+                ("collapsed_sidebar_popover_fade", anim_seq),
+                gpui::Animation::new(std::time::Duration::from_millis(
+                    super::COLLAPSED_POPOVER_FADE_MS,
+                ))
+                .with_easing(gpui::quadratic),
+                move |el, delta| el.opacity(if fade_in { delta } else { 1.0 - delta }),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn center_content(
         &mut self,
         window: &mut Window,
@@ -910,8 +1077,32 @@ impl GitCometView {
                     self.action_bar.clone(),
                     action_bar_height(cx),
                 ))
-                .child(
+                .child({
+                    // While collapsed, the pane renders one section as a floating
+                    // popover panel; otherwise it renders the full sidebar in place.
+                    // `open` drives the scrim + fade direction; `render` also covers
+                    // a section that is currently fading out.
+                    let popover_open = self
+                        .sidebar_collapsed
+                        .then_some(self.sidebar_collapsed_popover)
+                        .flatten();
+                    let popover_render = self
+                        .sidebar_collapsed
+                        .then(|| {
+                            self.sidebar_collapsed_popover
+                                .or(self.sidebar_collapsed_popover_closing)
+                        })
+                        .flatten();
+                    let popover_anim_seq = self.sidebar_collapsed_popover_anim_seq;
+                    self.sidebar_pane.update(cx, |pane, cx| {
+                        pane.set_collapsed_popover_section(popover_render, cx);
+                    });
+
                     div()
+                        // `relative` so the collapsed popover (a later, normal-flow
+                        // child below) anchors to the row: it paints above the main
+                        // card but below the overlay layer that hosts context menus.
+                        .relative()
                         .flex()
                         .flex_row()
                         .flex_1()
@@ -926,6 +1117,9 @@ impl GitCometView {
                                 .bg(theme.colors.sidebar_bg)
                                 .when(!self.sidebar_collapsed, |d| {
                                     d.child(self.sidebar_pane.clone())
+                                })
+                                .when(self.sidebar_collapsed, |d| {
+                                    d.child(self.collapsed_sidebar_rail(theme, cx))
                                 }),
                         )
                         .child(
@@ -941,7 +1135,7 @@ impl GitCometView {
                                 .flex_row()
                                 // Kept minimal so the bottom bar's icons (pane
                                 // toggles + zoom) read as one row hugging the card.
-                                .mb(px(2.0))
+                                .mb(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
                                 .mr(px(CONTENT_CARD_GAP_PX))
                                 .relative()
                                 .rounded(px(theme.radii.panel))
@@ -968,15 +1162,10 @@ impl GitCometView {
                                             d.child(stable_cached_fill_view(self.main_pane.clone()))
                                         }),
                                 )
-                                .when(!self.details_collapsed, |d| {
-                                    // The details divider occupies only its hairline. The wider
-                                    // drag target is overlaid below, so it does not leave a dead
-                                    // strip between the main content and details pane.
-                                    d.child(div().w(px(1.0)).h_full().flex_none())
-                                })
                                 .child(
                                     div()
                                         .id("details_pane")
+                                        .debug_selector(|| "details_pane".to_string())
                                         .relative()
                                         .w(self.details_render_width)
                                         .min_h(px(0.0))
@@ -997,23 +1186,25 @@ impl GitCometView {
                                             )
                                         }),
                                 )
-                                .when(!self.details_collapsed, |d| {
-                                    let handle_w = self.pane_resize_handle_width();
-                                    let overlap = (handle_w - px(1.0)) / 2.0;
-                                    d.child(
-                                        div()
-                                            .absolute()
-                                            .top_0()
-                                            .bottom_0()
-                                            .right(self.details_render_width - overlap)
-                                            .child(self.pane_resize_handle(
-                                                theme,
-                                                "pane_resize_details",
-                                                PaneResizeHandle::Details,
-                                                cx,
-                                            )),
-                                    )
-                                })
+                                .child(
+                                    // Keep the full resize hit target without reserving a
+                                    // visible strip between the main and details panes.
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right(
+                                            (self.details_render_width
+                                                - self.pane_resize_handle_width() / 2.0)
+                                                .max(px(0.0)),
+                                        )
+                                        .child(self.pane_resize_handle(
+                                            theme,
+                                            "pane_resize_details",
+                                            PaneResizeHandle::Details,
+                                            cx,
+                                        )),
+                                )
                                 .child(card_corner_caps(
                                     px((theme.radii.panel - 1.0).max(0.0)),
                                     theme.colors.sidebar_bg,
@@ -1031,8 +1222,22 @@ impl GitCometView {
                                         ),
                                     ),
                                 ),
-                        ),
-                )
+                        )
+                        // Scrim only while open (not during fade-out).
+                        .when(popover_open.is_some(), |d| {
+                            d.child(self.collapsed_sidebar_popover_scrim(cx))
+                        })
+                        .when_some(popover_render, |d, section| {
+                            let fade_in = popover_open.is_some();
+                            d.child(self.collapsed_sidebar_popover(
+                                section,
+                                theme,
+                                fade_in,
+                                popover_anim_seq,
+                                cx,
+                            ))
+                        })
+                })
                 .child(
                     // Keep the bottom bar uncached. It paints after the details pane,
                     // so reusing its cached paint range can replay a stale input-handler

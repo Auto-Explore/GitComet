@@ -1890,14 +1890,14 @@ fn resolved_output_highlight_provider_binding_key_tracks_theme_language_and_docu
 }
 
 #[test]
-fn pane_content_width_for_layout_omits_hidden_handles_when_panels_collapsed() {
+fn pane_content_width_for_layout_ignores_overlaid_resize_handles() {
     let total_w = gpui::px(1000.0);
     let expanded =
         pane_content_width_for_layout(total_w, gpui::px(280.0), gpui::px(420.0), false, false);
     let both_collapsed =
         pane_content_width_for_layout(total_w, gpui::px(34.0), gpui::px(34.0), true, true);
 
-    assert_eq!(expanded, gpui::px(284.0));
+    assert_eq!(expanded, gpui::px(300.0));
     assert_eq!(both_collapsed, gpui::px(932.0));
 }
 

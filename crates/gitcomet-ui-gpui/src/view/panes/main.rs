@@ -30,10 +30,11 @@ const FOCUSED_MERGETOOL_EXIT_ERROR: i32 = 2;
 pub(in crate::view) fn pane_non_main_width_for_layout(
     sidebar_w: Pixels,
     details_w: Pixels,
-    sidebar_collapsed: bool,
-    details_collapsed: bool,
+    _sidebar_collapsed: bool,
+    _details_collapsed: bool,
 ) -> Pixels {
-    sidebar_w + details_w + pane_resize_handles_width(sidebar_collapsed, details_collapsed)
+    // Resize handles overlay pane boundaries and therefore consume no layout width.
+    sidebar_w + details_w
 }
 
 #[inline]
@@ -101,8 +102,12 @@ impl Render for MainPaneView {
         div()
             .size_full()
             .relative()
-            .when(historical_content, |d| d.border_2().border_color(purple))
             .child(inner)
+            .when(historical_content, |d| {
+                // Overlay the historical frame so entering browse mode does
+                // not inset or resize the content beneath it.
+                d.child(div().absolute().inset_0().border_2().border_color(purple))
+            })
     }
 }
 

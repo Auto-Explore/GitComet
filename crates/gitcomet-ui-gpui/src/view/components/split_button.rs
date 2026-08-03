@@ -45,7 +45,7 @@ impl SplitButton {
             theme.colors.text_muted,
             if theme.is_dark { 0.55 } else { 0.40 },
         );
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.05 } else { 0.04 });
+        let hover_bg = theme.hover_overlay();
 
         let inner = div()
             .flex()

@@ -188,6 +188,136 @@ enum SettingsSection {
     GitLogTagFetch,
 }
 
+impl SettingsSection {
+    /// The left-nav category that owns this expandable section. Expanding a
+    /// section always happens from within its owning category's page, so this
+    /// mapping keeps the visible page and the expanded row in sync.
+    fn category(self) -> SettingsCategory {
+        match self {
+            Self::Theme
+            | Self::UiScale
+            | Self::UiFont
+            | Self::EditorFont
+            | Self::ExternalCodeEditor
+            | Self::DateFormat
+            | Self::Timezone => SettingsCategory::General,
+            Self::TerminalExternal | Self::TerminalActionBar => SettingsCategory::Terminal,
+            Self::ChangeTracking => SettingsCategory::ChangeTracking,
+            Self::DiffContentMode | Self::Diff | Self::DiffViewMode => SettingsCategory::Diff,
+            Self::GitLogDefaultMode | Self::GitLogColumns | Self::GitLogTagFetch => {
+                SettingsCategory::GitLog
+            }
+        }
+    }
+}
+
+/// A top-level settings grouping, shown as a row in the left-hand navigation.
+/// Each category maps to one of the existing settings cards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsCategory {
+    General,
+    Terminal,
+    ChangeTracking,
+    Diff,
+    GitLog,
+    Tags,
+    GitExecutable,
+    Environment,
+    Links,
+}
+
+impl SettingsCategory {
+    const ALL: &'static [SettingsCategory] = &[
+        SettingsCategory::General,
+        SettingsCategory::Terminal,
+        SettingsCategory::ChangeTracking,
+        SettingsCategory::Diff,
+        SettingsCategory::GitLog,
+        SettingsCategory::Tags,
+        SettingsCategory::GitExecutable,
+        SettingsCategory::Environment,
+        SettingsCategory::Links,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::General => "General",
+            Self::Terminal => "Terminal",
+            Self::ChangeTracking => "Change tracking",
+            Self::Diff => "Diff",
+            Self::GitLog => "Git log",
+            Self::Tags => "Tags",
+            Self::GitExecutable => "Git executable",
+            Self::Environment => "Environment",
+            Self::Links => "Links",
+        }
+    }
+
+    fn icon(self) -> &'static str {
+        match self {
+            Self::General => "icons/cog.svg",
+            Self::Terminal => "icons/terminal.svg",
+            Self::ChangeTracking => "icons/file.svg",
+            Self::Diff => "icons/swap.svg",
+            Self::GitLog => "icons/history.svg",
+            Self::Tags => "icons/tag.svg",
+            Self::GitExecutable => "icons/git_branch.svg",
+            Self::Environment => "icons/computer.svg",
+            Self::Links => "icons/link.svg",
+        }
+    }
+
+    fn nav_id(self) -> &'static str {
+        match self {
+            Self::General => "settings_window_nav_general",
+            Self::Terminal => "settings_window_nav_terminal",
+            Self::ChangeTracking => "settings_window_nav_change_tracking",
+            Self::Diff => "settings_window_nav_diff",
+            Self::GitLog => "settings_window_nav_git_log",
+            Self::Tags => "settings_window_nav_tags",
+            Self::GitExecutable => "settings_window_nav_git_executable",
+            Self::Environment => "settings_window_nav_environment",
+            Self::Links => "settings_window_nav_links",
+        }
+    }
+
+    /// Lowercase text (title plus the labels of the settings on the page) used
+    /// to decide whether a category matches the nav search query.
+    fn search_haystack(self) -> &'static str {
+        match self {
+            Self::General => {
+                "general theme date format ui scale ui font editor font ligatures \
+                 external code editor date timezone appearance"
+            }
+            Self::Terminal => "terminal external terminal action bar terminal button opens",
+            Self::ChangeTracking => "change tracking untracked files",
+            Self::Diff => {
+                "diff mode scroll sync show whitespace changes reveal whitespace characters \
+                 word wrap show line numbers unified split"
+            }
+            Self::GitLog => {
+                "git log default history mode history columns relative dates show tags graph \
+                 author sha"
+            }
+            Self::Tags => "tags automatically fetch tags",
+            Self::GitExecutable => "git executable custom path system path version",
+            Self::Environment => "environment build operating system app version",
+            Self::Links => {
+                "links theme guide github license open source licenses professional edition \
+                 waitlist"
+            }
+        }
+    }
+
+    fn matches_query(self, query: &str) -> bool {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return true;
+        }
+        self.search_haystack().contains(query.as_str())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsView {
     Root,
@@ -295,6 +425,10 @@ pub(crate) struct SettingsWindowView {
     default_history_mode: HistoryMode,
     default_tag_type: DefaultTagType,
     current_view: SettingsView,
+    selected_category: SettingsCategory,
+    search_query: String,
+    search_input: Entity<components::TextInput>,
+    nav_scroll: ScrollHandle,
     open_source_licenses_scroll: UniformListScrollHandle,
     runtime_info: SettingsRuntimeInfo,
     git_executable_mode: GitExecutableMode,
@@ -312,6 +446,7 @@ pub(crate) struct SettingsWindowView {
     _external_editor_custom_path_input_subscription: gpui::Subscription,
     _external_editor_custom_arguments_input_subscription: gpui::Subscription,
     _appearance_subscription: gpui::Subscription,
+    _search_input_subscription: gpui::Subscription,
     #[cfg(test)]
     overflow_probe: bool,
     #[cfg(test)]
@@ -509,6 +644,14 @@ fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
         b: a.b + (b.b - a.b) * t,
         a: a.a + (b.a - a.a) * t,
     }
+}
+
+fn settings_row_separator_color(theme: AppTheme) -> gpui::Rgba {
+    mix_color(
+        theme.colors.window_bg,
+        theme.colors.border_variant,
+        if theme.is_dark { 0.14 } else { 0.10 },
+    )
 }
 
 fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
@@ -808,6 +951,39 @@ impl SettingsWindowView {
                 }
                 cx.notify();
             });
+        let search_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Search".into(),
+                    leading_icon: Some("icons/zoom.svg"),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_theme(theme, cx);
+            input
+        });
+        let search_input_subscription = cx.observe(&search_input, |this, input, cx| {
+            let next = input.read(cx).text().to_string();
+            if this.search_query == next {
+                return;
+            }
+            this.search_query = next;
+            // Keep the visible page in the filtered set: if the current
+            // category no longer matches, jump to the first one that does.
+            if !this.selected_category.matches_query(&this.search_query)
+                && let Some(first) = SettingsCategory::ALL
+                    .iter()
+                    .copied()
+                    .find(|category| category.matches_query(&this.search_query))
+            {
+                this.selected_category = first;
+                this.expanded_section = None;
+            }
+            cx.notify();
+        });
+
         let external_editor_custom_arguments_input_subscription = cx.observe(
             &external_editor_custom_arguments_input,
             |this, input, cx| {
@@ -869,6 +1045,10 @@ impl SettingsWindowView {
             default_history_mode,
             default_tag_type,
             current_view: SettingsView::Root,
+            selected_category: SettingsCategory::General,
+            search_query: String::new(),
+            search_input,
+            nav_scroll: ScrollHandle::default(),
             open_source_licenses_scroll: UniformListScrollHandle::default(),
             runtime_info,
             git_executable_mode,
@@ -888,11 +1068,25 @@ impl SettingsWindowView {
             _external_editor_custom_arguments_input_subscription:
                 external_editor_custom_arguments_input_subscription,
             _appearance_subscription: appearance_subscription,
+            _search_input_subscription: search_input_subscription,
             #[cfg(test)]
             overflow_probe: false,
             #[cfg(test)]
             external_editor_browse_notify_count: 0,
         }
+    }
+
+    fn select_category(&mut self, category: SettingsCategory, cx: &mut gpui::Context<Self>) {
+        if self.selected_category == category {
+            return;
+        }
+        self.selected_category = category;
+        // Collapse any expanded row so the new page starts clean, and scroll
+        // the content pane back to the top.
+        self.expanded_section = None;
+        self.settings_window_scroll
+            .set_offset(gpui::point(px(0.0), px(0.0)));
+        cx.notify();
     }
 
     fn toggle_section(&mut self, section: SettingsSection, cx: &mut gpui::Context<Self>) {
@@ -915,11 +1109,14 @@ impl SettingsWindowView {
 
     fn preference_settings(&self) -> session::UiSettings {
         let mut settings = session::UiSettings {
+            repo_picker_sort: None,
             window_width: None,
             window_height: None,
             sidebar_width: None,
             details_width: None,
+            sidebar_collapsed: None,
             repo_sidebar_collapsed_items: None,
+            repo_sidebar_pinned_branches: None,
             theme_mode: Some(self.theme_mode.key().to_string()),
             ui_scale_percent: Some(self.ui_scale_percent),
             ui_font_family: Some(self.ui_font_family.clone()),
@@ -1849,6 +2046,21 @@ impl SettingsWindowView {
             )
     }
 
+    fn setting_option_row(
+        &self,
+        id: impl Into<SharedString>,
+        label: impl Into<SharedString>,
+        detail: Option<SharedString>,
+        selected: bool,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        self.option_row(id, label, detail, selected, theme)
+            .rounded(px(0.0))
+            .pb_3()
+            .border_b_1()
+            .border_color(settings_row_separator_color(theme))
+    }
+
     fn dense_detail_option_row(
         &self,
         id: impl Into<SharedString>,
@@ -2036,11 +2248,14 @@ impl SettingsWindowView {
             .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
-            .py_1()
+            .pt_1()
+            .pb_3()
             .flex()
             .items_center()
             .gap_2()
             .rounded(px(theme.radii.row))
+            .border_b_1()
+            .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
             .hover(move |s| s.bg(theme.colors.hover))
@@ -2105,11 +2320,14 @@ impl SettingsWindowView {
             .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
-            .py_1()
+            .pt_1()
+            .pb_3()
             .flex()
             .items_center()
             .gap_2()
             .rounded(px(theme.radii.row))
+            .border_b_1()
+            .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
             .hover(move |s| s.bg(theme.colors.hover))
@@ -2176,11 +2394,13 @@ impl SettingsWindowView {
             .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
-            .py_1()
+            .pt_1()
+            .pb_3()
             .flex()
             .items_center()
             .gap_2()
-            .rounded(px(theme.radii.row))
+            .border_b_1()
+            .border_color(settings_row_separator_color(theme))
             .overflow_hidden()
             .child(
                 div()
@@ -2233,54 +2453,41 @@ impl SettingsWindowView {
             .debug_selector(move || id.to_string())
             .w_full()
             .px_2()
-            .py_1()
+            .pt_1()
+            .pb_3()
             .flex()
-            .items_center()
-            .gap_2()
+            .flex_col()
+            .items_stretch()
+            .gap_0p5()
             .rounded(px(theme.radii.row))
+            .border_b_1()
+            .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
-            .overflow_hidden()
             .hover(move |s| s.bg(theme.colors.hover))
             .active(move |s| s.bg(theme.colors.active))
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
-                    .flex_1()
                     .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .text_sm()
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(label),
-                    ),
+                    .text_sm()
+                    .child(label),
             )
             .child(
                 div()
                     .debug_selector(move || value_debug_id.clone())
+                    .w_full()
                     .min_w(px(0.0))
                     .flex()
-                    .items_center()
-                    .justify_end()
+                    .items_start()
                     .gap_2()
                     .text_sm()
                     .text_color(theme.colors.accent)
-                    .overflow_hidden()
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .line_clamp(1)
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .child(value),
-                    )
-                    .child(svg_icon(
+                    .child(div().flex_1().min_w(px(0.0)).child(value))
+                    .child(div().flex_shrink_0().child(svg_icon(
                         "icons/open_external.svg",
                         theme.colors.accent,
                         px(13.0),
-                    )),
+                    ))),
             )
     }
 
@@ -2318,11 +2525,11 @@ impl SettingsWindowView {
             .debug_selector(|| "settings_window_git_runtime".to_string())
             .w_full()
             .px_2()
-            .py_1()
+            .pt_1()
+            .pb_3()
             .flex()
             .items_center()
             .gap_2()
-            .rounded(px(theme.radii.row))
             .overflow_hidden()
             .child(
                 div()
@@ -2798,21 +3005,145 @@ impl SettingsWindowView {
             .min_w(px(0.0))
             .flex()
             .flex_col()
-            .rounded(px(theme.radii.panel))
-            .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.surface_bg)
-            .p_2()
-            .gap_1()
+            .gap_2()
             .child(
                 div()
                     .px_2()
-                    .pb_1()
-                    .text_xs()
+                    .pb_2()
+                    .text_lg()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.text)
                     .child(title),
             )
+    }
+
+    fn subsection_heading(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        theme: AppTheme,
+    ) -> Stateful<gpui::Div> {
+        div()
+            .id(id)
+            .debug_selector(move || id.to_string())
+            .w_full()
+            .px_2()
+            .pt(px(24.0))
+            .pb_2()
+            .text_sm()
+            .font_weight(FontWeight::BOLD)
+            .text_color(theme.colors.text)
+            .child(title)
+    }
+
+    fn settings_nav_item(
+        &self,
+        category: SettingsCategory,
+        selected: bool,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<gpui::Div> {
+        let icon_color = if selected {
+            theme.colors.accent
+        } else {
+            theme.colors.text_muted
+        };
+        div()
+            .id(category.nav_id())
+            .debug_selector(move || category.nav_id().to_string())
+            .w_full()
+            .px_2()
+            .py_1()
+            .flex()
+            .items_center()
+            .gap_2()
+            .rounded(px(theme.radii.row))
+            .cursor(CursorStyle::PointingHand)
+            .overflow_hidden()
+            .when(selected, |d| d.bg(theme.colors.active))
+            .when(!selected, |d| d.hover(move |s| s.bg(theme.colors.hover)))
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .child(svg_icon(category.icon(), icon_color, px(15.0))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
+                    .text_color(theme.colors.text)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child(category.label()),
+            )
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _window, cx| {
+                this.select_category(category, cx);
+            }))
+    }
+
+    fn render_settings_nav(
+        &self,
+        active: SettingsCategory,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let query = self.search_query.clone();
+
+        let mut list = div()
+            .id("settings_window_nav_list")
+            .debug_selector(|| "settings_window_nav_list".to_string())
+            .flex_1()
+            .min_h(px(0.0))
+            .w_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.nav_scroll)
+            .flex()
+            .flex_col()
+            .gap(px(1.0));
+
+        let mut any_match = false;
+        for category in SettingsCategory::ALL.iter().copied() {
+            if !category.matches_query(&query) {
+                continue;
+            }
+            any_match = true;
+            list = list.child(self.settings_nav_item(category, category == active, theme, cx));
+        }
+
+        if !any_match {
+            list = list.child(
+                div()
+                    .px_2()
+                    .py_1()
+                    .text_sm()
+                    .text_color(theme.colors.text_muted)
+                    .child("No matching settings"),
+            );
+        }
+
+        div()
+            .id("settings_window_nav")
+            .debug_selector(|| "settings_window_nav".to_string())
+            .flex_none()
+            .w(px(200.0))
+            .h_full()
+            .min_h(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_2()
+            .bg(theme.colors.sidebar_bg)
+            .child(
+                div()
+                    .id("settings_window_nav_search")
+                    .flex_none()
+                    .w_full()
+                    .child(self.search_input.clone()),
+            )
+            .child(list)
     }
 }
 
@@ -3012,6 +3343,8 @@ impl Render for SettingsWindowView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.external_editor_custom_arguments_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.search_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
 
         #[cfg(test)]
         let show_overflow_probe =
@@ -3024,6 +3357,7 @@ impl Render for SettingsWindowView {
         } else {
             match self.current_view {
                 SettingsView::Root => {
+                    let no_separator = gpui::rgba(0x00000000);
                     let theme_row = self
                         .summary_row(
                             "settings_window_theme",
@@ -3091,6 +3425,7 @@ impl Render for SettingsWindowView {
                             self.use_font_ligatures,
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_use_font_ligatures(!this.use_font_ligatures, cx);
                         }));
@@ -3106,6 +3441,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::ExternalCodeEditor),
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::ExternalCodeEditor, cx);
                         }));
@@ -3129,6 +3465,7 @@ impl Render for SettingsWindowView {
                             self.show_timezone,
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_show_timezone(!this.show_timezone, cx);
                         }));
@@ -3156,6 +3493,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::TerminalActionBar),
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::TerminalActionBar, cx);
                         }));
@@ -3168,6 +3506,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::ChangeTracking),
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::ChangeTracking, cx);
                         }));
@@ -3180,6 +3519,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::Diff),
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.toggle_section(SettingsSection::Diff, cx);
                         }));
@@ -3293,6 +3633,11 @@ impl Render for SettingsWindowView {
                             self.history_show_tags,
                             theme,
                         )
+                        .border_color(if self.history_show_tags {
+                            settings_row_separator_color(theme)
+                        } else {
+                            no_separator
+                        })
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             this.set_history_show_tags(!this.history_show_tags, cx);
                         }));
@@ -3305,6 +3650,7 @@ impl Render for SettingsWindowView {
                             self.expanded_section == Some(SettingsSection::GitLogTagFetch),
                             theme,
                         )
+                        .border_color(no_separator)
                         .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                             if this.history_show_tags {
                                 this.toggle_section(SettingsSection::GitLogTagFetch, cx);
@@ -3313,6 +3659,11 @@ impl Render for SettingsWindowView {
 
                     let mut general_card = self
                         .card("settings_window_general", "General", theme)
+                        .child(self.subsection_heading(
+                            "settings_window_general_appearance",
+                            "Appearance",
+                            theme,
+                        ))
                         .child(theme_row);
 
                     if self.expanded_section == Some(SettingsSection::Theme) {
@@ -3370,6 +3721,7 @@ impl Render for SettingsWindowView {
                                         THEMES_GUIDE_URL.into(),
                                         theme,
                                     )
+                                    .border_color(no_separator)
                                     .on_click(|_, _, cx| {
                                         cx.open_url(THEMES_GUIDE_URL);
                                     }),
@@ -3517,7 +3869,13 @@ impl Render for SettingsWindowView {
 
                     general_card = general_card.child(font_ligatures_row);
 
-                    general_card = general_card.child(external_editor_row);
+                    general_card = general_card
+                        .child(self.subsection_heading(
+                            "settings_window_general_integrations",
+                            "Integrations",
+                            theme,
+                        ))
+                        .child(external_editor_row);
                     if self.expanded_section == Some(SettingsSection::ExternalCodeEditor) {
                         let list = uniform_list(
                             "settings_window_external_code_editor_list",
@@ -3631,7 +3989,13 @@ impl Render for SettingsWindowView {
                         );
                     }
 
-                    general_card = general_card.child(date_format_row);
+                    general_card = general_card
+                        .child(self.subsection_heading(
+                            "settings_window_general_date_time",
+                            "Date & Time",
+                            theme,
+                        ))
+                        .child(date_format_row);
                     if self.expanded_section == Some(SettingsSection::DateFormat) {
                         let list = uniform_list(
                             "settings_window_date_format_list",
@@ -4252,6 +4616,7 @@ impl Render for SettingsWindowView {
                                     "Reset".into(),
                                     theme,
                                 )
+                                .border_color(no_separator)
                                 .on_click(cx.listener(
                                     |this, _e: &ClickEvent, _window, cx| {
                                         this.update_main_windows(cx, |view, _window, cx| {
@@ -4323,7 +4688,7 @@ impl Render for SettingsWindowView {
                     let tags_card = self
                         .card("settings_window_tags_card", "Tags", theme)
                         .child(
-                            self.option_row(
+                            self.setting_option_row(
                                 "settings_window_tags_default_lightweight",
                                 "Lightweight",
                                 Some(
@@ -4338,7 +4703,7 @@ impl Render for SettingsWindowView {
                             })),
                         )
                         .child(
-                            self.option_row(
+                            self.setting_option_row(
                                 "settings_window_tags_default_annotated",
                                 "Annotated",
                                 Some(
@@ -4348,13 +4713,14 @@ impl Render for SettingsWindowView {
                                 self.default_tag_type == DefaultTagType::Annotated,
                                 theme,
                             )
+                            .border_color(no_separator)
                             .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                                 this.set_default_tag_type(DefaultTagType::Annotated, cx);
                             })),
                         );
 
                     let system_git_row = self
-                        .option_row(
+                        .setting_option_row(
                             "settings_window_git_executable_system",
                             "System PATH",
                             Some(
@@ -4369,7 +4735,7 @@ impl Render for SettingsWindowView {
                         }));
 
                     let custom_git_row = self
-                    .option_row(
+                    .setting_option_row(
                         "settings_window_git_executable_custom",
                         "Custom executable",
                         Some(
@@ -4514,7 +4880,7 @@ impl Render for SettingsWindowView {
                             "Operating system",
                             self.runtime_info.operating_system.clone(),
                             theme,
-                        ));
+                        ).border_color(no_separator));
 
                     let links_card = self
                         .card("settings_window_links", "Links", theme)
@@ -4569,12 +4935,34 @@ impl Render for SettingsWindowView {
                                 "Show".into(),
                                 theme,
                             )
+                            .border_color(no_separator)
                             .on_click(cx.listener(
                                 |this, _e: &ClickEvent, _window, cx| {
                                     this.show_open_source_licenses(cx);
                                 },
                             )),
                         );
+
+                    // The visible page follows the selected nav category.
+                    // Expanding a row can only happen from within its owning
+                    // category, so deriving from an expanded section keeps the
+                    // page and the expanded row consistent.
+                    let active_category = self
+                        .expanded_section
+                        .map(SettingsSection::category)
+                        .unwrap_or(self.selected_category);
+
+                    let active_card = match active_category {
+                        SettingsCategory::General => general_card,
+                        SettingsCategory::Terminal => terminal_card,
+                        SettingsCategory::ChangeTracking => change_tracking_card,
+                        SettingsCategory::Diff => diff_card,
+                        SettingsCategory::GitLog => git_log_card,
+                        SettingsCategory::Tags => tags_card,
+                        SettingsCategory::GitExecutable => git_executable_card,
+                        SettingsCategory::Environment => environment_card,
+                        SettingsCategory::Links => links_card,
+                    };
 
                     let scroll_surface = restrict_scroll_to_vertical_axis(
                         div()
@@ -4591,24 +4979,17 @@ impl Render for SettingsWindowView {
                     .flex_col()
                     .gap_3()
                     .p_3()
-                    .child(general_card)
-                    .child(terminal_card)
-                    .child(change_tracking_card)
-                    .child(diff_card)
-                    .child(git_log_card)
-                    .child(tags_card)
-                    .child(git_executable_card)
-                    .child(environment_card)
-                    .child(links_card);
+                    .child(active_card);
 
-                    div()
-                        .id("settings_window_root_view")
-                        .debug_selector(|| "settings_window_root_view".to_string())
-                        .w_full()
+                    let content_pane = div()
+                        .id("settings_window_content_pane")
+                        .debug_selector(|| "settings_window_content_pane".to_string())
                         .relative()
                         .flex_1()
+                        .h_full()
                         .min_w(px(0.0))
                         .min_h(px(0.0))
+                        .bg(theme.colors.window_bg)
                         .child(
                             div()
                                 .w_full()
@@ -4635,7 +5016,19 @@ impl Render for SettingsWindowView {
                                 scrollbar
                             }
                             .render(theme),
-                        )
+                        );
+
+                    div()
+                        .id("settings_window_root_view")
+                        .debug_selector(|| "settings_window_root_view".to_string())
+                        .w_full()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .min_h(px(0.0))
+                        .flex()
+                        .flex_row()
+                        .child(self.render_settings_nav(active_category, theme, cx))
+                        .child(content_pane)
                 }
                 SettingsView::OpenSourceLicenses => {
                     let rows = crate::view::open_source_licenses_data::open_source_license_rows();
@@ -5054,33 +5447,6 @@ mod tests {
                 && inner_bounds.bottom() <= outer_bounds.bottom() + tolerance,
             "expected `{inner_selector}` to stay within `{outer_selector}` \
              (outer={outer_bounds:?}, inner={inner_bounds:?})"
-        );
-    }
-
-    fn assert_debug_horizontal_insets(
-        cx: &mut gpui::VisualTestContext,
-        outer_selector: &'static str,
-        inner_selector: &'static str,
-        expected_left_inset: Pixels,
-        expected_right_inset: Pixels,
-    ) {
-        let outer_bounds = cx
-            .debug_bounds(outer_selector)
-            .unwrap_or_else(|| panic!("expected `{outer_selector}` bounds"));
-        let inner_bounds = cx
-            .debug_bounds(inner_selector)
-            .unwrap_or_else(|| panic!("expected `{inner_selector}` bounds"));
-        let left_inset = inner_bounds.left() - outer_bounds.left();
-        let right_inset = outer_bounds.right() - inner_bounds.right();
-        let tolerance = px(1.0);
-
-        assert!(
-            (left_inset - expected_left_inset).abs() <= tolerance
-                && (right_inset - expected_right_inset).abs() <= tolerance,
-            "expected `{inner_selector}` horizontal insets within `{outer_selector}` \
-             to be left={expected_left_inset:?}, right={expected_right_inset:?} \
-             (actual left={left_inset:?}, right={right_inset:?}, \
-             outer={outer_bounds:?}, inner={inner_bounds:?})"
         );
     }
 
@@ -5814,6 +6180,7 @@ mod tests {
         settings_cx.run_until_parked();
 
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.select_category(SettingsCategory::GitExecutable, cx);
             settings.git_executable_mode = GitExecutableMode::Custom;
             cx.notify();
         });
@@ -6170,6 +6537,7 @@ mod tests {
             let _ = window.draw(app);
         });
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.select_category(SettingsCategory::Links, cx);
             // Keep the interaction test resilient as rows are added to the root links card.
             let current_x = settings.settings_window_scroll.offset().x;
             let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
@@ -6281,6 +6649,7 @@ mod tests {
             let _ = window.draw(app);
         });
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.select_category(SettingsCategory::Links, cx);
             // Keep the interaction test resilient as sections are added above the links card.
             let current_x = settings.settings_window_scroll.offset().x;
             let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
@@ -6331,6 +6700,7 @@ mod tests {
             let _ = window.draw(app);
         });
         let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.select_category(SettingsCategory::Links, cx);
             let current_x = settings.settings_window_scroll.offset().x;
             let max_offset = settings.settings_window_scroll.max_offset().y.max(px(0.0));
             settings
@@ -6547,44 +6917,58 @@ mod tests {
         settings_cx.run_until_parked();
         settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_MIN_WIDTH_PX), px(1200.0)));
         settings_cx.run_until_parked();
-        settings_cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
 
-        assert_debug_horizontal_insets(
-            &mut settings_cx,
-            "settings_window_root_view",
-            "settings_window_scroll",
-            px(0.0),
-            px(16.0),
-        );
-
-        for card_selector in [
-            "settings_window_general",
-            "settings_window_change_tracking_card",
-            "settings_window_diff_card",
-            "settings_window_git_log_card",
-            "settings_window_git_executable",
-            "settings_window_environment",
-            "settings_window_links",
+        // Each category renders its card on its own page now, so visit every
+        // category and verify the visible card fills the content-pane width.
+        for (category, card_selector) in [
+            (SettingsCategory::General, "settings_window_general"),
+            (
+                SettingsCategory::ChangeTracking,
+                "settings_window_change_tracking_card",
+            ),
+            (SettingsCategory::Diff, "settings_window_diff_card"),
+            (SettingsCategory::GitLog, "settings_window_git_log_card"),
+            (
+                SettingsCategory::GitExecutable,
+                "settings_window_git_executable",
+            ),
+            (SettingsCategory::Environment, "settings_window_environment"),
+            (SettingsCategory::Links, "settings_window_links"),
         ] {
+            let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+                settings.select_category(category, cx);
+                // The General page keeps a dropdown expanded to exercise wrapping.
+                if category == SettingsCategory::General {
+                    settings.expanded_section = Some(SettingsSection::UiFont);
+                }
+                cx.notify();
+            });
+            settings_cx.run_until_parked();
+            settings_cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+
             assert_debug_matching_horizontal_insets(
                 &mut settings_cx,
                 "settings_window_scroll",
                 card_selector,
             );
-        }
 
-        assert_debug_matching_horizontal_insets(
-            &mut settings_cx,
-            "settings_window_general",
-            "settings_window_ui_font_list_container",
-        );
-        assert_debug_matching_horizontal_insets(
-            &mut settings_cx,
-            "settings_window_git_executable",
-            "settings_window_git_executable_custom_container",
-        );
+            if category == SettingsCategory::General {
+                assert_debug_matching_horizontal_insets(
+                    &mut settings_cx,
+                    "settings_window_general",
+                    "settings_window_ui_font_list_container",
+                );
+            }
+            if category == SettingsCategory::GitExecutable {
+                assert_debug_matching_horizontal_insets(
+                    &mut settings_cx,
+                    "settings_window_git_executable",
+                    "settings_window_git_executable_custom_container",
+                );
+            }
+        }
     }
 
     #[gpui::test]
@@ -6832,6 +7216,9 @@ mod tests {
 
         let mut settings_cx = gpui::VisualTestContext::from_window(*settings_window.deref(), cx);
         settings_cx.run_until_parked();
+        let _ = settings_window.update(&mut settings_cx, |settings, _window, cx| {
+            settings.select_category(SettingsCategory::Terminal, cx);
+        });
         settings_cx.simulate_resize(size(px(SETTINGS_WINDOW_DEFAULT_WIDTH_PX), px(1200.0)));
         settings_cx.run_until_parked();
         settings_cx.update(|window, app| {

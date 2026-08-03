@@ -516,6 +516,10 @@ impl GitRepository for GixRepo {
         self.create_branch_impl(name, target)
     }
 
+    fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.rename_branch_impl(old_name, new_name)
+    }
+
     fn delete_branch(&self, name: &str) -> Result<()> {
         self.delete_branch_impl(name)
     }

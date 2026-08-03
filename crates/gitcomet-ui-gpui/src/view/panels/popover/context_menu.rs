@@ -235,6 +235,8 @@ impl PopoverHost {
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::AppMenu => Some(app_menu::model(self)),
+            PopoverKind::AddRepoMenu => Some(add_repo_menu::model()),
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
             PopoverKind::CommitOptionsMenu { repo_id } => {
@@ -426,6 +428,14 @@ impl PopoverHost {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         match action {
+            ContextMenuAction::AppMenu(action) => {
+                app_menu::activate(self, action, window, cx);
+                return;
+            }
+            ContextMenuAction::AddRepoMenu(action) => {
+                add_repo_menu::activate(self, action, window, cx);
+                return;
+            }
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
@@ -657,6 +667,15 @@ impl PopoverHost {
                     root.pending_force_delete_branch_centered = false;
                 });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
+            }
+            ContextMenuAction::ToggleBranchPin {
+                repo_id,
+                section,
+                name,
+            } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.toggle_pinned_branch(repo_id, section, &name, cx);
+                });
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
@@ -1360,6 +1379,8 @@ impl PopoverHost {
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
         let entry_tooltips = model.entry_tooltips.clone();
+        let entry_debug_selectors = model.entry_debug_selectors.clone();
+        let shortcut_keycaps = model.shortcut_keycaps;
 
         let focus = self.context_menu_focus_handle.clone();
         // No fallback highlight: the menu opens with nothing selected (like
@@ -1418,6 +1439,13 @@ impl PopoverHost {
                             this.context_menu_selected_ix = next;
                             cx.notify();
                         }
+                        "tab" => {
+                            cx.stop_propagation();
+                            let direction = if mods.shift { -1 } else { 1 };
+                            this.context_menu_selected_ix = model_for_keys
+                                .next_selectable(this.context_menu_selected_ix, direction);
+                            cx.notify();
+                        }
                         "home" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.first_selectable();
@@ -1428,7 +1456,7 @@ impl PopoverHost {
                             this.context_menu_selected_ix = model_for_keys.last_selectable();
                             cx.notify();
                         }
-                        "enter" => {
+                        "enter" | "space" => {
                             let Some(ix) = context_menu_activate_entry_ix(
                                 &model_for_keys,
                                 this.context_menu_selected_ix,
@@ -1494,7 +1522,10 @@ impl PopoverHost {
                         action,
                     } => {
                         let selected = selected_for_render == Some(ix);
-                        let debug_selector = context_menu_entry_debug_selector(label.as_ref());
+                        let debug_selector = entry_debug_selectors
+                            .get(&ix)
+                            .map(|selector| selector.to_string())
+                            .unwrap_or_else(|| context_menu_entry_debug_selector(label.as_ref()));
                         let tooltip_text = entry_tooltips
                             .get(&ix)
                             .cloned()
@@ -1515,6 +1546,7 @@ impl PopoverHost {
                             components::ContextMenuEntry::new(("context_menu_entry", ix), label)
                                 .icon(icon_slot)
                                 .shortcut(shortcut)
+                                .shortcut_keycaps(shortcut_keycaps)
                                 .selected(selected)
                                 .disabled(disabled)
                                 .tooltip_host(tooltip_host.clone())

@@ -6,8 +6,8 @@ use crate::view::restrict_scroll_to_vertical_axis;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, ScrollHandle, SharedString,
-    WeakEntity, Window, div, px,
+    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    MouseMoveEvent, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -23,6 +23,15 @@ pub struct PickerPrompt {
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     selected_index: Option<usize>,
     marked_index: Option<usize>,
+    leading_icon: Option<&'static str>,
+    selected_hint: Option<SharedString>,
+    accent_selection: bool,
+    attached_list_surface: bool,
+    padded_query_row: bool,
+    select_on_mouse_down: bool,
+    query_row_trailing: Option<gpui::AnyElement>,
+    list_override: Option<gpui::AnyElement>,
+    remove_tooltip: Option<SharedString>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -30,6 +39,40 @@ pub struct PickerPromptItem {
     display_text: SharedString,
     match_text: SharedString,
     parts: Vec<PickerPromptItemPart>,
+    icon: Option<&'static str>,
+    section: Option<SharedString>,
+    removable: bool,
+}
+
+/// Where a filtered picker list ends up on screen: which items survived the
+/// query, in render order, and which scroll child each one is (section headers
+/// take child slots too, so `scroll_to_item` needs the translated index).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PickerPromptLayout {
+    pub item_indices: Vec<usize>,
+    pub child_indices: Vec<usize>,
+}
+
+/// Resolve the display layout the same way [`PickerPrompt::render`] does, so
+/// keyboard navigation over a filtered list stays in lockstep with the rows the
+/// user sees.
+pub fn picker_prompt_layout(items: &[PickerPromptItem], query: &str) -> PickerPromptLayout {
+    let matches = match_items(items, &section_groups(items), query);
+    let mut layout = PickerPromptLayout {
+        item_indices: Vec::with_capacity(matches.len()),
+        child_indices: Vec::with_capacity(matches.len()),
+    };
+    let mut child_ix = 0usize;
+    let mut sections = SectionRun::default();
+    for m in &matches {
+        if sections.starts_new_section(items[m.index].section.as_ref()) {
+            child_ix += 1;
+        }
+        layout.item_indices.push(m.index);
+        layout.child_indices.push(child_ix);
+        child_ix += 1;
+    }
+    layout
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,6 +86,7 @@ pub struct PickerPromptItemPart {
 
 type OnSelectFn<V> =
     dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static;
+type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
 
 impl PickerPrompt {
     pub fn new(query_input: Entity<TextInput>, scroll_handle: ScrollHandle) -> Self {
@@ -55,6 +99,15 @@ impl PickerPrompt {
             tooltip_host: None,
             selected_index: None,
             marked_index: None,
+            leading_icon: None,
+            selected_hint: None,
+            accent_selection: false,
+            attached_list_surface: false,
+            padded_query_row: false,
+            select_on_mouse_down: false,
+            query_row_trailing: None,
+            list_override: None,
+            remove_tooltip: None,
         }
     }
 
@@ -94,6 +147,59 @@ impl PickerPrompt {
         self
     }
 
+    pub fn leading_icon(mut self, icon: &'static str) -> Self {
+        self.leading_icon = Some(icon);
+        self
+    }
+
+    pub fn selected_hint(mut self, hint: impl Into<SharedString>) -> Self {
+        self.selected_hint = Some(hint.into());
+        self
+    }
+
+    pub fn accent_selection(mut self) -> Self {
+        self.accent_selection = true;
+        self
+    }
+
+    pub fn attached_list_surface(mut self) -> Self {
+        self.attached_list_surface = true;
+        self
+    }
+
+    /// Pads and vertically centers the query row (matching the attached-surface
+    /// layout) without drawing the surface border. Use when the picker already
+    /// sits inside a bordered card (e.g. a popover) but the input is chromeless.
+    pub fn padded_query_row(mut self) -> Self {
+        self.padded_query_row = true;
+        self
+    }
+
+    pub fn select_on_mouse_down(mut self) -> Self {
+        self.select_on_mouse_down = true;
+        self
+    }
+
+    /// Control pinned to the right of the query row, e.g. a sort toggle.
+    pub fn query_row_trailing(mut self, element: impl IntoElement) -> Self {
+        self.query_row_trailing = Some(element.into_any_element());
+        self
+    }
+
+    /// Replaces the result rows with `element` — for menus that take over the
+    /// list area while the query row stays put (the sort menu).
+    pub fn list_override(mut self, element: impl IntoElement) -> Self {
+        self.list_override = Some(element.into_any_element());
+        self
+    }
+
+    /// Tooltip for the trailing remove button on
+    /// [`PickerPromptItem::removable`] rows.
+    pub fn remove_tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.remove_tooltip = Some(tooltip.into());
+        self
+    }
+
     pub fn render<V: 'static>(
         self,
         theme: AppTheme,
@@ -101,15 +207,37 @@ impl PickerPrompt {
         cx: &gpui::Context<V>,
         on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
     ) -> Div {
+        self.render_with_remove(theme, ui_scale, cx, on_select, |_, _, _, _| {})
+    }
+
+    /// Like [`Self::render`], but also wires the trailing remove button that
+    /// [`PickerPromptItem::removable`] rows carry. `on_remove` receives the
+    /// item's original (pre-filter) index, like `on_select`.
+    pub fn render_with_remove<V: 'static>(
+        self,
+        theme: AppTheme,
+        ui_scale: impl Into<UiScale>,
+        cx: &gpui::Context<V>,
+        on_select: impl Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static,
+        on_remove: impl Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static,
+    ) -> Div {
         let on_select: Arc<OnSelectFn<V>> = Arc::new(on_select);
+        let on_remove: Arc<OnRemoveFn<V>> = Arc::new(on_remove);
+        let remove_tooltip = self.remove_tooltip;
         let scroll_handle = self.scroll_handle;
+        let leading_icon = self.leading_icon;
+        let selected_hint = self.selected_hint;
+        let accent_selection = self.accent_selection;
+        let attached_list_surface = self.attached_list_surface;
+        let padded_query_row = self.padded_query_row;
+        let select_on_mouse_down = self.select_on_mouse_down;
         let ui_scale = ui_scale.into();
         let scaled_px = |value| ui_scale.px(value);
 
         let query = self
             .query_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        let matches = match_items(&self.items, &query);
+        let matches = match_items(&self.items, &section_groups(&self.items), &query);
 
         let selected_index = self.selected_index.and_then(|ix| {
             if matches.is_empty() {
@@ -123,14 +251,44 @@ impl PickerPrompt {
             .flex()
             .flex_col()
             .w_full()
+            .when(attached_list_surface, |surface| {
+                surface
+                    .border_1()
+                    .border_color(theme.colors.border_variant)
+                    .rounded(px(theme.radii.control))
+                    .bg(theme.colors.surface_bg_elevated)
+                    .overflow_hidden()
+            })
             .child(
                 div()
                     .flex()
                     .w_full()
                     .min_w(px(0.0))
-                    .child(self.query_input.clone()),
+                    .when(attached_list_surface || padded_query_row, |query_row| {
+                        query_row
+                            .h(control_height_md(ui_scale))
+                            .items_center()
+                            .px(scaled_px(10.0))
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .child(self.query_input.clone()),
+                    )
+                    .when_some(self.query_row_trailing, |query_row, trailing| {
+                        query_row.child(div().flex_shrink_0().child(trailing))
+                    }),
             )
-            .child(div().border_t_1().border_color(theme.colors.border_variant));
+            .child(div().h(px(1.0)).w_full().bg(if attached_list_surface {
+                theme.colors.border
+            } else {
+                theme.colors.border_variant
+            }));
+
+        if let Some(list_override) = self.list_override {
+            return body.child(div().w_full().min_w(px(0.0)).child(list_override));
+        }
 
         let mut list = div()
             .id("picker_prompt_list")
@@ -155,7 +313,18 @@ impl PickerPrompt {
                     .child(self.empty_text),
             );
         } else {
+            let mut sections = SectionRun::default();
             for (display_ix, m) in matches.iter().enumerate() {
+                if sections.starts_new_section(self.items[m.index].section.as_ref())
+                    && let Some(section) = self.items[m.index].section.clone()
+                {
+                    list = list.child(section_header_row(
+                        theme,
+                        ui_scale,
+                        section,
+                        display_ix == 0,
+                    ));
+                }
                 let label = picker_item_label(
                     theme,
                     &self.items[m.index],
@@ -165,19 +334,36 @@ impl PickerPrompt {
                 );
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
+                let row_icon = self.items[original_index].icon.or(leading_icon);
                 let is_selected = selected_index == Some(display_ix);
                 let is_marked = self.marked_index == Some(original_index);
+                let is_removable = self.items[original_index].removable;
+                let row_group: SharedString = format!("picker_prompt_row_{original_index}").into();
                 let mut row = div()
                     .id(("picker_prompt_item", original_index))
                     .debug_selector(move || format!("picker_prompt_item_{original_index}"))
+                    .group(row_group.clone())
                     .h(control_height_md(ui_scale))
                     .w_full()
+                    .relative()
                     .flex()
                     .items_center()
+                    .gap(scaled_px(7.0))
                     .px(scaled_px(8.0))
                     .rounded(px(theme.radii.row))
                     .cursor(CursorStyle::PointingHand)
-                    .child(label)
+                    .when_some(row_icon, |row, icon| {
+                        row.child(crate::view::icons::svg_icon(
+                            icon,
+                            if is_selected {
+                                theme.colors.accent
+                            } else {
+                                theme.colors.text_muted
+                            },
+                            scaled_px(14.0),
+                        ))
+                    })
+                    .child(div().flex_1().min_w(px(0.0)).child(label))
                     .when(is_marked, |row| {
                         row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
                             crate::view::icons::svg_icon(
@@ -187,17 +373,77 @@ impl PickerPrompt {
                             ),
                         ))
                     })
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    .when(is_selected, |row| {
+                        row.when_some(selected_hint.clone(), |row, hint| {
+                            row.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_w(scaled_px(34.0))
+                                    .h(scaled_px(22.0))
+                                    .px(scaled_px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(scaled_px(4.0))
+                                    .bg(with_alpha(
+                                        theme.colors.text,
+                                        if theme.is_dark { 0.06 } else { 0.035 },
+                                    ))
+                                    .font_family(
+                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                    )
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(hint),
+                            )
+                        })
+                    })
+                    .when(is_removable, |row| {
+                        row.child(remove_row_button(
+                            theme,
+                            ui_scale,
+                            original_index,
+                            row_group.clone(),
+                            // Keyboard users never hover, so the row the
+                            // selection sits on keeps its button visible.
+                            is_selected,
+                            remove_tooltip.clone(),
+                            self.tooltip_host.clone(),
+                            Arc::clone(&on_remove),
+                            cx,
+                        ))
+                    });
+                if select_on_mouse_down {
+                    row = row.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            (on_select)(this, original_index, &ClickEvent::default(), window, cx);
+                        }),
+                    );
+                } else {
+                    row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         (on_select)(this, original_index, event, window, cx);
                     }));
+                }
                 // Text-alpha overlays keep the highlight visible on the
                 // elevated popover surface, unlike the canvas-tuned tokens.
-                let hover_overlay =
-                    with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-                let active_overlay =
-                    with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+                let hover_overlay = theme.hover_overlay();
+                let active_overlay = theme.active_overlay();
                 if is_selected {
-                    row = row.bg(hover_overlay);
+                    row = row.bg(active_overlay).when(accent_selection, |row| {
+                        row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(scaled_px(3.0))
+                                .rounded_tr(px(theme.radii.row))
+                                .rounded_br(px(theme.radii.row))
+                                .bg(theme.colors.accent),
+                        )
+                    });
                 }
                 row = row
                     .hover(move |s| s.bg(hover_overlay))
@@ -261,7 +507,29 @@ impl PickerPromptItem {
             display_text: display_text.into(),
             match_text: match_text.into(),
             parts: built_parts,
+            icon: None,
+            section: None,
+            removable: false,
         }
+    }
+
+    pub fn icon(mut self, icon: &'static str) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Gives the row a trailing `x` that drops the entry from the list instead
+    /// of activating it. Requires [`PickerPrompt::render_with_remove`].
+    pub fn removable(mut self) -> Self {
+        self.removable = true;
+        self
+    }
+
+    /// Groups the item under a labelled section header. Items sharing a label
+    /// must be contiguous in the list passed to [`PickerPrompt::items`].
+    pub fn section(mut self, section: impl Into<SharedString>) -> Self {
+        self.section = Some(section.into());
+        self
     }
 
     fn display_text(&self) -> &str {
@@ -345,10 +613,44 @@ impl From<&str> for PickerPromptItem {
 struct Match {
     index: usize,
     range: Option<Range<usize>>,
-    sort_key: (usize, usize, SharedString),
+    sort_key: (usize, usize, usize, SharedString),
 }
 
-fn match_items(items: &[PickerPromptItem], query: &str) -> Vec<Match> {
+/// Tracks the section of the previously emitted row so a header is rendered
+/// exactly once per contiguous run of items sharing a section label.
+#[derive(Default)]
+struct SectionRun<'a> {
+    previous: Option<Option<&'a SharedString>>,
+}
+
+impl<'a> SectionRun<'a> {
+    /// True when `section` opens a labelled run that needs a header row.
+    fn starts_new_section(&mut self, section: Option<&'a SharedString>) -> bool {
+        let changed = self.previous != Some(section);
+        self.previous = Some(section);
+        changed && section.is_some()
+    }
+}
+
+/// Numbers each contiguous run of items sharing a section label. Matches sort
+/// within their group, so filtering never interleaves sections.
+fn section_groups(items: &[PickerPromptItem]) -> Vec<usize> {
+    let mut groups = Vec::with_capacity(items.len());
+    let mut group = 0usize;
+    let mut previous: Option<&SharedString> = None;
+    for (ix, item) in items.iter().enumerate() {
+        if ix > 0 && item.section.as_ref() != previous {
+            group += 1;
+        }
+        previous = item.section.as_ref();
+        groups.push(group);
+    }
+    groups
+}
+
+fn match_items(items: &[PickerPromptItem], groups: &[usize], query: &str) -> Vec<Match> {
+    let group_of = |index: usize| groups.get(index).copied().unwrap_or(0);
+
     if query.is_empty() {
         return items
             .iter()
@@ -356,7 +658,12 @@ fn match_items(items: &[PickerPromptItem], query: &str) -> Vec<Match> {
             .map(|(index, item)| Match {
                 index,
                 range: None,
-                sort_key: (0, item.display_text().len(), item.display_text.clone()),
+                sort_key: (
+                    group_of(index),
+                    0,
+                    item.display_text().len(),
+                    item.display_text.clone(),
+                ),
             })
             .collect();
     }
@@ -384,12 +691,39 @@ fn match_items(items: &[PickerPromptItem], query: &str) -> Vec<Match> {
         out.push(Match {
             index,
             range: Some(range),
-            sort_key: (start, item.display_text().len(), item.display_text.clone()),
+            sort_key: (
+                group_of(index),
+                start,
+                item.display_text().len(),
+                item.display_text.clone(),
+            ),
         });
     }
 
     out.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
     out
+}
+
+fn section_header_row(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    label: SharedString,
+    is_first: bool,
+) -> Div {
+    let scaled_px = |value| ui_scale.px(value);
+    div()
+        .w_full()
+        .flex_shrink_0()
+        .px(scaled_px(8.0))
+        .pt(scaled_px(if is_first { 4.0 } else { 10.0 }))
+        .pb(scaled_px(4.0))
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .line_height(scaled_px(16.0))
+        .text_color(theme.colors.text_muted)
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .child(label)
 }
 
 fn picker_item_label<V: 'static>(
@@ -448,6 +782,80 @@ fn picker_item_label<V: 'static>(
     label
 }
 
+/// The trailing `x` on a removable row — drops the entry from the list the
+/// picker draws from, rather than activating it. Mirrors the repository tab's
+/// close affordance: hidden until the row is hovered (or carries the keyboard
+/// selection) and tinted with the danger colour.
+#[allow(clippy::too_many_arguments)]
+fn remove_row_button<V: 'static>(
+    theme: AppTheme,
+    ui_scale: UiScale,
+    index: usize,
+    row_group: SharedString,
+    always_visible: bool,
+    tooltip: Option<SharedString>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    on_remove: Arc<OnRemoveFn<V>>,
+    cx: &gpui::Context<V>,
+) -> impl IntoElement {
+    let scaled_px = |value| ui_scale.px(value);
+    let tooltip_for_move = tooltip.clone();
+    let host_for_move = tooltip_host.clone();
+    let host_for_hover = tooltip_host;
+
+    div()
+        .id(("picker_prompt_item_remove", index))
+        .debug_selector(move || format!("picker_prompt_item_remove_{index}"))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(scaled_px(18.0))
+        .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
+        .when(!always_visible, |button| {
+            button
+                .invisible()
+                .group_hover(row_group, |style| style.visible())
+        })
+        .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
+        .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
+        .child(crate::view::icons::svg_icon(
+            "icons/repo_tab_close.svg",
+            theme.colors.danger,
+            scaled_px(12.0),
+        ))
+        .on_mouse_move(cx.listener(move |_this, event: &MouseMoveEvent, _w, cx| {
+            let (Some(host), Some(tooltip)) = (host_for_move.as_ref(), tooltip_for_move.as_ref())
+            else {
+                return;
+            };
+            let _ = host.update(cx, |host, cx| {
+                host.on_mouse_moved(event.position, cx);
+                host.set_tooltip_text_if_changed(Some(tooltip.clone()), cx);
+            });
+        }))
+        .on_hover(cx.listener(move |_this, hovering: &bool, _w, cx| {
+            let (false, Some(host), Some(tooltip)) =
+                (*hovering, host_for_hover.as_ref(), tooltip.as_ref())
+            else {
+                return;
+            };
+            let _ = host.update(cx, |host, cx| {
+                host.clear_tooltip_if_matches(tooltip, cx);
+            });
+        }))
+        // Keeps the press off the row, which may activate on mouse-down.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|_this, _event: &MouseDownEvent, _w, cx| cx.stop_propagation()),
+        )
+        .on_click(cx.listener(move |this, _event: &ClickEvent, window, cx| {
+            cx.stop_propagation();
+            (on_remove)(this, index, window, cx);
+        }))
+}
+
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
     color.a = alpha;
     color
@@ -498,7 +906,7 @@ mod tests {
             PickerPromptItem::plain("alphabet"),
         ];
 
-        let matches = match_items(&items, "alphabet soup");
+        let matches = match_items(&items, &section_groups(&items), "alphabet soup");
 
         assert!(matches.is_empty());
     }
@@ -525,7 +933,7 @@ mod tests {
             PickerPromptItemPart::path("/tmp/repo/src/main.rs"),
         ]);
 
-        let matches = match_items(std::slice::from_ref(&item), "main");
+        let matches = match_items(std::slice::from_ref(&item), &[0], "main");
         let range = matches
             .first()
             .and_then(|m| m.range.clone())
@@ -540,6 +948,50 @@ mod tests {
     }
 
     #[test]
+    fn picker_prompt_layout_reserves_a_child_slot_per_section_header() {
+        let items = vec![
+            PickerPromptItem::plain("alpha").section("Open"),
+            PickerPromptItem::plain("beta").section("Open"),
+            PickerPromptItem::plain("gamma").section("Recently Closed"),
+        ];
+
+        let layout = picker_prompt_layout(&items, "");
+
+        assert_eq!(layout.item_indices, vec![0, 1, 2]);
+        // Header, alpha, beta, header, gamma.
+        assert_eq!(layout.child_indices, vec![1, 2, 4]);
+    }
+
+    #[test]
+    fn picker_prompt_layout_keeps_sections_contiguous_when_filtering() {
+        let items = vec![
+            PickerPromptItem::plain("zulu-repo").section("Open"),
+            PickerPromptItem::plain("repo-one").section("Recently Closed"),
+            PickerPromptItem::plain("repo-two").section("Recently Closed"),
+        ];
+
+        let layout = picker_prompt_layout(&items, "repo");
+
+        // The "Recently Closed" hits sort earlier on match position, but must
+        // not be hoisted above the "Open" section.
+        assert_eq!(layout.item_indices, vec![0, 1, 2]);
+        assert_eq!(layout.child_indices, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn picker_prompt_layout_drops_headers_for_sections_without_matches() {
+        let items = vec![
+            PickerPromptItem::plain("alpha").section("Open"),
+            PickerPromptItem::plain("gamma").section("Recently Closed"),
+        ];
+
+        let layout = picker_prompt_layout(&items, "gam");
+
+        assert_eq!(layout.item_indices, vec![1]);
+        assert_eq!(layout.child_indices, vec![1]);
+    }
+
+    #[test]
     fn picker_prompt_item_search_skips_non_searchable_separators() {
         let item = PickerPromptItem::from_parts([
             PickerPromptItemPart::new("repo").flexible(false),
@@ -547,7 +999,7 @@ mod tests {
             PickerPromptItemPart::path("/tmp/workspace"),
         ]);
 
-        let matches = match_items(&[item], " - ");
+        let matches = match_items(&[item], &[0], " - ");
 
         assert!(matches.is_empty());
     }

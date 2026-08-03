@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_core::domain::{
-    Branch, CommitId, Remote, RemoteBranch, RepoSpec, StashEntry, Submodule, SubmoduleStatus,
-    Upstream, Worktree,
+    Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
+    Submodule, SubmoduleStatus, Upstream, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::{GitExecutableAvailability, GitExecutablePreference, GitRuntimeState};
@@ -132,11 +132,14 @@ fn command_palette_input_focus(
     view: &gpui::Entity<GitCometView>,
 ) -> Option<gpui::FocusHandle> {
     cx.update(|_window, app| {
-        view.read(app)
-            .command_palette
-            .query_input
-            .as_ref()
-            .map(|input| input.read(app).focus_handle())
+        Some(
+            view.read(app)
+                .command_palette
+                .read(app)
+                .query_input
+                .read(app)
+                .focus_handle(),
+        )
     })
 }
 
@@ -199,6 +202,10 @@ fn command_palette_opens_from_detached_focus_on_loading_repo_tabs(cx: &mut gpui:
     assert!(
         command_palette_is_open(cx, &view),
         "expected secondary-p from detached focus to open the command palette"
+    );
+    assert!(
+        cx.debug_bounds("modal_scrim").is_some(),
+        "expected command palette to use the shared modal scrim"
     );
     let input_focus = command_palette_input_focus(cx, &view)
         .expect("expected command palette input to exist after opening");
@@ -291,6 +298,42 @@ fn command_palette_opens_commit_prompt_for_clean_repo(cx: &mut gpui::TestAppCont
             "expected Commit Changes to remain selectable for a clean repo"
         );
     });
+    assert!(
+        cx.debug_bounds("modal_scrim").is_some(),
+        "expected command-palette dialogs to use the shared modal scrim"
+    );
+}
+
+#[gpui::test]
+fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].head_branch = Loadable::Ready("feature/current".to_string());
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("rename-branch", Some(window), cx)
+        });
+    });
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert!(matches!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::RenameBranchPrompt {
+                repo_id: RepoId(1),
+                name,
+                is_current_branch: true,
+            }) if name == "feature/current"
+        ));
+    });
 }
 
 #[gpui::test]
@@ -328,10 +371,13 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
         view.update(app, |this, cx| {
             let stale_focus = this
                 .command_palette
+                .read(cx)
                 .query_input
-                .as_ref()
-                .map(|input| input.read(cx).focus_handle());
-            this.command_palette.restore_focus = stale_focus;
+                .read(cx)
+                .focus_handle();
+            this.command_palette.update(cx, |palette, _cx| {
+                palette.restore_focus = Some(stale_focus);
+            });
         });
     });
 
@@ -2046,22 +2092,6 @@ fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette
     assert!(command_palette_available(GitCometViewMode::Normal));
 }
 
-#[test]
-fn ease_out_cubic_hits_expected_anchor_points() {
-    assert_eq!(GitCometView::ease_out_cubic(0.0), 0.0);
-    assert_eq!(GitCometView::ease_out_cubic(1.0), 1.0);
-    assert!((GitCometView::ease_out_cubic(0.5) - 0.875).abs() < 1e-6);
-}
-
-#[test]
-fn ease_out_cubic_is_monotonic_in_unit_interval() {
-    let a = GitCometView::ease_out_cubic(0.2);
-    let b = GitCometView::ease_out_cubic(0.6);
-    let c = GitCometView::ease_out_cubic(0.9);
-    assert!(a < b);
-    assert!(b < c);
-}
-
 #[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -2088,6 +2118,276 @@ fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::Tes
 
     cx.update(|_window, app| {
         assert!(!view.read(app).sidebar_collapsed);
+    });
+}
+
+#[gpui::test]
+fn collapsed_files_popover_uses_branch_style_rows_and_scrolls(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
+        (0..40)
+            .map(|ix| FileEntry {
+                name: format!("file_{ix}.txt"),
+                path: Arc::new(PathBuf::from(format!("file_{ix}.txt"))),
+                kind: FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Files, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    let panel = cx
+        .debug_bounds("collapsed_sidebar_popover")
+        .expect("expected collapsed Files popover");
+    assert!(
+        cx.debug_bounds("collapsed_file_browser_rows").is_some(),
+        "collapsed Files should eagerly render intrinsic rows like branch popovers"
+    );
+    assert!(
+        cx.debug_bounds("file_browser_scroll_container").is_none(),
+        "collapsed Files must not use the full-sidebar virtualized viewport"
+    );
+    let scroll = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .collapsed_popover_scroll
+            .clone()
+    });
+    assert!(
+        scroll.max_offset().y > px(0.0),
+        "collapsed popover scrollbar must observe overflowing rows"
+    );
+    assert!(
+        components::Scrollbar::thumb_visible_for_test(&scroll, panel.size.height),
+        "collapsed popover must render a scrollbar thumb for overflowing rows"
+    );
+    let surface = cx
+        .debug_bounds("collapsed_sidebar_popover_content")
+        .expect("expected collapsed popover scroll surface");
+    let scrollbar_before = cx
+        .debug_bounds("collapsed_sidebar_popover_scrollbar")
+        .expect("expected collapsed popover scrollbar");
+    assert_eq!(
+        (scrollbar_before.top(), scrollbar_before.bottom()),
+        (surface.top(), surface.bottom()),
+        "scrollbar track must be anchored to the visible surface"
+    );
+
+    let before = cx
+        .debug_bounds("file_browser_row_0")
+        .expect("expected first file row")
+        .top();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: panel.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(-120.0))),
+        ..Default::default()
+    });
+    test_support::redraw(cx);
+    let after = cx
+        .debug_bounds("file_browser_row_0")
+        .expect("expected first file row after scroll")
+        .top();
+    let scrollbar_after = cx
+        .debug_bounds("collapsed_sidebar_popover_scrollbar")
+        .expect("expected collapsed popover scrollbar after scroll");
+    assert!(
+        after < before - px(1.0),
+        "mouse wheel must move collapsed file rows (before={before:?}, after={after:?})"
+    );
+    assert_eq!(
+        scrollbar_after, scrollbar_before,
+        "scrollbar track must stay fixed while its content scrolls"
+    );
+}
+
+#[gpui::test]
+fn collapsed_branch_popover_filter_spans_local_and_remote(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![Branch {
+        name: "feature/alpha".to_string(),
+        target: CommitId("deadbeef".into()),
+        upstream: None,
+        divergence: None,
+    }]));
+    state.repos[0].remote_branches = Loadable::Ready(Arc::new(vec![RemoteBranch {
+        remote: "origin".to_string(),
+        name: "feature/beta".to_string(),
+        target: CommitId("deadbeef".into()),
+    }]));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Local, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    assert!(
+        cx.debug_bounds("collapsed_popover_filter_bar").is_none(),
+        "the popover filter must stay hidden until its header toggle is used"
+    );
+    let toggle = cx
+        .debug_bounds("collapsed_popover_filter_toggle")
+        .expect("expected a filter toggle in the branch popover header");
+    let section_menu = cx
+        .debug_bounds("collapsed_popover_section_menu")
+        .expect("expected a section menu button in the branch popover header");
+    let panel = cx
+        .debug_bounds("collapsed_sidebar_popover")
+        .expect("expected the collapsed branch popover");
+    assert!(
+        section_menu.left() >= toggle.right() && section_menu.right() <= panel.right(),
+        "the header's two buttons must sit side by side inside the panel \
+         (filter={toggle:?}, menu={section_menu:?}, panel={panel:?})"
+    );
+
+    cx.simulate_mouse_move(toggle.center(), None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        toggle.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        toggle.center(),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+
+    let filter_bar = cx
+        .debug_bounds("collapsed_popover_filter_bar")
+        .expect("expected the toggle to reveal the popover filter");
+    // The branch sits under a `feature/` group header, so it is not row zero.
+    let first_row = ["branch_row_1_0", "branch_row_1_1", "branch_row_1_2"]
+        .into_iter()
+        .find_map(|selector| cx.debug_bounds(selector))
+        .expect("expected the popover to render branch rows");
+    assert!(
+        filter_bar.bottom() <= first_row.top(),
+        "the filter box must sit above every branch row \
+         (filter={filter_bar:?}, first row={first_row:?})"
+    );
+    assert!(
+        filter_bar.top() > toggle.top(),
+        "the filter box must sit below the popover header"
+    );
+
+    cx.simulate_keystrokes("b e t a");
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("branch_filter_group_remote").is_some(),
+        "a Local popover filter must also surface Remote matches, under a Remote label"
+    );
+    let query = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .collapsed_popover_filter_query
+            .clone()
+    });
+    assert_eq!(
+        query, "beta",
+        "keystrokes must reach the popover filter box"
+    );
+}
+
+#[gpui::test]
+fn collapsed_worktrees_popover_offers_its_section_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    // An empty section is the worst case: it has no rows to right-click, so
+    // without the panel's own handler the click falls through to the history
+    // canvas underneath (whose listener is window-level, not hitbox-gated).
+    state.repos[0].worktrees = Loadable::Ready(Arc::new(vec![]));
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_sidebar_collapsed(true, cx);
+            this.open_sidebar_collapsed_popover(CollapsedSidebarSection::Worktrees, cx);
+        });
+    });
+    pump_for(
+        cx,
+        Duration::from_millis(PANE_COLLAPSE_ANIM_MS.saturating_add(180)),
+    );
+
+    let panel = cx
+        .debug_bounds("collapsed_sidebar_popover")
+        .expect("expected the collapsed Worktrees popover");
+    assert!(
+        cx.debug_bounds("collapsed_popover_section_menu").is_some(),
+        "the popover header must expose the section's menu button"
+    );
+
+    // Low in the panel, below the header and the empty state.
+    let empty_point = gpui::point(panel.center().x, panel.bottom() - px(24.0));
+    cx.simulate_mouse_move(empty_point, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        empty_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        empty_point,
+        gpui::MouseButton::Right,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::popover_kind(view.read(app), app),
+            Some(PopoverKind::worktree(
+                RepoId(1),
+                WorktreePopoverKind::SectionMenu
+            )),
+            "right-clicking the popover must open the worktrees section menu"
+        );
+        assert_eq!(
+            view.read(app).sidebar_collapsed_popover,
+            Some(CollapsedSidebarSection::Worktrees),
+            "the popover must stay open behind its own context menu"
+        );
     });
 }
 
@@ -3358,4 +3658,44 @@ fn try_auth_prompt_submit_username_password_dispatches_submit(cx: &mut gpui::Tes
         "auth prompt should be cleared after successful submit with credentials",
         || store_for_assert.snapshot().auth_prompt.is_none(),
     );
+}
+
+#[test]
+fn pane_collapse_ease_is_a_well_formed_easing_curve() {
+    // Endpoints are pinned.
+    assert_eq!(GitCometView::pane_collapse_ease(0.0), 0.0);
+    assert_eq!(GitCometView::pane_collapse_ease(1.0), 1.0);
+
+    // Out-of-range inputs clamp to the endpoints.
+    assert_eq!(GitCometView::pane_collapse_ease(-0.5), 0.0);
+    assert_eq!(GitCometView::pane_collapse_ease(1.5), 1.0);
+
+    // Monotonically non-decreasing across the domain.
+    let mut prev = 0.0;
+    for i in 0..=100 {
+        let t = i as f32 / 100.0;
+        let y = GitCometView::pane_collapse_ease(t);
+        assert!(
+            y >= prev - 1e-4,
+            "easing should be monotonic: y({t}) = {y} < previous {prev}"
+        );
+        assert!(
+            (0.0..=1.0).contains(&y),
+            "easing stays in [0, 1]: y({t}) = {y}"
+        );
+        prev = y;
+    }
+
+    // Fast-out, slow-in: past the halfway mark well before the halfway time.
+    assert!(GitCometView::pane_collapse_ease(0.5) > 0.5);
+}
+
+#[test]
+fn cubic_bezier_matches_a_linear_curve_for_the_identity_control_points() {
+    // cubic-bezier(1/3, 1/3, 2/3, 2/3) is the straight line y = x.
+    for i in 0..=20 {
+        let t = i as f32 / 20.0;
+        let y = GitCometView::cubic_bezier(1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, t);
+        assert!((y - t).abs() < 1e-3, "linear bezier: y({t}) = {y}");
+    }
 }

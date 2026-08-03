@@ -16,6 +16,17 @@ pub(super) fn panel(
         .filter(|prompt| prompt.repo_id == repo_id)
         .cloned()
     else {
+        // No prompt yet: if the background trust check for this repo is still
+        // running, show a spinner so the popover is not an empty box. Otherwise
+        // the popover is mid-teardown and renders nothing.
+        if this
+            .state
+            .submodule_trust_check_pending
+            .as_ref()
+            .is_some_and(|check| check.repo_id == repo_id)
+        {
+            return checking_panel(theme, cx);
+        }
         return div();
     };
 
@@ -45,12 +56,20 @@ pub(super) fn panel(
     };
     let sources = prompt.sources.clone();
     let operation = prompt.operation.clone();
+    let scaled_px = super::popover_scaled_px_fn(cx);
 
-    let mut dialog = ConfirmDialog::new(title, DIALOG_640_WIDTH)
+    let mut dialog = ConfirmDialog::new(title, DIALOG_460_WIDTH)
         .section(
+            // `ConfirmDialog` only pins a `min_w`, so an unwrapped body line grows
+            // the whole dialog to its natural width. Capping this long intro
+            // paragraph at the dialog width forces it to wrap and keeps the dialog
+            // at 460px. Source paths below have no wrap points, so a pathologically
+            // long submodule path could still widen it — acceptable for this rare
+            // dialog rather than hard-pinning every ConfirmDialog to a fixed width.
             div()
                 .px_2()
                 .pt_1()
+                .max_w(scaled_px(460.0))
                 .text_sm()
                 .text_color(theme.colors.text_muted)
                 .child("Git blocks local file transport for submodules by default. Trusting these sources will allow GitComet to enable file transport only for this repo/source pair."),
@@ -61,7 +80,11 @@ pub(super) fn panel(
                     .style(components::ButtonStyle::Filled)
                     .borderless()
                     .no_hover_border()
-                    .end_slot(div().font_family(UI_MONOSPACE_FONT_FAMILY).child("->"))
+                    .end_slot(svg_icon(
+                        "icons/open_external.svg",
+                        theme.colors.accent,
+                        px(14.0),
+                    ))
                     .on_click(theme, cx, |_this, _e, _window, cx| {
                         cx.open_url(SUBMODULE_TRUST_CVE_URL);
                     }),
@@ -207,4 +230,36 @@ pub(super) fn panel(
             }),
         cx,
     )
+}
+
+/// Pending state shown while the background trust check runs. Matches the trust
+/// dialog's width so the popover does not jump in size when the check resolves
+/// into the real dialog.
+fn checking_panel(theme: AppTheme, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
+    let scaled_px = super::popover_scaled_px_fn(cx);
+    div()
+        .flex()
+        .flex_col()
+        .min_w(scaled_px(460.0))
+        .child(popover_title("Checking submodule trust…"))
+        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(
+            div()
+                .px_2()
+                .py_3()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(crate::view::icons::svg_spinner(
+                    "submodule_trust_checking_spinner",
+                    theme.colors.text_muted,
+                    scaled_px(16.0),
+                ))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.colors.text_muted)
+                        .child("Checking local submodule sources…"),
+                ),
+        )
 }

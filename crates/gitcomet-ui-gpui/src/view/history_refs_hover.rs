@@ -519,6 +519,7 @@ impl Render for HistoryRefsHoverHost {
                 .gap_1()
                 .text_xs()
                 .line_height(ui_scale.px(16.0))
+                .rounded(px(theme.radii.row))
                 .text_color(if actionable {
                     theme.colors.text
                 } else {

@@ -19,6 +19,7 @@ impl TextInput {
             focus_handle,
             content: TextModel::new(),
             placeholder: options.placeholder,
+            leading_icon: options.leading_icon,
             multiline: options.multiline,
             read_only: options.read_only,
             chromeless: options.chromeless,
@@ -131,6 +132,24 @@ impl TextInput {
         }
         self.style = style;
         self.bump_shape_style_epoch();
+        cx.notify();
+    }
+
+    pub fn set_chromeless(&mut self, chromeless: bool, cx: &mut Context<Self>) {
+        if self.chromeless == chromeless {
+            return;
+        }
+        self.chromeless = chromeless;
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
+    pub fn set_leading_icon(&mut self, leading_icon: Option<&'static str>, cx: &mut Context<Self>) {
+        if self.leading_icon == leading_icon {
+            return;
+        }
+        self.leading_icon = leading_icon;
+        self.invalidate_layout_caches();
         cx.notify();
     }
 

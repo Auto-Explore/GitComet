@@ -100,6 +100,8 @@ pub(in crate::view) fn build_sidebar_presentation(
     cache: &mut SidebarPresentationCache,
     state: &AppState,
     collapsed_items_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    pinned_branches_by_repo: &BTreeMap<PathBuf, BTreeSet<String>>,
+    branch_filter: &str,
 ) -> Option<SidebarPresentation> {
     let repo_id = state.active_repo?;
     let repo = state.repos.iter().find(|repo| repo.id == repo_id)?;
@@ -107,9 +109,18 @@ pub(in crate::view) fn build_sidebar_presentation(
     let collapsed_items = collapsed_items_by_repo
         .get(&repo.spec.workdir)
         .unwrap_or(&empty);
+    let pinned_branches = pinned_branches_by_repo
+        .get(&repo.spec.workdir)
+        .unwrap_or(&empty);
 
     Some(SidebarPresentation {
-        rows: branch_sidebar_rows_cached(&mut cache.branch_rows, repo, collapsed_items),
+        rows: branch_sidebar_rows_cached(
+            &mut cache.branch_rows,
+            repo,
+            collapsed_items,
+            pinned_branches,
+            branch_filter,
+        ),
         workspace_badges: WorkspaceBadgeIndex::for_state(repo, state.repos.as_slice()),
     })
 }
@@ -118,7 +129,22 @@ fn branch_sidebar_rows_cached(
     cache: &mut Option<BranchSidebarCache>,
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
+    pinned_branches: &BTreeSet<String>,
+    branch_filter: &str,
 ) -> Rc<[BranchSidebarRow]> {
+    // A live filter query changes rows independently of the cached repo/source
+    // fingerprints, so bypass the cache entirely while filtering (and don't
+    // pollute it with filtered results).
+    if !branch_filter.trim().is_empty() {
+        return branch_sidebar::branch_sidebar_rows(
+            repo,
+            collapsed_items,
+            pinned_branches,
+            branch_filter,
+        )
+        .into();
+    }
+
     let fingerprint = BranchSidebarFingerprint::from_repo(repo);
 
     if let Some(rows) = branch_sidebar_cache_lookup(cache, repo.id, fingerprint) {
@@ -148,7 +174,7 @@ fn branch_sidebar_rows_cached(
     }
 
     let rows: Rc<[BranchSidebarRow]> =
-        branch_sidebar::branch_sidebar_rows(repo, collapsed_items).into();
+        branch_sidebar::branch_sidebar_rows(repo, collapsed_items, pinned_branches, "").into();
 
     branch_sidebar_cache_store(
         cache,
@@ -256,8 +282,9 @@ mod tests {
         )]);
         let mut cache = SidebarPresentationCache::default();
 
-        let initial = build_sidebar_presentation(&mut cache, &state, &collapsed_items)
-            .expect("initial sidebar presentation");
+        let initial =
+            build_sidebar_presentation(&mut cache, &state, &collapsed_items, &BTreeMap::new(), "")
+                .expect("initial sidebar presentation");
         assert_eq!(
             worktree_branch_for_path(initial.rows.as_ref(), "/tmp/repo-feature"),
             Some("feature/old".to_string())
@@ -273,8 +300,9 @@ mod tests {
         state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
         state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
 
-        let refreshed = build_sidebar_presentation(&mut cache, &state, &collapsed_items)
-            .expect("refreshed sidebar presentation");
+        let refreshed =
+            build_sidebar_presentation(&mut cache, &state, &collapsed_items, &BTreeMap::new(), "")
+                .expect("refreshed sidebar presentation");
         assert_eq!(
             worktree_branch_for_path(refreshed.rows.as_ref(), "/tmp/repo-feature"),
             Some("feature/new".to_string())
@@ -407,8 +435,9 @@ mod tests {
         };
         let mut cache = SidebarPresentationCache::default();
 
-        let presentation = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-            .expect("sidebar presentation");
+        let presentation =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
+                .expect("sidebar presentation");
 
         assert_eq!(
             presentation.workspace_badges.listed_path("feature"),
@@ -438,8 +467,9 @@ mod tests {
         state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
         state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
 
-        let presentation = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-            .expect("sidebar presentation");
+        let presentation =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
+                .expect("sidebar presentation");
 
         assert!(
             presentation
@@ -467,8 +497,9 @@ mod tests {
         };
         let mut cache = SidebarPresentationCache::default();
 
-        let initial = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-            .expect("initial sidebar presentation");
+        let initial =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
+                .expect("initial sidebar presentation");
         assert_eq!(
             initial.workspace_badges.listed_path("feature/old"),
             Some(&PathBuf::from("/tmp/repo-feature"))
@@ -484,8 +515,9 @@ mod tests {
         state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
         state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
 
-        let refreshed = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-            .expect("refreshed sidebar presentation");
+        let refreshed =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
+                .expect("refreshed sidebar presentation");
 
         assert!(
             refreshed
@@ -517,8 +549,9 @@ mod tests {
         };
         let mut cache = SidebarPresentationCache::default();
 
-        let initial = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-            .expect("initial sidebar presentation");
+        let initial =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
+                .expect("initial sidebar presentation");
         assert!(initial.workspace_badges.listed_path("feature").is_some());
 
         state.repos[0].worktrees =
@@ -531,8 +564,9 @@ mod tests {
         state.repos[0].worktrees_rev = state.repos[0].worktrees_rev.wrapping_add(1);
         state.repos[0].branch_sidebar_rev = state.repos[0].branch_sidebar_rev.wrapping_add(1);
 
-        let refreshed = build_sidebar_presentation(&mut cache, &state, &BTreeMap::new())
-            .expect("refreshed sidebar presentation");
+        let refreshed =
+            build_sidebar_presentation(&mut cache, &state, &BTreeMap::new(), &BTreeMap::new(), "")
+                .expect("refreshed sidebar presentation");
 
         assert!(refreshed.workspace_badges.listed_path("feature").is_none());
     }

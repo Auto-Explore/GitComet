@@ -255,6 +255,25 @@ pub(super) fn schedule_create_branch_and_checkout(
     });
 }
 
+pub(super) fn schedule_rename_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    old_name: String,
+    new_name: String,
+) {
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        move |repo| repo.rename_branch(&old_name, &new_name),
+        send_refresh_branches_and_load_worktrees_on_success,
+        repo_action_finished(RepoActionKind::RenameBranch),
+    );
+}
+
 pub(super) fn schedule_delete_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,

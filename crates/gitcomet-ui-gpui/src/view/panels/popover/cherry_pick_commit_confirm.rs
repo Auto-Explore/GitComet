@@ -97,8 +97,6 @@ pub(super) fn panel(
             _ => None,
         })
         .unwrap_or_default();
-    let ui_scale_percent = super::popover_ui_scale_percent(cx);
-    let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     let dispatch =
         move |this: &mut PopoverHost, commit_now: bool, cx: &mut gpui::Context<PopoverHost>| {
@@ -109,178 +107,136 @@ pub(super) fn panel(
                 mainline: selected_mainline,
                 summary: summary.clone(),
             });
-            this.popover = None;
-            this.popover_anchor = None;
-            cx.notify();
+            this.close_popover(cx);
         };
 
-    div()
-        .flex()
-        .flex_col()
-        .min_w(scaled_px(380.0))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .child("Commit cherry-picked commit?"),
-        )
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .text_sm()
-                .text_color(theme.colors.text_muted)
-                .child(format!("Apply {short} to the current branch?")),
-        )
-        .child(
-            div()
-                .px_2()
-                .pb_1()
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .child("Commit the cherry-picked change immediately?"),
-        )
-        .when(is_merge, |dialog| {
-            dialog.child(
+    let mainline_section = is_merge.then(|| {
+        div()
+            .px_2()
+            .pb_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
                 div()
-                    .px_2()
-                    .pb_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("Mainline parent"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("Choose the parent Git should treat as the merge's mainline."),
-                    )
-                    .children(mainline_choices.into_iter().map(|choice| {
-                        let number = choice.number;
-                        let is_selected = selected_mainline == Some(number);
-                        let outlined_border = crate::theme::with_alpha(
-                            theme.colors.text_muted,
-                            if theme.is_dark { 0.38 } else { 0.28 },
-                        );
-                        let hover_overlay = crate::theme::with_alpha(
-                            theme.colors.text,
-                            if theme.is_dark { 0.07 } else { 0.05 },
-                        );
-                        let top_line = div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(div().text_sm().child(format!("Parent {number}")))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_family(
-                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                    )
-                                    .child(choice.short_id),
-                            )
-                            .when(!choice.refs.is_empty(), |line| {
-                                line.child(div().flex_1()).child(
-                                    div()
-                                        .text_xs()
-                                        .whitespace_nowrap()
-                                        .overflow_hidden()
-                                        .child(choice.refs.join(", ")),
-                                )
-                            });
-
-                        div()
-                            .id(SharedString::from(format!("cherry_pick_mainline_{number}")))
-                            .w_full()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_color(theme.colors.text)
-                            .border_1()
-                            .border_color(if is_selected {
-                                theme.colors.accent
-                            } else {
-                                outlined_border
-                            })
-                            .when(is_selected, |row| {
-                                row.bg(crate::theme::with_alpha(
-                                    theme.colors.accent,
-                                    if theme.is_dark { 0.12 } else { 0.08 },
-                                ))
-                            })
-                            .when(!is_selected, |row| {
-                                row.hover(move |style| style.bg(hover_overlay))
-                            })
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
-                                this.cherry_pick_mainline = Some(number);
-                                cx.notify();
-                            }))
-                            .child(top_line)
-                            .when_some(choice.summary, |row, summary| {
-                                row.child(
-                                    div()
-                                        .text_xs()
-                                        .whitespace_nowrap()
-                                        .overflow_hidden()
-                                        .child(summary),
-                                )
-                            })
-                    })),
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .child("Mainline parent"),
             )
-        })
-        .child(div().border_t_1().border_color(theme.colors.border))
-        .child(
-            div()
-                .px_2()
-                .py_1()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    super::cancel_button(
-                        "cherry_pick_commit_cancel",
-                        "cherry_pick_commit_cancel_hint",
-                        theme,
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.text_muted)
+                    .child("Choose the parent Git should treat as the merge's mainline."),
+            )
+            .children(mainline_choices.into_iter().map(|choice| {
+                let number = choice.number;
+                let is_selected = selected_mainline == Some(number);
+                let outlined_border = crate::theme::with_alpha(
+                    theme.colors.text_muted,
+                    if theme.is_dark { 0.38 } else { 0.28 },
+                );
+                let hover_overlay = crate::theme::with_alpha(
+                    theme.colors.text,
+                    if theme.is_dark { 0.07 } else { 0.05 },
+                );
+                let top_line = div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().text_sm().child(format!("Parent {number}")))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                            .child(choice.short_id),
                     )
-                    .on_click(theme, cx, |this, _e, _w, cx| {
-                        this.popover = None;
-                        this.popover_anchor = None;
-                        cx.notify();
-                    }),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            components::Button::new("cherry_pick_commit_no", "No")
-                                .style(components::ButtonStyle::Outlined)
-                                .disabled(mainline_missing)
-                                .on_click(theme, cx, {
-                                    let dispatch = dispatch.clone();
-                                    move |this, _e, _w, cx| dispatch(this, false, cx)
-                                }),
+                    .when(!choice.refs.is_empty(), |line| {
+                        line.child(div().flex_1()).child(
+                            div()
+                                .text_xs()
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(choice.refs.join(", ")),
                         )
-                        .child(
-                            components::Button::new("cherry_pick_commit_yes", "Yes")
-                                .style(components::ButtonStyle::Filled)
-                                .disabled(mainline_missing)
-                                .on_click(theme, cx, move |this, _e, _w, cx| {
-                                    dispatch(this, true, cx)
-                                }),
-                        ),
-                ),
-        )
+                    });
+
+                div()
+                    .id(SharedString::from(format!("cherry_pick_mainline_{number}")))
+                    .w_full()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_color(theme.colors.text)
+                    .border_1()
+                    .border_color(if is_selected {
+                        theme.colors.accent
+                    } else {
+                        outlined_border
+                    })
+                    .when(is_selected, |row| {
+                        row.bg(crate::theme::with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.12 } else { 0.08 },
+                        ))
+                    })
+                    .when(!is_selected, |row| {
+                        row.hover(move |style| style.bg(hover_overlay))
+                    })
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _e: &gpui::ClickEvent, _w, cx| {
+                        this.cherry_pick_mainline = Some(number);
+                        cx.notify();
+                    }))
+                    .child(top_line)
+                    .when_some(choice.summary, |row, summary| {
+                        row.child(
+                            div()
+                                .text_xs()
+                                .whitespace_nowrap()
+                                .overflow_hidden()
+                                .child(summary),
+                        )
+                    })
+            }))
+    });
+
+    let mut dialog = ConfirmDialog::new("Commit cherry-picked commit?", DIALOG_380_WIDTH)
+        .text(theme, format!("Apply {short} to the current branch?"))
+        .note(theme, "Commit the cherry-picked change immediately?");
+    if let Some(section) = mainline_section {
+        dialog = dialog.section(section);
+    }
+
+    dialog.render(
+        theme,
+        dialog_cancel_button(
+            "cherry_pick_commit_cancel",
+            "cherry_pick_commit_cancel_hint",
+            theme,
+            cx,
+        ),
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(
+                components::Button::new("cherry_pick_commit_no", "No")
+                    .style(components::ButtonStyle::Outlined)
+                    .disabled(mainline_missing)
+                    .on_click(theme, cx, {
+                        let dispatch = dispatch.clone();
+                        move |this, _e, _w, cx| dispatch(this, false, cx)
+                    }),
+            )
+            .child(
+                components::Button::new("cherry_pick_commit_yes", "Yes")
+                    .style(components::ButtonStyle::Filled)
+                    .disabled(mainline_missing)
+                    .on_click(theme, cx, move |this, _e, _w, cx| dispatch(this, true, cx)),
+            ),
+        cx,
+    )
 }
 
 #[cfg(test)]

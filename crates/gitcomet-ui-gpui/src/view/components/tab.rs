@@ -24,6 +24,12 @@ impl Tab {
     /// Long repository names truncate rather than widening the tab past this.
     const TAB_MAX_WIDTH_PX: f32 = 180.0;
 
+    /// Overlay an idle tab picks up on hover. Exposed so anything painted on
+    /// top of a tab (the label fade) can flatten it into a matching color.
+    pub fn hover_overlay(theme: AppTheme) -> gpui::Rgba {
+        theme.hover_overlay()
+    }
+
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id = id.into();
         Self {
@@ -57,7 +63,7 @@ impl Tab {
         } else {
             theme.colors.text_muted
         };
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
+        let hover_bg = Self::hover_overlay(theme);
         let active_bg = theme.colors.active;
 
         let end_slot = div()
@@ -70,11 +76,12 @@ impl Tab {
 
         // Browser-style tab: both states share the shape — inset from the bar
         // top, sitting on the bar's bottom edge, rounded top corners only.
-        // The active tab fills with the content-strip color and carries a
-        // top/side border so it reads as the front sheet; the bottom stays
-        // open to fuse with the workspace below. Width is clamped: long repo
-        // names truncate at the max, and tabs shrink no further than the min
-        // before the strip starts scrolling.
+        // Every tab reserves the active tab's top/side border so changing
+        // selection never shifts its contents. The active tab colors that
+        // border and fills with the content-strip color; the bottom stays open
+        // to fuse with the workspace below. Width is clamped: long repo names
+        // truncate at the max, and tabs shrink no further than the min before
+        // the strip starts scrolling.
         let mut base = self
             .div
             .group("tab")
@@ -89,6 +96,10 @@ impl Tab {
             .gap_1()
             .rounded_tl(px(theme.radii.control))
             .rounded_tr(px(theme.radii.control))
+            .border_t_1()
+            .border_l_1()
+            .border_r_1()
+            .border_color(gpui::transparent_black())
             .text_color(text_color)
             .cursor_pointer()
             .children(self.children)
@@ -97,9 +108,6 @@ impl Tab {
         if self.selected {
             base = base
                 .bg(theme.colors.sidebar_bg)
-                .border_t_1()
-                .border_l_1()
-                .border_r_1()
                 .border_color(theme.colors.border);
         } else {
             base = base
@@ -110,9 +118,4 @@ impl Tab {
 
         base
     }
-}
-
-fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
-    color
 }

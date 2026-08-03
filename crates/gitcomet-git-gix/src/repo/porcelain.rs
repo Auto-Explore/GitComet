@@ -463,6 +463,19 @@ impl GixRepo {
         self.create_local_branch_reference(name, target.as_ref())
     }
 
+    pub(super) fn rename_branch_impl(&self, old_name: &str, new_name: &str) -> Result<()> {
+        validate_ref_like_arg(old_name, "branch name")?;
+        validate_ref_like_arg(new_name, "branch name")?;
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("branch")
+            .arg("-m")
+            .arg("--")
+            .arg(old_name)
+            .arg(new_name);
+        run_git_simple(cmd, "git branch -m")
+    }
+
     pub(super) fn delete_branch_impl(&self, name: &str) -> Result<()> {
         validate_ref_like_arg(name, "branch name")?;
 

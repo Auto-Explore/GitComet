@@ -50,7 +50,7 @@ actions!(
         OpenSettings,
         OpenInCodeEditor,
         OpenRepository,
-        OpenRecentPicker,
+        SwitchRepository,
         ApplyPatch,
         Close,
         CloseWindow,
@@ -540,13 +540,13 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     });
 
     let recent_picker_backend = Arc::clone(&backend);
-    cx.on_action(move |_: &OpenRecentPicker, cx| {
+    cx.on_action(move |_: &SwitchRepository, cx| {
         let backend = Arc::clone(&recent_picker_backend);
         cx.defer(move |cx| {
             if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
                 return;
             }
-            open_recent_repository_picker_in_existing_or_new_window(cx, backend);
+            open_repository_switcher_in_existing_or_new_window(cx, backend);
         });
     });
     cx.on_action(|_: &ToggleCommandPalette, cx| {
@@ -697,7 +697,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-n", NewWindow, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
-        KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
+        KeyBinding::new("secondary-shift-o", SwitchRepository, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-w", Close, None),
@@ -718,7 +718,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
         KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("alt-cmd-o", OpenRecentPicker, None),
+        KeyBinding::new("alt-cmd-o", SwitchRepository, None),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-{", PreviousRepository, None),
         #[cfg(target_os = "macos")]
@@ -781,7 +781,7 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
         MenuItem::action("New Window", NewWindow),
         MenuItem::separator(),
         MenuItem::action("Open…", OpenRepository),
-        MenuItem::action("Open Recent…", OpenRecentPicker),
+        MenuItem::action("Switch Repository…", SwitchRepository),
     ];
 
     let recent_repo_items = recent_repo_menu_items();
@@ -909,6 +909,9 @@ fn recent_repo_menu_items() -> Vec<MenuItem> {
         .collect()
 }
 
+/// Labels the macOS "Recent Repositories" menu items. Other platforms only
+/// reach the recents through the repository switcher, which builds its own rows.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn recent_repository_label(path: &Path) -> String {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return path.display().to_string();
@@ -1210,13 +1213,13 @@ fn repository_paths_from_open_urls(urls: &[String]) -> Vec<PathBuf> {
     paths
 }
 
-fn open_recent_repository_picker_in_window(cx: &mut App, window: &GitCometWindowEntry) {
+fn open_repository_switcher_in_window(cx: &mut App, window: &GitCometWindowEntry) {
     let _ = window.handle.update(cx, |root_view, window, cx| {
         let Ok(view) = root_view.downcast::<GitCometView>() else {
             return;
         };
         view.update(cx, |view, cx| {
-            view.open_recent_repository_picker(window, cx);
+            view.toggle_repository_switcher(window, cx);
         });
     });
     if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
@@ -1224,19 +1227,16 @@ fn open_recent_repository_picker_in_window(cx: &mut App, window: &GitCometWindow
     }
 }
 
-fn open_recent_repository_picker_in_existing_or_new_window(
-    cx: &mut App,
-    backend: Arc<dyn GitBackend>,
-) {
+fn open_repository_switcher_in_existing_or_new_window(cx: &mut App, backend: Arc<dyn GitBackend>) {
     if let Some(window) = find_normal_gitcomet_window(cx) {
-        open_recent_repository_picker_in_window(cx, &window);
+        open_repository_switcher_in_window(cx, &window);
         return;
     }
 
     let launch = normal_launch_config(None, None);
     let window = open_gitcomet_window(cx, backend, &launch);
     let _ = window.update(cx, |view, window, cx| {
-        view.open_recent_repository_picker(window, cx);
+        view.toggle_repository_switcher(window, cx);
     });
     activate_gitcomet_window(cx, window.into());
     cx.activate(true);
@@ -1777,7 +1777,7 @@ mod tests {
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenInCodeEditor))
                 .on_action(record_action_listener!(OpenRepository))
-                .on_action(record_action_listener!(OpenRecentPicker))
+                .on_action(record_action_listener!(SwitchRepository))
                 .on_action(record_action_listener!(Close))
                 .on_action(record_action_listener!(CloseWindow))
                 .on_action(record_action_listener!(PreviousRepository))
@@ -2223,7 +2223,7 @@ mod tests {
             ("secondary-shift-n", NewWindow.name()),
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
-            ("secondary-shift-o", OpenRecentPicker.name()),
+            ("secondary-shift-o", SwitchRepository.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-p", crate::view::ToggleCommandPalette.name()),
             ("secondary-w", Close.name()),
@@ -2243,7 +2243,7 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         cases.extend([
-            ("alt-cmd-o", OpenRecentPicker.name()),
+            ("alt-cmd-o", SwitchRepository.name()),
             ("cmd-{", PreviousRepository.name()),
             ("alt-cmd-left", PreviousRepository.name()),
             ("cmd-}", NextRepository.name()),

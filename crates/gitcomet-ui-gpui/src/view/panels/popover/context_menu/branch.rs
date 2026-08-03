@@ -87,12 +87,43 @@ pub(super) fn model(
             },
         }),
     });
+    if section == BranchSection::Local {
+        items.push(ContextMenuItem::Entry {
+            label: "Rename branch".into(),
+            icon: Some("icons/pencil.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::RenameBranchPrompt {
+                    repo_id,
+                    name: name.clone(),
+                    is_current_branch: false,
+                },
+            }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy branch name".into(),
         icon: Some("icons/copy.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText { text: name.clone() }),
+    });
+    let pinned = this.is_branch_pinned(repo_id, section, name);
+    items.push(ContextMenuItem::Entry {
+        label: if pinned {
+            "Unpin branch".into()
+        } else {
+            "Pin branch".into()
+        },
+        icon: Some("icons/pin.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ToggleBranchPin {
+            repo_id,
+            section,
+            name: name.clone(),
+        }),
     });
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Separator);
