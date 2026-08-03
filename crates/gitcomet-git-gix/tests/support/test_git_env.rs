@@ -4,9 +4,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct IsolatedGitConfigEnv {
-    _root: tempfile::TempDir,
     home_dir: PathBuf,
     xdg_config_home: PathBuf,
     global_config: PathBuf,
@@ -16,11 +16,11 @@ struct IsolatedGitConfigEnv {
 fn isolated_git_config_env() -> &'static IsolatedGitConfigEnv {
     static ENV: OnceLock<IsolatedGitConfigEnv> = OnceLock::new();
     ENV.get_or_init(|| {
-        let root = tempfile::tempdir().expect("create isolated git config tempdir");
-        let home_dir = root.path().join("home");
-        let xdg_config_home = root.path().join("xdg");
-        let global_config = root.path().join("global.gitconfig");
-        let gnupg_home = root.path().join("gnupg");
+        let root = unique_test_dir("gitcomet-git-env");
+        let home_dir = root.join("home");
+        let xdg_config_home = root.join("xdg");
+        let global_config = root.join("global.gitconfig");
+        let gnupg_home = root.join("gnupg");
 
         fs::create_dir_all(&home_dir).expect("create isolated HOME directory");
         fs::create_dir_all(&xdg_config_home).expect("create isolated XDG_CONFIG_HOME directory");
@@ -43,13 +43,25 @@ fn isolated_git_config_env() -> &'static IsolatedGitConfigEnv {
         );
 
         IsolatedGitConfigEnv {
-            _root: root,
             home_dir,
             xdg_config_home,
             global_config,
             gnupg_home,
         }
     })
+}
+
+fn unique_test_dir(prefix: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("{prefix}-{pid}-{id}"));
+    fs::create_dir_all(&dir).expect("create isolated git config tempdir");
+    dir
+}
+
+pub(crate) fn ensure_initialized() {
+    let _ = isolated_git_config_env();
 }
 
 pub(crate) fn apply(cmd: &mut Command) {
@@ -59,5 +71,7 @@ pub(crate) fn apply(cmd: &mut Command) {
         .env("HOME", &env.home_dir)
         .env("XDG_CONFIG_HOME", &env.xdg_config_home)
         .env("GNUPGHOME", &env.gnupg_home)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "Never")
         .env_remove("GIT_CONFIG_SYSTEM");
 }

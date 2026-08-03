@@ -360,6 +360,11 @@ impl ToastHost {
         id
     }
 
+    #[cfg(test)]
+    pub(super) fn toast_count_for_tests(&self) -> usize {
+        self.toasts.len()
+    }
+
     pub(super) fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
         let before = self.toasts.len();
         self.toasts.retain(|t| t.id != id);

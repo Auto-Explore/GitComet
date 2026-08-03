@@ -869,9 +869,7 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-        Effect::FetchAll {
-            repo_id, prune: _, ..
-        } => send(Msg::Internal(
+        Effect::FetchAll { repo_id, .. } => send(Msg::Internal(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::FetchAll,

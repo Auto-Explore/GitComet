@@ -4,6 +4,7 @@ use super::super::*;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 mod actions_impl;
+mod conflict_actions;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
 pub(in crate::view) mod diff_search;
@@ -21,7 +22,6 @@ pub(crate) use helpers::*;
 
 #[cfg(not(test))]
 const CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS: u64 = 140;
-const CONFLICT_RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
 const FOCUSED_MERGETOOL_EXIT_SUCCESS: i32 = 0;
 const FOCUSED_MERGETOOL_EXIT_CANCELED: i32 = 1;
 const FOCUSED_MERGETOOL_EXIT_ERROR: i32 = 2;

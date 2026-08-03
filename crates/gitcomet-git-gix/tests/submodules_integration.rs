@@ -72,23 +72,33 @@ fn add_submodule_raw(parent_repo: &Path, sub_repo: &Path, path: &Path, name: Opt
     if let Some(name) = name {
         cmd.arg("--name").arg(name);
     }
-    let status = cmd
+    let output = cmd
         .arg(sub_repo)
         .arg(path)
-        .status()
+        .output()
         .expect("git submodule add to run");
-    assert!(status.success(), "git submodule add failed");
+    assert!(
+        output.status.success(),
+        "git submodule add failed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn run_git_with_path(repo: &Path, args: &[&str], path: &Path) {
-    let status = git_command()
+    let output = git_command()
         .arg("-C")
         .arg(repo)
         .args(args)
         .arg(path)
-        .status()
+        .output()
         .expect("git command to run");
-    assert!(status.success(), "git {:?} {:?} failed", args, path);
+    assert!(
+        output.status.success(),
+        "git {:?} {:?} failed\nstderr: {}",
+        args,
+        path,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn create_stale_submodule_git_dir(
@@ -172,6 +182,7 @@ fn git_shell_available_for_submodule_tests() -> bool {
 }
 
 fn require_git_shell_for_submodule_tests() -> bool {
+    test_git_env::ensure_initialized();
     #[cfg(windows)]
     {
         if !git_shell_available_for_submodule_tests() {
@@ -201,7 +212,7 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed");
     let submodule_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
 
-    let status = git_command()
+    let output = git_command()
         .arg("-C")
         .arg(&parent_repo)
         .arg("-c")
@@ -210,9 +221,13 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
         .arg("add")
         .arg(&sub_repo)
         .arg("submod")
-        .status()
+        .output()
         .expect("git submodule add to run");
-    assert!(status.success(), "git submodule add failed");
+    assert!(
+        output.status.success(),
+        "git submodule add failed\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     run_git(
         &parent_repo,
@@ -265,7 +280,7 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
 
     let original_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
 
-    let add_status = git_command()
+    let add_output = git_command()
         .arg("-C")
         .arg(&parent_repo)
         .arg("-c")
@@ -274,9 +289,13 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
         .arg("add")
         .arg(&sub_repo)
         .arg("sm")
-        .status()
+        .output()
         .expect("git submodule add to run");
-    assert!(add_status.success(), "git submodule add failed");
+    assert!(
+        add_output.status.success(),
+        "git submodule add failed\nstderr: {}",
+        String::from_utf8_lossy(&add_output.stderr)
+    );
     run_git(
         &parent_repo,
         &[
@@ -323,23 +342,31 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
     );
     let mismatched_head = git_stdout(&sub_repo, &["rev-parse", "HEAD"]);
 
-    let fetch_status = git_command()
+    let fetch_output = git_command()
         .arg("-C")
         .arg(parent_repo.join("sm"))
         .arg("-c")
         .arg("protocol.file.allow=always")
         .args(["fetch", "--quiet"])
-        .status()
+        .output()
         .expect("git fetch in submodule to run");
-    assert!(fetch_status.success(), "git fetch failed");
+    assert!(
+        fetch_output.status.success(),
+        "git fetch failed\nstderr: {}",
+        String::from_utf8_lossy(&fetch_output.stderr)
+    );
 
-    let checkout_status = git_command()
+    let checkout_output = git_command()
         .arg("-C")
         .arg(parent_repo.join("sm"))
         .args(["checkout", "--quiet", &mismatched_head])
-        .status()
+        .output()
         .expect("git checkout in submodule to run");
-    assert!(checkout_status.success(), "git checkout failed");
+    assert!(
+        checkout_output.status.success(),
+        "git checkout failed\nstderr: {}",
+        String::from_utf8_lossy(&checkout_output.stderr)
+    );
 
     let head_mismatch = opened.list_submodules().expect("list mismatched submodule");
     assert_eq!(head_mismatch.len(), 1);
@@ -374,7 +401,7 @@ fn list_submodules_recurses_into_nested_submodules() {
     init_repo_with_seed(&child_repo, "child.txt", "child\n", "seed child");
     init_repo_with_seed(&parent_repo, "parent.txt", "parent\n", "seed parent");
 
-    let child_add_status = git_command()
+    let child_add_output = git_command()
         .arg("-C")
         .arg(&child_repo)
         .arg("-c")
@@ -383,11 +410,12 @@ fn list_submodules_recurses_into_nested_submodules() {
         .arg("add")
         .arg(&grand_repo)
         .arg("nested/grand")
-        .status()
+        .output()
         .expect("git nested submodule add to run");
     assert!(
-        child_add_status.success(),
-        "git nested submodule add failed"
+        child_add_output.status.success(),
+        "git nested submodule add failed\nstderr: {}",
+        String::from_utf8_lossy(&child_add_output.stderr)
     );
     run_git(
         &child_repo,
@@ -400,7 +428,7 @@ fn list_submodules_recurses_into_nested_submodules() {
         ],
     );
 
-    let parent_add_status = git_command()
+    let parent_add_output = git_command()
         .arg("-C")
         .arg(&parent_repo)
         .arg("-c")
@@ -409,11 +437,12 @@ fn list_submodules_recurses_into_nested_submodules() {
         .arg("add")
         .arg(&child_repo)
         .arg("mods/child")
-        .status()
+        .output()
         .expect("git parent submodule add to run");
     assert!(
-        parent_add_status.success(),
-        "git parent submodule add failed"
+        parent_add_output.status.success(),
+        "git parent submodule add failed\nstderr: {}",
+        String::from_utf8_lossy(&parent_add_output.stderr)
     );
     run_git(
         &parent_repo,
@@ -504,7 +533,7 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
 
     init_repo_with_seed(&parent_repo, "seed.txt", "seed\n", "seed parent");
 
-    let add_status = git_command()
+    let add_output = git_command()
         .arg("-C")
         .arg(&parent_repo)
         .arg("-c")
@@ -513,17 +542,25 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
         .arg("add")
         .arg(&sub_repo)
         .arg("sm")
-        .status()
+        .output()
         .expect("git submodule add to run");
-    assert!(add_status.success(), "git submodule add failed");
+    assert!(
+        add_output.status.success(),
+        "git submodule add failed\nstderr: {}",
+        String::from_utf8_lossy(&add_output.stderr)
+    );
 
-    let checkout_base_status = git_command()
+    let checkout_base_output = git_command()
         .arg("-C")
         .arg(parent_repo.join("sm"))
         .args(["checkout", "--quiet", &base_head])
-        .status()
+        .output()
         .expect("git checkout base in submodule to run");
-    assert!(checkout_base_status.success(), "git checkout base failed");
+    assert!(
+        checkout_base_output.status.success(),
+        "git checkout base failed\nstderr: {}",
+        String::from_utf8_lossy(&checkout_base_output.stderr)
+    );
     run_git(&parent_repo, &["add", "sm"]);
     run_git(
         &parent_repo,
@@ -537,13 +574,17 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     );
 
     run_git(&parent_repo, &["checkout", "-b", "branch-left"]);
-    let checkout_left_status = git_command()
+    let checkout_left_output = git_command()
         .arg("-C")
         .arg(parent_repo.join("sm"))
         .args(["checkout", "--quiet", &left_head])
-        .status()
+        .output()
         .expect("git checkout left in submodule to run");
-    assert!(checkout_left_status.success(), "git checkout left failed");
+    assert!(
+        checkout_left_output.status.success(),
+        "git checkout left failed\nstderr: {}",
+        String::from_utf8_lossy(&checkout_left_output.stderr)
+    );
     run_git(&parent_repo, &["add", "sm"]);
     run_git(
         &parent_repo,
@@ -557,13 +598,17 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
     );
 
     run_git(&parent_repo, &["checkout", "master"]);
-    let checkout_right_status = git_command()
+    let checkout_right_output = git_command()
         .arg("-C")
         .arg(parent_repo.join("sm"))
         .args(["checkout", "--quiet", &right_head])
-        .status()
+        .output()
         .expect("git checkout right in submodule to run");
-    assert!(checkout_right_status.success(), "git checkout right failed");
+    assert!(
+        checkout_right_output.status.success(),
+        "git checkout right failed\nstderr: {}",
+        String::from_utf8_lossy(&checkout_right_output.stderr)
+    );
     run_git(&parent_repo, &["add", "sm"]);
     run_git(
         &parent_repo,

@@ -16,6 +16,7 @@ mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
 mod history_branch_filter;
+mod mergetool_settings;
 mod previous_commit_messages;
 mod pull;
 mod push;
@@ -357,12 +358,18 @@ impl PopoverHost {
                 is_three_way,
                 selected_choices,
                 output_line_ix,
+                split_selection_rows,
+                join_previous_region,
+                join_next_region,
             } => Some(conflict_resolver_chunk::model(
                 *conflict_ix,
                 *has_base,
                 *is_three_way,
                 selected_choices,
                 *output_line_ix,
+                *split_selection_rows,
+                join_previous_region.clone(),
+                join_next_region.clone(),
             )),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,
@@ -383,6 +390,7 @@ impl PopoverHost {
                 Some(history_branch_filter::model(self, *repo_id))
             }
             PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
+            PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
             PopoverKind::ChangeTrackingSettings => Some(change_tracking_settings::model(self)),
             PopoverKind::UiScalePicker => Some(ui_scale_picker::model(cx)),
@@ -1031,6 +1039,64 @@ impl PopoverHost {
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_apply_pick_target(target, cx);
                 });
+            }
+            ContextMenuAction::ConflictResolverUnresolve { conflict_ix } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_select_conflict(conflict_ix, cx);
+                    pane.conflict_resolver_unresolve_active_conflict(cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverSplitSelection => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_split_selection(cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverJoinRegions { target } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_join_regions(target, cx);
+                });
+            }
+            ContextMenuAction::SetMergetoolAutoAdvance { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_auto_advance_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::ToggleMergetoolCollapseUnchanged => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_toggle_collapse_context(cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolOutputScrollSync { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_output_scroll_sync_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolShowLineNumbers { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.set_mergetool_show_line_numbers_and_persist(enabled, cx);
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolThreeWayView { enabled } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_set_view_mode(
+                        if enabled {
+                            ConflictResolverViewMode::ThreeWay
+                        } else {
+                            ConflictResolverViewMode::TwoWayDiff
+                        },
+                        cx,
+                    );
+                });
+                cx.notify();
             }
             ContextMenuAction::ConflictResolverOutputCut { text } => {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));

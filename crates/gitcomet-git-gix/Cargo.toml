@@ -21,4 +21,4 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 gitcomet-core = { workspace = true, features = ["test-support", "benchmarks"] }
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }

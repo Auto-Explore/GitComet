@@ -1,6 +1,7 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::InteractiveRebaseAction;
+use rustc_hash::FxHashMap;
 
 type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
 
@@ -147,6 +148,7 @@ pub(super) fn conflict_file_is_binary(file: &gitcomet_state::model::ConflictFile
     has_non_text(&file.base_bytes, &file.base)
         || has_non_text(&file.ours_bytes, &file.ours)
         || has_non_text(&file.theirs_bytes, &file.theirs)
+        || has_non_text(&file.current_bytes, &file.current)
 }
 
 pub(super) fn renderable_conflict_file(
@@ -1015,6 +1017,15 @@ pub(super) enum ThreeWayColumn {
 }
 
 impl ThreeWayColumn {
+    /// Index into `[base, ours, theirs]` arrays and the aligned map.
+    pub(super) fn side_index(self) -> usize {
+        match self {
+            ThreeWayColumn::Base => 0,
+            ThreeWayColumn::Ours => 1,
+            ThreeWayColumn::Theirs => 2,
+        }
+    }
+
     pub(super) const ALL: [ThreeWayColumn; 3] = [
         ThreeWayColumn::Base,
         ThreeWayColumn::Ours,
@@ -1238,6 +1249,28 @@ impl Default for ConflictModeState {
     }
 }
 
+/// section 30 split: a drag selection of aligned rows within one conflict block.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ConflictRowSelection {
+    /// Visible conflict block the selection is anchored in.
+    pub(super) conflict_ix: usize,
+    /// Aligned row where the drag started.
+    pub(super) anchor_row: usize,
+    /// Aligned row under the cursor (clamped to the block).
+    pub(super) head_row: usize,
+    /// True while the drag is in progress.
+    pub(super) selecting: bool,
+}
+
+impl ConflictRowSelection {
+    /// Inclusive aligned-row range covered, normalized so start <= end.
+    pub(super) fn row_range(&self) -> std::ops::RangeInclusive<usize> {
+        let lo = self.anchor_row.min(self.head_row);
+        let hi = self.anchor_row.max(self.head_row);
+        lo..=hi
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverUiState {
     pub(super) repo_id: Option<RepoId>,
@@ -1248,10 +1281,31 @@ pub(super) struct ConflictResolverUiState {
     pub(super) source_hash: Option<u64>,
     pub(super) current: Option<std::sync::Arc<str>>,
     pub(super) marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    /// section 30 collapsed context mode: fold unchanged runs in the source columns.
+    pub(super) collapse_context: bool,
+    /// Per-fold reveal state for collapsed context mode, keyed by fold id.
+    pub(super) context_fold_reveals:
+        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
+    /// section 30 collapsed context mode for the resolved output pane: fold
+    /// projection in output line space. `None` ⇒ pass-through (one row per
+    /// line). Rebuilt lazily after its inputs change.
+    pub(super) resolved_output_visible: Option<conflict_resolver::ThreeWayVisibleProjection>,
+    pub(super) resolved_output_visible_dirty: bool,
+    /// Per-fold reveal state for resolved-output folds (output-line fold ids).
+    pub(super) output_context_fold_reveals:
+        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
+    /// Whether each raw session region includes a diff3 base marker. This is
+    /// kept separate from display blocks, whose base may be populated from
+    /// the shared ancestor for picking.
+    pub(super) conflict_region_marker_has_base: Vec<bool>,
     pub(super) active_conflict: usize,
     pub(super) hovered_conflict: Option<(usize, ThreeWayColumn)>,
+    /// section 30 split: in-progress or completed drag selection of aligned rows
+    /// inside one conflict block, used to split that block at the selection
+    /// boundary. Cleared whenever the conflict source rebuilds.
+    pub(super) row_selection: Option<ConflictRowSelection>,
     /// Streamed conflict state for the single conflict rendering/runtime path.
     pub(super) mode_state: ConflictModeState,
     pub(super) view_mode: ConflictResolverViewMode,
@@ -1260,6 +1314,9 @@ pub(super) struct ConflictResolverUiState {
     /// Per-side line start offsets into `three_way_text`, materialized lazily.
     pub(super) three_way_line_starts: ThreeWaySides<DeferredLineStarts>,
     pub(super) three_way_len: usize,
+    /// section 30 aligned row space: maps visual rows to per-side lines. Identity
+    /// (row == line) when alignment is unavailable.
+    pub(super) three_way_aligned: conflict_resolver::ThreeWayAlignedMap,
     /// Whether the three-way visible projection/ranges have been built at
     /// least once for the current conflict source.
     pub(super) three_way_visible_state_ready: bool,
@@ -1279,6 +1336,13 @@ pub(super) struct ConflictResolverUiState {
     /// Visible-row indices used to measure horizontal width for the two-way split inputs.
     pub(super) two_way_horizontal_measure_rows: [usize; 2],
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
+    /// Aligned two-way (ours↔theirs) word highlights keyed by aligned row,
+    /// precomputed once per rebuild and shared by both diff columns.
+    pub(super) two_way_aligned_word_highlights:
+        FxHashMap<usize, conflict_resolver::TwoWayWordHighlightPair>,
+    /// Bounded on-demand word highlights for giant block-local two-way rows.
+    pub(super) two_way_split_word_highlight_cache:
+        conflict_resolver::ConflictSplitWordHighlightCache,
     pub(super) nav_anchor: Option<usize>,
     pub(super) hide_resolved: bool,
     /// True when any conflict side contains non-UTF8 binary data.
@@ -1291,6 +1355,14 @@ pub(super) struct ConflictResolverUiState {
     pub(super) conflict_kind: Option<gitcomet_core::domain::FileConflictKind>,
     /// Last autosolve trace summary shown in resolver UI.
     pub(super) last_autosolve_summary: Option<SharedString>,
+    /// Conflicts that were auto-solved when this resolver file opened.
+    ///
+    /// This stays fixed while the user makes manual picks, so the count summary
+    /// describes the open-time autosolve result rather than live current state.
+    pub(super) auto_solved_on_open: Option<usize>,
+    /// True once the one-shot open-summary toast (total / auto-solved /
+    /// remaining, kdiff3-style) has been pushed for this resolver open.
+    pub(super) open_summary_announced: bool,
     /// Tracks the last-seen `conflict_rev` from state so we can detect
     /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
     /// that don't change the underlying file content.
@@ -1301,6 +1373,10 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached per-line gutter render state for resolved-output preview rows.
     pub(super) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
+    /// Conflict-to-output anchors used by scroll sync. Rebuilt lazily after
+    /// either the source projection or resolved outline changes.
+    pub(super) conflict_output_row_anchors: Arc<[(f32, f32)]>,
+    pub(super) conflict_output_row_anchors_dirty: bool,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -1316,18 +1392,23 @@ impl Default for ConflictResolverUiState {
             path: None,
             shared_path: None,
             loaded_file: None,
+            collapse_context: false,
+            context_fold_reveals: std::collections::HashMap::default(),
             conflict_syntax_language: None,
             source_hash: None,
             current: None,
             marker_segments: Vec::new(),
             conflict_region_indices: Vec::new(),
+            conflict_region_marker_has_base: Vec::new(),
             active_conflict: 0,
             hovered_conflict: None,
+            row_selection: None,
             mode_state: ConflictModeState::default(),
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             three_way_text: ThreeWaySides::default(),
             three_way_line_starts: ThreeWaySides::default(),
             three_way_len: 0,
+            three_way_aligned: conflict_resolver::ThreeWayAlignedMap::default(),
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             three_way_horizontal_measure_rows: [0; 3],
@@ -1336,6 +1417,8 @@ impl Default for ConflictResolverUiState {
             two_way_split_visual_kind_cache: HashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights: ThreeWaySides::default(),
+            two_way_aligned_word_highlights: FxHashMap::default(),
+            two_way_split_word_highlight_cache: Default::default(),
             nav_anchor: None,
             hide_resolved: false,
             is_binary_conflict: false,
@@ -1343,10 +1426,17 @@ impl Default for ConflictResolverUiState {
             strategy: None,
             conflict_kind: None,
             last_autosolve_summary: None,
+            auto_solved_on_open: None,
+            open_summary_announced: false,
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),
+            resolved_output_visible: None,
+            resolved_output_visible_dirty: true,
+            output_context_fold_reveals: std::collections::HashMap::default(),
+            conflict_output_row_anchors: Arc::from([(0.0, 0.0)]),
+            conflict_output_row_anchors_dirty: true,
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -1495,6 +1585,267 @@ impl ConflictResolverUiState {
         )
     }
 
+    /// The side line rendered at an aligned visual row (section 30 aligned row
+    /// space), or `None` for padding rows.
+    pub(super) fn three_way_side_line_for_row(
+        &self,
+        side: ThreeWayColumn,
+        row: usize,
+    ) -> Option<usize> {
+        self.three_way_aligned
+            .side_line_for_row(side.side_index(), row)
+    }
+
+    /// Text of the side line rendered at an aligned visual row; `None` for
+    /// padding rows and rows past the side's end.
+    pub(super) fn three_way_row_text(&self, side: ThreeWayColumn, row: usize) -> Option<&str> {
+        let line_ix = self.three_way_side_line_for_row(side, row)?;
+        self.three_way_line_text(side, line_ix)
+    }
+
+    /// section 30 R11 (kdiff3 change colours): whether the side columns can tint
+    /// rows by their own change vs base — needs a real base and a
+    /// non-identity alignment (both-added and unaligned files keep the
+    /// marker-region tint).
+    pub(super) fn three_way_per_side_change_rows(&self) -> bool {
+        !self.three_way_aligned.is_identity() && !self.three_way_text.base.is_empty()
+    }
+
+    /// section 30 R11: whether `column`'s line at aligned `row` differs from the
+    /// base line paired at the same row. A line on one side of a padding row
+    /// counts as a change; the base column itself is never "changed".
+    pub(super) fn three_way_row_differs_from_base(
+        &self,
+        column: ThreeWayColumn,
+        row: usize,
+    ) -> bool {
+        if matches!(column, ThreeWayColumn::Base) {
+            return false;
+        }
+        self.three_way_row_text(column, row) != self.three_way_row_text(ThreeWayColumn::Base, row)
+    }
+
+    /// The aligned visual row at which a side line renders.
+    pub(super) fn three_way_row_for_side_line(&self, side: ThreeWayColumn, line: usize) -> usize {
+        self.three_way_aligned
+            .row_for_side_line(side.side_index(), line)
+    }
+
+    /// section 30 split: whether row selection / split is available for the current
+    /// conflict. Requires a real aligned row space (so rows map consistently
+    /// across columns) and a full-text resolver strategy on non-binary data.
+    pub(super) fn conflict_row_selection_enabled(&self) -> bool {
+        !self.three_way_aligned.is_identity()
+            && !self.is_binary_conflict
+            && self.strategy
+                == Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
+    }
+
+    /// section 30 split: whether aligned `row` is inside the current row selection
+    /// (highlighted in every source column since rows are shared).
+    pub(super) fn conflict_row_is_selected(&self, row: usize) -> bool {
+        self.row_selection
+            .is_some_and(|sel| sel.row_range().contains(&row))
+    }
+
+    /// section 30 split: the shared aligned-row range of conflict block `conflict_ix`
+    /// (all source columns share it after `rebuild_three_way_visible_state`).
+    pub(super) fn three_way_block_aligned_range(
+        &self,
+        conflict_ix: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        self.three_way_conflict_ranges[ThreeWayColumn::Ours]
+            .get(conflict_ix)
+            .cloned()
+    }
+
+    /// section 30 split: clamp aligned `row` into conflict block `conflict_ix`.
+    pub(super) fn clamp_row_to_conflict_block(&self, conflict_ix: usize, row: usize) -> usize {
+        match self.three_way_block_aligned_range(conflict_ix) {
+            Some(range) if !range.is_empty() => row.clamp(range.start, range.end - 1),
+            _ => row,
+        }
+    }
+
+    /// section 30 split: convert a normalized row selection inside a conflict block
+    /// into block-local per-side split boundaries and the target region index.
+    /// Returns `None` when selection/split is unavailable, the selection is
+    /// degenerate (covers the whole block or nothing), or the block maps to a
+    /// non-unique session region.
+    pub(super) fn split_boundaries_for_selection(
+        &self,
+    ) -> Option<(
+        usize,
+        gitcomet_core::conflict_session::ConflictRegionSplitBoundaries,
+    )> {
+        let selection = self.row_selection?;
+        if !self.conflict_row_selection_enabled() {
+            return None;
+        }
+        // Custom/manual resolutions can replace a raw region with display
+        // text, shifting every later display-side range away from the
+        // immutable source alignment. Only split while display blocks retain
+        // a one-to-one, in-order mapping to raw session regions.
+        if self.conflict_region_indices.len() != self.conflict_region_marker_has_base.len()
+            || self
+                .conflict_region_indices
+                .iter()
+                .enumerate()
+                .any(|(block_index, &region_index)| block_index != region_index)
+        {
+            return None;
+        }
+        let conflict_ix = selection.conflict_ix;
+        let block = self.three_way_block_aligned_range(conflict_ix)?;
+        if block.is_empty() {
+            return None;
+        }
+        let row_range = selection.row_range();
+        let sel_start = (*row_range.start()).max(block.start);
+        let sel_end_inclusive = (*row_range.end()).min(block.end - 1);
+        if sel_start > sel_end_inclusive {
+            return None;
+        }
+        // A selection covering the whole block cannot split it.
+        if sel_start <= block.start && sel_end_inclusive >= block.end - 1 {
+            return None;
+        }
+
+        let marker_block = self
+            .marker_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                conflict_resolver::ConflictSegment::Block(block) => Some(block),
+                conflict_resolver::ConflictSegment::Text(_) => None,
+            })
+            .nth(conflict_ix)?;
+        let line_count = |text: &str| {
+            if text.is_empty() {
+                0
+            } else {
+                text.as_bytes()
+                    .iter()
+                    .filter(|&&byte| byte == b'\n')
+                    .count()
+                    + usize::from(!text.ends_with('\n'))
+            }
+        };
+
+        let side_bounds = |side: usize| -> Option<([usize; 2], usize)> {
+            // The aligned map is built from the actual staged sides. Its position
+            // at the block's first aligned row remains correct when clean context
+            // before this block exists on only one side; marker Text segments do
+            // not retain enough information to reconstruct that position.
+            let base = self
+                .three_way_aligned
+                .side_line_lower_bound(side, block.start);
+            let b0 = self
+                .three_way_aligned
+                .side_line_lower_bound(side, sel_start)
+                .saturating_sub(base);
+            let b1 = self
+                .three_way_aligned
+                .side_line_lower_bound(side, sel_end_inclusive + 1)
+                .saturating_sub(base);
+            let len = match side {
+                0 => line_count(marker_block.base.as_deref().unwrap_or_default()),
+                1 => line_count(&marker_block.ours),
+                2 => line_count(&marker_block.theirs),
+                _ => return None,
+            };
+            let b0 = b0.min(len);
+            let b1 = b1.clamp(b0, len);
+            Some(([b0, b1], len))
+        };
+
+        let region_index = self.conflict_region_indices.get(conflict_ix).copied()?;
+        if self
+            .conflict_region_indices
+            .iter()
+            .filter(|&&index| index == region_index)
+            .take(2)
+            .count()
+            != 1
+        {
+            return None;
+        }
+        let has_base = self
+            .conflict_region_marker_has_base
+            .get(region_index)
+            .copied()?;
+        let (ours, ours_len) = side_bounds(ThreeWayColumn::Ours.side_index())?;
+        let (theirs, theirs_len) = side_bounds(ThreeWayColumn::Theirs.side_index())?;
+        let base = if has_base {
+            Some(side_bounds(ThreeWayColumn::Base.side_index())?)
+        } else {
+            None
+        };
+
+        // Alignment can contain padding/base-only rows that have no content in
+        // the serialized marker block. Do not advertise a split unless the
+        // selection owns at least one serialized line and leaves at least one
+        // serialized line outside the new region.
+        let selected_has_content = ours[0] < ours[1]
+            || theirs[0] < theirs[1]
+            || base.is_some_and(|(bounds, _)| bounds[0] < bounds[1]);
+        let has_content_outside = ours[0] > 0
+            || ours[1] < ours_len
+            || theirs[0] > 0
+            || theirs[1] < theirs_len
+            || base.is_some_and(|(bounds, len)| bounds[0] > 0 || bounds[1] < len);
+        if !selected_has_content || !has_content_outside {
+            return None;
+        }
+
+        let boundaries = gitcomet_core::conflict_session::ConflictRegionSplitBoundaries {
+            ours,
+            theirs,
+            base: base.map(|(bounds, _)| bounds),
+        };
+        Some((region_index, boundaries))
+    }
+
+    /// Whether two consecutive displayed marker blocks can be joined without
+    /// crossing malformed marker-looking context. This mirrors the core
+    /// surgery guard so an enabled menu item does not silently no-op.
+    pub(super) fn conflict_blocks_have_joinable_context(
+        &self,
+        first_conflict_ix: usize,
+        second_conflict_ix: usize,
+    ) -> bool {
+        if first_conflict_ix.checked_add(1) != Some(second_conflict_ix) {
+            return false;
+        }
+        let markerish = |text: &str| {
+            text.lines().any(|line| {
+                line.starts_with("<<<<<<<")
+                    || line.starts_with("=======")
+                    || line.starts_with(">>>>>>>")
+                    || line.starts_with("|||||||")
+            })
+        };
+        let mut conflict_ix = 0usize;
+        let mut between = false;
+        for segment in &self.marker_segments {
+            match segment {
+                conflict_resolver::ConflictSegment::Block(_) => {
+                    if conflict_ix == second_conflict_ix {
+                        return between;
+                    }
+                    between = conflict_ix == first_conflict_ix;
+                    conflict_ix = conflict_ix.saturating_add(1);
+                }
+                conflict_resolver::ConflictSegment::Text(text) if between => {
+                    if markerish(text.as_str()) {
+                        return false;
+                    }
+                }
+                conflict_resolver::ConflictSegment::Text(_) => {}
+            }
+        }
+        false
+    }
+
     pub(super) fn three_way_has_line(&self, side: ThreeWayColumn, line_ix: usize) -> bool {
         self.three_way_line_text(side, line_ix).is_some()
     }
@@ -1568,6 +1919,22 @@ impl ConflictResolverUiState {
     }
 
     // ----- Two-way split dispatch (giant vs eager) -----
+
+    /// section 30 aligned row space: whether the two-way view renders the shared
+    /// aligned whole-file rows (full mode) instead of the block-local
+    /// `ConflictSplitRowIndex` rows (giant files / sides not loaded).
+    pub(super) fn two_way_uses_aligned_rows(&self) -> bool {
+        !self.three_way_aligned.is_identity()
+    }
+
+    /// Number of visible rows in the two-way view (aligned or block-local).
+    pub(super) fn two_way_visible_len(&self) -> usize {
+        if self.two_way_uses_aligned_rows() {
+            self.three_way_visible_len()
+        } else {
+            self.two_way_split_visible_len()
+        }
+    }
 
     /// Number of visible rows in the two-way split view.
     pub(super) fn two_way_split_visible_len(&self) -> usize {
@@ -1710,22 +2077,42 @@ impl ConflictResolverUiState {
         }
     }
 
-    // ----- Unified two-way dispatch (Split + Inline, giant vs eager) -----
+    // ----- Unified two-way dispatch (aligned vs block-local) -----
 
     /// Build unresolved conflict navigation entries for the current two-way
     /// conflict diff view.
     pub(super) fn two_way_nav_entries(&self) -> Vec<usize> {
+        if self.two_way_uses_aligned_rows() {
+            return conflict_resolver::unresolved_conflict_indices(&self.marker_segments)
+                .into_iter()
+                .filter_map(|ci| self.visible_index_for_conflict(ci))
+                .collect();
+        }
         self.two_way_split_nav_entries()
     }
 
     /// Map a two-way visible index to its conflict index.
     pub(super) fn two_way_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
+        if self.two_way_uses_aligned_rows() {
+            return match self.three_way_visible_item(visible_ix)? {
+                conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(ri) => Some(ri),
+                conflict_resolver::ThreeWayVisibleItem::Line(row) => {
+                    // Conflict ranges are aligned-row ranges shared by all
+                    // columns, so any side works for the lookup.
+                    self.conflict_index_for_side_line(ThreeWayColumn::Ours, row)
+                }
+                conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. } => None,
+            };
+        }
         self.two_way_split_conflict_ix_for_visible(visible_ix)
     }
 
     /// Find the first visible index for a conflict in the current two-way diff
     /// view.
     pub(super) fn two_way_visible_ix_for_conflict(&self, conflict_ix: usize) -> Option<usize> {
+        if self.two_way_uses_aligned_rows() {
+            return self.visible_index_for_conflict(conflict_ix);
+        }
         self.two_way_split_visible_ix_for_conflict(conflict_ix)
     }
 
@@ -1748,6 +2135,18 @@ impl ConflictResolverUiState {
         &self,
         side: conflict_resolver::ConflictPickSide,
     ) -> usize {
+        // Aligned two-way rows share the three-way row space, so the
+        // three-way per-column measurements apply directly.
+        if self.two_way_uses_aligned_rows() {
+            return match side {
+                conflict_resolver::ConflictPickSide::Ours => {
+                    self.three_way_horizontal_measure_row(ThreeWayColumn::Ours)
+                }
+                conflict_resolver::ConflictPickSide::Theirs => {
+                    self.three_way_horizontal_measure_row(ThreeWayColumn::Theirs)
+                }
+            };
+        }
         match side {
             conflict_resolver::ConflictPickSide::Ours => self.two_way_horizontal_measure_rows[0],
             conflict_resolver::ConflictPickSide::Theirs => self.two_way_horizontal_measure_rows[1],
@@ -1770,62 +2169,43 @@ impl ConflictResolverUiState {
                     conflict_resolver::ConflictSegment::Block(block) if block.resolved
                 )
             });
-        if has_hidden_resolved_blocks {
+        if self.collapse_context || has_hidden_resolved_blocks {
+            // This helper already returns indices in the compact visible
+            // projection. Mapping them as side-line indices would apply the
+            // alignment a second time and can select an unrelated row. Context
+            // folding likewise changes visible indices even without a hidden
+            // resolved block.
             return self.compute_three_way_horizontal_measure_rows_from_visible_projection();
         }
 
-        let mut best_rows = [0usize; 3];
-        let mut best_lens = [0usize; 3];
-        let mut base_line = 0usize;
-        let mut ours_line = 0usize;
-        let mut theirs_line = 0usize;
+        let rows = self.compute_three_way_horizontal_measure_side_lines();
+        // The scan yields indices in each stage's own text; width measurement
+        // wants their corresponding aligned rows.
+        [
+            self.three_way_row_for_side_line(ThreeWayColumn::Base, rows[0]),
+            self.three_way_row_for_side_line(ThreeWayColumn::Ours, rows[1]),
+            self.three_way_row_for_side_line(ThreeWayColumn::Theirs, rows[2]),
+        ]
+    }
 
-        let mut update_best = |slot: usize, row_ix: usize, width: usize| {
-            if width > best_lens[slot] {
-                best_lens[slot] = width;
-                best_rows[slot] = row_ix;
-            }
-        };
-
-        for segment in &self.marker_segments {
-            match segment {
-                conflict_resolver::ConflictSegment::Text(text) => {
-                    let stats = conflict_resolver::scan_text_line_stats(text.as_ref());
-                    if let Some((line_ix, width)) = stats.widest_line() {
-                        update_best(0, base_line + line_ix, width);
-                        update_best(1, ours_line + line_ix, width);
-                        update_best(2, theirs_line + line_ix, width);
-                    }
-                    base_line = base_line.saturating_add(stats.line_count);
-                    ours_line = ours_line.saturating_add(stats.line_count);
-                    theirs_line = theirs_line.saturating_add(stats.line_count);
-                }
-                conflict_resolver::ConflictSegment::Block(block) => {
-                    if let Some(base) = block.base.as_deref() {
-                        let stats = conflict_resolver::scan_text_line_stats(base);
-                        if let Some((line_ix, width)) = stats.widest_line() {
-                            update_best(0, base_line + line_ix, width);
-                        }
-                        base_line = base_line.saturating_add(stats.line_count);
-                    }
-
-                    let ours_stats = conflict_resolver::scan_text_line_stats(block.ours.as_ref());
-                    if let Some((line_ix, width)) = ours_stats.widest_line() {
-                        update_best(1, ours_line + line_ix, width);
-                    }
-                    ours_line = ours_line.saturating_add(ours_stats.line_count);
-
-                    let theirs_stats =
-                        conflict_resolver::scan_text_line_stats(block.theirs.as_ref());
-                    if let Some((line_ix, width)) = theirs_stats.widest_line() {
-                        update_best(2, theirs_line + line_ix, width);
-                    }
-                    theirs_line = theirs_line.saturating_add(theirs_stats.line_count);
-                }
-            }
-        }
-
-        best_rows
+    fn compute_three_way_horizontal_measure_side_lines(&self) -> [usize; 3] {
+        // Marker text is the merge result, not any one index stage. Clean
+        // changes outside conflict markers can therefore add or remove lines
+        // on only one side. Walking marker segments and advancing all three
+        // counters together produces invalid stage coordinates (and can make
+        // a column measure a short row instead of its widest row). Scan each
+        // actual stage text independently instead.
+        [
+            conflict_resolver::scan_text_line_stats(self.three_way_text.base.as_ref())
+                .widest_line()
+                .map_or(0, |(line_ix, _)| line_ix),
+            conflict_resolver::scan_text_line_stats(self.three_way_text.ours.as_ref())
+                .widest_line()
+                .map_or(0, |(line_ix, _)| line_ix),
+            conflict_resolver::scan_text_line_stats(self.three_way_text.theirs.as_ref())
+                .widest_line()
+                .map_or(0, |(line_ix, _)| line_ix),
+        ]
     }
 
     fn compute_three_way_horizontal_measure_rows_from_visible_projection(&self) -> [usize; 3] {
@@ -1854,7 +2234,7 @@ impl ConflictResolverUiState {
                 .into_iter()
                 .enumerate()
                 {
-                    let width = self.three_way_line_text(side, line_ix).map_or(0, str::len);
+                    let width = self.three_way_row_text(side, line_ix).map_or(0, str::len);
                     if width > best_lens[slot] {
                         best_lens[slot] = width;
                         best_rows[slot] = visible_ix;
@@ -1888,13 +2268,34 @@ impl ConflictResolverUiState {
     }
 
     /// Pre-computed word highlights for a source row in the two-way split view.
-    /// Returns `None` in giant mode (word highlights are computed on-the-fly
-    /// via `compute_word_highlights_for_row` at render time instead).
+    /// Return an already-computed giant-mode word highlight pair.
     pub(super) fn two_way_split_word_highlight(
         &self,
-        _row_ix: usize,
-    ) -> Option<&conflict_resolver::TwoWayWordHighlightPair> {
-        None
+        row_ix: usize,
+    ) -> Option<Arc<conflict_resolver::TwoWayWordHighlightPair>> {
+        self.two_way_split_word_highlight_cache.get(row_ix)
+    }
+
+    /// Cache a giant-mode word highlight pair so the other split column and
+    /// later frames reuse the same word diff.
+    pub(super) fn cache_two_way_split_word_highlight(
+        &mut self,
+        row_ix: usize,
+        highlights: conflict_resolver::TwoWayWordHighlightPair,
+    ) -> Arc<conflict_resolver::TwoWayWordHighlightPair> {
+        self.two_way_split_word_highlight_cache
+            .insert(row_ix, highlights)
+    }
+
+    pub(super) fn two_way_split_word_highlight_for_row(
+        &mut self,
+        row_ix: usize,
+        row: &gitcomet_core::file_diff::FileDiffRow,
+    ) -> Option<Arc<conflict_resolver::TwoWayWordHighlightPair>> {
+        self.two_way_split_word_highlight(row_ix).or_else(|| {
+            conflict_resolver::compute_word_highlights_for_row(row)
+                .map(|highlights| self.cache_two_way_split_word_highlight(row_ix, highlights))
+        })
     }
 
     /// Rebuild three-way visible state (conflict maps + visible map/projection)
@@ -1906,20 +2307,68 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Ours),
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
+        // section 30 aligned row space: conflict ranges live in aligned rows, shared
+        // by every column. Each block covers the union of its per-side
+        // estimated ranges mapped through the alignment, clamped monotonic.
+        let block_count = maps.conflict_ranges[1].len();
+        let mut aligned_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(block_count);
+        for block_ix in 0..block_count {
+            let mut start = usize::MAX;
+            let mut end = 0usize;
+            for side in 0..3 {
+                let side_range = &maps.conflict_ranges[side][block_ix];
+                if side_range.is_empty() {
+                    // A side without content contributes no aligned rows to
+                    // the shared block extent.
+                    continue;
+                }
+                let mapped = self
+                    .three_way_aligned
+                    .aligned_range_for_side_range(side, side_range.clone());
+                start = start.min(mapped.start);
+                end = end.max(mapped.end);
+            }
+            if start == usize::MAX {
+                start = end;
+            }
+            if let Some(prev) = aligned_ranges.last() {
+                start = start.max(prev.end);
+                end = end.max(start);
+            }
+            // A zero-length extent is legitimate: a conflict empty on all three
+            // sides (e.g. `<<<<<<<\n=======\n>>>>>>>`) has nothing to show, and a
+            // split sub-block can map entirely within its predecessor's extent —
+            // the monotonic clamp then collapses it into the neighbor's rows.
+            // Such a block renders none of its own rows, which is fine; the
+            // conflict group it belongs to is still reachable. Never fabricate a
+            // row to avoid the empty range.
+            aligned_ranges.push(start..end);
+        }
         let three_way_visible_projection =
-            conflict_resolver::build_three_way_visible_projection_with_resolved_flags(
+            conflict_resolver::build_three_way_visible_projection_with_options(
                 self.three_way_len,
-                &maps.conflict_ranges[1],
+                &aligned_ranges,
                 &maps.conflict_resolved,
-                self.hide_resolved,
+                conflict_resolver::ThreeWayVisibleOptions {
+                    hide_resolved: self.hide_resolved,
+                    collapse_context: self.collapse_context,
+                    context_fold_reveals: Some(&self.context_fold_reveals),
+                },
             );
         self.apply_three_way_conflict_maps(maps);
+        // All columns share the aligned conflict ranges.
+        self.three_way_conflict_ranges = ThreeWaySides {
+            base: aligned_ranges.clone(),
+            ours: aligned_ranges.clone(),
+            theirs: aligned_ranges,
+        };
         match &mut self.mode_state {
             ConflictModeState::Streamed(s) => {
                 s.three_way_visible_projection = three_way_visible_projection;
             }
         }
         self.three_way_visible_state_ready = true;
+        self.conflict_output_row_anchors_dirty = true;
         self.refresh_three_way_horizontal_measure_rows();
     }
 
@@ -1927,6 +2376,7 @@ impl ConflictResolverUiState {
     /// Rebuilds the streamed split row index and projection.
     pub(super) fn rebuild_two_way_visible_state(&mut self) {
         self.two_way_split_visual_kind_cache.clear();
+        self.two_way_split_word_highlight_cache.clear();
         let ConflictModeState::Streamed(s) = &mut self.mode_state;
         s.split_row_index = conflict_resolver::ConflictSplitRowIndex::new(
             &self.marker_segments,
@@ -1946,6 +2396,7 @@ impl ConflictResolverUiState {
                 );
             }
         }
+        self.conflict_output_row_anchors_dirty = true;
         self.debug_assert_rendering_mode_invariants();
         self.refresh_two_way_horizontal_measure_rows();
     }
@@ -1997,8 +2448,8 @@ impl ConflictResolverUiState {
 #[allow(clippy::field_reassign_with_default, clippy::single_range_in_vec_init)]
 mod conflict_resolver_ui_state_tests {
     use super::{
-        ConflictResolverUiState, DeferredLineStarts, DiffWhitespaceMode, Loadable, ThreeWayColumn,
-        ThreeWaySides,
+        ConflictResolverUiState, ConflictRowSelection, DeferredLineStarts, DiffWhitespaceMode,
+        Loadable, ThreeWayColumn, ThreeWaySides,
     };
     use crate::view::conflict_resolver::{
         self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
@@ -2207,6 +2658,29 @@ mod conflict_resolver_ui_state_tests {
     }
 
     #[test]
+    fn giant_two_way_word_highlights_are_shared_between_column_renders() {
+        let mut state = ConflictResolverUiState::default();
+        state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "let local_name = value;\n".into(),
+            theirs: "let remote_name = value;\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+        })];
+        state.rebuild_two_way_visible_state();
+        let row = state.two_way_split_row_by_source(0).unwrap();
+
+        let left = state
+            .two_way_split_word_highlight_for_row(0, &row)
+            .expect("modified row should have word highlights");
+        let right = state
+            .two_way_split_word_highlight_for_row(0, &row)
+            .expect("second column should reuse word highlights");
+
+        assert!(std::sync::Arc::ptr_eq(&left, &right));
+    }
+
+    #[test]
     fn rebuild_three_way_visible_state_streamed_mode() {
         let mut state = ConflictResolverUiState::default();
         state.marker_segments = vec![ConflictSegment::Block(ConflictBlock {
@@ -2287,6 +2761,180 @@ mod conflict_resolver_ui_state_tests {
         assert!(
             !state.three_way_line_starts.theirs.is_materialized(),
             "theirs line starts should stay deferred when selecting measure rows"
+        );
+    }
+
+    #[test]
+    fn three_way_measure_rows_use_each_stage_coordinates_when_clean_context_diverges() {
+        let base = "ctx\nbase conflict\ntail\n";
+        let ours = "ctx\nclean ours insertion\nours conflict\ntail\n";
+        let long_theirs = "theirs conflict line that must drive the remote column width";
+        let theirs = format!("ctx\n{long_theirs}\ntail\n");
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(
+            &gitcomet_core::merge::align_three_way(
+                base,
+                ours,
+                &theirs,
+                gitcomet_core::merge::DiffAlgorithm::Myers,
+            ),
+        );
+        let mut state = ConflictResolverUiState {
+            // The clean insertion is present in the merge result's context,
+            // but not in the base or remote index stages.
+            marker_segments: vec![
+                ConflictSegment::Text("ctx\nclean ours insertion\n".into()),
+                ConflictSegment::Block(ConflictBlock {
+                    base: Some("base conflict\n".into()),
+                    ours: "ours conflict\n".into(),
+                    theirs: format!("{long_theirs}\n").into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                }),
+                ConflictSegment::Text("tail\n".into()),
+            ],
+            three_way_text: ThreeWaySides {
+                base: base.into(),
+                ours: ours.into(),
+                theirs: theirs.clone().into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: super::deferred_line_starts_for_text(base).into(),
+                ours: super::deferred_line_starts_for_text(ours).into(),
+                theirs: super::deferred_line_starts_for_text(&theirs).into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+
+        state.rebuild_three_way_visible_state();
+
+        let measure_row = state.three_way_horizontal_measure_row(ThreeWayColumn::Theirs);
+        assert_eq!(
+            state.three_way_row_text(ThreeWayColumn::Theirs, measure_row),
+            Some(long_theirs),
+            "remote width measurement must select the widest line in stage :3"
+        );
+    }
+
+    #[test]
+    fn hidden_resolved_measure_row_is_not_remapped_as_a_side_line() {
+        let base = "head\nb1\nb2\ntail\nbase widest visible line\n";
+        let ours = "head\no1\nours insertion\no2\ntail\nours widest visible line\n";
+        let long_theirs = "theirs widest visible line after a collapsed conflict";
+        let theirs = format!("head\nt1\nt2\ntail\n{long_theirs}\n");
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(
+            &gitcomet_core::merge::align_three_way(
+                base,
+                ours,
+                &theirs,
+                gitcomet_core::merge::DiffAlgorithm::Myers,
+            ),
+        );
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                ConflictSegment::Text("head\n".into()),
+                ConflictSegment::Block(ConflictBlock {
+                    base: Some("b1\nb2\n".into()),
+                    ours: "o1\nours insertion\no2\n".into(),
+                    theirs: "t1\nt2\n".into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: true,
+                }),
+                ConflictSegment::Text(format!("tail\n{long_theirs}\n").into()),
+            ],
+            hide_resolved: true,
+            three_way_text: ThreeWaySides {
+                base: base.into(),
+                ours: ours.into(),
+                theirs: theirs.clone().into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: super::deferred_line_starts_for_text(base).into(),
+                ours: super::deferred_line_starts_for_text(ours).into(),
+                theirs: super::deferred_line_starts_for_text(&theirs).into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+
+        state.rebuild_three_way_visible_state();
+
+        let measure_visible_ix = state.three_way_horizontal_measure_row(ThreeWayColumn::Theirs);
+        let Some(ThreeWayVisibleItem::Line(aligned_row)) =
+            state.three_way_visible_item(measure_visible_ix)
+        else {
+            panic!("remote measure row should be a visible source line");
+        };
+        assert_eq!(
+            state.three_way_row_text(ThreeWayColumn::Theirs, aligned_row),
+            Some(long_theirs),
+        );
+    }
+
+    #[test]
+    fn collapsed_context_measure_row_uses_the_compact_visible_index() {
+        let prefix = (0..20)
+            .map(|ix| format!("context {ix}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let base = format!("{prefix}base conflict\ntail\n");
+        let ours = format!("{prefix}ours conflict\ntail\n");
+        let long_theirs = "theirs conflict line wide enough to be the measurement row";
+        let theirs = format!("{prefix}{long_theirs}\ntail\n");
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(
+            &gitcomet_core::merge::align_three_way(
+                &base,
+                &ours,
+                &theirs,
+                gitcomet_core::merge::DiffAlgorithm::Myers,
+            ),
+        );
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                ConflictSegment::Text(prefix.into()),
+                ConflictSegment::Block(ConflictBlock {
+                    base: Some("base conflict\n".into()),
+                    ours: "ours conflict\n".into(),
+                    theirs: format!("{long_theirs}\n").into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                }),
+                ConflictSegment::Text("tail\n".into()),
+            ],
+            collapse_context: true,
+            three_way_text: ThreeWaySides {
+                base: base.clone().into(),
+                ours: ours.clone().into(),
+                theirs: theirs.clone().into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: super::deferred_line_starts_for_text(&base).into(),
+                ours: super::deferred_line_starts_for_text(&ours).into(),
+                theirs: super::deferred_line_starts_for_text(&theirs).into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+
+        state.rebuild_three_way_visible_state();
+
+        let measure_visible_ix = state.three_way_horizontal_measure_row(ThreeWayColumn::Theirs);
+        let Some(ThreeWayVisibleItem::Line(aligned_row)) =
+            state.three_way_visible_item(measure_visible_ix)
+        else {
+            panic!("remote measure row should survive context folding");
+        };
+        assert_eq!(
+            state.three_way_row_text(ThreeWayColumn::Theirs, aligned_row),
+            Some(long_theirs),
+        );
+        assert!(
+            measure_visible_ix < aligned_row,
+            "folded projection should compact the source row index"
         );
     }
 
@@ -2437,6 +3085,358 @@ mod conflict_resolver_ui_state_tests {
         assert!(state.rendering_mode().is_streamed_large_file());
         assert!(state.split_row_index().is_some());
     }
+
+    fn split_ready_state() -> ConflictResolverUiState {
+        let base = "ctx\nb1\nb2\nb3\ntail\n";
+        let ours = "ctx\no1\no2\no3\ntail\n";
+        let theirs = "ctx\nt1\nt2\nt3\ntail\n";
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(
+            &gitcomet_core::merge::align_three_way(
+                base,
+                ours,
+                theirs,
+                gitcomet_core::merge::DiffAlgorithm::Myers,
+            ),
+        );
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                ConflictSegment::Text("ctx\n".into()),
+                // Display blocks may have a base populated from the ancestor
+                // even though the raw marker block is two-sided.
+                ConflictSegment::Block(ConflictBlock {
+                    base: Some("b1\nb2\nb3\n".into()),
+                    ours: "o1\no2\no3\n".into(),
+                    theirs: "t1\nt2\nt3\n".into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                }),
+                ConflictSegment::Text("tail\n".into()),
+            ],
+            conflict_region_indices: vec![0],
+            conflict_region_marker_has_base: vec![false],
+            strategy: Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver,
+            ),
+            three_way_text: ThreeWaySides {
+                base: base.into(),
+                ours: ours.into(),
+                theirs: theirs.into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: vec![0, 4, 7, 10, 13].into(),
+                ours: vec![0, 4, 7, 10, 13].into(),
+                theirs: vec![0, 4, 7, 10, 13].into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+        state.rebuild_three_way_visible_state();
+        assert_eq!(state.three_way_block_aligned_range(0), Some(1..4));
+        state
+    }
+
+    fn split_ready_state_with_synthetic_base(
+        base: &str,
+        block_base: &str,
+    ) -> ConflictResolverUiState {
+        let ours = "ctx\nshared1\nshared2\ntail\n";
+        let theirs = ours;
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(
+            &gitcomet_core::merge::align_three_way(
+                base,
+                ours,
+                theirs,
+                gitcomet_core::merge::DiffAlgorithm::Myers,
+            ),
+        );
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                ConflictSegment::Text("ctx\n".into()),
+                ConflictSegment::Block(ConflictBlock {
+                    // Synthetic display base populated from the ancestor; the
+                    // serialized marker remains the ordinary two-marker form.
+                    base: Some(block_base.to_string().into()),
+                    ours: "shared1\nshared2\n".into(),
+                    theirs: "shared1\nshared2\n".into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                }),
+                ConflictSegment::Text("tail\n".into()),
+            ],
+            conflict_region_indices: vec![0],
+            conflict_region_marker_has_base: vec![false],
+            strategy: Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver,
+            ),
+            three_way_text: ThreeWaySides {
+                base: base.to_string().into(),
+                ours: ours.into(),
+                theirs: theirs.into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: super::deferred_line_starts_for_text(base).into(),
+                ours: super::deferred_line_starts_for_text(ours).into(),
+                theirs: super::deferred_line_starts_for_text(theirs).into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+        state.rebuild_three_way_visible_state();
+        state
+    }
+
+    #[test]
+    fn conflict_row_selection_normalizes_and_clamps_to_its_block() {
+        let state = split_ready_state();
+        let reverse = ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: 3,
+            head_row: 1,
+            selecting: true,
+        };
+        assert_eq!(reverse.row_range(), 1..=3);
+        assert_eq!(state.clamp_row_to_conflict_block(0, 0), 1);
+        assert_eq!(state.clamp_row_to_conflict_block(0, usize::MAX), 3);
+    }
+
+    #[test]
+    fn split_boundaries_support_forward_reverse_and_single_row_selections() {
+        let mut state = split_ready_state();
+
+        state.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: 1,
+            head_row: 2,
+            selecting: false,
+        });
+        let (region_index, forward) = state.split_boundaries_for_selection().expect("forward");
+        assert_eq!(region_index, 0);
+        assert_eq!(forward.ours, [0, 2]);
+        assert_eq!(forward.theirs, [0, 2]);
+        assert_eq!(
+            forward.base, None,
+            "raw two-sided markers need no base cuts"
+        );
+
+        state.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: 2,
+            head_row: 1,
+            selecting: false,
+        });
+        assert_eq!(
+            state.split_boundaries_for_selection().unwrap().1,
+            forward,
+            "reverse drags normalize to the same boundaries",
+        );
+
+        state.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: 3,
+            head_row: 3,
+            selecting: false,
+        });
+        let single = state
+            .split_boundaries_for_selection()
+            .expect("single row")
+            .1;
+        assert_eq!(single.ours, [2, 3]);
+        assert_eq!(single.theirs, [2, 3]);
+    }
+
+    #[test]
+    fn split_boundaries_use_staged_positions_after_one_sided_clean_context() {
+        let base = "ctx\nb1\nb2\ntail\n";
+        let ours = "ctx\nours clean insertion\no1\no2\ntail\n";
+        let theirs = "ctx\nt1\nt2\ntail\n";
+        use gitcomet_core::merge::{AlignedRun, AlignedRunKind};
+        let aligned = conflict_resolver::ThreeWayAlignedMap::from_alignment(&[
+            AlignedRun {
+                base: 0..1,
+                ours: 0..1,
+                theirs: 0..1,
+                kind: AlignedRunKind::Unchanged,
+            },
+            AlignedRun {
+                base: 1..1,
+                ours: 1..2,
+                theirs: 1..1,
+                kind: AlignedRunKind::OursChanged,
+            },
+            AlignedRun {
+                base: 1..3,
+                ours: 2..4,
+                theirs: 1..3,
+                kind: AlignedRunKind::Conflict,
+            },
+            AlignedRun {
+                base: 3..4,
+                ours: 4..5,
+                theirs: 3..4,
+                kind: AlignedRunKind::Unchanged,
+            },
+        ]);
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                ConflictSegment::Text("ctx\nours clean insertion\n".into()),
+                ConflictSegment::Block(ConflictBlock {
+                    base: Some("b1\nb2\n".into()),
+                    ours: "o1\no2\n".into(),
+                    theirs: "t1\nt2\n".into(),
+                    choice: ConflictChoice::Ours,
+                    resolved: false,
+                }),
+                ConflictSegment::Text("tail\n".into()),
+            ],
+            conflict_region_indices: vec![0],
+            conflict_region_marker_has_base: vec![true],
+            strategy: Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver,
+            ),
+            three_way_text: ThreeWaySides {
+                base: base.into(),
+                ours: ours.into(),
+                theirs: theirs.into(),
+            },
+            three_way_line_starts: ThreeWaySides {
+                base: super::deferred_line_starts_for_text(base).into(),
+                ours: super::deferred_line_starts_for_text(ours).into(),
+                theirs: super::deferred_line_starts_for_text(theirs).into(),
+            },
+            three_way_len: aligned.aligned_len(),
+            three_way_aligned: aligned,
+            ..Default::default()
+        };
+        state.rebuild_three_way_visible_state();
+        let first_conflict_row = state
+            .three_way_block_aligned_range(0)
+            .unwrap()
+            .find(|&row| {
+                state.three_way_row_text(ThreeWayColumn::Base, row) == Some("b1")
+                    && state.three_way_row_text(ThreeWayColumn::Ours, row) == Some("o1")
+                    && state.three_way_row_text(ThreeWayColumn::Theirs, row) == Some("t1")
+            })
+            .expect("first conflict row");
+        state.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: first_conflict_row,
+            head_row: first_conflict_row,
+            selecting: false,
+        });
+
+        let boundaries = state.split_boundaries_for_selection().unwrap().1;
+        assert_eq!(boundaries.base, Some([0, 1]));
+        assert_eq!(boundaries.ours, [0, 1]);
+        assert_eq!(boundaries.theirs, [0, 1]);
+    }
+
+    #[test]
+    fn split_boundaries_reject_whole_block_and_ambiguous_region_maps() {
+        let mut state = split_ready_state();
+        state.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: 1,
+            head_row: 3,
+            selecting: false,
+        });
+        assert!(state.split_boundaries_for_selection().is_none());
+
+        state.row_selection.as_mut().unwrap().head_row = 2;
+        state.conflict_region_indices = vec![0, 0];
+        assert!(state.split_boundaries_for_selection().is_none());
+
+        state.conflict_region_indices.clear();
+        assert!(state.split_boundaries_for_selection().is_none());
+
+        state.conflict_region_indices = vec![1];
+        assert!(state.split_boundaries_for_selection().is_none());
+    }
+
+    #[test]
+    fn split_boundaries_reject_synthetic_base_only_and_serialized_whole_block_selections() {
+        let mut interior = split_ready_state_with_synthetic_base(
+            "ctx\nshared1\nbase-only\nshared2\ntail\n",
+            "shared1\nbase-only\nshared2\n",
+        );
+        let interior_range = interior.three_way_block_aligned_range(0).unwrap();
+        let interior_padding = interior_range
+            .clone()
+            .find(|&row| {
+                interior
+                    .three_way_side_line_for_row(ThreeWayColumn::Base, row)
+                    .is_some()
+                    && interior
+                        .three_way_side_line_for_row(ThreeWayColumn::Ours, row)
+                        .is_none()
+                    && interior
+                        .three_way_side_line_for_row(ThreeWayColumn::Theirs, row)
+                        .is_none()
+            })
+            .expect("base-only aligned row");
+        interior.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: interior_padding,
+            head_row: interior_padding,
+            selecting: false,
+        });
+        assert!(
+            interior.split_boundaries_for_selection().is_none(),
+            "a row absent from every serialized marker side cannot become its own conflict",
+        );
+
+        let mut edge = split_ready_state_with_synthetic_base(
+            "ctx\nbase-only\nshared1\nshared2\ntail\n",
+            "base-only\nshared1\nshared2\n",
+        );
+        let edge_range = edge.three_way_block_aligned_range(0).unwrap();
+        let serialized_rows: Vec<usize> = edge_range
+            .clone()
+            .filter(|&row| {
+                edge.three_way_side_line_for_row(ThreeWayColumn::Ours, row)
+                    .is_some()
+                    || edge
+                        .three_way_side_line_for_row(ThreeWayColumn::Theirs, row)
+                        .is_some()
+            })
+            .collect();
+        edge.row_selection = Some(ConflictRowSelection {
+            conflict_ix: 0,
+            anchor_row: *serialized_rows.first().expect("serialized row"),
+            head_row: *serialized_rows.last().expect("serialized row"),
+            selecting: false,
+        });
+        assert!(
+            edge.split_boundaries_for_selection().is_none(),
+            "selecting every serialized line remains a degenerate whole-block split",
+        );
+    }
+
+    #[test]
+    fn joinable_context_rejects_marker_looking_text_between_blocks() {
+        let block = || {
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: "ours\n".into(),
+                theirs: "theirs\n".into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+            })
+        };
+        let mut state = ConflictResolverUiState {
+            marker_segments: vec![
+                block(),
+                ConflictSegment::Text("clean context\n".into()),
+                block(),
+            ],
+            ..Default::default()
+        };
+        assert!(state.conflict_blocks_have_joinable_context(0, 1));
+        state.marker_segments[1] = ConflictSegment::Text("<<<<<<< malformed\n".into());
+        assert!(!state.conflict_blocks_have_joinable_context(0, 1));
+        assert!(!state.conflict_blocks_have_joinable_context(0, 2));
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -2459,6 +3459,17 @@ pub(super) enum ResolverPickTarget {
         /// When present, chunk pick scopes to the marker chunk at this line.
         output_line_ix: Option<usize>,
     },
+}
+
+/// Identity captured when a conflict-region Join entry is built. The action
+/// is accepted only while this exact resolver revision remains current, so an
+/// open menu cannot join a different pair after region indices shift.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct ConflictResolverJoinTarget {
+    pub(super) repo_id: RepoId,
+    pub(super) path: gitcomet_state::msg::RepoPath,
+    pub(super) conflict_rev: u64,
+    pub(super) first_region_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2619,6 +3630,7 @@ pub(super) enum PopoverKind {
         context: TerminalMenuContext,
     },
     DiffActionMenu,
+    MergetoolSettingsMenu,
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,
@@ -2647,6 +3659,15 @@ pub(super) enum PopoverKind {
         is_three_way: bool,
         selected_choices: Vec<conflict_resolver::ConflictChoice>,
         output_line_ix: Option<usize>,
+        /// section 30 split: row count of a valid split selection in this block, or
+        /// `None` when there is no splittable selection (hides the entry).
+        split_selection_rows: Option<usize>,
+        /// Revision-bound target for joining this chunk with its previous
+        /// neighbour, when one exists.
+        join_previous_region: Option<ConflictResolverJoinTarget>,
+        /// Revision-bound target for joining this chunk with its next
+        /// neighbour, when one exists.
+        join_next_region: Option<ConflictResolverJoinTarget>,
     },
     ConflictResolverOutputMenu {
         cursor_line: usize,
@@ -3265,6 +4286,18 @@ pub(super) fn renders_full_chrome(view_mode: GitCometViewMode) -> bool {
     matches!(view_mode, GitCometViewMode::Normal)
 }
 
+pub(super) fn show_diff_file_navigation(view_mode: GitCometViewMode) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+}
+
+pub(super) fn show_titlebar_repo_tabs(view_mode: GitCometViewMode) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+}
+
+pub(super) fn command_palette_available(view_mode: GitCometViewMode) -> bool {
+    matches!(view_mode, GitCometViewMode::Normal)
+}
+
 pub(super) fn should_seed_initial_repository_from_session(
     view_mode: GitCometViewMode,
     initial_path: Option<&std::path::Path>,
@@ -3601,6 +4634,7 @@ pub struct GitCometView {
     /// Bumped on every open/close transition; keys the fade animation (so it
     /// restarts each time) and guards the close timer against races.
     pub(super) sidebar_collapsed_popover_anim_seq: u64,
+    pub(super) sidebar_collapsed_before_merge_view: Option<bool>,
     pub(super) details_collapsed: bool,
     pub(super) sidebar_width_design: f32,
     pub(super) details_width_design: f32,

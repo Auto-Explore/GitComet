@@ -26,19 +26,22 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let active_repo_id = this.active_repo().map(|repo| repo.id);
     let active_repo_workdir = this.active_repo().map(|repo| repo.spec.workdir.clone());
     let external_editor_configured = crate::external_editor::configured_setting().is_some();
+    let show_command_palette = command_palette_available(this.root_view_mode);
 
     let mut items = vec![ContextMenuItem::Header("Application".into())];
     let mut debug_selectors = std::collections::HashMap::new();
 
-    push_entry(
-        &mut items,
-        &mut debug_selectors,
-        "app_menu_command_palette",
-        "Command Palette",
-        Shortcut::Secondary("P"),
-        false,
-        AppMenuAction::CommandPalette,
-    );
+    if show_command_palette {
+        push_entry(
+            &mut items,
+            &mut debug_selectors,
+            "app_menu_command_palette",
+            "Command Palette",
+            Shortcut::Secondary("P"),
+            false,
+            AppMenuAction::CommandPalette,
+        );
+    }
     push_entry(
         &mut items,
         &mut debug_selectors,

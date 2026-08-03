@@ -97,9 +97,11 @@ const REBASE_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(110.0
 const REBASE_AUTOSQUASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(190.0);
 const CHANGE_TRACKING_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 220.0, 320.0);
 const DIFF_ACTION_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 320.0);
+const MERGETOOL_SETTINGS_MENU_WIDTH: PopoverWidthSpec =
+    PopoverWidthSpec::range(320.0, 280.0, 420.0);
 const DIFF_EDITOR_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(260.0, 200.0, 340.0);
 const CONFLICT_INPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 280.0);
-const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 190.0, 280.0);
+const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 220.0, 360.0);
 const CONFLICT_OUTPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 300.0);
 const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 360.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
@@ -156,6 +158,10 @@ pub(in super::super) struct PopoverHost {
     _prompt_input_subscriptions: Vec<gpui::Subscription>,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
+    /// Mirror of the root view's mode, which is fixed for the window's lifetime.
+    /// Held here because menu models are built while the root view's update
+    /// borrow is active, so its entity can't be read at that point.
+    root_view_mode: GitCometViewMode,
     tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
@@ -350,6 +356,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
             | PopoverKind::InteractiveRebaseAutosquashMenu
+            | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
@@ -671,6 +678,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::DiffActionMenu
+        | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
@@ -767,6 +775,10 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         // "Browse repository at this point" needs more room than the default
         // context-menu width.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
+        // Resolver settings have substantially longer labels than diff actions.
+        // A dedicated preferred width also feeds the shared anchor-side chooser,
+        // allowing the menu to flip toward the side where the full label fits.
+        PopoverKind::MergetoolSettingsMenu => Some(MERGETOOL_SETTINGS_MENU_WIDTH),
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
@@ -934,6 +946,7 @@ impl PopoverHost {
         diff_word_wrap: bool,
         diff_show_line_numbers: bool,
         root_view: WeakEntity<GitCometView>,
+        root_view_mode: GitCometViewMode,
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
@@ -1481,6 +1494,7 @@ impl PopoverHost {
             _prompt_input_subscriptions: prompt_input_subscriptions,
             notify_fingerprint: 0,
             root_view,
+            root_view_mode,
             tooltip_host,
             main_pane,
             details_pane,
@@ -1770,6 +1784,7 @@ impl PopoverHost {
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
                     | PopoverKind::DiffActionMenu
+                    | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
                     | PopoverKind::DiffEditorMenu { .. }
             )
@@ -3647,6 +3662,9 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
+            PopoverKind::MergetoolSettingsMenu => {
+                self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
+            }
             PopoverKind::TerminalMenu { repo_id, context } => {
                 self.context_menu_view(PopoverKind::TerminalMenu { repo_id, context }, cx)
             }
@@ -3738,6 +3756,9 @@ impl PopoverHost {
                 is_three_way,
                 selected_choices,
                 output_line_ix,
+                split_selection_rows,
+                join_previous_region,
+                join_next_region,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3745,6 +3766,9 @@ impl PopoverHost {
                     is_three_way,
                     selected_choices,
                     output_line_ix,
+                    split_selection_rows,
+                    join_previous_region,
+                    join_next_region,
                 },
                 cx,
             ),

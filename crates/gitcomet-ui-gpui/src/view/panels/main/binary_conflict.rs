@@ -83,6 +83,11 @@ impl MainPaneView {
         let theirs_path = path.clone();
         let mergetool_path = path.clone();
 
+        let focused_mergetool = self.view_mode == GitCometViewMode::FocusedMergetool;
+        let base_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Base);
+        let ours_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Ours);
+        let theirs_bytes = conflict_side_output_bytes(file, ThreeWayColumn::Theirs);
+
         let has_base = file.base_bytes.is_some();
         let has_ours = file.ours_bytes.is_some();
         let has_theirs = file.theirs_bytes.is_some();
@@ -94,39 +99,87 @@ impl MainPaneView {
             .gap_2()
             .p_3()
             .child(
-                components::Button::new("binary_use_base", "Use Base (ancestor)")
-                    .style(components::ButtonStyle::Outlined)
-                    .disabled(!has_base)
-                    .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        this.store.dispatch(Msg::CheckoutConflictBase {
-                            repo_id,
-                            path: base_path.clone(),
-                        });
-                    }),
+                components::Button::new(
+                    "binary_use_base",
+                    if focused_mergetool {
+                        "Use Base & close"
+                    } else {
+                        "Use Base (ancestor)"
+                    },
+                )
+                .style(components::ButtonStyle::Outlined)
+                .disabled(!has_base)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    if focused_mergetool {
+                        if let Some(bytes) = base_bytes.as_deref() {
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id, &base_path, bytes, cx,
+                            );
+                        }
+                        return;
+                    }
+                    this.store.dispatch(Msg::CheckoutConflictBase {
+                        repo_id,
+                        path: base_path.clone(),
+                    });
+                }),
             )
             .child(
-                components::Button::new("binary_use_ours", "Use Ours (local)")
-                    .style(components::ButtonStyle::Outlined)
-                    .disabled(!has_ours)
-                    .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        this.store.dispatch(Msg::CheckoutConflictSide {
-                            repo_id,
-                            path: ours_path.clone(),
-                            side: ConflictSide::Ours,
-                        });
-                    }),
+                components::Button::new(
+                    "binary_use_ours",
+                    if focused_mergetool {
+                        "Use Ours & close"
+                    } else {
+                        "Use Ours (local)"
+                    },
+                )
+                .style(components::ButtonStyle::Outlined)
+                .disabled(!has_ours)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    if focused_mergetool {
+                        if let Some(bytes) = ours_bytes.as_deref() {
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id, &ours_path, bytes, cx,
+                            );
+                        }
+                        return;
+                    }
+                    this.store.dispatch(Msg::CheckoutConflictSide {
+                        repo_id,
+                        path: ours_path.clone(),
+                        side: ConflictSide::Ours,
+                    });
+                }),
             )
             .child(
-                components::Button::new("binary_use_theirs", "Use Theirs (remote)")
-                    .style(components::ButtonStyle::Outlined)
-                    .disabled(!has_theirs)
-                    .on_click(theme, cx, move |this, _e, _w, _cx| {
-                        this.store.dispatch(Msg::CheckoutConflictSide {
-                            repo_id,
-                            path: theirs_path.clone(),
-                            side: ConflictSide::Theirs,
-                        });
-                    }),
+                components::Button::new(
+                    "binary_use_theirs",
+                    if focused_mergetool {
+                        "Use Theirs & close"
+                    } else {
+                        "Use Theirs (remote)"
+                    },
+                )
+                .style(components::ButtonStyle::Outlined)
+                .disabled(!has_theirs)
+                .on_click(theme, cx, move |this, _e, _w, cx| {
+                    if focused_mergetool {
+                        if let Some(bytes) = theirs_bytes.as_deref() {
+                            this.focused_mergetool_write_side_and_exit(
+                                repo_id,
+                                &theirs_path,
+                                bytes,
+                                cx,
+                            );
+                        }
+                        return;
+                    }
+                    this.store.dispatch(Msg::CheckoutConflictSide {
+                        repo_id,
+                        path: theirs_path.clone(),
+                        side: ConflictSide::Theirs,
+                    });
+                }),
             )
             .when(show_external_mergetool_actions(self.view_mode), |d| {
                 d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))

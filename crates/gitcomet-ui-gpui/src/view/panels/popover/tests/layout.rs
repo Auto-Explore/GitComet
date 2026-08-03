@@ -12,6 +12,19 @@ fn popover_width_spec_scales_with_zoom() {
 }
 
 #[test]
+fn mergetool_settings_menu_is_wider_than_diff_actions() {
+    let scale = ui_scale::UiScale::from_percent(100);
+    let mergetool =
+        popover_width_spec(&PopoverKind::MergetoolSettingsMenu).expect("mergetool menu width");
+    let diff_actions =
+        popover_width_spec(&PopoverKind::DiffActionMenu).expect("diff actions menu width");
+
+    assert_eq!(mergetool.preferred_px(scale), px(320.0));
+    assert!(mergetool.preferred_px(scale) > diff_actions.preferred_px(scale));
+    assert!(mergetool.min_px(scale) > diff_actions.min_px(scale));
+}
+
+#[test]
 fn choose_popover_anchor_corner_prefers_side_with_more_space() {
     assert_eq!(
         choose_popover_anchor_corner(Anchor::TopRight, px(260.0), px(640.0), px(420.0),),

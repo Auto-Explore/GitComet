@@ -158,6 +158,14 @@ impl GitCometView {
                             .history_tag_preferences(cx);
                         let history_relative_dates =
                             this.main_pane.read(cx).history_relative_dates(cx);
+                        let (
+                            mergetool_auto_advance,
+                            mergetool_collapse_unchanged,
+                            mergetool_output_scroll_sync,
+                            mergetool_show_line_numbers,
+                        ) = this.main_pane.read(cx).mergetool_preferences();
+                        let mergetool_view_three_way =
+                            this.main_pane.read(cx).mergetool_view_three_way;
                         let (change_tracking_height, untracked_height) =
                             this.details_pane.read(cx).saved_status_section_heights();
                         let repo_sidebar_collapsed_items =
@@ -201,6 +209,11 @@ impl GitCometView {
                             ),
                             diff_word_wrap: Some(this.diff_word_wrap),
                             diff_show_line_numbers: Some(this.diff_show_line_numbers),
+                            mergetool_auto_advance: Some(mergetool_auto_advance),
+                            mergetool_collapse_unchanged: Some(mergetool_collapse_unchanged),
+                            mergetool_output_scroll_sync: Some(mergetool_output_scroll_sync),
+                            mergetool_show_line_numbers: Some(mergetool_show_line_numbers),
+                            mergetool_view_three_way: Some(mergetool_view_three_way),
                             change_tracking_height,
                             untracked_height,
                             history_show_graph: Some(history_show_graph),

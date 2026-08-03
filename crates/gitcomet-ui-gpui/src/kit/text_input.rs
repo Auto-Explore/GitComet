@@ -17,6 +17,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::hash::Hash;
 #[cfg(any(test, feature = "benchmarks"))]
 use std::hash::Hasher;

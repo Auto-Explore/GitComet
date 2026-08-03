@@ -105,13 +105,9 @@ pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
         match segment {
             ParsedConflictSegment::Text(text) => output.push_str(&text),
             ParsedConflictSegment::Conflict(block) => {
-                if let Some(resolved) =
-                    try_resolve_single_block(block.base.as_deref(), &block.ours, &block.theirs)
-                {
-                    output.push_str(&resolved);
-                } else {
-                    return None;
-                }
+                let resolved =
+                    try_resolve_single_block(block.base.as_deref(), &block.ours, &block.theirs)?;
+                output.push_str(&resolved);
             }
         }
     }

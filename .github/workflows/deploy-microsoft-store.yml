@@ -341,7 +341,7 @@ jobs:
 
       - name: Install Microsoft Store CLI
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
-        uses: microsoft/microsoft-store-apppublisher@v1.3
+        uses: microsoft/microsoft-store-apppublisher@v1.4
 
       - name: Configure Microsoft Store CLI
         if: ${{ steps.norm.outputs.dry_run != 'true' }}

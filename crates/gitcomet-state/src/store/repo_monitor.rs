@@ -522,10 +522,8 @@ impl GitignoreRules {
     }
 
     fn cache_get(&mut self, key: &IgnoreCacheKey, now: Instant) -> Option<bool> {
-        let (ignored, fresh) = match self.cache.get(key) {
-            Some(entry) => (entry.ignored, Self::is_cache_entry_fresh(now, entry)),
-            None => return None,
-        };
+        let entry = self.cache.get(key)?;
+        let (ignored, fresh) = (entry.ignored, Self::is_cache_entry_fresh(now, entry));
 
         if !fresh {
             self.cache.remove(key);

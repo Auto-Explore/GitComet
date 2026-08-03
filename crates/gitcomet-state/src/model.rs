@@ -824,6 +824,10 @@ pub struct ConflictState {
     pub conflict_file_load_mode: ConflictFileLoadMode,
     pub conflict_file: Loadable<Option<ConflictFile>>,
     pub conflict_session: Option<ConflictSession>,
+    /// Session stashed across a same-path conflict reload so
+    /// `conflict_file_loaded` can restore resolutions (and skip the on-open
+    /// autosolve). Cleared on path switch and consumed on load completion.
+    pub session_pending_restore: Option<ConflictSession>,
     pub conflict_hide_resolved: bool,
     pub conflict_rev: u64,
 }
@@ -835,6 +839,7 @@ impl Default for ConflictState {
             conflict_file_load_mode: ConflictFileLoadMode::CurrentOnly,
             conflict_file: Loadable::NotLoaded,
             conflict_session: None,
+            session_pending_restore: None,
             conflict_hide_resolved: false,
             conflict_rev: 0,
         }

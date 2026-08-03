@@ -1301,6 +1301,7 @@ fn clear_conflict_context(repo_state: &mut RepoState) {
     repo_state.conflict_state.conflict_file_load_mode =
         crate::model::ConflictFileLoadMode::CurrentOnly;
     repo_state.conflict_state.conflict_file = Loadable::NotLoaded;
+    repo_state.conflict_state.session_pending_restore = None;
     repo_state.conflict_state.conflict_session = None;
     repo_state.conflict_state.conflict_hide_resolved = false;
 }

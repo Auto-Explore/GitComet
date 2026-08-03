@@ -168,6 +168,488 @@ pub fn merge_file(base: &str, ours: &str, theirs: &str, options: &MergeOptions) 
     render_merged(&base_lines, &merged_hunks, base, ours, theirs, options)
 }
 
+/// How the sides relate within one aligned run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AlignedRunKind {
+    /// No side changed this region.
+    Unchanged,
+    /// Only ours changed from base.
+    OursChanged,
+    /// Only theirs changed from base.
+    TheirsChanged,
+    /// Both sides changed and agree (identical result).
+    BothSame,
+    /// Both sides changed differently.
+    Conflict,
+}
+
+/// One run of a kdiff3-style three-way alignment.
+///
+/// The three ranges are line ranges into base/ours/theirs respectively; a
+/// run renders as `max(len)` visual rows with shorter sides padded, so
+/// corresponding lines always sit at the same visual height.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AlignedRun {
+    pub base: std::ops::Range<usize>,
+    pub ours: std::ops::Range<usize>,
+    pub theirs: std::ops::Range<usize>,
+    pub kind: AlignedRunKind,
+}
+
+impl AlignedRun {
+    /// Number of visual rows this run occupies in the aligned space.
+    pub fn visual_rows(&self) -> usize {
+        self.base.len().max(self.ours.len()).max(self.theirs.len())
+    }
+}
+
+/// Compute the three-way alignment of base/ours/theirs (section 30 aligned row
+/// space). This walks the same base-anchored regions the merge algorithm
+/// uses to produce conflict markers, but reports per-side line ranges
+/// instead of merged content. The runs partition each input exactly.
+pub fn align_three_way(
+    base: &str,
+    ours: &str,
+    theirs: &str,
+    algorithm: DiffAlgorithm,
+) -> Vec<AlignedRun> {
+    let base_lines = split_lines(base);
+    let ours_lines = split_lines(ours);
+    let theirs_lines = split_lines(theirs);
+
+    let diff_fn = match algorithm {
+        DiffAlgorithm::Myers => myers_edits,
+        DiffAlgorithm::Histogram => histogram_edits,
+    };
+    let edits_ours = diff_fn(&base_lines, &ours_lines);
+    let edits_theirs = diff_fn(&base_lines, &theirs_lines);
+    let hunks_ours = edits_to_hunks(&edits_ours);
+    let hunks_theirs = edits_to_hunks(&edits_theirs);
+
+    let mut runs = Vec::new();
+    let mut base_pos = 0usize;
+    let mut ours_pos = 0usize;
+    let mut theirs_pos = 0usize;
+
+    let push_unchanged = |runs: &mut Vec<AlignedRun>,
+                          base_pos: &mut usize,
+                          ours_pos: &mut usize,
+                          theirs_pos: &mut usize,
+                          until: usize| {
+        let len = until.saturating_sub(*base_pos);
+        if len == 0 {
+            return;
+        }
+        runs.push(AlignedRun {
+            base: *base_pos..*base_pos + len,
+            ours: *ours_pos..*ours_pos + len,
+            theirs: *theirs_pos..*theirs_pos + len,
+            kind: AlignedRunKind::Unchanged,
+        });
+        *base_pos += len;
+        *ours_pos += len;
+        *theirs_pos += len;
+    };
+
+    for_each_merge_region(&base_lines, &hunks_ours, &hunks_theirs, |region| {
+        push_unchanged(
+            &mut runs,
+            &mut base_pos,
+            &mut ours_pos,
+            &mut theirs_pos,
+            region.base_start,
+        );
+
+        let ours_shape = side_region_shape(
+            region.base_start,
+            region.base_end,
+            region.ours_hunks,
+            ours_pos,
+        );
+        let theirs_shape = side_region_shape(
+            region.base_start,
+            region.base_end,
+            region.theirs_hunks,
+            theirs_pos,
+        );
+        let (ours_end, theirs_end) = emit_region_rows(
+            &mut runs,
+            &ours_lines,
+            &theirs_lines,
+            region.base_start,
+            region.base_end,
+            &ours_shape,
+            &theirs_shape,
+            ours_pos,
+            theirs_pos,
+        );
+        base_pos = region.base_end;
+        ours_pos = ours_end;
+        theirs_pos = theirs_end;
+    });
+
+    push_unchanged(
+        &mut runs,
+        &mut base_pos,
+        &mut ours_pos,
+        &mut theirs_pos,
+        base_lines.len(),
+    );
+
+    debug_assert_eq!(ours_pos, ours_lines.len());
+    debug_assert_eq!(theirs_pos, theirs_lines.len());
+    runs
+}
+
+/// Compute a direct two-way alignment of ours/theirs (section 30 aligned row space,
+/// two-way full mode without a base version — e.g. both-added conflicts).
+///
+/// Runs carry empty base ranges. A replaced region pairs its lines 1:1
+/// top-aligned as one `Conflict` run; lines present on only one side become
+/// `OursChanged` (deletion) or `TheirsChanged` (insertion) runs. The runs
+/// partition both inputs exactly.
+pub fn align_two_way(ours: &str, theirs: &str, algorithm: DiffAlgorithm) -> Vec<AlignedRun> {
+    let ours_lines = split_lines(ours);
+    let theirs_lines = split_lines(theirs);
+
+    let diff_fn = match algorithm {
+        DiffAlgorithm::Myers => myers_edits,
+        DiffAlgorithm::Histogram => histogram_edits,
+    };
+    // Hunks are base-relative; here "base" is the ours side.
+    let hunks = edits_to_hunks(&diff_fn(&ours_lines, &theirs_lines));
+
+    let mut runs = Vec::with_capacity(hunks.len().saturating_mul(2).saturating_add(1));
+    let mut ours_pos = 0usize;
+    let mut theirs_pos = 0usize;
+
+    let push_unchanged =
+        |runs: &mut Vec<AlignedRun>, ours_pos: &mut usize, theirs_pos: &mut usize, until: usize| {
+            let len = until.saturating_sub(*ours_pos);
+            if len == 0 {
+                return;
+            }
+            runs.push(AlignedRun {
+                base: 0..0,
+                ours: *ours_pos..*ours_pos + len,
+                theirs: *theirs_pos..*theirs_pos + len,
+                kind: AlignedRunKind::Unchanged,
+            });
+            *ours_pos += len;
+            *theirs_pos += len;
+        };
+
+    for hunk in &hunks {
+        push_unchanged(&mut runs, &mut ours_pos, &mut theirs_pos, hunk.base_start);
+        let ours_range = ours_pos..hunk.base_end;
+        let theirs_range = theirs_pos..theirs_pos + hunk.new_lines.len();
+        let kind = match (ours_range.is_empty(), theirs_range.is_empty()) {
+            (true, true) => continue,
+            (false, true) => AlignedRunKind::OursChanged,
+            (true, false) => AlignedRunKind::TheirsChanged,
+            (false, false) => AlignedRunKind::Conflict,
+        };
+        ours_pos = ours_range.end;
+        theirs_pos = theirs_range.end;
+        runs.push(AlignedRun {
+            base: 0..0,
+            ours: ours_range,
+            theirs: theirs_range,
+            kind,
+        });
+    }
+    push_unchanged(&mut runs, &mut ours_pos, &mut theirs_pos, ours_lines.len());
+
+    debug_assert_eq!(ours_pos, ours_lines.len());
+    debug_assert_eq!(theirs_pos, theirs_lines.len());
+    runs
+}
+
+/// A base-anchored change region visited by [`for_each_merge_region`].
+struct MergeRegion<'h, 'a> {
+    base_start: usize,
+    base_end: usize,
+    ours_hunks: &'h [Hunk<'a>],
+    theirs_hunks: &'h [Hunk<'a>],
+}
+
+/// Walk the overlapping-hunk regions of the two edit scripts, exactly as
+/// [`merge_hunks`] does, invoking `visit` per region.
+fn for_each_merge_region<'a>(
+    base_lines: &'a [&'a str],
+    ours: &[Hunk<'a>],
+    theirs: &[Hunk<'a>],
+    mut visit: impl FnMut(MergeRegion<'_, 'a>),
+) {
+    let _ = base_lines;
+    let mut oi = 0;
+    let mut ti = 0;
+
+    loop {
+        let oh_start = ours.get(oi).map(|h| h.base_start).unwrap_or(usize::MAX);
+        let th_start = theirs.get(ti).map(|h| h.base_start).unwrap_or(usize::MAX);
+        if oh_start == usize::MAX && th_start == usize::MAX {
+            break;
+        }
+
+        let change_start = oh_start.min(th_start);
+        let mut region_end = change_start;
+        let oi_start = oi;
+        let ti_start = ti;
+
+        loop {
+            let mut extended = false;
+            while let Some(oh) = ours.get(oi) {
+                if oh.base_start <= region_end {
+                    region_end = region_end.max(oh.base_end);
+                    oi += 1;
+                    extended = true;
+                } else {
+                    break;
+                }
+            }
+            while let Some(th) = theirs.get(ti) {
+                if th.base_start <= region_end {
+                    region_end = region_end.max(th.base_end);
+                    ti += 1;
+                    extended = true;
+                } else {
+                    break;
+                }
+            }
+            if !extended {
+                break;
+            }
+        }
+
+        visit(MergeRegion {
+            base_start: change_start,
+            base_end: region_end,
+            ours_hunks: &ours[oi_start..oi],
+            theirs_hunks: &theirs[ti_start..ti],
+        });
+    }
+}
+
+/// Per-side shape of a change region: which base lines survive on the side
+/// (with their side line index), and the side's free (inserted/replacement)
+/// line segments keyed by the base boundary they precede.
+struct SideRegionShape {
+    /// For each region-relative base index: `Some(side_line)` when the base
+    /// line survives on this side.
+    kept: Vec<Option<usize>>,
+    /// For each boundary position `0..=len`: `(side_line_start, count)` of
+    /// side lines inserted before that base line (or at the region end).
+    free_at: Vec<(usize, usize)>,
+}
+
+fn side_region_shape(
+    region_start: usize,
+    region_end: usize,
+    hunks: &[Hunk<'_>],
+    side_start: usize,
+) -> SideRegionShape {
+    let len = region_end - region_start;
+    let mut kept = vec![None; len];
+    let mut free_at = vec![(0usize, 0usize); len + 1];
+    let mut side_line = side_start;
+    let mut b = region_start;
+
+    for hunk in hunks {
+        let hunk_start = hunk.base_start.clamp(region_start, region_end);
+        while b < hunk_start {
+            kept[b - region_start] = Some(side_line);
+            side_line += 1;
+            b += 1;
+        }
+        let slot = &mut free_at[b - region_start];
+        if slot.1 == 0 {
+            slot.0 = side_line;
+        }
+        slot.1 += hunk.new_lines.len();
+        side_line += hunk.new_lines.len();
+        b = hunk.base_end.clamp(b, region_end);
+    }
+    while b < region_end {
+        kept[b - region_start] = Some(side_line);
+        side_line += 1;
+        b += 1;
+    }
+
+    SideRegionShape { kept, free_at }
+}
+
+/// Emit kdiff3-style aligned rows for one change region.
+///
+/// Base lines anchor to their surviving copies: a side that dropped the base
+/// line contributes its next replacement line on that row instead of padding.
+/// Free lines from both sides pair up top-aligned; a side's free lines always
+/// flush before its own anchored copy so side ranges stay contiguous.
+/// Returns the per-side cursor positions after the region.
+#[allow(clippy::too_many_arguments)]
+fn emit_region_rows(
+    runs: &mut Vec<AlignedRun>,
+    ours_lines: &[&str],
+    theirs_lines: &[&str],
+    region_start: usize,
+    region_end: usize,
+    ours_shape: &SideRegionShape,
+    theirs_shape: &SideRegionShape,
+    ours_start: usize,
+    theirs_start: usize,
+) -> (usize, usize) {
+    // Pending free lines per side; contiguous by construction (a side's free
+    // segments are only ever separated by its own anchored copies, which
+    // force a flush first).
+    let mut pend_o = (ours_start, 0usize);
+    let mut pend_t = (theirs_start, 0usize);
+
+    fn extend(pend: &mut (usize, usize), seg: (usize, usize)) {
+        if seg.1 == 0 {
+            return;
+        }
+        if pend.1 == 0 {
+            pend.0 = seg.0;
+        }
+        pend.1 += seg.1;
+    }
+    fn take(pend: &mut (usize, usize), n: usize) -> std::ops::Range<usize> {
+        let n = n.min(pend.1);
+        let range = pend.0..pend.0 + n;
+        pend.0 += n;
+        pend.1 -= n;
+        range
+    }
+
+    let mut o_cur = ours_start;
+    let mut t_cur = theirs_start;
+    let push_row = |runs: &mut Vec<AlignedRun>,
+                    o_cur: &mut usize,
+                    t_cur: &mut usize,
+                    base: std::ops::Range<usize>,
+                    ours: std::ops::Range<usize>,
+                    theirs: std::ops::Range<usize>,
+                    kind: AlignedRunKind| {
+        debug_assert_eq!(ours.start.max(*o_cur), *o_cur);
+        *o_cur = ours.end.max(*o_cur);
+        *t_cur = theirs.end.max(*t_cur);
+        runs.push(AlignedRun {
+            base,
+            ours,
+            theirs,
+            kind,
+        });
+    };
+
+    let zip_pending = |runs: &mut Vec<AlignedRun>,
+                       pend_o: &mut (usize, usize),
+                       pend_t: &mut (usize, usize),
+                       o_cur: &mut usize,
+                       t_cur: &mut usize,
+                       base_at: usize| {
+        let n = pend_o.1.min(pend_t.1);
+        if n == 0 {
+            return;
+        }
+        let ours = take(pend_o, n);
+        let theirs = take(pend_t, n);
+        let kind = if ours_lines.get(ours.clone()) == theirs_lines.get(theirs.clone())
+            && ours_lines.get(ours.clone()).is_some()
+        {
+            AlignedRunKind::BothSame
+        } else {
+            AlignedRunKind::Conflict
+        };
+        push_row(runs, o_cur, t_cur, base_at..base_at, ours, theirs, kind);
+    };
+    let flush_solo = |runs: &mut Vec<AlignedRun>,
+                      pend: &mut (usize, usize),
+                      o_cur: &mut usize,
+                      t_cur: &mut usize,
+                      base_at: usize,
+                      is_ours: bool| {
+        if pend.1 == 0 {
+            return;
+        }
+        let range = take(pend, pend.1);
+        let (ours, theirs, kind) = if is_ours {
+            (range, *t_cur..*t_cur, AlignedRunKind::OursChanged)
+        } else {
+            (*o_cur..*o_cur, range, AlignedRunKind::TheirsChanged)
+        };
+        push_row(runs, o_cur, t_cur, base_at..base_at, ours, theirs, kind);
+    };
+
+    let len = region_end - region_start;
+    for p in 0..len {
+        extend(&mut pend_o, ours_shape.free_at[p]);
+        extend(&mut pend_t, theirs_shape.free_at[p]);
+        let b = region_start + p;
+        let kept_o = ours_shape.kept[p];
+        let kept_t = theirs_shape.kept[p];
+
+        if kept_o.is_none() && kept_t.is_none() {
+            // The base line was dropped by both sides: it pairs positionally
+            // with the next replacement line of each (kdiff3's modified-line
+            // rows — an N-line block replaced on both sides aligns 1:1).
+            // Leftover replacements flow to later anchors or the region end.
+            let ours = take(&mut pend_o, 1);
+            let theirs = take(&mut pend_t, 1);
+            let kind = if !ours.is_empty()
+                && ours_lines.get(ours.clone()) == theirs_lines.get(theirs.clone())
+            {
+                AlignedRunKind::BothSame
+            } else {
+                AlignedRunKind::Conflict
+            };
+            push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
+            continue;
+        }
+
+        zip_pending(runs, &mut pend_o, &mut pend_t, &mut o_cur, &mut t_cur, b);
+        // A side's free lines precede its anchored copy in side order, so
+        // they must be on rows above the anchor row.
+        if kept_o.is_some() {
+            flush_solo(runs, &mut pend_o, &mut o_cur, &mut t_cur, b, true);
+        }
+        if kept_t.is_some() {
+            flush_solo(runs, &mut pend_t, &mut o_cur, &mut t_cur, b, false);
+        }
+
+        let ours = match kept_o {
+            Some(line) => line..line + 1,
+            None => take(&mut pend_o, 1),
+        };
+        let theirs = match kept_t {
+            Some(line) => line..line + 1,
+            None => take(&mut pend_t, 1),
+        };
+        let kind = match (kept_o.is_some(), kept_t.is_some()) {
+            (true, true) => AlignedRunKind::Unchanged,
+            (true, false) => AlignedRunKind::TheirsChanged,
+            (false, true) => AlignedRunKind::OursChanged,
+            (false, false) => unreachable!("handled above"),
+        };
+        push_row(runs, &mut o_cur, &mut t_cur, b..b + 1, ours, theirs, kind);
+    }
+
+    // Region-end boundary: remaining free lines pair up, overflow flushes.
+    extend(&mut pend_o, ours_shape.free_at[len]);
+    extend(&mut pend_t, theirs_shape.free_at[len]);
+    zip_pending(
+        runs,
+        &mut pend_o,
+        &mut pend_t,
+        &mut o_cur,
+        &mut t_cur,
+        region_end,
+    );
+    flush_solo(runs, &mut pend_o, &mut o_cur, &mut t_cur, region_end, true);
+    flush_solo(runs, &mut pend_t, &mut o_cur, &mut t_cur, region_end, false);
+
+    (o_cur, t_cur)
+}
+
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
@@ -640,12 +1122,19 @@ fn emit_conflict_markers(
                 output.push_str(line_ending);
             }
             emit_marker(output, '|', ms, options.labels.base.as_deref(), line_ending);
-            // In zdiff3, the base section shows the trimmed base content.
-            let base_conflict = if base_lines.len() > prefix_len + suffix_len {
-                &base_lines[prefix_len..base_lines.len() - suffix_len]
-            } else {
-                &[] as &[&str]
-            };
+            // The base section shows the ancestor of the *conflicting* region.
+            // Trim it only by the prefix/suffix lines the two sides share *with
+            // the base* — not by the sides' full common prefix/suffix length,
+            // which can include lines both sides merely added (absent from base).
+            // Trimming by the raw length drops real base content (git zdiff3
+            // keeps it). The hoisted prefix/suffix are common to ours and theirs,
+            // so comparing against `ours_lines` is equivalent to `theirs_lines`.
+            let base_prefix = base_common_prefix_len(base_lines, &ours_lines[..prefix_len]);
+            let base_suffix =
+                base_common_suffix_len(base_lines, &ours_lines[ours_lines.len() - suffix_len..]);
+            let base_start = base_prefix.min(base_lines.len());
+            let base_end = base_lines.len().saturating_sub(base_suffix).max(base_start);
+            let base_conflict = &base_lines[base_start..base_end];
             for line in base_conflict {
                 output.push_str(line);
                 output.push_str(line_ending);
@@ -739,6 +1228,31 @@ fn common_prefix_suffix_lines<T: PartialEq>(a: &[T], b: &[T]) -> (usize, usize) 
         suffix += 1;
     }
     (prefix, suffix)
+}
+
+/// Count leading lines of `base` that match the corresponding hoisted context
+/// lines in `side`. Used to trim the zdiff3 base section by shared-with-base
+/// context only, so lines both sides merely added (absent from base) never
+/// cause real base content to be dropped.
+fn base_common_prefix_len(base: &[&str], side: &[Cow<'_, str>]) -> usize {
+    let mut n = 0;
+    while n < base.len() && n < side.len() && base[n] == side[n].as_ref() {
+        n += 1;
+    }
+    n
+}
+
+/// Count trailing lines of `base` that match the corresponding hoisted context
+/// lines in `side`. Companion to [`base_common_prefix_len`].
+fn base_common_suffix_len(base: &[&str], side: &[Cow<'_, str>]) -> usize {
+    let mut n = 0;
+    while n < base.len()
+        && n < side.len()
+        && base[base.len() - 1 - n] == side[side.len() - 1 - n].as_ref()
+    {
+        n += 1;
+    }
+    n
 }
 
 /// Detect the dominant line ending in the full-file merge inputs.
@@ -1025,6 +1539,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn zdiff3_preserves_base_when_sides_share_added_prefix() {
+        // Both sides prepend "A" (a line absent from base) before diverging.
+        // The zdiff3 base section must still show the real ancestor line "X",
+        // not be trimmed away by the sides' common-prefix length.
+        let base = "pre\nX\npost\n";
+        let ours = "pre\nA\nO\npost\n";
+        let theirs = "pre\nA\nT\npost\n";
+        let result = merge_file(base, ours, theirs, &opts_with_style(ConflictStyle::Zdiff3));
+        assert!(!result.is_clean());
+        let base_marker = result.output.find("|||||||").expect("base marker");
+        let sep = result.output[base_marker..]
+            .find("=======")
+            .expect("separator")
+            + base_marker;
+        let base_section = &result.output[base_marker..sep];
+        assert!(
+            base_section.contains("\nX\n"),
+            "zdiff3 base section should preserve ancestor line X, got: {base_section:?}"
+        );
+    }
+
+    #[test]
+    fn zdiff3_shows_base_when_prefix_suffix_span_whole_base() {
+        // Regression: conflict base region is exactly prefix_len + suffix_len
+        // long. The old `len > prefix + suffix` guard emitted an empty base
+        // section here; the ancestor lines must be shown.
+        let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+        let ours = "1\n2\n3\n4\nA\nB\nC\nD\nE\n7\n8\n9\n";
+        let theirs = "1\n2\n3\n4\nA\nX\nC\nY\nE\n7\n8\n9\n";
+        let result = merge_file(base, ours, theirs, &opts_with_style(ConflictStyle::Zdiff3));
+        assert!(!result.is_clean());
+        let base_marker = result.output.find("|||||||").expect("base marker");
+        let sep = result.output[base_marker..]
+            .find("=======")
+            .expect("separator")
+            + base_marker;
+        let base_section = &result.output[base_marker..sep];
+        assert!(
+            base_section.contains("\n5\n6\n"),
+            "zdiff3 base section should show ancestor lines 5,6, got: {base_section:?}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Marker size
     // -----------------------------------------------------------------------
@@ -1181,6 +1739,289 @@ mod tests {
         let result = merge_file(base, both, both, &default_opts());
         assert!(result.is_clean());
         assert_eq!(result.output, "first\nreplaced\nthird\n");
+    }
+
+    // -----------------------------------------------------------------------
+    // Three-way alignment (section 30 aligned row space)
+    // -----------------------------------------------------------------------
+
+    fn run_lens(runs: &[AlignedRun]) -> (usize, usize, usize) {
+        runs.iter().fold((0, 0, 0), |acc, run| {
+            (
+                acc.0 + run.base.len(),
+                acc.1 + run.ours.len(),
+                acc.2 + run.theirs.len(),
+            )
+        })
+    }
+
+    fn assert_partitions(runs: &[AlignedRun], base: &str, ours: &str, theirs: &str) {
+        let (b, o, t) = run_lens(runs);
+        assert_eq!(b, split_lines(base).len(), "base lines partitioned");
+        assert_eq!(o, split_lines(ours).len(), "ours lines partitioned");
+        assert_eq!(t, split_lines(theirs).len(), "theirs lines partitioned");
+        let mut bp = 0;
+        let mut op = 0;
+        let mut tp = 0;
+        for run in runs {
+            assert_eq!(run.base.start, bp, "base ranges contiguous");
+            assert_eq!(run.ours.start, op, "ours ranges contiguous");
+            assert_eq!(run.theirs.start, tp, "theirs ranges contiguous");
+            bp = run.base.end;
+            op = run.ours.end;
+            tp = run.theirs.end;
+        }
+    }
+
+    #[test]
+    fn align_identity_is_one_unchanged_run() {
+        let text = "a\nb\nc\n";
+        let runs = align_three_way(text, text, text, DiffAlgorithm::Myers);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::Unchanged);
+        assert_eq!(runs[0].visual_rows(), 3);
+        assert_partitions(&runs, text, text, text);
+    }
+
+    #[test]
+    fn align_classifies_side_changes_and_conflicts() {
+        let base = "a\nb\nc\nd\ne\n";
+        let ours = "a\nB1\nB2\nc\nd\nE-ours\n";
+        let theirs = "a\nb\nc\nd\nE-theirs\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+
+        // Fine-grained rows: a | b anchored to its replacement + theirs copy |
+        // ours' second replacement line alone | c d | e as one modified-line
+        // row holding both replacements.
+        let kinds: Vec<_> = runs.iter().map(|r| r.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::OursChanged,
+                AlignedRunKind::OursChanged,
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::Conflict,
+            ],
+        );
+        // Row 1: base `b` rides with ours' first replacement and theirs' copy.
+        assert_eq!(runs[1].base, 1..2);
+        assert_eq!(runs[1].ours, 1..2);
+        assert_eq!(runs[1].theirs, 1..2);
+        // Row 2: ours' second replacement line, base/theirs padded.
+        assert_eq!(runs[2].base, 2..2);
+        assert_eq!(runs[2].ours, 2..3);
+        assert_eq!(runs[2].theirs.len(), 0);
+        // Row 4: `e` modified by both — one row with both replacements.
+        assert_eq!(runs[4].base.len(), 1);
+        assert_eq!(runs[4].ours.len(), 1);
+        assert_eq!(runs[4].theirs.len(), 1);
+        assert_eq!(runs[4].visual_rows(), 1);
+    }
+
+    /// First kdiff3-parity case from manual testing: ours inserts two lines
+    /// and keeps the base line; theirs replaces it with four lines. The kept
+    /// base line must anchor to its identical ours copy on one row, with
+    /// theirs' replacement lines flowing 1:1 through all rows.
+    #[test]
+    fn align_anchors_kept_line_below_paired_insertions() {
+        let base = "ctx\nreturn SLA\n";
+        let ours = "ctx\nif critical:\n    return 2x\nreturn SLA\n";
+        let theirs = "ctx\nthreshold = SLA\nif blocked:\n    half\nreturn threshold\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+
+        // ctx | [o1|t1] [o2|t2] | [base ~ ours copy ~ t3] | [t4]
+        let rows: Vec<(usize, usize, usize)> = runs
+            .iter()
+            .map(|r| (r.base.len(), r.ours.len(), r.theirs.len()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(1, 1, 1), (0, 2, 2), (1, 1, 1), (0, 0, 1)],
+            "kept base line must share a row with its ours copy and theirs' third line",
+        );
+        // The anchored row pairs base line 1 with ours line 3 (its copy).
+        assert_eq!(runs[2].base, 1..2);
+        assert_eq!(runs[2].ours, 3..4);
+        assert_eq!(runs[2].theirs, 3..4);
+    }
+
+    /// Third kdiff3-parity case from manual testing: a block where every
+    /// line was modified on both sides aligns 1:1 — seven clean rows, no
+    /// padding and no stranded base lines.
+    #[test]
+    fn align_pairs_fully_rewritten_blocks_line_by_line() {
+        let make = |suffix: &str| -> String {
+            (0..7).map(|i| format!("const_{i} = {suffix}\n")).collect()
+        };
+        let base = format!("ctx\n{}rest\n", make("base"));
+        let ours = format!("ctx\n{}rest\n", make("ours"));
+        let theirs = format!("ctx\n{}rest\n", make("theirs"));
+        let runs = align_three_way(&base, &ours, &theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, &base, &ours, &theirs);
+
+        let total_rows: usize = runs.iter().map(AlignedRun::visual_rows).sum();
+        assert_eq!(total_rows, 9, "ctx + 7 paired rows + rest, no padding");
+        for run in &runs {
+            assert_eq!(
+                (run.base.len(), run.ours.len(), run.theirs.len()),
+                (run.visual_rows(), run.visual_rows(), run.visual_rows()),
+                "every row pairs one line from each side",
+            );
+        }
+    }
+
+    /// Second kdiff3-parity case: ours replaces two base lines with two new
+    /// ones; theirs keeps one base line mid-region among three new lines.
+    /// The theirs-kept base line anchors to its copy, and ours' second
+    /// replacement rides on that anchor row.
+    #[test]
+    fn align_anchors_theirs_kept_line_with_ours_replacement() {
+        let base = "ctx\ndone = len\nreturn round(done)\n";
+        let ours = "ctx\nfinished = len\nreturn round(finished)\n";
+        let theirs = "ctx\nactive = [t]\ndone = len\ndenom = len or 1\nreturn round(denom)\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+
+        // ctx | [o1|t1] | [base done ~ o2 ~ theirs copy] | [base return ~ t3]
+        // | [t4]
+        let rows: Vec<(usize, usize, usize)> = runs
+            .iter()
+            .map(|r| (r.base.len(), r.ours.len(), r.theirs.len()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(1, 1, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1), (0, 0, 1)],
+        );
+        // Anchor row: base `done = len` with theirs' identical copy.
+        assert_eq!(runs[2].base, 1..2);
+        assert_eq!(runs[2].theirs, 2..3);
+    }
+
+    #[test]
+    fn align_marks_identical_changes_as_both_same() {
+        let base = "a\nb\nc\n";
+        let both = "a\nX\nc\n";
+        let runs = align_three_way(base, both, both, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, both, both);
+        assert!(runs.iter().any(|r| r.kind == AlignedRunKind::BothSame));
+        assert!(!runs.iter().any(|r| r.kind == AlignedRunKind::Conflict));
+    }
+
+    #[test]
+    fn align_handles_empty_and_added_files() {
+        let runs = align_three_way("", "", "", DiffAlgorithm::Myers);
+        assert!(runs.is_empty());
+
+        let runs = align_three_way("", "added\n", "other\n", DiffAlgorithm::Myers);
+        assert_partitions(&runs, "", "added\n", "other\n");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::Conflict);
+        assert_eq!(runs[0].visual_rows(), 1);
+    }
+
+    #[test]
+    fn align_matches_merge_conflict_detection() {
+        // Alignment and merge_file must agree on what is a conflict.
+        let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
+        let ours = "1\nO2\n3\n4\n5\nO6\n7\n8\n9\n";
+        let theirs = "1\nT2\n3\n4\n5\n6\n7\nT8\n9\n";
+        let runs = align_three_way(base, ours, theirs, DiffAlgorithm::Myers);
+        assert_partitions(&runs, base, ours, theirs);
+        let conflict_runs = runs
+            .iter()
+            .filter(|r| r.kind == AlignedRunKind::Conflict)
+            .count();
+        let merged = merge_file(base, ours, theirs, &MergeOptions::default());
+        assert_eq!(conflict_runs, merged.conflict_count);
+    }
+
+    // -----------------------------------------------------------------------
+    // Two-way alignment (section 30 aligned row space, no-base fallback)
+    // -----------------------------------------------------------------------
+
+    fn assert_two_way_partitions(runs: &[AlignedRun], ours: &str, theirs: &str) {
+        let (b, o, t) = run_lens(runs);
+        assert_eq!(b, 0, "two-way runs carry no base lines");
+        assert_eq!(o, split_lines(ours).len(), "ours lines partitioned");
+        assert_eq!(t, split_lines(theirs).len(), "theirs lines partitioned");
+        let mut op = 0;
+        let mut tp = 0;
+        for run in runs {
+            assert_eq!(run.ours.start, op, "ours ranges contiguous");
+            assert_eq!(run.theirs.start, tp, "theirs ranges contiguous");
+            op = run.ours.end;
+            tp = run.theirs.end;
+        }
+    }
+
+    #[test]
+    fn align_two_way_identity_is_one_unchanged_run() {
+        let text = "a\nb\nc\n";
+        let runs = align_two_way(text, text, DiffAlgorithm::Myers);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::Unchanged);
+        assert_eq!(runs[0].visual_rows(), 3);
+        assert_two_way_partitions(&runs, text, text);
+    }
+
+    #[test]
+    fn align_two_way_classifies_inserts_deletes_and_replacements() {
+        let ours = "a\nours-only\nb\nreplaced-o\nc\n";
+        let theirs = "a\nb\nreplaced-t\nc\ntheirs-only\n";
+        let runs = align_two_way(ours, theirs, DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, ours, theirs);
+
+        let kinds: Vec<_> = runs.iter().map(|r| r.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::OursChanged,
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::Conflict,
+                AlignedRunKind::Unchanged,
+                AlignedRunKind::TheirsChanged,
+            ],
+        );
+        // The replaced line pairs 1:1 on a single visual row.
+        assert_eq!(runs[3].visual_rows(), 1);
+        // Deletion pads theirs; insertion pads ours.
+        assert_eq!(runs[1].theirs.len(), 0);
+        assert_eq!(runs[5].ours.len(), 0);
+    }
+
+    #[test]
+    fn align_two_way_pairs_uneven_replacement_top_aligned() {
+        let ours = "ctx\no1\no2\nrest\n";
+        let theirs = "ctx\nt1\nt2\nt3\nt4\nrest\n";
+        let runs = align_two_way(ours, theirs, DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, ours, theirs);
+
+        let conflict = runs
+            .iter()
+            .find(|r| r.kind == AlignedRunKind::Conflict)
+            .expect("replacement region");
+        assert_eq!(conflict.ours.len(), 2);
+        assert_eq!(conflict.theirs.len(), 4);
+        assert_eq!(conflict.visual_rows(), 4, "shorter side padded below");
+    }
+
+    #[test]
+    fn align_two_way_handles_empty_sides() {
+        assert!(align_two_way("", "", DiffAlgorithm::Myers).is_empty());
+
+        let runs = align_two_way("", "added\n", DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, "", "added\n");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::TheirsChanged);
+
+        let runs = align_two_way("gone\n", "", DiffAlgorithm::Myers);
+        assert_two_way_partitions(&runs, "gone\n", "");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].kind, AlignedRunKind::OursChanged);
     }
 
     #[test]

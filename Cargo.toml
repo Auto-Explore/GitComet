@@ -28,7 +28,7 @@ edition = "2024"
 license = "AGPL-3.0-only"
 authors = ["AutoExplore Oy <info@autoexplore.ai>"]
 repository = "https://github.com/Auto-Explore/GitComet"
-rust-version = "1.96.0"
+rust-version = "1.97.1"
 
 [workspace.dependencies]
 # Internal crates
@@ -41,13 +41,13 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 
 # External crates
 alacritty_terminal = "0.26"
-clap = { version = "4.6.2", features = ["derive"] }
+clap = { version = "4.6.4", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.23.0"
 futures = "0.3.33"
-gix = { version = "0.85.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "e76c07448f035933b580046a022f9903bac24fa1" }
-gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "e76c07448f035933b580046a022f9903bac24fa1", features = ["font-kit"] }
+gix = { version = "0.86.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "4cf012218ea9d0b00c7577fbea326304de250d0e" }
+gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "4cf012218ea9d0b00c7577fbea326304de250d0e", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
@@ -116,7 +116,7 @@ tree-sitter-zig = "1.1.2"
 unicode-segmentation = "1.13.3"
 url = "2.5.8"
 windows = "0.62.2"
-wayland-client = "0.31.14"
+wayland-client = "0.31.15"
 x11-clipboard = "0.9.3"
 
 [workspace.lints.rust]
