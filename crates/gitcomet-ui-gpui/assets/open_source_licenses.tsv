@@ -12,7 +12,7 @@ addr2line	0.25.1	Apache-2.0 OR MIT
 adler2	2.0.1	0BSD OR MIT OR Apache-2.0
 aes	0.8.4	MIT OR Apache-2.0
 ahash	0.8.12	MIT OR Apache-2.0
-aho-corasick	1.1.4	Unlicense OR MIT
+aho-corasick	1.1.5	Unlicense OR MIT
 alacritty_terminal	0.26.0	Apache-2.0
 aligned	0.4.3	MIT OR Apache-2.0
 aligned-vec	0.6.4	MIT
@@ -59,6 +59,7 @@ av1-grain	0.2.5	BSD-2-Clause
 avif-serialize	0.8.9	BSD-3-Clause
 backtrace	0.3.76	MIT OR Apache-2.0
 base64	0.22.1	MIT OR Apache-2.0
+base64	0.23.0	MIT OR Apache-2.0
 bindgen	0.72.1	BSD-3-Clause
 bisync	0.3.0	MIT OR Apache-2.0
 bisync_macros	0.2.3	MIT OR Apache-2.0
@@ -85,7 +86,7 @@ bytemuck_derive	1.11.0	Zlib OR Apache-2.0 OR MIT
 byteorder	1.5.0	Unlicense OR MIT
 byteorder-lite	0.1.0	Unlicense OR MIT
 bytes	1.12.1	MIT
-bytesize	2.6.0	Apache-2.0
+bytesize	2.7.0	Apache-2.0
 calloop	0.14.4	MIT
 calloop-wayland-source	0.4.1	MIT
 cast	0.3.0	MIT OR Apache-2.0
@@ -292,6 +293,7 @@ gpui_wgpu	0.1.0	Apache-2.0
 gpui_windows	0.1.0	Apache-2.0
 grid	1.0.1	MIT
 half	2.7.1	MIT OR Apache-2.0
+harfrust	0.12.0	MIT
 harfrust	0.5.2	MIT
 hash32	0.3.1	MIT OR Apache-2.0
 hashbrown	0.14.5	MIT OR Apache-2.0
@@ -323,6 +325,7 @@ idna_adapter	1.2.2	Apache-2.0 OR MIT
 image	0.25.10	MIT OR Apache-2.0
 image-webp	0.2.4	MIT OR Apache-2.0
 imagesize	0.14.0	MIT
+imagesize	0.15.0	MIT
 imgref	1.12.2	CC0-1.0 OR Apache-2.0
 indexmap	2.14.0	Apache-2.0 OR MIT
 inotify	0.11.4	ISC
@@ -359,7 +362,7 @@ libfuzzer-sys	0.4.13	(MIT OR Apache-2.0) AND NCSA
 libloading	0.8.9	ISC
 libm	0.2.16	MIT
 libmimalloc-sys	0.1.49	MIT
-libredox	0.1.18	MIT
+libredox	0.1.19	MIT
 libz-sys	1.1.29	MIT OR Apache-2.0
 linebender_resource_handle	0.1.1	Apache-2.0 OR MIT
 link-section	0.19.2	Apache-2.0 OR MIT
@@ -370,7 +373,7 @@ litrs	1.0.0	MIT OR Apache-2.0
 lock_api	0.4.14	MIT OR Apache-2.0
 log	0.4.33	MIT OR Apache-2.0
 loop9	0.1.5	MIT
-lru	0.18.1	MIT
+lru	0.18.2	MIT
 lyon	1.0.19	MIT OR Apache-2.0
 lyon_algorithms	1.0.20	MIT OR Apache-2.0
 lyon_geom	1.0.19	MIT OR Apache-2.0
@@ -483,7 +486,7 @@ profiling	1.0.18	MIT OR Apache-2.0
 profiling-procmacros	1.0.18	MIT OR Apache-2.0
 proptest	1.11.0	MIT OR Apache-2.0
 proptest-macro	0.5.0	MIT OR Apache-2.0
-psm	0.1.31	MIT OR Apache-2.0
+psm	0.1.32	MIT OR Apache-2.0
 pulldown-cmark	0.13.4	MIT
 pulldown-cmark-escape	0.11.0	MIT
 pulp	0.22.3	MIT
@@ -524,6 +527,7 @@ regex-automata	0.4.16	MIT OR Apache-2.0
 regex-syntax	0.8.11	MIT OR Apache-2.0
 renderdoc-sys	1.1.0	MIT OR Apache-2.0
 resvg	0.47.0	Apache-2.0 OR MIT
+resvg	0.48.1	Apache-2.0 OR MIT
 rgb	0.8.53	MIT
 roxmltree	0.20.0	MIT OR Apache-2.0
 roxmltree	0.21.1	MIT OR Apache-2.0
@@ -577,7 +581,7 @@ spin	0.12.2	MIT
 spin	0.9.9	MIT
 spirv	0.4.0+sdk-1.4.341.0	Apache-2.0
 stable_deref_trait	1.2.1	MIT OR Apache-2.0
-stacker	0.1.24	MIT OR Apache-2.0
+stacker	0.1.25	MIT OR Apache-2.0
 stacksafe	1.0.3	Apache-2.0
 stacksafe-macro	1.0.3	Apache-2.0
 static_assertions	1.1.0	MIT OR Apache-2.0
@@ -682,6 +686,7 @@ unicode-width	0.2.2	MIT OR Apache-2.0
 unicode-xid	0.2.6	MIT OR Apache-2.0
 url	2.5.8	MIT OR Apache-2.0
 usvg	0.47.0	Apache-2.0 OR MIT
+usvg	0.48.1	Apache-2.0 OR MIT
 utf8_iter	1.0.4	Apache-2.0 OR MIT
 utf8parse	0.2.2	Apache-2.0 OR MIT
 util	0.1.0	Apache-2.0
@@ -789,7 +794,7 @@ zeroize_derive	1.5.0	Apache-2.0 OR MIT
 zerotrie	0.2.4	Unicode-3.0
 zerovec	0.11.6	Unicode-3.0
 zerovec-derive	0.11.3	Unicode-3.0
-zlib-rs	0.6.6	Zlib
+zlib-rs	0.6.7	Zlib
 zmij	1.0.23	MIT
 zune-core	0.5.1	MIT OR Apache-2.0 OR Zlib
 zune-inflate	0.2.54	MIT OR Apache-2.0 OR Zlib
