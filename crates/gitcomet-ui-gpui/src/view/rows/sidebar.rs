@@ -421,6 +421,15 @@ impl SidebarPaneView {
             Some(highlight) => crate::theme::composite_over(row_surface, highlight),
             None => row_surface,
         };
+        // `theme.colors.hover` is an opaque fill tuned for the pane's surface;
+        // on the flyout's elevated surface it lands on nearly the same color and
+        // reads as no hover at all. Tint with text there instead, matching the
+        // other menus that sit on that surface.
+        let row_hover = if is_collapsed_popover {
+            with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 })
+        } else {
+            theme.colors.hover
+        };
 
         let top_divider = |color: gpui::Rgba| {
             div()
@@ -525,7 +534,8 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .cursor(CursorStyle::PointingHand)
-                        .hover(move |s| s.bg(theme.colors.hover))
+                        .rounded(px(theme.radii.row))
+                        .hover(move |s| s.bg(row_hover))
                         .active(move |s| s.bg(theme.colors.active))
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.border_variant))
@@ -587,12 +597,13 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .cursor(CursorStyle::PointingHand)
+                        .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -716,12 +727,13 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .cursor(CursorStyle::PointingHand)
+                        .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -829,7 +841,7 @@ impl SidebarPaneView {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -845,7 +857,7 @@ impl SidebarPaneView {
                                 row_bg(Some(if context_menu_active {
                                     theme.colors.active
                                 } else {
-                                    theme.colors.hover
+                                    row_hover
                                 })),
                             )
                             .render(ui_scale_percent)
@@ -937,12 +949,13 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .cursor(CursorStyle::PointingHand)
+                        .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -1074,7 +1087,7 @@ impl SidebarPaneView {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -1241,12 +1254,13 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .cursor(CursorStyle::PointingHand)
+                        .rounded(px(theme.radii.row))
                         .when(context_menu_active, |d| d.bg(theme.colors.active))
                         .hover(move |s| {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -1439,7 +1453,7 @@ impl SidebarPaneView {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -1566,7 +1580,7 @@ impl SidebarPaneView {
                             if context_menu_active {
                                 s.bg(theme.colors.active)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| s.bg(theme.colors.active))
@@ -1589,7 +1603,7 @@ impl SidebarPaneView {
                                 row_bg(Some(if context_menu_active {
                                     theme.colors.active
                                 } else {
-                                    theme.colors.hover
+                                    row_hover
                                 })),
                             )
                             .render(ui_scale_percent)
@@ -1664,7 +1678,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .rounded(px(theme.radii.row))
                         .cursor(CursorStyle::PointingHand)
-                        .hover(move |s| s.bg(theme.colors.hover))
+                        .hover(move |s| s.bg(row_hover))
                         .active(move |s| s.bg(theme.colors.active))
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
@@ -1688,7 +1702,7 @@ impl SidebarPaneView {
                                 ),
                                 row_bg(None),
                             )
-                            .hover_bg(row_group.clone(), row_bg(Some(theme.colors.hover)))
+                            .hover_bg(row_group.clone(), row_bg(Some(row_hover)))
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
@@ -1843,7 +1857,7 @@ impl SidebarPaneView {
                     } else if branch_selected {
                         branch_selected_bg
                     } else {
-                        theme.colors.hover
+                        row_hover
                     });
 
                     let mut row = div()
@@ -1872,7 +1886,7 @@ impl SidebarPaneView {
                             } else if branch_selected {
                                 s.bg(branch_selected_bg)
                             } else {
-                                s.bg(theme.colors.hover)
+                                s.bg(row_hover)
                             }
                         })
                         .active(move |s| {

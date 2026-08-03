@@ -47,6 +47,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             .justify_between()
             .text_sm()
             .line_height(scaled_px(18.0))
+            .rounded(px(theme.radii.row))
             .when(!disabled, |d| {
                 d.cursor(CursorStyle::PointingHand)
                     .hover(move |s| s.bg(hover_overlay))
