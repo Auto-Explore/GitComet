@@ -6,6 +6,7 @@ fn advanced_toggle(
     focus_handle: &FocusHandle,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
+    let scaled_px = super::popover_scaled_px_fn(cx);
     focusable_toggle_row(
         "submodule_add_advanced_toggle",
         "submodule_add_advanced_toggle",
@@ -22,7 +23,7 @@ fn advanced_toggle(
             "icons/chevron_down.svg"
         },
         theme.colors.text_muted,
-        px(12.0),
+        scaled_px(12.0),
     ))
 }
 
