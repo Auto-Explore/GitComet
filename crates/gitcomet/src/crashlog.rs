@@ -64,10 +64,20 @@ impl log::Log for CrashLogger {
         // them durable enough to survive an event-loop or native process exit.
         let mut stderr = std::io::stderr().lock();
         let _ = writeln!(stderr, "{}", record.args());
-        write_runtime_error_log(record);
+        if should_record_runtime_error(record.target(), &record.args().to_string()) {
+            write_runtime_error_log(record);
+        }
     }
 
     fn flush(&self) {}
+}
+
+fn should_record_runtime_error(target: &str, message: &str) -> bool {
+    // GPUI can deliver a queued native-window notification after the window was
+    // removed from App. Its callback logs the failed handle lookup even though
+    // teardown is proceeding normally. Treating that diagnostic as evidence of
+    // a crash causes the next launch to report a false abnormal exit.
+    !(target == "gpui::window" && message.trim() == "window not found")
 }
 
 fn write_runtime_error_log(record: &log::Record<'_>) {
@@ -1095,6 +1105,30 @@ impl Drop for ResetFlagOnDrop {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn ignores_gpui_window_notification_after_window_teardown() {
+        assert!(!should_record_runtime_error(
+            "gpui::window",
+            "window not found"
+        ));
+        assert!(!should_record_runtime_error(
+            "gpui::window",
+            "  window not found\n"
+        ));
+    }
+
+    #[test]
+    fn retains_other_runtime_errors() {
+        assert!(should_record_runtime_error(
+            "gpui::window",
+            "rendering failed"
+        ));
+        assert!(should_record_runtime_error(
+            "gitcomet::window",
+            "window not found"
+        ));
+    }
 
     #[test]
     fn percent_encode_encodes_reserved_characters() {
