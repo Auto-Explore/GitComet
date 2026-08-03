@@ -104,7 +104,7 @@ fn session_update_effects_persist_on_session_executor() {
     let session_executor = super::executor::TaskExecutor::new(1);
     let backend: Arc<dyn GitBackend> = Arc::new(Backend);
     let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
-    let (msg_tx, _msg_rx) = std::sync::mpsc::channel::<Msg>();
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
 
     schedule_effect_for_test(
         &executor,
@@ -144,24 +144,32 @@ fn session_update_effects_persist_on_session_executor() {
         },
     );
 
-    std::thread::sleep(Duration::from_millis(10));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let session = crate::session::load_from_path(&session_file);
-        let repo_a_mode = crate::session::load_repo_history_mode_from_path(&repo_a, &session_file);
-        let repo_b_mode = crate::session::load_repo_history_mode_from_path(&repo_b, &session_file);
-        if session.recent_repos.first() == Some(&repo_a)
-            && repo_a_mode == Some(LogScope::NoMerges)
-            && repo_b_mode == Some(LogScope::FirstParent)
-        {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "session update effects did not persist before timeout"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+    session_executor.spawn(move || {
+        completed_tx
+            .send(())
+            .expect("session persistence completion receiver should remain open");
+    });
+    completed_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("session persistence effects did not complete before timeout");
+
+    let persistence_failures = msg_rx.try_iter().collect::<Vec<_>>();
+    assert!(
+        persistence_failures.is_empty(),
+        "session persistence effects reported failures: {persistence_failures:?}"
+    );
+
+    let session = crate::session::load_from_path(&session_file);
+    assert_eq!(session.recent_repos.first(), Some(&repo_a));
+    assert_eq!(
+        crate::session::load_repo_history_mode_from_path(&repo_a, &session_file),
+        Some(LogScope::NoMerges)
+    );
+    assert_eq!(
+        crate::session::load_repo_history_mode_from_path(&repo_b, &session_file),
+        Some(LogScope::FirstParent)
+    );
 }
 
 #[test]

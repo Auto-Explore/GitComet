@@ -8,8 +8,7 @@ mod test_git_env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-#[cfg(windows)]
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 fn git_command() -> Command {
     let mut cmd = Command::new("git");
@@ -181,7 +180,15 @@ fn git_shell_available_for_submodule_tests() -> bool {
     })
 }
 
-fn require_git_shell_for_submodule_tests() -> bool {
+fn submodule_integration_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn require_git_shell_for_submodule_tests() -> Option<MutexGuard<'static, ()>> {
+    let guard = submodule_integration_test_lock();
     test_git_env::ensure_initialized();
     #[cfg(windows)]
     {
@@ -189,17 +196,17 @@ fn require_git_shell_for_submodule_tests() -> bool {
             eprintln!(
                 "skipping submodule integration test: Git-for-Windows shell startup failed in this environment"
             );
-            return false;
+            return None;
         }
     }
-    true
+    Some(guard)
 }
 
 #[test]
 fn list_submodules_reports_missing_gitmodules_mapping() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
 
@@ -264,9 +271,9 @@ fn list_submodules_reports_missing_gitmodules_mapping() {
 
 #[test]
 fn list_submodules_reports_not_initialized_and_head_mismatch() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -384,9 +391,9 @@ fn list_submodules_reports_not_initialized_and_head_mismatch() {
 
 #[test]
 fn list_submodules_recurses_into_nested_submodules() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -491,9 +498,9 @@ fn list_submodules_recurses_into_nested_submodules() {
 
 #[test]
 fn list_submodules_reports_merge_conflicted_gitlinks() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -643,9 +650,9 @@ fn list_submodules_reports_merge_conflicted_gitlinks() {
 
 #[test]
 fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -689,9 +696,9 @@ fn submodule_worktree_summary_treats_new_submodule_head_gitlink_as_missing() {
 
 #[test]
 fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -767,9 +774,9 @@ fn submodule_commit_summary_treats_missing_submodule_history_as_unavailable() {
 
 #[test]
 fn submodule_add_update_remove_round_trip() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -861,9 +868,9 @@ fn submodule_add_update_remove_round_trip() {
 
 #[test]
 fn add_submodule_does_not_restrict_https_or_ssh_transports() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let repo = dir.path().join("parent");
     fs::create_dir_all(&repo).expect("create parent repository directory");
@@ -889,9 +896,9 @@ fn add_submodule_does_not_restrict_https_or_ssh_transports() {
 
 #[test]
 fn add_local_submodule_requires_explicit_trust() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -945,9 +952,9 @@ fn add_local_submodule_requires_explicit_trust() {
 
 #[test]
 fn add_submodule_supports_branch_selection() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -994,9 +1001,9 @@ fn add_submodule_supports_branch_selection() {
 
 #[test]
 fn add_submodule_supports_multiple_branches_from_same_source() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1089,9 +1096,9 @@ fn add_submodule_supports_multiple_branches_from_same_source() {
 
 #[test]
 fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1158,9 +1165,9 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_and_metadata() {
 
 #[test]
 fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1216,9 +1223,9 @@ fn add_submodule_failed_branch_checkout_cleans_partial_clone_with_custom_name() 
 
 #[test]
 fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1280,9 +1287,9 @@ fn add_submodule_supports_custom_logical_name_for_local_git_dir_collision() {
 
 #[test]
 fn add_submodule_supports_force_for_local_git_dir_collision() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
@@ -1326,9 +1333,9 @@ fn add_submodule_supports_force_for_local_git_dir_collision() {
 
 #[test]
 fn remove_submodule_cleans_custom_logical_name_metadata() {
-    if !require_git_shell_for_submodule_tests() {
+    let Some(_guard) = require_git_shell_for_submodule_tests() else {
         return;
-    }
+    };
     let dir = tempfile::tempdir().expect("create tempdir");
     let root = dir.path();
 
