@@ -304,6 +304,8 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
     cx: &mut gpui::Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
     let focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
+    let hover_bg = theme.hover_overlay();
+    let active_bg = theme.active_overlay();
     div()
         .id(id)
         .debug_selector(move || debug_selector.to_string())
@@ -316,8 +318,8 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .rounded(px(theme.radii.row))
         .track_focus(&focus_handle)
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
+        .hover(move |s| s.bg(hover_bg))
+        .active(move |s| s.bg(active_bg))
         .focus(move |s| {
             s.bg(theme.colors.focus_ring_bg)
                 .border_1()
