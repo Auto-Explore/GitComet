@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::kit::TextInput;
 use crate::kit::TextInputOptions;
+use crate::view::components::InteractiveRowExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 type FileBrowserRowsCache = std::cell::RefCell<
@@ -1695,6 +1696,15 @@ impl SidebarPaneView {
         // bright accent — match that so the tree reads the same way.
         let icon_color = theme.colors.text_muted;
         let text_color = theme.colors.text;
+        let row_surface = if matches!(
+            this.collapsed_popover_section,
+            Some(CollapsedSidebarSection::Files)
+        ) {
+            theme.colors.surface_bg_elevated
+        } else {
+            theme.colors.sidebar_bg
+        };
+        let row_style = components::InteractiveRowStyle::new(theme, row_surface);
         let store = Arc::clone(&this.store);
         let search_matchers = this
             .active_repo()
@@ -1757,6 +1767,13 @@ impl SidebarPaneView {
             .map(|(ix, row, entry)| {
                 let left_pad = scaled_px(6.0 + INDENT_STEP_PX * row.depth as f32);
                 let store = Arc::clone(&store);
+                let menu_invoker = (!row.is_directory)
+                    .then(|| SharedString::from(format!("file_browser_file_{ix}")));
+                let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
+                    this.active_context_menu_invoker.as_ref() == Some(invoker)
+                });
+                let row_state =
+                    components::InteractiveRowState::default().open(context_menu_active);
 
                 let mut row_div = div()
                     .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
@@ -1769,9 +1786,7 @@ impl SidebarPaneView {
                     .pl(left_pad)
                     .pr_2()
                     .gap(scaled_px(4.0))
-                    .cursor_pointer()
-                    .rounded(px(theme.radii.row))
-                    .hover(|d| d.bg(theme.colors.hover));
+                    .interactive_row(row_style, row_state);
 
                 if row.is_directory {
                     let path = (*entry.path).clone();
@@ -1789,7 +1804,7 @@ impl SidebarPaneView {
                     let source = repo
                         .map(|r| r.file_browser.source.clone())
                         .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
-                    let menu_invoker = SharedString::from(format!("file_browser_file_{ix}"));
+                    let menu_invoker = menu_invoker.expect("file rows have a context-menu invoker");
                     row_div = row_div
                         .on_click(
                             cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {

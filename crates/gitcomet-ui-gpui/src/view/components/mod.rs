@@ -5,6 +5,7 @@ mod commit_sha_hover_menu;
 mod containers;
 mod context_menu;
 mod diff_stat;
+mod interactive_row;
 mod modal;
 mod picker_prompt;
 mod resize_grip;
@@ -32,6 +33,7 @@ pub use context_menu::{
     context_menu_header, context_menu_label, context_menu_separator,
 };
 pub use diff_stat::diff_stat;
+pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
 pub use modal::{modal_scrim, modal_surface};
 pub use picker_prompt::{
     PickerPrompt, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,

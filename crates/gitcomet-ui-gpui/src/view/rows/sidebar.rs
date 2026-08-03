@@ -1,5 +1,6 @@
 use super::*;
 use crate::ui_scale;
+use crate::view::components::InteractiveRowExt as _;
 use gitcomet_core::domain::LogScope;
 use gitcomet_core::domain::SubmoduleStatus;
 use std::num::NonZeroU32;
@@ -409,27 +410,15 @@ impl SidebarPaneView {
             scaled_px(BRANCH_TREE_BASE_PAD_PX + depth as f32 * BRANCH_TREE_DEPTH_STEP_PX)
         };
 
-        // Rows paint their highlights over the surface behind the list, which
-        // differs between the pane and the collapsed rail's flyout. Label fades
-        // have to land on the resulting color, so resolve it per row state.
+        // The same translucent interaction overlays are used on both surfaces.
+        // The style also resolves those overlays for label fades, so the fade
+        // and the row can never disagree about a semantic state.
         let row_surface = if is_collapsed_popover {
             theme.colors.surface_bg_elevated
         } else {
             theme.colors.sidebar_bg
         };
-        let row_bg = move |highlight: Option<gpui::Rgba>| match highlight {
-            Some(highlight) => crate::theme::composite_over(row_surface, highlight),
-            None => row_surface,
-        };
-        // `theme.colors.hover` is an opaque fill tuned for the pane's surface;
-        // on the flyout's elevated surface it lands on nearly the same color and
-        // reads as no hover at all. Tint with text there instead, matching the
-        // other menus that sit on that surface.
-        let row_hover = if is_collapsed_popover {
-            theme.hover_overlay()
-        } else {
-            theme.colors.hover
-        };
+        let row_style = components::InteractiveRowStyle::new(theme, row_surface);
 
         let top_divider = |color: gpui::Rgba| {
             div()
@@ -533,10 +522,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .cursor(CursorStyle::PointingHand)
-                        .rounded(px(theme.radii.row))
-                        .hover(move |s| s.bg(row_hover))
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, components::InteractiveRowState::Idle)
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.border_variant))
                         })
@@ -584,6 +570,8 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("branch_section_row_{}_{}", repo_id.0, section_key).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("branch_section", ix))
@@ -596,17 +584,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .cursor(CursorStyle::PointingHand)
-                        .rounded(px(theme.radii.row))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.border_variant))
                         })
@@ -713,6 +691,8 @@ impl SidebarPaneView {
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString = format!("stash_section_row_{}", repo_id.0).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("stash_section", ix))
@@ -726,17 +706,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .cursor(CursorStyle::PointingHand)
-                        .rounded(px(theme.radii.row))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.border_variant))
                         })
@@ -823,6 +793,8 @@ impl SidebarPaneView {
                     let stash_message_for_right_click = stash_message_for_menu.clone();
                     let row_group: SharedString =
                         format!("stash_row_{}_{}", repo_id.0, index).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("stash_sidebar_row", index))
@@ -835,30 +807,17 @@ impl SidebarPaneView {
                         .pr_2()
                         .h(scaled_px(24.0))
                         .w_full()
-                        .rounded(px(theme.radii.row))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 12.0))
                         .child(
                             components::FadingText::new(
                                 div().text_sm().child(message.clone()),
-                                row_bg(context_menu_active.then_some(theme.colors.active)),
+                                row_style.resolved_background(row_state),
                             )
                             .hover_bg(
                                 row_group.clone(),
-                                row_bg(Some(if context_menu_active {
-                                    theme.colors.active
-                                } else {
-                                    row_hover
-                                })),
+                                row_style.resolved_hover_background(row_state),
                             )
                             .render(ui_scale_percent)
                             .flex_1(),
@@ -935,6 +894,8 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("worktrees_section_row_{}", repo_id.0).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("worktrees_section", ix))
@@ -948,17 +909,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .cursor(CursorStyle::PointingHand)
-                        .rounded(px(theme.radii.row))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.border_variant))
                         })
@@ -1062,6 +1013,11 @@ impl SidebarPaneView {
                     let row_group: SharedString =
                         format!("worktree_row_{}_{}", repo_id.0, ix).into();
                     let row_debug_selector = row_group.as_ref().to_owned();
+                    let active_background =
+                        with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
+                    let row_state = components::InteractiveRowState::default()
+                        .selected(is_active, active_background)
+                        .open(context_menu_active);
 
                     div()
                         .id(("worktree_item", ix))
@@ -1075,22 +1031,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr(px(0.0))
-                        .rounded(px(theme.radii.row))
-                        .when(is_active, |d| {
-                            d.bg(with_alpha(
-                                theme.colors.accent,
-                                if theme.is_dark { 0.18 } else { 0.12 },
-                            ))
-                        })
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 12.0))
                         .child(
@@ -1240,6 +1181,8 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("submodules_section_row_{}", repo_id.0).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("submodules_section", ix))
@@ -1253,17 +1196,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .cursor(CursorStyle::PointingHand)
-                        .rounded(px(theme.radii.row))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.border_variant))
                         })
@@ -1435,6 +1368,8 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("submodule_row_{}_{}", repo_id.0, ix).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("submodule_item", ix))
@@ -1447,16 +1382,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
                         .pr(px(0.0))
-                        .rounded(px(theme.radii.row))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot("icons/box.svg", icon_color, 12.0))
                         .child(
@@ -1561,6 +1487,8 @@ impl SidebarPaneView {
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
                     let row_group: SharedString =
                         format!("remote_header_row_{}_{}", repo_id.0, remote_name).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("branch_remote", ix))
@@ -1573,17 +1501,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .rounded(px(theme.radii.row))
-                        .cursor(CursorStyle::PointingHand)
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
                         .text_color(remote_color)
@@ -1596,15 +1514,11 @@ impl SidebarPaneView {
                         .child(
                             components::FadingText::new(
                                 div().child(name),
-                                row_bg(context_menu_active.then_some(theme.colors.active)),
+                                row_style.resolved_background(row_state),
                             )
                             .hover_bg(
                                 row_group.clone(),
-                                row_bg(Some(if context_menu_active {
-                                    theme.colors.active
-                                } else {
-                                    row_hover
-                                })),
+                                row_style.resolved_hover_background(row_state),
                             )
                             .render(ui_scale_percent)
                             .flex_1(),
@@ -1665,6 +1579,7 @@ impl SidebarPaneView {
                     };
                     let row_group: SharedString =
                         format!("branch_group_row_{}_{}", repo_id.0, ix).into();
+                    let row_state = components::InteractiveRowState::Idle;
 
                     div()
                         .id(("branch_group", ix))
@@ -1676,10 +1591,7 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .rounded(px(theme.radii.row))
-                        .cursor(CursorStyle::PointingHand)
-                        .hover(move |s| s.bg(row_hover))
-                        .active(move |s| s.bg(theme.colors.active))
+                        .interactive_row(row_style, row_state)
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.colors.text_muted)
@@ -1700,9 +1612,12 @@ impl SidebarPaneView {
                                     FontWeight::SEMIBOLD,
                                     cx,
                                 ),
-                                row_bg(None),
+                                row_style.resolved_background(row_state),
                             )
-                            .hover_bg(row_group.clone(), row_bg(Some(row_hover)))
+                            .hover_bg(
+                                row_group.clone(),
+                                row_style.resolved_hover_background(row_state),
+                            )
                             .render(ui_scale_percent)
                             .flex_1(),
                         )
@@ -1841,24 +1756,10 @@ impl SidebarPaneView {
                     };
                     let head_highlight =
                         with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
-                    // Mirrors the row's own `bg`/`hover` rules below, so the
-                    // label fade always dissolves into the color under it.
-                    let branch_row_highlight = if context_menu_active {
-                        Some(theme.colors.active)
-                    } else if branch_selected {
-                        Some(branch_selected_bg)
-                    } else if is_head {
-                        Some(head_highlight)
-                    } else {
-                        None
-                    };
-                    let branch_row_hover_highlight = Some(if context_menu_active {
-                        theme.colors.active
-                    } else if branch_selected {
-                        branch_selected_bg
-                    } else {
-                        row_hover
-                    });
+                    let row_state = components::InteractiveRowState::default()
+                        .selected(is_head, head_highlight)
+                        .selected(branch_selected, branch_selected_bg)
+                        .open(context_menu_active);
 
                     let mut row = div()
                         .id(("branch_item", ix))
@@ -1876,28 +1777,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(usize::from(depth)))
                         .pr(px(0.0))
-                        .rounded(px(theme.radii.row))
-                        .when(is_head, |d| d.bg(head_highlight))
-                        .when(branch_selected, |d| d.bg(branch_selected_bg))
-                        .when(context_menu_active, |d| d.bg(theme.colors.active))
-                        .hover(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else if branch_selected {
-                                s.bg(branch_selected_bg)
-                            } else {
-                                s.bg(row_hover)
-                            }
-                        })
-                        .active(move |s| {
-                            if context_menu_active {
-                                s.bg(theme.colors.active)
-                            } else if branch_selected {
-                                s.bg(branch_selected_bg)
-                            } else {
-                                s.bg(theme.colors.active)
-                            }
-                        })
+                        .interactive_row(row_style, row_state)
                         .text_color(branch_text_color)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(
@@ -1921,9 +1801,12 @@ impl SidebarPaneView {
                                         FontWeight::NORMAL,
                                         cx,
                                     )),
-                                row_bg(branch_row_highlight),
+                                row_style.resolved_background(row_state),
                             )
-                            .hover_bg(row_group.clone(), row_bg(branch_row_hover_highlight))
+                            .hover_bg(
+                                row_group.clone(),
+                                row_style.resolved_hover_background(row_state),
+                            )
                             .render(ui_scale_percent)
                             .flex_1(),
                         );
