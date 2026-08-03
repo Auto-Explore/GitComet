@@ -1,5 +1,5 @@
 use crate::kit::{Scrollbar, ScrollbarAxis};
-use crate::theme::{AppTheme, with_alpha};
+use crate::theme::AppTheme;
 use crate::ui_scale;
 use gpui::prelude::*;
 use gpui::{
@@ -837,9 +837,8 @@ impl CommandPaletteView {
         let ui_scale = ui_scale::UiScale::current(cx);
         let scaled_px = |value: f32| ui_scale.px(value);
         let row_height = scaled_px(36.0);
-        let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-        let selected_overlay =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+        let hover_overlay = theme.hover_overlay();
+        let selected_overlay = theme.active_overlay();
 
         range
             .filter_map(|row_index| {

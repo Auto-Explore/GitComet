@@ -1144,8 +1144,8 @@ impl SidebarPaneView {
         let store_branches = Arc::clone(&self.store);
         let store_files = Arc::clone(&self.store);
         // `theme.colors.hover` is nearly identical to the sidebar chrome bg,
-        // so use a text-tinted overlay that actually reads on hover.
-        let tab_hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
+        // so use the standard text-tinted overlay that reads on hover.
+        let tab_hover_bg = theme.hover_overlay();
 
         let branches_tab = div()
             .flex()

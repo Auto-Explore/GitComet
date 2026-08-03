@@ -428,10 +428,8 @@ impl PickerPrompt {
                 }
                 // Text-alpha overlays keep the highlight visible on the
                 // elevated popover surface, unlike the canvas-tuned tokens.
-                let hover_overlay =
-                    with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-                let active_overlay =
-                    with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+                let hover_overlay = theme.hover_overlay();
+                let active_overlay = theme.active_overlay();
                 if is_selected {
                     row = row.bg(active_overlay).when(accent_selection, |row| {
                         row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(

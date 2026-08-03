@@ -1,4 +1,4 @@
-use crate::theme::{AppTheme, with_alpha};
+use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{Div, div};
@@ -8,7 +8,7 @@ use gpui::{Div, div};
 /// rows visually identical.
 pub fn shortcut_keys(label: &str, theme: AppTheme, scale: impl Into<UiScale>) -> Div {
     let scale = scale.into();
-    let chip_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.035 });
+    let chip_bg = theme.hover_overlay();
     div()
         .flex()
         .items_center()

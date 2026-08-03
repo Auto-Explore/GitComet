@@ -898,8 +898,8 @@ impl GitCometView {
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let active = self.sidebar_collapsed_popover;
         let icon_muted = theme.colors.text_muted;
-        let active_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.10 } else { 0.06 });
-        let hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.06 } else { 0.04 });
+        let active_bg = theme.active_overlay();
+        let hover_bg = theme.hover_overlay();
         let slot = scaled_px(28.0);
 
         let icons = CollapsedSidebarSection::ALL.into_iter().map(|section| {

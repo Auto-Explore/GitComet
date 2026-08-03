@@ -8,8 +8,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     // Text-alpha overlays: the canvas-tuned hover token has no contrast on
     // the elevated popover surface.
-    let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-    let active_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+    let hover_overlay = theme.hover_overlay();
+    let active_overlay = theme.active_overlay();
 
     let active_repo_id = this.active_repo().map(|r| r.id);
     let active_repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());

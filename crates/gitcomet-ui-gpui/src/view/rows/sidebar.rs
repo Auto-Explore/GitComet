@@ -426,7 +426,7 @@ impl SidebarPaneView {
         // reads as no hover at all. Tint with text there instead, matching the
         // other menus that sit on that surface.
         let row_hover = if is_collapsed_popover {
-            with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 })
+            theme.hover_overlay()
         } else {
             theme.colors.hover
         };

@@ -288,8 +288,8 @@ fn context_menu_entry<V: 'static>(
     };
     // Text-alpha overlays stay visible on the elevated popover surface, where
     // the `hover` token (tuned for the darker canvas) has no contrast.
-    let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-    let active_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+    let hover_overlay = theme.hover_overlay();
+    let active_overlay = theme.active_overlay();
 
     let mut row = div()
         .id(id)
@@ -527,11 +527,6 @@ fn context_menu_text_content<V: 'static>(
         .text_color(text_color)
         .child(text.text)
         .into_any_element()
-}
-
-fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
-    color.a = alpha;
-    color
 }
 
 #[cfg(test)]

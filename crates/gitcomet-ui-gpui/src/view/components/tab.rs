@@ -27,7 +27,7 @@ impl Tab {
     /// Overlay an idle tab picks up on hover. Exposed so anything painted on
     /// top of a tab (the label fade) can flatten it into a matching color.
     pub fn hover_overlay(theme: AppTheme) -> gpui::Rgba {
-        with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 })
+        theme.hover_overlay()
     }
 
     pub fn new(id: impl Into<ElementId>) -> Self {
@@ -116,9 +116,4 @@ impl Tab {
 
         base
     }
-}
-
-fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
-    color
 }

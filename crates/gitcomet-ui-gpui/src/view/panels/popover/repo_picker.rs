@@ -369,8 +369,8 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
     let ui_scale = super::popover_ui_scale(cx);
     let scaled_px = |value: f32| ui_scale.px(value);
     let menu_open = this.repo_picker_sort_menu_open;
-    let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-    let active_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+    let hover_overlay = theme.hover_overlay();
+    let active_overlay = theme.active_overlay();
 
     div()
         .id("repo_picker_sort_toggle")

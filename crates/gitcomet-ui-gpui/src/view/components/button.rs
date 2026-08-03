@@ -205,10 +205,6 @@ impl Button {
         );
         let hover_overlay = theme.hover_overlay();
         let active_overlay = theme.active_overlay();
-        let hover_overlay_muted =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.05 } else { 0.04 });
-        let active_overlay_muted =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.06 });
         let (bg, hover_bg, active_bg, border, hover_border, active_border, text) = match style {
             ButtonStyle::Filled => (
                 transparent,
@@ -282,8 +278,8 @@ impl Button {
             ),
             ButtonStyle::Transparent => (
                 transparent,
-                hover_overlay_muted,
-                active_overlay_muted,
+                hover_overlay,
+                active_overlay,
                 transparent,
                 with_alpha(
                     theme.colors.text_muted,
