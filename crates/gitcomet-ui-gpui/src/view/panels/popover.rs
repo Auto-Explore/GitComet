@@ -316,13 +316,14 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .items_center()
         .justify_between()
         .rounded(px(theme.radii.row))
+        .border_1()
+        .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
         .cursor(CursorStyle::PointingHand)
         .hover(move |s| s.bg(hover_bg))
         .active(move |s| s.bg(active_bg))
         .focus(move |s| {
             s.bg(theme.colors.focus_ring_bg)
-                .border_1()
                 .border_color(theme.colors.focus_ring)
         })
         .on_mouse_down(

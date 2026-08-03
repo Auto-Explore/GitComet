@@ -15,7 +15,12 @@ fn advanced_toggle(
         cx,
     )
     .flex()
-    .child(div().text_sm().child("Advanced"))
+    .child(
+        div()
+            .debug_selector(|| "submodule_add_advanced_label".to_string())
+            .text_sm()
+            .child("Advanced"),
+    )
     .child(svg_icon(
         if expanded {
             "icons/chevron_up.svg"

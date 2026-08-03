@@ -102,8 +102,12 @@ impl Render for MainPaneView {
         div()
             .size_full()
             .relative()
-            .when(historical_content, |d| d.border_2().border_color(purple))
             .child(inner)
+            .when(historical_content, |d| {
+                // Overlay the historical frame so entering browse mode does
+                // not inset or resize the content beneath it.
+                d.child(div().absolute().inset_0().border_2().border_color(purple))
+            })
     }
 }
 

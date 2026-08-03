@@ -183,14 +183,24 @@ impl gpui::Render for SmokeView {
             .tab(
                 components::Tab::new(("t", 0u64))
                     .selected(true)
-                    .child(div().child("One"))
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
+                    .child(
+                        div()
+                            .debug_selector(|| "smoke_selected_tab_content".to_string())
+                            .child("One"),
+                    )
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .debug_selector(|| "smoke_selected_tab".to_string()),
             )
             .tab(
                 components::Tab::new(("t", 1u64))
                     .selected(false)
-                    .child(div().child("Two"))
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
+                    .child(
+                        div()
+                            .debug_selector(|| "smoke_idle_tab_content".to_string())
+                            .child("Two"),
+                    )
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .debug_selector(|| "smoke_idle_tab".to_string()),
             )
             .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
@@ -371,6 +381,38 @@ fn smoke_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
         })
         .unwrap();
     });
+}
+
+#[gpui::test]
+fn tab_selection_border_keeps_content_inset_stable(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = cx.add_window_view(SmokeView::new);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let selected_tab = cx
+        .debug_bounds("smoke_selected_tab")
+        .expect("expected the selected smoke tab");
+    let selected_content = cx
+        .debug_bounds("smoke_selected_tab_content")
+        .expect("expected the selected smoke tab content");
+    let idle_tab = cx
+        .debug_bounds("smoke_idle_tab")
+        .expect("expected the idle smoke tab");
+    let idle_content = cx
+        .debug_bounds("smoke_idle_tab_content")
+        .expect("expected the idle smoke tab content");
+
+    assert_eq!(
+        selected_content.left() - selected_tab.left(),
+        idle_content.left() - idle_tab.left(),
+        "selected and idle tabs must reserve the same leading border inset",
+    );
+    assert_eq!(
+        selected_content.top() - selected_tab.top(),
+        idle_content.top() - idle_tab.top(),
+        "selected and idle tabs must reserve the same top border inset",
+    );
 }
 
 #[gpui::test]

@@ -1534,13 +1534,18 @@ impl SidebarPaneView {
             .is_some_and(|r| r.browsing_commit().is_some());
         let purple = crate::theme::historical_outline(theme.is_dark);
         div()
+            .relative()
             .flex()
             .flex_col()
             .h_full()
             .min_h(px(0.0))
-            .when(browsing_commit, |d| d.border_2().border_color(purple))
             .child(search_bar)
             .child(body)
+            .when(browsing_commit, |d| {
+                // Overlay the historical frame so entering browse mode does
+                // not inset or resize the file browser beneath it.
+                d.child(div().absolute().inset_0().border_2().border_color(purple))
+            })
             .into_any()
     }
 

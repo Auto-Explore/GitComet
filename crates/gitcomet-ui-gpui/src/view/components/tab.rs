@@ -76,11 +76,12 @@ impl Tab {
 
         // Browser-style tab: both states share the shape — inset from the bar
         // top, sitting on the bar's bottom edge, rounded top corners only.
-        // The active tab fills with the content-strip color and carries a
-        // top/side border so it reads as the front sheet; the bottom stays
-        // open to fuse with the workspace below. Width is clamped: long repo
-        // names truncate at the max, and tabs shrink no further than the min
-        // before the strip starts scrolling.
+        // Every tab reserves the active tab's top/side border so changing
+        // selection never shifts its contents. The active tab colors that
+        // border and fills with the content-strip color; the bottom stays open
+        // to fuse with the workspace below. Width is clamped: long repo names
+        // truncate at the max, and tabs shrink no further than the min before
+        // the strip starts scrolling.
         let mut base = self
             .div
             .group("tab")
@@ -95,6 +96,10 @@ impl Tab {
             .gap_1()
             .rounded_tl(px(theme.radii.control))
             .rounded_tr(px(theme.radii.control))
+            .border_t_1()
+            .border_l_1()
+            .border_r_1()
+            .border_color(gpui::transparent_black())
             .text_color(text_color)
             .cursor_pointer()
             .children(self.children)
@@ -103,9 +108,6 @@ impl Tab {
         if self.selected {
             base = base
                 .bg(theme.colors.sidebar_bg)
-                .border_t_1()
-                .border_l_1()
-                .border_r_1()
                 .border_color(theme.colors.border);
         } else {
             base = base

@@ -87,6 +87,18 @@ impl InteractiveRowStyle {
         }
     }
 
+    fn focus_outline(self) -> gpui::BoxShadow {
+        // An inset shadow paints the focus ring without introducing border
+        // width into layout when a row gains focus.
+        gpui::BoxShadow {
+            color: self.focus_ring.into(),
+            offset: gpui::point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
+            spread_radius: px(1.0),
+            inset: true,
+        }
+    }
+
     pub fn resolved_background(self, state: InteractiveRowState) -> Rgba {
         self.resting_fill(state)
             .map_or(self.surface, |fill| composite_over(self.surface, fill))
@@ -101,14 +113,14 @@ impl InteractiveRowStyle {
         let hover = self.hover_fill(state);
         let active = self.active_fill(state);
         let focus = self.focus_fill(state);
-        let focus_ring = self.focus_ring;
+        let focus_outline = vec![self.focus_outline()];
 
         row.rounded(px(self.radius))
             .cursor(CursorStyle::PointingHand)
             .when_some(resting, |row, background| row.bg(background))
             .hover(move |row| row.bg(hover))
             .active(move |row| row.bg(active))
-            .focus(move |row| row.bg(focus).border_1().border_color(focus_ring))
+            .focus(move |row| row.bg(focus).shadow(focus_outline.clone()))
     }
 }
 
@@ -155,6 +167,17 @@ mod tests {
         assert_eq!(style.resting_fill(state), Some(selected));
         assert_eq!(style.hover_fill(state), selected);
         assert_eq!(style.active_fill(state), selected);
+    }
+
+    #[test]
+    fn focus_outline_is_inset_and_does_not_require_layout_border() {
+        let theme = dark_theme();
+        let outline = InteractiveRowStyle::new(theme, theme.colors.sidebar_bg).focus_outline();
+
+        assert!(outline.inset);
+        assert_eq!(outline.offset, gpui::point(px(0.0), px(0.0)));
+        assert_eq!(outline.blur_radius, px(0.0));
+        assert_eq!(outline.spread_radius, px(1.0));
     }
 
     #[test]
