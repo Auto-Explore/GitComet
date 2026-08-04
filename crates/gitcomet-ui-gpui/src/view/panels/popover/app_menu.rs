@@ -28,7 +28,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let external_editor_configured = crate::external_editor::configured_setting().is_some();
     let show_command_palette = command_palette_available(this.root_view_mode);
 
-    let mut items = vec![ContextMenuItem::Header("Application".into())];
+    let mut items = Vec::new();
     let mut debug_selectors = std::collections::HashMap::new();
 
     if show_command_palette {
@@ -66,7 +66,6 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     }
 
     items.push(ContextMenuItem::Separator);
-    items.push(ContextMenuItem::Header("Patches".into()));
     push_entry(
         &mut items,
         &mut debug_selectors,
@@ -96,20 +95,20 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     push_entry(
         &mut items,
         &mut debug_selectors,
-        "app_menu_quit",
-        "Quit",
-        Shortcut::Secondary("Q"),
-        false,
-        AppMenuAction::Quit,
-    );
-    push_entry(
-        &mut items,
-        &mut debug_selectors,
         "app_menu_close_window",
         "Close Window",
         Shortcut::Secondary("Shift+W"),
         false,
         AppMenuAction::CloseWindow,
+    );
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_quit",
+        "Quit",
+        Shortcut::Secondary("Q"),
+        false,
+        AppMenuAction::Quit,
     );
 
     ContextMenuModel::new(items)

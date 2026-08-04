@@ -104,6 +104,7 @@ const CONFLICT_INPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.
 const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 220.0, 360.0);
 const CONFLICT_OUTPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 300.0);
 const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 360.0);
+const REPO_TAB_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
 const DIALOG_320_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -114,7 +115,9 @@ const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
-const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(250.0);
+// Leaves enough room for “Open in code editor” and its three-key shortcut
+// badge to remain on one line on non-macOS platforms.
+const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
 
 /// Cancel/submit focus-handle pair shared by every prompt dialog.
 pub(super) struct DialogFocus {
@@ -783,7 +786,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
-        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -811,6 +813,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker

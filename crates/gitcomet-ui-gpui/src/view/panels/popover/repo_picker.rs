@@ -144,7 +144,6 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
             sortable_row(
                 RepoPickerEntry::Open(repo.id),
                 &repo.spec.workdir,
-                "icons/folder.svg",
                 OPEN_SECTION,
                 recency,
                 false,
@@ -172,7 +171,6 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
             sortable_row(
                 RepoPickerEntry::RecentlyClosed(path.clone()),
                 path,
-                "icons/history.svg",
                 RECENTLY_CLOSED_SECTION,
                 recency,
                 // Only recents can be forgotten; open repositories leave the
@@ -195,7 +193,6 @@ pub(super) fn entries(this: &PopoverHost) -> Vec<(RepoPickerEntry, components::P
 fn sortable_row(
     entry: RepoPickerEntry,
     workdir: &std::path::Path,
-    icon: &'static str,
     section: &'static str,
     recency: usize,
     removable: bool,
@@ -203,7 +200,10 @@ fn sortable_row(
     SortableRow {
         entry,
         item: {
-            let item = repo_picker_item(workdir).icon(icon).section(section);
+            let repository_name = path_display::repo_path_name(workdir);
+            let item = repo_picker_item(workdir)
+                .repository_initials(repository_name.as_ref())
+                .section(section);
             if removable { item.removable() } else { item }
         },
         name_key: workdir
@@ -224,7 +224,6 @@ mod tests {
         sortable_row(
             RepoPickerEntry::RecentlyClosed(std::path::PathBuf::from(path)),
             std::path::Path::new(path),
-            "icons/history.svg",
             RECENTLY_CLOSED_SECTION,
             recency,
             true,
@@ -276,6 +275,20 @@ mod tests {
             );
         }
         assert_eq!(RepoPickerSort::from_storage_key("nonsense"), None);
+    }
+
+    #[test]
+    fn sort_toggle_includes_the_selected_sort() {
+        assert_eq!(sort_toggle_label(RepoPickerSort::Newest), "Sort: Newest");
+        assert_eq!(sort_toggle_label(RepoPickerSort::Oldest), "Sort: Oldest");
+        assert_eq!(
+            sort_toggle_label(RepoPickerSort::Name),
+            format!("Sort: {}", RepoPickerSort::Name.label())
+        );
+        assert_eq!(
+            sort_toggle_label(RepoPickerSort::Path),
+            format!("Sort: {}", RepoPickerSort::Path.label())
+        );
     }
 }
 
@@ -391,7 +404,7 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .when(menu_open, |toggle| toggle.bg(active_overlay))
         .hover(move |s| s.bg(hover_overlay))
         .active(move |s| s.bg(active_overlay))
-        .child("Sort")
+        .child(sort_toggle_label(this.repo_picker_sort))
         .child(crate::view::icons::svg_icon(
             "icons/chevron_down.svg",
             theme.colors.text_muted,
@@ -400,6 +413,10 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {
             toggle_sort_menu(this, cx);
         }))
+}
+
+fn sort_toggle_label(sort: RepoPickerSort) -> String {
+    format!("Sort: {}", sort.label())
 }
 
 /// The sort options, rendered in place of the repository rows while the menu is

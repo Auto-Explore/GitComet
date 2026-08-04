@@ -199,6 +199,36 @@ impl PopoverHost {
         super::super::super::platform_open::open_file_location(path)
     }
 
+    fn reveal_path_in_file_manager(
+        &mut self,
+        path: std::path::PathBuf,
+        fallback: Option<std::path::PathBuf>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let target = if path.exists() {
+            path
+        } else {
+            path.parent()
+                .map(ToOwned::to_owned)
+                .or(fallback)
+                .unwrap_or(path)
+        };
+
+        if !target.exists() {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Path not found: {}", target.display()),
+                cx,
+            );
+        } else if let Err(err) = self.open_file_location(&target) {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Failed to open location: {err}"),
+                cx,
+            );
+        }
+    }
+
     fn take_status_paths_for_action(
         &mut self,
         repo_id: RepoId,
@@ -495,31 +525,11 @@ impl PopoverHost {
                     }
                 };
 
-                let target = if full_path.exists() {
-                    full_path
-                } else {
-                    full_path
-                        .parent()
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| {
-                            self.workdir_for_repo(repo_id)
-                                .unwrap_or_else(|| full_path.clone())
-                        })
-                };
-
-                if !target.exists() {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Path not found: {}", target.display()),
-                        cx,
-                    );
-                } else if let Err(err) = self.open_file_location(&target) {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open location: {err}"),
-                        cx,
-                    );
-                }
+                let fallback = self.workdir_for_repo(repo_id);
+                self.reveal_path_in_file_manager(full_path, fallback, cx);
+            }
+            ContextMenuAction::OpenRepositoryLocation { path } => {
+                self.reveal_path_in_file_manager(path, None, cx);
             }
             ContextMenuAction::OpenInCodeEditor { repo_id, path } => {
                 let full_path = match repo_id {

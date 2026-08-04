@@ -1,39 +1,22 @@
-use super::{Button, ButtonStyle, tab::TAB_HEIGHT_PX};
-use crate::theme::{AppTheme, with_alpha};
+use super::tab::TAB_HEIGHT_PX;
+use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
-use crate::view::icons::svg_icon;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, App, Bounds, Div, ElementId, IntoElement, Pixels, Point, ScrollHandle, Stateful,
-    Window, div, point, px,
+    AnyElement, Bounds, Div, ElementId, IntoElement, Pixels, Point, ScrollHandle, Stateful, div,
+    point, px,
 };
-use std::cell::Cell;
-use std::rc::Rc;
 
-/// Fraction of the visible strip a single arrow click travels.
-const ARROW_SCROLL_PAGE_FRACTION: f32 = 0.75;
-/// Floor for an arrow click so a narrow strip still moves a useful amount.
-const ARROW_SCROLL_MIN_PX: f32 = 120.0;
 /// Sub-pixel slack: layout rounding leaves a hair of scrollable width behind
-/// that must not count as overflow or light up an arrow.
+/// that must not count as overflow.
 const SCROLL_EPSILON: Pixels = px(0.5);
 
-/// How the strip's scroll arrows should look, derived from the last measured
-/// layout: whether they show at all, and which way they can still travel.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct ArrowState {
-    visible: bool,
-    can_scroll_left: bool,
-    can_scroll_right: bool,
-}
-
 /// Scroll state of a tab strip. The view owns one of these so the offset and
-/// the last measured layout survive re-renders; the strip has no visible
-/// scrollbar, so the arrows are the only affordance and have to track it.
+/// the last measured overflow state survive re-renders. Repository tabs use
+/// wheel/trackpad input and active-tab reveal instead of visible scroll arrows.
 #[derive(Clone, Debug)]
 pub struct TabBarScroll {
     handle: ScrollHandle,
-    arrows: Rc<Cell<ArrowState>>,
 }
 
 impl Default for TabBarScroll {
@@ -46,7 +29,6 @@ impl TabBarScroll {
     pub fn new() -> Self {
         Self {
             handle: ScrollHandle::new(),
-            arrows: Rc::new(Cell::new(ArrowState::default())),
         }
     }
 
@@ -94,17 +76,6 @@ impl TabBarScroll {
         self.handle.max_offset().x
     }
 
-    /// Arrow state implied by the layout measured during the last prepaint.
-    fn arrow_state(&self) -> ArrowState {
-        let max_scroll = self.max_scroll();
-        let scrolled = self.scrolled();
-        ArrowState {
-            visible: max_scroll > SCROLL_EPSILON,
-            can_scroll_left: scrolled > SCROLL_EPSILON,
-            can_scroll_right: scrolled < max_scroll - SCROLL_EPSILON,
-        }
-    }
-
     /// Bounds of the visible strip, as measured during the last prepaint.
     pub fn viewport(&self) -> Bounds<Pixels> {
         self.handle.bounds()
@@ -120,11 +91,12 @@ impl TabBarScroll {
 
     /// Whether the strip can still travel in `direction` (negative is left).
     pub fn can_scroll(&self, direction: f32) -> bool {
-        let arrows = self.arrow_state();
+        let max_scroll = self.max_scroll();
+        let scrolled = self.scrolled();
         if direction < 0.0 {
-            arrows.can_scroll_left
+            scrolled > SCROLL_EPSILON
         } else {
-            arrows.can_scroll_right
+            scrolled < max_scroll - SCROLL_EPSILON
         }
     }
 
@@ -139,17 +111,11 @@ impl TabBarScroll {
         self.handle.set_offset(point(x, offset.y));
         true
     }
-
-    fn page(&self) -> Pixels {
-        let visible = self.handle.bounds().size.width;
-        (visible * ARROW_SCROLL_PAGE_FRACTION).max(px(ARROW_SCROLL_MIN_PX))
-    }
 }
 
 pub struct TabBar {
     id: ElementId,
     tabs: Vec<AnyElement>,
-    filler: Option<AnyElement>,
     tab_end: Option<AnyElement>,
     scroll: Option<TabBarScroll>,
 }
@@ -159,7 +125,6 @@ impl TabBar {
         Self {
             id: id.into(),
             tabs: Vec::new(),
-            filler: None,
             tab_end: None,
             scroll: None,
         }
@@ -170,17 +135,8 @@ impl TabBar {
         self
     }
 
-    /// Element stretched into the empty space after the tabs (e.g. a window
-    /// drag surface). It collapses to zero width once tabs fill the bar.
-    pub fn filler(mut self, filler: impl IntoElement) -> Self {
-        self.filler = Some(filler.into_any_element());
-        self
-    }
-
-    /// Element that follows the last tab, browser-style. While the tabs fit it
-    /// rides inside the strip, sitting where the next tab would appear; once
-    /// they overflow it moves out beside the scroll arrows, where the tabs can
-    /// never scroll it out of reach.
+    /// Element pinned after the scroll viewport. Its normal layout width is
+    /// always reserved, so it never overlaps tabs or shifts when they overflow.
     pub fn tab_end(mut self, tab_end: impl IntoElement) -> Self {
         self.tab_end = Some(tab_end.into_any_element());
         self
@@ -192,31 +148,14 @@ impl TabBar {
         self
     }
 
-    pub fn render(self, theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
+    pub fn render(self, _theme: AppTheme, ui_scale_percent: u32) -> Stateful<Div> {
         let ui_scale = UiScale::from_percent(ui_scale_percent);
         let Self {
             id,
             tabs,
-            filler,
             tab_end,
             scroll,
         } = self;
-
-        // Reflects the previous frame's layout; the listener below asks for a
-        // redraw whenever this frame's layout disagrees with it.
-        let arrows = scroll
-            .as_ref()
-            .map(TabBarScroll::arrow_state)
-            .unwrap_or_default();
-
-        // The strip carries the end element while everything fits, and hands it
-        // to the pinned slot once the arrows appear. The swap cannot oscillate:
-        // the pair of arrows is wider than the element, so a strip that
-        // overflows with the element inside still overflows once it moves out.
-        let (strip_end, pinned_end) = match tab_end {
-            Some(tab_end) if arrows.visible => (None, Some(tab_end)),
-            tab_end => (tab_end, None),
-        };
 
         // The tabs are direct children of the scroll container on purpose:
         // GPUI measures scrollable content from its immediate children, so a
@@ -233,15 +172,9 @@ impl TabBar {
             .when_some(scroll.as_ref(), |this, scroll| {
                 this.track_scroll(&scroll.handle)
             })
-            .children(tabs)
-            // After the tabs, so tab indices still address tabs: the scroll
-            // handle addresses its children positionally.
-            .children(strip_end)
-            .when_some(filler, |this, filler| {
-                this.child(div().flex_1().min_w(px(0.0)).h_full().child(filler))
-            });
+            .children(tabs);
 
-        let mut viewport = div()
+        let viewport = div()
             .relative()
             .flex()
             .items_end()
@@ -249,16 +182,6 @@ impl TabBar {
             .min_w(px(0.0))
             .h_full()
             .overflow_x_hidden();
-        if let Some(scroll) = scroll.clone() {
-            viewport = viewport.on_children_prepainted(move |_bounds, _window, cx| {
-                let measured = scroll.arrow_state();
-                if scroll.arrows.replace(measured) != measured {
-                    // `Window::refresh` is a no-op mid-draw; an app effect is
-                    // the way to get another frame out of prepaint.
-                    cx.refresh_windows();
-                }
-            });
-        }
 
         div()
             .id(id)
@@ -267,68 +190,7 @@ impl TabBar {
             .items_center()
             .w_full()
             .h_full()
-            .when(arrows.visible, |this| {
-                let scroll = scroll
-                    .clone()
-                    .expect("visible arrows imply a scroll handle");
-                this.child(scroll_arrow(
-                    "tab_bar_scroll_left",
-                    "icons/chevron_left.svg",
-                    theme,
-                    ui_scale,
-                    arrows.can_scroll_left,
-                    move |window| {
-                        scroll.scroll_by(-scroll.page());
-                        window.refresh();
-                    },
-                ))
-            })
             .child(viewport.child(tabs))
-            .when(arrows.visible, |this| {
-                let scroll = scroll
-                    .clone()
-                    .expect("visible arrows imply a scroll handle");
-                this.child(scroll_arrow(
-                    "tab_bar_scroll_right",
-                    "icons/chevron_right.svg",
-                    theme,
-                    ui_scale,
-                    arrows.can_scroll_right,
-                    move |window| {
-                        scroll.scroll_by(scroll.page());
-                        window.refresh();
-                    },
-                ))
-            })
-            .children(pinned_end)
+            .children(tab_end)
     }
-}
-
-fn scroll_arrow(
-    id: &'static str,
-    icon: &'static str,
-    theme: AppTheme,
-    ui_scale: UiScale,
-    enabled: bool,
-    on_click: impl Fn(&mut Window) + 'static,
-) -> impl IntoElement {
-    let color = if enabled {
-        theme.colors.text_muted
-    } else {
-        with_alpha(theme.colors.text_muted, 0.35)
-    };
-
-    div().flex_none().h_full().flex().items_center().child(
-        Button::new(id, "")
-            .start_slot(svg_icon(icon, color, ui_scale.px(12.0)))
-            .style(ButtonStyle::Transparent)
-            .borderless()
-            .disabled(!enabled)
-            .render(theme, ui_scale)
-            .debug_selector(move || id.to_string())
-            .block_mouse_except_scroll()
-            .when(enabled, |this| {
-                this.on_click(move |_e, window, _cx: &mut App| on_click(window))
-            }),
-    )
 }

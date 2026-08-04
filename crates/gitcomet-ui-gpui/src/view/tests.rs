@@ -3272,9 +3272,24 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
             workdir: PathBuf::from("/tmp/repo"),
         },
     ));
+    let ready_repo_id = RepoId(2);
+    let mut ready_repo = RepoState::new_opening(
+        ready_repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/GitComet"),
+        },
+    );
+    ready_repo.open = Loadable::Ready(());
+    state.repos.push(ready_repo);
     store_for_assert.replace_snapshot_for_test(Arc::new(state));
     cx.update(|_window, app| {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+        let repo_tabs_bar = view.read(app).repo_tabs_bar.clone();
+        repo_tabs_bar.update(app, |bar, cx| {
+            let mut open_terminal_repo_ids = HashSet::default();
+            open_terminal_repo_ids.insert(ready_repo_id);
+            bar.set_open_terminal_repo_ids(open_terminal_repo_ids, cx);
+        });
     });
     test_support::redraw(cx);
 
@@ -3285,24 +3300,44 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     let repo_tab_bounds = cx
         .debug_bounds("repo_tab_1")
         .expect("expected loading repo tab bounds");
+    let label_before_hover = cx
+        .debug_bounds("repo_tab_label_1")
+        .expect("expected loading repo tab label before hover");
+    assert_eq!(
+        cx.debug_bounds("repo_tab_close_1"),
+        None,
+        "close action should stay hidden until the repository tab is hovered"
+    );
+    assert_eq!(
+        cx.debug_bounds("repo_tab_close_fade_1"),
+        None,
+        "close fade should only exist together with the close action"
+    );
     assert_eq!(
         repo_tab_bounds.size.width,
-        px(100.0),
-        "expected a short repository label to retain the 100px minimum tab width"
+        px(102.0),
+        "expected a short repository label to fit the 18px status mark at the compact width"
     );
     cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
     test_support::redraw(cx);
 
-    let label_center_y = cx
+    let label_bounds = cx
         .debug_bounds("repo_tab_label_1")
-        .expect("expected loading repo tab label bounds")
-        .center()
-        .y;
-    let spinner_center_y = cx
+        .expect("expected loading repo tab label bounds");
+    let label_center_y = label_bounds.center().y;
+    let spinner_bounds = cx
         .debug_bounds("repo_tab_busy_spinner_1")
-        .expect("expected loading repo tab spinner bounds")
-        .center()
-        .y;
+        .expect("expected loading repo tab spinner bounds");
+    let initials_bounds = cx
+        .debug_bounds("repo_tab_initials_2")
+        .expect("expected ready repo tab initials bounds");
+    let ready_label_bounds = cx
+        .debug_bounds("repo_tab_label_2")
+        .expect("expected ready repo tab label bounds");
+    let ready_label_center_y = ready_label_bounds.center().y;
+    let terminal_bounds = cx
+        .debug_bounds("repo_tab_terminal_2")
+        .expect("expected ready repo tab terminal icon bounds");
     let close_center = cx
         .debug_bounds("repo_tab_close_1")
         .expect("expected loading repo tab close button to be rendered")
@@ -3310,6 +3345,9 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     let close_bounds = cx
         .debug_bounds("repo_tab_close_1")
         .expect("expected loading repo tab close button bounds");
+    let close_fade_bounds = cx
+        .debug_bounds("repo_tab_close_fade_1")
+        .expect("expected a fade before the overlaid close button");
     let close_trailing_inset = repo_tab_bounds.right() - close_bounds.right();
     assert!(
         close_trailing_inset >= px(10.0) && close_trailing_inset <= px(12.0),
@@ -3317,12 +3355,78 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
          {close_trailing_inset:?}"
     );
     assert_eq!(
-        label_center_y, spinner_center_y,
+        label_bounds.size.width, label_before_hover.size.width,
+        "showing the close action must not reserve or remove repository-label space"
+    );
+    assert!(
+        label_bounds.right() > close_bounds.left(),
+        "the close action should overlay the repository text instead of taking a flex slot"
+    );
+    assert_eq!(
+        close_fade_bounds.size.width,
+        px(16.0),
+        "expected the shared 16px fade ramp before the close action"
+    );
+    assert_eq!(
+        close_fade_bounds.right(),
+        close_bounds.left(),
+        "the fade ramp should meet the close button without a hard edge"
+    );
+    assert_eq!(
+        spinner_bounds.size, initials_bounds.size,
+        "expected loading spinner and repository initials to have identical dimensions"
+    );
+    assert_eq!(
+        spinner_bounds.size,
+        gpui::size(px(18.0), px(18.0)),
+        "expected repository status marks to match the shared 18px text line box"
+    );
+    assert_eq!(
+        close_bounds.size, spinner_bounds.size,
+        "expected the repository close button to use the shared 18px geometry"
+    );
+    assert_eq!(
+        terminal_bounds.size, spinner_bounds.size,
+        "expected the embedded terminal icon to use the shared 18px geometry"
+    );
+    assert_eq!(
+        label_bounds.left() - spinner_bounds.right(),
+        px(6.0),
+        "expected a 6px gap between the loading spinner and repository name"
+    );
+    assert_eq!(
+        ready_label_bounds.left() - initials_bounds.right(),
+        px(6.0),
+        "expected a 6px gap between the initials badge and repository name"
+    );
+    assert_eq!(
+        cx.debug_bounds("repo_tab_initials_1"),
+        None,
+        "expected loading repository initials to be replaced by the spinner"
+    );
+    assert_eq!(
+        cx.debug_bounds("repo_tab_busy_spinner_2"),
+        None,
+        "expected a ready repository to show initials instead of a spinner"
+    );
+    assert_eq!(
+        label_center_y,
+        spinner_bounds.center().y,
         "expected repository label and loading spinner to share a centerline"
     );
     assert_eq!(
         label_center_y, close_center.y,
         "expected repository label and close button to share a centerline"
+    );
+    assert_eq!(
+        ready_label_center_y,
+        initials_bounds.center().y,
+        "expected repository label and initials badge to share a centerline"
+    );
+    assert_eq!(
+        ready_label_center_y,
+        terminal_bounds.center().y,
+        "expected repository label and terminal icon to share a centerline"
     );
     cx.simulate_mouse_move(close_center, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(
@@ -3337,7 +3441,11 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     );
 
     wait_until("loading repo tab to close", || {
-        store_for_assert.snapshot().repos.is_empty()
+        !store_for_assert
+            .snapshot()
+            .repos
+            .iter()
+            .any(|repo| repo.id == repo_id)
     });
 }
 
@@ -3394,18 +3502,28 @@ fn repo_tab_context_menu_renders_requested_actions(cx: &mut gpui::TestAppContext
     open_repo_tab_context_menu(cx, "repo_tab_2");
 
     assert_eq!(store.snapshot().active_repo, Some(RepoId(1)));
-    cx.debug_bounds("context_menu_active")
-        .expect("expected Active menu item");
+    cx.debug_bounds("context_menu_activate")
+        .expect("expected Activate menu item");
+    cx.debug_bounds("context_menu_open_repository_location")
+        .expect("expected Open repository location menu item");
     cx.debug_bounds("context_menu_close")
         .expect("expected Close menu item");
     cx.debug_bounds("context_menu_close_repositories_to_the_right")
         .expect("expected Close repositories to the right menu item");
     cx.debug_bounds("context_menu_close_other_repositories")
         .expect("expected Close other repositories menu item");
+    assert!(
+        cx.debug_bounds("app_popover")
+            .expect("expected repository tab context menu bounds")
+            .size
+            .width
+            >= px(360.0),
+        "expected repository tab context menu to use its wider layout"
+    );
 }
 
 #[gpui::test]
-fn repo_tab_context_menu_active_activates_selected_repo(cx: &mut gpui::TestAppContext) {
+fn repo_tab_context_menu_activate_activates_selected_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -3414,9 +3532,9 @@ fn repo_tab_context_menu_active_activates_selected_repo(cx: &mut gpui::TestAppCo
 
     install_repo_tab_test_state(&store, &view, cx, RepoId(1));
     open_repo_tab_context_menu(cx, "repo_tab_2");
-    click_debug_selector(cx, "context_menu_active");
+    click_debug_selector(cx, "context_menu_activate");
 
-    wait_until("repo tab menu active action", || {
+    wait_until("repo tab menu activate action", || {
         store.snapshot().active_repo == Some(RepoId(2))
     });
 }
@@ -3493,7 +3611,7 @@ fn repo_tab_context_menu_close_other_repos_keeps_selected_repo(cx: &mut gpui::Te
 }
 
 #[gpui::test]
-fn repo_tab_context_menu_active_is_disabled_for_active_repo(cx: &mut gpui::TestAppContext) {
+fn repo_tab_context_menu_activate_is_disabled_for_active_repo(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_view = store.clone();
@@ -3502,11 +3620,11 @@ fn repo_tab_context_menu_active_is_disabled_for_active_repo(cx: &mut gpui::TestA
 
     install_repo_tab_test_state(&store, &view, cx, RepoId(2));
     open_repo_tab_context_menu(cx, "repo_tab_2");
-    click_debug_selector(cx, "context_menu_active");
+    click_debug_selector(cx, "context_menu_activate");
 
     assert_eq!(store.snapshot().active_repo, Some(RepoId(2)));
-    cx.debug_bounds("context_menu_active")
-        .expect("expected disabled Active item to leave the menu open");
+    cx.debug_bounds("context_menu_activate")
+        .expect("expected disabled Activate item to leave the menu open");
 }
 
 #[gpui::test]

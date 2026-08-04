@@ -40,6 +40,7 @@ pub struct PickerPromptItem {
     match_text: SharedString,
     parts: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
+    repository_initials: Option<SharedString>,
     section: Option<SharedString>,
     removable: bool,
 }
@@ -334,7 +335,11 @@ impl PickerPrompt {
                 );
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
-                let row_icon = self.items[original_index].icon.or(leading_icon);
+                let row_initials = self.items[original_index].repository_initials.clone();
+                let row_icon = row_initials
+                    .is_none()
+                    .then(|| self.items[original_index].icon.or(leading_icon))
+                    .flatten();
                 let is_selected = selected_index == Some(display_ix);
                 let is_marked = self.marked_index == Some(original_index);
                 let is_removable = self.items[original_index].removable;
@@ -362,6 +367,19 @@ impl PickerPrompt {
                             },
                             scaled_px(14.0),
                         ))
+                    })
+                    .when_some(row_initials, |row, initials| {
+                        row.child(
+                            super::repository_initials_box(
+                                theme,
+                                ui_scale,
+                                initials,
+                                is_selected || is_marked,
+                            )
+                            .debug_selector(move || {
+                                format!("picker_prompt_repository_badge_{original_index}")
+                            }),
+                        )
                     })
                     .child(div().flex_1().min_w(px(0.0)).child(label))
                     .when(is_marked, |row| {
@@ -508,6 +526,7 @@ impl PickerPromptItem {
             match_text: match_text.into(),
             parts: built_parts,
             icon: None,
+            repository_initials: None,
             section: None,
             removable: false,
         }
@@ -515,6 +534,13 @@ impl PickerPromptItem {
 
     pub fn icon(mut self, icon: &'static str) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Uses the shared repository initials box in the row's leading slot.
+    /// This takes precedence over both item and picker-level SVG icons.
+    pub fn repository_initials(mut self, repository_name: &str) -> Self {
+        self.repository_initials = Some(super::repository_initials(repository_name).into());
         self
     }
 
