@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
 static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static SESSION_LIFECYCLE: Mutex<()> = Mutex::new(());
 static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
 static CRASH_LOGGER: CrashLogger = CrashLogger;
 const CRASH_ISSUE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new");
@@ -39,6 +40,11 @@ struct AbnormalExitLog {
 pub fn install() {
     if log::set_logger(&CRASH_LOGGER).is_ok() {
         log::set_max_level(log::LevelFilter::Error);
+    }
+
+    #[cfg(unix)]
+    if let Err(err) = install_terminal_interrupt_handler() {
+        eprintln!("Failed to install GitComet terminal interrupt handler: {err}");
     }
 
     let previous = std::panic::take_hook();
@@ -80,7 +86,51 @@ fn should_record_runtime_error(target: &str, message: &str) -> bool {
     // removed from App. Its callback logs the failed handle lookup even though
     // teardown is proceeding normally. Treating that diagnostic as evidence of
     // a crash causes the next launch to report a false abnormal exit.
-    !(target == "gpui::window" && message.trim() == "window not found")
+    if target == "gpui::window" && message.trim() == "window not found" {
+        return false;
+    }
+
+    // Some EGL drivers emit this validation message through wgpu's debug
+    // callback while the application continues normally. It is not evidence
+    // that GitComet itself failed and can otherwise obscure a later exit's
+    // actual cause in the recovered report.
+    if target == "wgpu_hal::gles::egl"
+        && message.contains("eglCreateSyncKHR")
+        && message.contains("EGL_BAD_ATTRIBUTE")
+        && message.contains("EGL_SYNC_NATIVE_FENCE_FD_ANDROID")
+        && message.contains("EGL_SYNC_STATUS")
+    {
+        return false;
+    }
+
+    true
+}
+
+#[cfg(unix)]
+fn install_terminal_interrupt_handler() -> std::io::Result<()> {
+    use signal_hook::consts::signal::SIGINT;
+    use signal_hook::iterator::Signals;
+
+    let mut signals = Signals::new([SIGINT])?;
+    std::thread::Builder::new()
+        .name("gitcomet-sigint".to_string())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                // SIGINT is the user's explicit request to stop a terminal
+                // launch. Retire only this process's active recovery marker,
+                // then preserve the conventional shell exit status (130).
+                let _lifecycle = SESSION_LIFECYCLE
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if SESSION_ACTIVE.swap(false, Ordering::SeqCst)
+                    && let Some(dir) = crash_dir()
+                {
+                    let _ = finish_session_in_dir(&dir);
+                }
+                std::process::exit(128 + SIGINT);
+            }
+        })?;
+    Ok(())
 }
 
 fn write_runtime_error_log(record: &log::Record<'_>) {
@@ -154,10 +204,18 @@ fn write_runtime_error_log_in_dir(
 }
 
 /// Records entry to the UI event loop. A stale marker lets the next launch
-/// report native aborts and signals without attempting I/O in a signal handler.
+/// report native aborts and unexpected signals. Terminal SIGINT is handled on
+/// a dedicated thread and removes the marker before exiting.
 pub fn begin_session() -> std::io::Result<()> {
     let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
-    begin_session_in_dir(&dir)?;
+    let _lifecycle = SESSION_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Err(err) = begin_session_in_dir(&dir) {
+        SESSION_ACTIVE.store(false, Ordering::SeqCst);
+        let _ = finish_session_in_dir(&dir);
+        return Err(err);
+    }
     SESSION_ACTIVE.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -199,9 +257,13 @@ fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
 
 /// Clears the current session marker after the UI event loop returns normally.
 pub fn finish_session() -> std::io::Result<()> {
-    SESSION_ACTIVE.store(false, Ordering::SeqCst);
     let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
-    finish_session_in_dir(&dir)
+    let _lifecycle = SESSION_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let result = finish_session_in_dir(&dir);
+    SESSION_ACTIVE.store(false, Ordering::SeqCst);
+    result
 }
 
 fn finish_session_in_dir(dir: &Path) -> std::io::Result<()> {
@@ -1122,6 +1184,16 @@ mod tests {
     }
 
     #[test]
+    fn ignores_non_fatal_egl_native_fence_validation_error() {
+        assert!(!should_record_runtime_error(
+            "wgpu_hal::gles::egl",
+            "EGL 'eglCreateSyncKHR' code 0x3004: EGL_BAD_ATTRIBUTE error: In \
+             eglCreateSyncKHR: EGL_SYNC_NATIVE_FENCE_FD_ANDROID specified valid fd butEGL_SYNC_STATUS \
+             is also being set"
+        ));
+    }
+
+    #[test]
     fn retains_other_runtime_errors() {
         assert!(should_record_runtime_error(
             "gpui::window",
@@ -1607,6 +1679,41 @@ new frame
         assert!(!marker.exists());
         assert!(!last_operation.exists());
         assert!(!runtime_error.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_interrupt_clears_active_session_state() {
+        const CHILD_PROCESS: &str = "GITCOMET_SIGINT_CLEANUP_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            install_terminal_interrupt_handler().expect("install SIGINT handler");
+            begin_session().expect("begin child session");
+            let dir = crash_dir().expect("child crash directory");
+            std::fs::write(last_operation_path(&dir), "copy_source=test\n")
+                .expect("write child operation diagnostics");
+            std::fs::write(runtime_error_path(&dir), "message=test runtime error\n")
+                .expect("write child runtime diagnostics");
+            signal_hook::low_level::raise(signal_hook::consts::signal::SIGINT)
+                .expect("raise SIGINT");
+            loop {
+                std::thread::park();
+            }
+        }
+
+        let state_root = tempdir().expect("temporary state root");
+        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .arg("terminal_interrupt_clears_active_session_state")
+            .env(CHILD_PROCESS, "1")
+            .env("XDG_STATE_HOME", state_root.path())
+            .status()
+            .expect("run SIGINT cleanup child");
+
+        assert_eq!(status.code(), Some(130));
+        let dir = state_root.path().join("gitcomet").join("crashes");
+        assert!(!session_marker_path(&dir).exists());
+        assert!(!last_operation_path(&dir).exists());
+        assert!(!runtime_error_path(&dir).exists());
     }
 
     #[test]
