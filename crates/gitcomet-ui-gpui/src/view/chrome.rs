@@ -5,6 +5,9 @@ use std::rc::Rc;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
 pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 38.0;
+/// Empty title-bar width kept beside repository tabs so the window always has
+/// an easy-to-hit drag surface, even when the tab strip overflows.
+const REPO_TABS_TRAILING_DRAG_WIDTH_PX: f32 = 64.0;
 const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 #[cfg(test)]
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
@@ -711,11 +714,27 @@ impl Render for TitleBarView {
         };
         let middle: AnyElement = if let Some(repo_tabs) = repo_tabs {
             div()
+                .flex()
                 .flex_1()
                 .min_w(px(0.0))
                 .h_full()
                 .overflow_hidden()
-                .child(repo_tabs)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .overflow_hidden()
+                        .child(repo_tabs),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .w(scaled_px(REPO_TABS_TRAILING_DRAG_WIDTH_PX))
+                        .h_full()
+                        .child(drag_region),
+                )
                 .into_any_element()
         } else {
             drag_region.into_any_element()

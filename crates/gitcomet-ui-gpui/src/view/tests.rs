@@ -3269,7 +3269,7 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     state.repos.push(RepoState::new_opening(
         repo_id,
         RepoSpec {
-            workdir: PathBuf::from("/tmp/loading-repo-tab-close-test"),
+            workdir: PathBuf::from("/tmp/repo"),
         },
     ));
     store_for_assert.replace_snapshot_for_test(Arc::new(state));
@@ -3282,13 +3282,48 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
         .debug_bounds("repo_tab_1")
         .expect("expected loading repo tab to be rendered")
         .center();
+    let repo_tab_bounds = cx
+        .debug_bounds("repo_tab_1")
+        .expect("expected loading repo tab bounds");
+    assert_eq!(
+        repo_tab_bounds.size.width,
+        px(96.0),
+        "expected a short repository label to retain the 96px minimum tab width"
+    );
     cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
     test_support::redraw(cx);
 
+    let label_center_y = cx
+        .debug_bounds("repo_tab_label_1")
+        .expect("expected loading repo tab label bounds")
+        .center()
+        .y;
+    let spinner_center_y = cx
+        .debug_bounds("repo_tab_busy_spinner_1")
+        .expect("expected loading repo tab spinner bounds")
+        .center()
+        .y;
     let close_center = cx
         .debug_bounds("repo_tab_close_1")
         .expect("expected loading repo tab close button to be rendered")
         .center();
+    let close_bounds = cx
+        .debug_bounds("repo_tab_close_1")
+        .expect("expected loading repo tab close button bounds");
+    let close_trailing_inset = repo_tab_bounds.right() - close_bounds.right();
+    assert!(
+        close_trailing_inset >= px(10.0) && close_trailing_inset <= px(12.0),
+        "expected close button at the end of the tab inside its trailing padding, got \
+         {close_trailing_inset:?}"
+    );
+    assert_eq!(
+        label_center_y, spinner_center_y,
+        "expected repository label and loading spinner to share a centerline"
+    );
+    assert_eq!(
+        label_center_y, close_center.y,
+        "expected repository label and close button to share a centerline"
+    );
     cx.simulate_mouse_move(close_center, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(
         close_center,

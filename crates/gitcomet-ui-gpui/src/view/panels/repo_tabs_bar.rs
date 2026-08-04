@@ -77,6 +77,38 @@ const REPO_TAB_DRAG_SCROLL_PX_PER_SEC: f32 = 700.0;
 /// Ceiling on the gap between two auto-scroll steps, so a stalled frame can't
 /// launch the strip across several tabs at once.
 const REPO_TAB_DRAG_SCROLL_MAX_STEP: Duration = Duration::from_millis(50);
+/// Shared label-row geometry. Keeping an explicit line box lets the text,
+/// status glyph, and close button all center on the same title-bar axis.
+const REPO_TAB_FONT_SIZE_PX: f32 = 15.0;
+const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
+const REPO_TAB_STATUS_SIZE_PX: f32 = 12.0;
+const REPO_TAB_LABEL_GAP_PX: f32 = 4.0;
+const REPO_TAB_MIN_SIDE_PADDING_PX: f32 = 6.0;
+const REPO_TAB_MAX_SIDE_PADDING_PX: f32 = 10.0;
+/// Padding reaches its minimum when each tab only has its minimum width, and
+/// its maximum when every tab could occupy the component's 180px width cap.
+const REPO_TAB_COMPACT_AVAILABLE_WIDTH_PX: f32 = 96.0;
+const REPO_TAB_ROOMY_AVAILABLE_WIDTH_PX: f32 = 180.0;
+
+fn repo_tab_horizontal_padding(
+    viewport_width: Pixels,
+    repo_count: usize,
+    ui_scale_percent: u32,
+) -> Pixels {
+    let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+    let min_padding = f32::from(scaled_px(REPO_TAB_MIN_SIDE_PADDING_PX));
+    let max_padding = f32::from(scaled_px(REPO_TAB_MAX_SIDE_PADDING_PX));
+    if repo_count == 0 || viewport_width <= px(0.0) {
+        return px(max_padding);
+    }
+
+    let available_per_tab = f32::from(viewport_width) / repo_count as f32;
+    let compact_width = f32::from(scaled_px(REPO_TAB_COMPACT_AVAILABLE_WIDTH_PX));
+    let roomy_width = f32::from(scaled_px(REPO_TAB_ROOMY_AVAILABLE_WIDTH_PX));
+    let room =
+        ((available_per_tab - compact_width) / (roomy_width - compact_width)).clamp(0.0, 1.0);
+    px(min_padding + (max_padding - min_padding) * room)
+}
 
 struct RepoTabSlide {
     id: ElementId,
@@ -617,6 +649,12 @@ impl Render for RepoTabsBarView {
         self.reveal_pending_repo_tab(window);
         self.drive_repo_tab_drag_scroll(ui_scale_percent, window);
 
+        let repo_count = self.state.repos.len();
+        let tab_horizontal_padding = repo_tab_horizontal_padding(
+            self.tab_scroll.viewport().size.width,
+            repo_count,
+            ui_scale_percent,
+        );
         let mut bar = components::TabBar::new("repo_tab_bar").scroll(self.tab_scroll.clone());
         for (ix, repo) in self.state.repos.iter().enumerate() {
             let repo_id = repo.id;
@@ -632,6 +670,18 @@ impl Render for RepoTabsBarView {
             let context_menu_invoker: SharedString = format!("repo_tab_{}", repo_id.0).into();
             let context_menu_active =
                 self.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+            let next_context_menu_active = next_repo_id.is_some_and(|next_repo_id| {
+                self.active_context_menu_invoker
+                    .as_ref()
+                    .is_some_and(|invoker| {
+                        invoker.as_ref() == format!("repo_tab_{}", next_repo_id.0)
+                    })
+            });
+            let show_inactive_separator = !is_active
+                && !context_menu_active
+                && next_repo_id.is_some()
+                && next_repo_id != active
+                && !next_context_menu_active;
             let context_menu_invoker_for_right_click = context_menu_invoker.clone();
             let is_hovered = self.hovered_repo_tab == Some(repo_id);
             let label = path_display::repo_path_name(&repo.spec.workdir);
@@ -656,11 +706,6 @@ impl Render for RepoTabsBarView {
                 .flex()
                 .items_center()
                 .justify_center()
-                // The row centers on the label's line box, which sits slightly
-                // above the text's optical center (ascender space). Nudge the
-                // close glyph down so it aligns with the visible label text.
-                .relative()
-                .top(scaled_px(1.5))
                 .size(scaled_px(14.0))
                 .rounded(px(theme.radii.row))
                 .cursor_pointer()
@@ -678,7 +723,8 @@ impl Render for RepoTabsBarView {
                 .gitcomet_tooltip(theme, close_tooltip.clone());
 
             let mut tab = components::Tab::new(("repo_tab", repo_id.0))
-                .selected(is_active || context_menu_active);
+                .selected(is_active || context_menu_active)
+                .horizontal_padding(tab_horizontal_padding);
             if is_hovered {
                 tab = tab.end_slot(close_button);
             }
@@ -686,27 +732,29 @@ impl Render for RepoTabsBarView {
             let show_missing_warning = Self::repo_tab_shows_missing_warning(repo, show_spinner);
             let tab_label = div()
                 .flex()
+                .flex_1()
                 .items_center()
-                .gap(scaled_px(6.0))
+                .h(scaled_px(REPO_TAB_CONTENT_HEIGHT_PX))
+                .gap(scaled_px(REPO_TAB_LABEL_GAP_PX))
                 .min_w(px(0.0))
                 .child(
                     div()
-                        .w(scaled_px(12.0))
-                        .h(scaled_px(12.0))
+                        .size(scaled_px(REPO_TAB_STATUS_SIZE_PX))
                         .flex()
                         .items_center()
                         .justify_center()
                         .when(show_spinner, |d| {
-                            d.child(
-                                spinner(
-                                    ("repo_tab_busy_spinner", repo_id.0),
-                                    with_alpha(
-                                        theme.colors.text,
-                                        if theme.is_dark { 0.72 } else { 0.62 },
-                                    ),
+                            d.debug_selector(move || format!("repo_tab_busy_spinner_{}", repo_id.0))
+                                .child(
+                                    spinner(
+                                        ("repo_tab_busy_spinner", repo_id.0),
+                                        with_alpha(
+                                            theme.colors.text,
+                                            if theme.is_dark { 0.72 } else { 0.62 },
+                                        ),
+                                    )
+                                    .into_any_element(),
                                 )
-                                .into_any_element(),
-                            )
                         })
                         .when(show_missing_warning, |d| {
                             d.child(svg_icon(
@@ -719,9 +767,16 @@ impl Render for RepoTabsBarView {
                 .child(
                     // A name too long for the tab fades into the tab's own
                     // background rather than being cut mid-glyph.
-                    components::FadingText::new(div().text_sm().child(label), label_bg)
-                        .render(ui_scale_percent)
-                        .flex_1(),
+                    components::FadingText::new(
+                        div()
+                            .text_size(scaled_px(REPO_TAB_FONT_SIZE_PX))
+                            .line_height(scaled_px(REPO_TAB_CONTENT_HEIGHT_PX))
+                            .child(label),
+                        label_bg,
+                    )
+                    .render(ui_scale_percent)
+                    .debug_selector(move || format!("repo_tab_label_{}", repo_id.0))
+                    .flex_1(),
                 )
                 .when(self.open_terminal_repo_ids.contains(&repo_id), |d| {
                     d.child(
@@ -738,6 +793,24 @@ impl Render for RepoTabsBarView {
             let tab = tab
                 .child(tab_label)
                 .render(theme, ui_scale_percent)
+                .relative()
+                .when(show_inactive_separator, |tab| {
+                    tab.child(
+                        div()
+                            .debug_selector(move || {
+                                format!("repo_tab_separator_after_{}", repo_id.0)
+                            })
+                            .absolute()
+                            // Each tab has 3px horizontal margins. Paint in
+                            // their shared gap so the divider sits between the
+                            // two idle tab shapes rather than on either one.
+                            .right(scaled_px(-3.0))
+                            .top(scaled_px(7.0))
+                            .w(px(1.0))
+                            .h(scaled_px(16.0))
+                            .bg(theme.colors.border_variant),
+                    )
+                })
                 .debug_selector(move || format!("repo_tab_{}", repo_id.0))
                 .on_drag(
                     RepoTabDrag {
@@ -982,9 +1055,25 @@ impl Render for RepoTabsBarView {
                 },
             ));
 
-        bar.tab_end(add_repo)
+        let padding_scroll = self.tab_scroll.clone();
+        let bar = bar
+            .tab_end(add_repo)
             .filler(tab_strip_drag)
-            .render(theme, ui_scale_percent)
+            .render(theme, ui_scale_percent);
+        div()
+            .size_full()
+            .on_children_prepainted(move |_bounds, _window, cx| {
+                let next_padding = repo_tab_horizontal_padding(
+                    padding_scroll.viewport().size.width,
+                    repo_count,
+                    ui_scale_percent,
+                );
+                if (f32::from(next_padding) - f32::from(tab_horizontal_padding)).abs() > 0.25 {
+                    cx.refresh_windows();
+                }
+            })
+            .child(bar)
+            .id("repo_tabs_responsive_root")
             .can_drop(|dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
             .on_drop(cx.listener(|this, drag: &RepoTabDrag, _w, cx| {
                 // Drop on the bar (but not on a specific tab) -> move to end.
@@ -1041,7 +1130,8 @@ fn repo_tab_insert_before_for_drop(
 #[cfg(test)]
 mod tests {
     use super::{
-        RepoTabsBarView, repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
+        RepoTabsBarView, repo_tab_horizontal_padding, repo_tab_insert_before_for_drag_cursor,
+        repo_tab_insert_before_for_drop,
     };
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{RepoId, RepoState};
@@ -1056,6 +1146,20 @@ mod tests {
                 workdir: PathBuf::from(path),
             },
         )
+    }
+
+    #[test]
+    fn repo_tab_padding_tracks_available_width_per_tab() {
+        assert_eq!(repo_tab_horizontal_padding(px(0.0), 3, 100), px(10.0));
+        assert_eq!(repo_tab_horizontal_padding(px(288.0), 3, 100), px(6.0));
+        assert_eq!(repo_tab_horizontal_padding(px(414.0), 3, 100), px(8.0));
+        assert_eq!(repo_tab_horizontal_padding(px(540.0), 3, 100), px(10.0));
+
+        assert!(
+            repo_tab_horizontal_padding(px(600.0), 8, 100)
+                < repo_tab_horizontal_padding(px(600.0), 3, 100),
+            "more tabs in the same viewport should use less side padding"
+        );
     }
 
     #[test]

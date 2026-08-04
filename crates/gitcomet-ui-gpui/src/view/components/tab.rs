@@ -6,6 +6,7 @@ use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
 pub struct Tab {
     div: Stateful<Div>,
     selected: bool,
+    horizontal_padding: Option<gpui::Pixels>,
     end_slot: Option<AnyElement>,
     children: Vec<AnyElement>,
 }
@@ -19,6 +20,8 @@ impl Tab {
     /// the bar's bottom edge, so without this its label would sit below the
     /// bar midline that the title bar icons center on.
     const TAB_BOTTOM_FUSE_PAD_PX: f32 = 4.0;
+    const TAB_HORIZONTAL_PADDING_PX: f32 = 10.0;
+    const TAB_CONTENT_GAP_PX: f32 = 2.0;
     /// Tabs shrink no further than this before the strip scrolls.
     const TAB_MIN_WIDTH_PX: f32 = 96.0;
     /// Long repository names truncate rather than widening the tab past this.
@@ -35,6 +38,7 @@ impl Tab {
         Self {
             div: div().id(id.clone()),
             selected: false,
+            horizontal_padding: None,
             end_slot: None,
             children: Vec::new(),
         }
@@ -42,6 +46,13 @@ impl Tab {
 
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Overrides the default side padding. Repository tabs use this to become
+    /// denser as the available strip width per tab decreases.
+    pub fn horizontal_padding(mut self, padding: gpui::Pixels) -> Self {
+        self.horizontal_padding = Some(padding);
         self
     }
 
@@ -58,6 +69,9 @@ impl Tab {
     pub fn render(self, theme: AppTheme, ui_scale: impl Into<UiScale>) -> Stateful<Div> {
         let ui_scale = ui_scale.into();
         let scaled_px = |value| ui_scale.px(value);
+        let horizontal_padding = self
+            .horizontal_padding
+            .unwrap_or_else(|| scaled_px(Self::TAB_HORIZONTAL_PADDING_PX));
         let text_color = if self.selected {
             theme.colors.text
         } else {
@@ -89,11 +103,11 @@ impl Tab {
             .min_w(scaled_px(Self::TAB_MIN_WIDTH_PX))
             .max_w(scaled_px(Self::TAB_MAX_WIDTH_PX))
             .mx(scaled_px(3.0))
-            .px(scaled_px(10.0))
+            .px(horizontal_padding)
             .pb(scaled_px(Self::TAB_BOTTOM_FUSE_PAD_PX))
             .flex()
             .items_center()
-            .gap_1()
+            .gap(scaled_px(Self::TAB_CONTENT_GAP_PX))
             .rounded_tl(px(theme.radii.control))
             .rounded_tr(px(theme.radii.control))
             .border_t_1()

@@ -1493,6 +1493,14 @@ fn repo_tab_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("repo_tab_{}", repo_id.0).into_boxed_str())
 }
 
+fn repo_tab_separator_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("repo_tab_separator_after_{}", repo_id.0).into_boxed_str())
+}
+
+fn repo_tab_label_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("repo_tab_label_{}", repo_id.0).into_boxed_str())
+}
+
 fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("worktrees_spinner_{}", repo_id.0).into_boxed_str())
 }
@@ -3961,7 +3969,14 @@ fn repo_tab_scroll_arrows_appear_only_when_tabs_overflow(cx: &mut gpui::TestAppC
         crate::view::GitCometView::new(store, events, None, window, cx)
     });
 
-    open_repo_tabs(cx, &store_for_test, view.clone(), "tab_arrows_few", 2);
+    let roomy_repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_arrows_few", 2);
+    let roomy_tab = cx
+        .debug_bounds(repo_tab_selector(roomy_repo_ids[0]))
+        .expect("expected a repository tab in the roomy strip");
+    let roomy_label = cx
+        .debug_bounds(repo_tab_label_selector(roomy_repo_ids[0]))
+        .expect("expected a repository label in the roomy strip");
+    let roomy_leading_inset = roomy_label.left() - roomy_tab.left();
 
     assert!(
         cx.debug_bounds("tab_bar_scroll_left").is_none()
@@ -3979,13 +3994,60 @@ fn repo_tab_scroll_arrows_appear_only_when_tabs_overflow(cx: &mut gpui::TestAppC
                 .join(format!("repository-number-{ix}"))
         })
         .collect();
-    restore_session_and_draw(cx, &store_for_test, view.clone(), repos);
+    let dense_repo_ids = restore_session_and_draw(cx, &store_for_test, view.clone(), repos);
     sync_view_for_tests(cx, &view);
 
     assert!(
         cx.debug_bounds("tab_bar_scroll_left").is_some()
             && cx.debug_bounds("tab_bar_scroll_right").is_some(),
         "expected both scroll arrows once the tabs overflow"
+    );
+    let dense_tab = cx
+        .debug_bounds(repo_tab_selector(dense_repo_ids[0]))
+        .expect("expected a repository tab in the dense strip");
+    let dense_label = cx
+        .debug_bounds(repo_tab_label_selector(dense_repo_ids[0]))
+        .expect("expected a repository label in the dense strip");
+    let dense_leading_inset = dense_label.left() - dense_tab.left();
+    assert!(
+        dense_leading_inset < roomy_leading_inset,
+        "expected side padding to shrink as the tab strip gets denser, got \
+         roomy={roomy_leading_inset:?}, dense={dense_leading_inset:?}"
+    );
+    let drag_region = cx
+        .debug_bounds("titlebar_drag")
+        .expect("expected a window drag region after overflowing repository tabs");
+    assert!(
+        drag_region.size.width >= px(60.0),
+        "expected repository tabs to leave a useful window drag region, got {:?}",
+        drag_region.size.width
+    );
+}
+
+#[gpui::test]
+fn repo_tabs_show_separators_only_between_inactive_tabs(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view, "tab_inactive_separators", 3);
+
+    assert!(
+        cx.debug_bounds(repo_tab_separator_selector(repo_ids[0]))
+            .is_none(),
+        "expected no separator between the active tab and its inactive neighbour"
+    );
+    assert!(
+        cx.debug_bounds(repo_tab_separator_selector(repo_ids[1]))
+            .is_some(),
+        "expected a separator between adjacent inactive tabs"
+    );
+    assert!(
+        cx.debug_bounds(repo_tab_separator_selector(repo_ids[2]))
+            .is_none(),
+        "expected no separator after the final tab"
     );
 }
 
