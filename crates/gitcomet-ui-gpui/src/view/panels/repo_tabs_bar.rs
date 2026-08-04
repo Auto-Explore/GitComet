@@ -36,7 +36,7 @@ struct RepoTabDrag {
     repo_id: RepoId,
     cursor_offset_x: Rc<Cell<Pixels>>,
     tab_width: Rc<Cell<Pixels>>,
-    last_center_x: Rc<Cell<Pixels>>,
+    direction_anchor_x: Rc<Cell<Pixels>>,
     direction: Rc<Cell<i8>>,
 }
 
@@ -48,6 +48,18 @@ impl RepoTabDrag {
         } else {
             cursor_x - self.cursor_offset_x.get() + width / 2.0
         }
+    }
+
+    fn update_direction(&self, cursor_x: Pixels, reversal_threshold: Pixels) -> i8 {
+        let (direction, anchor_x) = repo_tab_drag_direction(
+            self.direction.get(),
+            self.direction_anchor_x.get(),
+            cursor_x,
+            reversal_threshold,
+        );
+        self.direction.set(direction);
+        self.direction_anchor_x.set(anchor_x);
+        direction
     }
 }
 
@@ -69,6 +81,10 @@ impl Render for RepoTabDragCarrier {
 
 const REPO_TAB_SLIDE_DURATION: Duration = Duration::from_millis(100);
 const REPO_TAB_TAKEOVER_BIAS: f32 = 0.25;
+/// Ignore tiny pointer reversals while neighbouring tabs are sliding into
+/// their new slots. Without this dead band, trackpad noise can reverse the
+/// takeover bias every frame and make the same two tabs trade places rapidly.
+const REPO_TAB_DIRECTION_REVERSAL_PX: f32 = 12.0;
 /// How close to a strip edge a dragged tab has to get before the strip starts
 /// scrolling under it.
 const REPO_TAB_DRAG_EDGE_PX: f32 = 40.0;
@@ -89,6 +105,28 @@ const REPO_TAB_SIDE_PADDING_PX: f32 = 10.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
 const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
+
+/// Returns the drag direction and its new high/low-water mark. A direction is
+/// established immediately, but reversing it requires deliberate travel away
+/// from the furthest point reached in the current direction.
+fn repo_tab_drag_direction(
+    direction: i8,
+    anchor_x: Pixels,
+    cursor_x: Pixels,
+    reversal_threshold: Pixels,
+) -> (i8, Pixels) {
+    match direction {
+        1 if cursor_x >= anchor_x => (1, cursor_x),
+        1 if anchor_x - cursor_x >= reversal_threshold => (-1, cursor_x),
+        1 => (1, anchor_x),
+        -1 if cursor_x <= anchor_x => (-1, cursor_x),
+        -1 if cursor_x - anchor_x >= reversal_threshold => (1, cursor_x),
+        -1 => (-1, anchor_x),
+        _ if cursor_x > anchor_x => (1, cursor_x),
+        _ if cursor_x < anchor_x => (-1, cursor_x),
+        _ => (0, anchor_x),
+    }
+}
 
 fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Window) -> Pixels {
     if label.is_empty() {
@@ -651,6 +689,7 @@ impl Render for RepoTabsBarView {
         let theme = self.theme;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let drag_direction_reversal = scaled_px(REPO_TAB_DIRECTION_REVERSAL_PX);
         let active = self.active_repo_id();
         let spinner = |id: (&'static str, u64), color: gpui::Rgba| {
             svg_spinner(id, color, scaled_px(REPO_TAB_STATUS_SIZE_PX))
@@ -914,12 +953,12 @@ impl Render for RepoTabsBarView {
                         repo_id,
                         cursor_offset_x: Rc::new(Cell::new(px(0.0))),
                         tab_width: Rc::new(Cell::new(px(0.0))),
-                        last_center_x: Rc::new(Cell::new(px(0.0))),
+                        direction_anchor_x: Rc::new(Cell::new(px(0.0))),
                         direction: Rc::new(Cell::new(0)),
                     },
                     move |drag, offset, window, cx| {
                         drag.cursor_offset_x.set(offset.x);
-                        drag.last_center_x.set(window.mouse_position().x);
+                        drag.direction_anchor_x.set(window.mouse_position().x);
                         cx.new(|_cx| RepoTabDragCarrier)
                     },
                 )
@@ -935,12 +974,14 @@ impl Render for RepoTabsBarView {
                             return;
                         }
 
+                        let direction =
+                            drag.update_direction(e.event.position.x, drag_direction_reversal);
                         let dragged_ix = this
                             .state
                             .repos
                             .iter()
                             .position(|repo| repo.id == dragged_repo_id);
-                        match (drag.direction.get(), dragged_ix) {
+                        match (direction, dragged_ix) {
                             (1, Some(dragged_ix)) if ix <= dragged_ix => return,
                             (-1, Some(dragged_ix)) if ix >= dragged_ix => return,
                             _ => {}
@@ -952,7 +993,7 @@ impl Render for RepoTabsBarView {
                             next_repo_id,
                             point(drag_center_x, e.event.position.y),
                             e.bounds,
-                            drag.direction.get(),
+                            direction,
                         ) else {
                             return;
                         };
@@ -1029,10 +1070,10 @@ impl Render for RepoTabsBarView {
 
         // A single interactive element: putting the hover style on an inner
         // non-interactive div makes the highlight lag behind the pointer.
-        // Browser-style "+" at the end of the strip: one entry point for
-        // opening or cloning a repository. It is pinned outside the scroll
-        // area so it stays reachable however far the tabs are scrolled, with
-        // extra room on its right so it doesn't crowd the title bar badge.
+        // Browser-style "+" at the end of the repository run: one entry point
+        // for opening or cloning a repository. Keeping it in the same scroll
+        // row makes it hug the final tab instead of occupying blank title-bar
+        // space, with a little trailing room before the title-bar badge.
         let root_view = self.root_view.clone();
         let add_repo = div()
             .flex_none()
@@ -1069,17 +1110,12 @@ impl Render for RepoTabsBarView {
         // Keeps repository-tab drag reordering alive across the empty part of
         // the strip. Ordinary pointer input falls through to the title bar's
         // shared drag surface underneath.
-        let tab_strip_drag_listener =
-            cx.listener(|this, e: &gpui::DragMoveEvent<RepoTabDrag>, _window, cx| {
+        let tab_strip_drag_listener = cx.listener(
+            move |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _window, cx| {
                 let (repo_id, cursor_offset_x, drag_center_x, dragged_tab_width) = {
                     let drag = e.drag(cx);
                     let drag_center_x = drag.center_x(e.event.position.x);
-                    let previous_center_x = drag.last_center_x.replace(drag_center_x);
-                    if drag_center_x > previous_center_x {
-                        drag.direction.set(1);
-                    } else if drag_center_x < previous_center_x {
-                        drag.direction.set(-1);
-                    }
+                    drag.update_direction(e.event.position.x, drag_direction_reversal);
                     (
                         drag.repo_id,
                         drag.cursor_offset_x.get(),
@@ -1100,7 +1136,21 @@ impl Render for RepoTabsBarView {
                     cx.notify();
                 }
 
-                if drag_center_x < e.bounds.left() {
+                // A sliding neighbour can briefly leave the pointer over the
+                // strip-level hitbox. That is not an instruction to append
+                // the dragged tab: only the area genuinely after the final
+                // repository is the trailing drop zone.
+                let Some(last_tab_right) = this
+                    .state
+                    .repos
+                    .len()
+                    .checked_sub(1)
+                    .and_then(|ix| this.tab_scroll.tab_bounds(ix))
+                    .map(|bounds| bounds.right())
+                else {
+                    return;
+                };
+                if drag_center_x < last_tab_right {
                     return;
                 }
 
@@ -1108,7 +1158,8 @@ impl Render for RepoTabsBarView {
                     repo_id,
                     insert_before: None,
                 });
-            });
+            },
+        );
 
         let bar = bar.tab_end(add_repo).render(theme, ui_scale_percent);
         div()
@@ -1189,8 +1240,8 @@ fn repo_tab_insert_before_for_drop(
 #[cfg(test)]
 mod tests {
     use super::{
-        RepoTabsBarView, repo_tab_close_button_fill, repo_tab_insert_before_for_drag_cursor,
-        repo_tab_insert_before_for_drop,
+        RepoTabsBarView, repo_tab_close_button_fill, repo_tab_drag_direction,
+        repo_tab_insert_before_for_drag_cursor, repo_tab_insert_before_for_drop,
     };
     use gitcomet_core::domain::RepoSpec;
     use gitcomet_state::model::{RepoId, RepoState};
@@ -1329,6 +1380,27 @@ mod tests {
                 -1,
             ),
             Some(Some(RepoId(5)))
+        );
+    }
+
+    #[test]
+    fn repo_tab_drag_direction_ignores_small_reversals() {
+        let threshold = px(12.0);
+        let (direction, anchor) = repo_tab_drag_direction(0, px(100.0), px(110.0), threshold);
+        assert_eq!((direction, anchor), (1, px(110.0)));
+
+        let (direction, anchor) = repo_tab_drag_direction(direction, anchor, px(102.0), threshold);
+        assert_eq!(
+            (direction, anchor),
+            (1, px(110.0)),
+            "minor pointer noise must not reverse a rightward reorder"
+        );
+
+        let (direction, anchor) = repo_tab_drag_direction(direction, anchor, px(98.0), threshold);
+        assert_eq!(
+            (direction, anchor),
+            (-1, px(98.0)),
+            "deliberate travel beyond the dead band must still reverse"
         );
     }
 

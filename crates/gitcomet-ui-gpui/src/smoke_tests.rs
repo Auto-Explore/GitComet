@@ -1834,6 +1834,71 @@ fn repo_tabs_can_drag_reorder_by_right_half(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn repo_tab_reorder_does_not_bounce_on_minor_pointer_reversal(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_repo_tabs_jitter_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let dragged = repo_ids[0];
+    let expected = vec![repo_ids[1], repo_ids[0], repo_ids[2]];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repository tab bounds");
+    let target_bounds = cx
+        .debug_bounds(repo_tab_selector(repo_ids[1]))
+        .expect("expected target repository tab bounds");
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x + px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    // Cross the rightward takeover point, then move back only a few pixels
+    // while the displaced neighbour is still animating through that point.
+    let takeover = gpui::point(
+        target_bounds.left() + target_bounds.size.width * 0.45,
+        target_bounds.center().y,
+    );
+    cx.simulate_mouse_move(takeover, Some(MouseButton::Left), Modifiers::default());
+    wait_for_repo_order(&store_for_test, &expected);
+    sync_view_for_tests(cx, &view);
+
+    let jitter = gpui::point(takeover.x - px(5.0), takeover.y);
+    cx.simulate_mouse_move(jitter, Some(MouseButton::Left), Modifiers::default());
+    sync_view_for_tests(cx, &view);
+
+    let got = store_for_test
+        .snapshot()
+        .repos
+        .iter()
+        .map(|repo| repo.id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        got, expected,
+        "a small reverse movement must not make adjacent tabs swap back"
+    );
+
+    cx.simulate_mouse_up(jitter, MouseButton::Left, Modifiers::default());
+}
+
+#[gpui::test]
 fn repo_tabs_can_drag_reorder_by_left_half(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_test = store.clone();
@@ -4485,7 +4550,7 @@ fn dragging_a_repo_tab_past_the_strip_ends_keeps_it_inside(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
-fn add_repo_button_stays_pinned_right_of_overflowing_tabs(cx: &mut gpui::TestAppContext) {
+fn add_repo_button_follows_the_last_overflowing_tab(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4503,16 +4568,19 @@ fn add_repo_button_stays_pinned_right_of_overflowing_tabs(cx: &mut gpui::TestApp
     let first_tab = cx
         .debug_bounds(repo_tab_selector(repo_ids[0]))
         .expect("expected first repository tab bounds");
+    let last_tab = cx
+        .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
+        .expect("expected final repository tab bounds");
 
     assert!(cx.debug_bounds("tab_bar_scroll_left").is_none());
     assert!(cx.debug_bounds("tab_bar_scroll_right").is_none());
     assert!(
-        plus.left() >= strip.right() - px(1.0),
-        "expected the + button to occupy a reserved rail after the scroll viewport"
+        plus.left() >= last_tab.right(),
+        "expected the + button to follow the final overflowing repository tab"
     );
     assert!(
         first_tab.right() <= strip.right() + px(1.0),
-        "expected visible repository tabs not to overlap the sticky + button"
+        "expected visible repository tabs to stay within the scroll viewport"
     );
 }
 
@@ -4524,7 +4592,7 @@ fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppCo
         crate::view::GitCometView::new(store, events, None, window, cx)
     });
 
-    let _repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_plus_sticky", 3);
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_plus_sticky", 3);
     let (_, max_scroll) = repo_tab_scroll(cx, &view);
     assert_eq!(max_scroll, px(0.0), "expected three tabs not to overflow");
 
@@ -4534,10 +4602,22 @@ fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppCo
     let strip = cx.update(|_window, app| {
         crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
     });
+    let last_tab = cx
+        .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
+        .expect("expected final repository tab bounds");
 
     assert!(
-        plus.left() >= strip.right() - px(1.0),
-        "expected the + button to stay sticky after the repository scroll viewport"
+        plus.left() >= last_tab.right(),
+        "expected the + button after the final repository tab"
+    );
+    assert!(
+        plus.left() <= last_tab.right() + px(12.0),
+        "expected the + button to hug the final repository tab, got a {:?} gap",
+        plus.left() - last_tab.right()
+    );
+    assert!(
+        plus.right() < strip.right(),
+        "expected unused title-bar space to remain after the inline + button"
     );
     assert!(
         cx.debug_bounds("tab_bar_scroll_right").is_none(),

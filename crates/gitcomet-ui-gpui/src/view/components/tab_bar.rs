@@ -135,8 +135,9 @@ impl TabBar {
         self
     }
 
-    /// Element pinned after the scroll viewport. Its normal layout width is
-    /// always reserved, so it never overlaps tabs or shifts when they overflow.
+    /// Element laid out directly after the final tab. Keeping it in the scroll
+    /// row makes controls such as the add-repository button follow the tabs
+    /// instead of floating at the far edge of otherwise empty title-bar space.
     pub fn tab_end(mut self, tab_end: impl IntoElement) -> Self {
         self.tab_end = Some(tab_end.into_any_element());
         self
@@ -172,7 +173,8 @@ impl TabBar {
             .when_some(scroll.as_ref(), |this, scroll| {
                 this.track_scroll(&scroll.handle)
             })
-            .children(tabs);
+            .children(tabs)
+            .children(tab_end);
 
         let viewport = div()
             .relative()
@@ -191,6 +193,5 @@ impl TabBar {
             .w_full()
             .h_full()
             .child(viewport.child(tabs))
-            .children(tab_end)
     }
 }
