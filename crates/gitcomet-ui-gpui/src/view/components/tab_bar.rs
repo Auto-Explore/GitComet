@@ -1,4 +1,4 @@
-use super::{Button, ButtonStyle};
+use super::{Button, ButtonStyle, tab::TAB_HEIGHT_PX};
 use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use crate::view::icons::svg_icon;
@@ -226,7 +226,8 @@ impl TabBar {
             .id((id.clone(), "tabs"))
             .flex()
             .items_end()
-            .size_full()
+            .w_full()
+            .h(ui_scale.px(TAB_HEIGHT_PX))
             .overflow_x_scroll()
             .scrollbar_width(px(0.0))
             .when_some(scroll.as_ref(), |this, scroll| {
@@ -242,6 +243,8 @@ impl TabBar {
 
         let mut viewport = div()
             .relative()
+            .flex()
+            .items_end()
             .flex_1()
             .min_w(px(0.0))
             .h_full()
@@ -259,7 +262,6 @@ impl TabBar {
 
         div()
             .id(id)
-            .group("tab_bar")
             .flex()
             .flex_none()
             .items_center()
@@ -324,6 +326,7 @@ fn scroll_arrow(
             .disabled(!enabled)
             .render(theme, ui_scale)
             .debug_selector(move || id.to_string())
+            .block_mouse_except_scroll()
             .when(enabled, |this| {
                 this.on_click(move |_e, window, _cx: &mut App| on_click(window))
             }),

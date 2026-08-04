@@ -14,11 +14,12 @@ pub(in super::super) struct RepoTabsBarView {
     open_terminal_repo_ids: HashSet<RepoId>,
 
     hovered_repo_tab: Option<RepoId>,
+    /// Left-pressed tab, tracked so its text fade matches the tab's active fill.
+    pressed_repo_tab: Option<RepoId>,
     active_context_menu_invoker: Option<SharedString>,
     repo_tab_spinner_delay: Option<RepoTabSpinnerDelayState>,
     repo_tab_spinner_delay_seq: u64,
     notify_fingerprint: u64,
-    title_drag_state: crate::view::chrome::TitleBarDragState,
     repo_tab_drag_visual: Option<RepoTabDragVisual>,
     tab_scroll: components::TabBarScroll,
     /// Active repo the strip last scrolled into view, so a repo the user
@@ -87,7 +88,7 @@ const REPO_TAB_MIN_SIDE_PADDING_PX: f32 = 6.0;
 const REPO_TAB_MAX_SIDE_PADDING_PX: f32 = 10.0;
 /// Padding reaches its minimum when each tab only has its minimum width, and
 /// its maximum when every tab could occupy the component's 180px width cap.
-const REPO_TAB_COMPACT_AVAILABLE_WIDTH_PX: f32 = 96.0;
+const REPO_TAB_COMPACT_AVAILABLE_WIDTH_PX: f32 = 100.0;
 const REPO_TAB_ROOMY_AVAILABLE_WIDTH_PX: f32 = 180.0;
 
 fn repo_tab_horizontal_padding(
@@ -302,6 +303,7 @@ impl RepoTabsBarView {
 
     fn close_repo_tab(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         self.hovered_repo_tab = None;
+        self.pressed_repo_tab = None;
         if let Ok(true) = self.root_view.update(cx, |root, cx| {
             root.request_terminal_shutdown_action(TerminalShutdownAction::CloseRepo { repo_id }, cx)
         }) {
@@ -333,6 +335,12 @@ impl RepoTabsBarView {
             {
                 this.hovered_repo_tab = None;
             }
+            if this
+                .pressed_repo_tab
+                .is_some_and(|id| !this.state.repos.iter().any(|r| r.id == id))
+            {
+                this.pressed_repo_tab = None;
+            }
 
             if next_fingerprint != this.notify_fingerprint {
                 this.notify_fingerprint = next_fingerprint;
@@ -348,11 +356,11 @@ impl RepoTabsBarView {
             root_view,
             open_terminal_repo_ids: HashSet::default(),
             hovered_repo_tab: None,
+            pressed_repo_tab: None,
             active_context_menu_invoker: None,
             repo_tab_spinner_delay: None,
             repo_tab_spinner_delay_seq: 0,
             notify_fingerprint,
-            title_drag_state: crate::view::chrome::TitleBarDragState::default(),
             repo_tab_drag_visual: None,
             tab_scroll: components::TabBarScroll::new(),
             revealed_repo: None,
@@ -542,6 +550,11 @@ impl RepoTabsBarView {
         self.tab_scroll.viewport()
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn pressed_repo_tab_for_tests(&self) -> Option<RepoId> {
+        self.pressed_repo_tab
+    }
+
     fn active_repo_id(&self) -> Option<RepoId> {
         self.state.active_repo
     }
@@ -684,9 +697,12 @@ impl Render for RepoTabsBarView {
                 && !next_context_menu_active;
             let context_menu_invoker_for_right_click = context_menu_invoker.clone();
             let is_hovered = self.hovered_repo_tab == Some(repo_id);
+            let is_pressed = self.pressed_repo_tab == Some(repo_id);
             let label = path_display::repo_path_name(&repo.spec.workdir);
             let label_bg = if is_active || context_menu_active {
                 theme.colors.sidebar_bg
+            } else if is_pressed {
+                theme.colors.active
             } else if is_hovered {
                 hovered_tab_bg
             } else {
@@ -868,6 +884,7 @@ impl Render for RepoTabsBarView {
                 ))
                 .on_drop(cx.listener(move |this, _drag: &RepoTabDrag, _w, cx| {
                     this.hovered_repo_tab = None;
+                    this.pressed_repo_tab = None;
                     this.clear_repo_tab_drag_visual(cx);
                     cx.notify();
                 }))
@@ -879,6 +896,13 @@ impl Render for RepoTabsBarView {
                     }
                     cx.notify();
                 }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _e: &MouseDownEvent, _w, cx| {
+                        this.pressed_repo_tab = Some(repo_id);
+                        cx.notify();
+                    }),
+                )
                 .on_mouse_down(
                     MouseButton::Right,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
@@ -957,108 +981,59 @@ impl Render for RepoTabsBarView {
                         });
                     })
                     .debug_selector(|| "add_repo_menu".to_string())
+                    .block_mouse_except_scroll()
                     .gitcomet_tooltip(theme, "Add repository".into()),
             );
 
-        // Browser-style: the empty strip after the tabs moves the window,
-        // toggles zoom on double click, and offers the window system menu.
-        let tab_strip_drag = div()
-            .id("repo_tab_strip_drag")
-            .debug_selector(|| "repo_tab_strip_drag".to_string())
-            .size_full()
-            .window_control_area(WindowControlArea::Drag)
-            .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                if !crate::view::chrome::should_handle_titlebar_double_click(
-                    e.click_count(),
-                    e.standard_click(),
-                ) {
+        // Keeps repository-tab drag reordering alive across the empty part of
+        // the strip. Ordinary pointer input falls through to the title bar's
+        // shared drag surface underneath.
+        let tab_strip_filler = div().size_full().on_drag_move(cx.listener(
+            |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _window, cx| {
+                let (repo_id, cursor_offset_x, drag_center_x, dragged_tab_width) = {
+                    let drag = e.drag(cx);
+                    let drag_center_x = drag.center_x(e.event.position.x);
+                    let previous_center_x = drag.last_center_x.replace(drag_center_x);
+                    if drag_center_x > previous_center_x {
+                        drag.direction.set(1);
+                    } else if drag_center_x < previous_center_x {
+                        drag.direction.set(-1);
+                    }
+                    (
+                        drag.repo_id,
+                        drag.cursor_offset_x.get(),
+                        drag_center_x,
+                        drag.tab_width.get(),
+                    )
+                };
+                let visual = RepoTabDragVisual {
+                    repo_id,
+                    left: this.clamp_repo_tab_drag_left(
+                        e.event.position.x - cursor_offset_x,
+                        repo_id,
+                        dragged_tab_width,
+                    ),
+                };
+                if this.repo_tab_drag_visual != Some(visual) {
+                    this.repo_tab_drag_visual = Some(visual);
+                    cx.notify();
+                }
+
+                if drag_center_x < e.bounds.left() {
                     return;
                 }
-                this.title_drag_state.clear();
-                cx.stop_propagation();
-                crate::view::chrome::handle_titlebar_double_click(window);
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Right,
-                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
-                    crate::view::chrome::show_titlebar_secondary_menu(e.position, window, cx);
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, e: &MouseDownEvent, _w, cx| {
-                    this.title_drag_state.on_left_mouse_down(e.click_count);
-                    cx.notify();
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _e, _w, cx| {
-                    this.title_drag_state.clear();
-                    this.clear_repo_tab_drag_visual(cx);
-                    cx.notify();
-                }),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _e, _w, cx| {
-                    this.title_drag_state.clear();
-                    this.clear_repo_tab_drag_visual(cx);
-                    cx.notify();
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, _e, window, _cx| {
-                if this.title_drag_state.take_move_request() {
-                    crate::app::begin_window_move(window);
-                }
-            }))
-            .on_drag_move(cx.listener(
-                |this, e: &gpui::DragMoveEvent<RepoTabDrag>, _window, cx| {
-                    let (repo_id, cursor_offset_x, drag_center_x, dragged_tab_width) = {
-                        let drag = e.drag(cx);
-                        let drag_center_x = drag.center_x(e.event.position.x);
-                        let previous_center_x = drag.last_center_x.replace(drag_center_x);
-                        if drag_center_x > previous_center_x {
-                            drag.direction.set(1);
-                        } else if drag_center_x < previous_center_x {
-                            drag.direction.set(-1);
-                        }
-                        (
-                            drag.repo_id,
-                            drag.cursor_offset_x.get(),
-                            drag_center_x,
-                            drag.tab_width.get(),
-                        )
-                    };
-                    let visual = RepoTabDragVisual {
-                        repo_id,
-                        left: this.clamp_repo_tab_drag_left(
-                            e.event.position.x - cursor_offset_x,
-                            repo_id,
-                            dragged_tab_width,
-                        ),
-                    };
-                    if this.repo_tab_drag_visual != Some(visual) {
-                        this.repo_tab_drag_visual = Some(visual);
-                        cx.notify();
-                    }
 
-                    if drag_center_x < e.bounds.left() {
-                        return;
-                    }
-
-                    this.store.dispatch(Msg::ReorderRepoTabs {
-                        repo_id,
-                        insert_before: None,
-                    });
-                },
-            ));
+                this.store.dispatch(Msg::ReorderRepoTabs {
+                    repo_id,
+                    insert_before: None,
+                });
+            },
+        ));
 
         let padding_scroll = self.tab_scroll.clone();
         let bar = bar
             .tab_end(add_repo)
-            .filler(tab_strip_drag)
+            .filler(tab_strip_filler)
             .render(theme, ui_scale_percent);
         div()
             .size_full()
@@ -1074,6 +1049,22 @@ impl Render for RepoTabsBarView {
             })
             .child(bar)
             .id("repo_tabs_responsive_root")
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseUpEvent, _w, cx| {
+                    if this.pressed_repo_tab.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _e: &MouseUpEvent, _w, cx| {
+                    if this.pressed_repo_tab.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .can_drop(|dragged, _window, _cx| dragged.downcast_ref::<RepoTabDrag>().is_some())
             .on_drop(cx.listener(|this, drag: &RepoTabDrag, _w, cx| {
                 // Drop on the bar (but not on a specific tab) -> move to end.
@@ -1082,6 +1073,7 @@ impl Render for RepoTabsBarView {
                     insert_before: None,
                 });
                 this.hovered_repo_tab = None;
+                this.pressed_repo_tab = None;
                 this.clear_repo_tab_drag_visual(cx);
                 cx.notify();
             }))
@@ -1151,8 +1143,8 @@ mod tests {
     #[test]
     fn repo_tab_padding_tracks_available_width_per_tab() {
         assert_eq!(repo_tab_horizontal_padding(px(0.0), 3, 100), px(10.0));
-        assert_eq!(repo_tab_horizontal_padding(px(288.0), 3, 100), px(6.0));
-        assert_eq!(repo_tab_horizontal_padding(px(414.0), 3, 100), px(8.0));
+        assert_eq!(repo_tab_horizontal_padding(px(300.0), 3, 100), px(6.0));
+        assert_eq!(repo_tab_horizontal_padding(px(420.0), 3, 100), px(8.0));
         assert_eq!(repo_tab_horizontal_padding(px(540.0), 3, 100), px(10.0));
 
         assert!(

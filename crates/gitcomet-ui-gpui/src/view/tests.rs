@@ -3287,8 +3287,8 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
         .expect("expected loading repo tab bounds");
     assert_eq!(
         repo_tab_bounds.size.width,
-        px(96.0),
-        "expected a short repository label to retain the 96px minimum tab width"
+        px(100.0),
+        "expected a short repository label to retain the 100px minimum tab width"
     );
     cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());
     test_support::redraw(cx);
@@ -3338,6 +3338,47 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
 
     wait_until("loading repo tab to close", || {
         store_for_assert.snapshot().repos.is_empty()
+    });
+}
+
+#[gpui::test]
+fn inactive_repo_tab_tracks_pressed_state_for_its_label_fade(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx.add_window_view(move |window, cx| {
+        GitCometView::new(store_for_view, events, None, window, cx)
+    });
+    install_repo_tab_test_state(&store, &view, cx, RepoId(1));
+
+    let inactive_tab_center = cx
+        .debug_bounds("repo_tab_2")
+        .expect("expected inactive repository tab bounds")
+        .center();
+    cx.simulate_mouse_move(inactive_tab_center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(
+        inactive_tab_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::pressed_repo_tab(view.read(app), app),
+            Some(RepoId(2)),
+            "expected the label fade to resolve against the held tab's active background"
+        );
+    });
+
+    cx.simulate_mouse_up(
+        inactive_tab_center,
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert_eq!(test_support::pressed_repo_tab(view.read(app), app), None);
     });
 }
 

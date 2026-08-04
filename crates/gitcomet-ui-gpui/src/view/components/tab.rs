@@ -3,6 +3,10 @@ use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{AnyElement, Div, ElementId, IntoElement, Stateful, div, px};
 
+/// Tab height inside the title bar; the difference to the bar height is the
+/// uncovered title chrome above a browser-style repository tab.
+pub(super) const TAB_HEIGHT_PX: f32 = 34.0;
+
 pub struct Tab {
     div: Stateful<Div>,
     selected: bool,
@@ -13,9 +17,6 @@ pub struct Tab {
 
 impl Tab {
     const END_TAB_SLOT_SIZE_PX: f32 = 14.0;
-    /// Tab height inside the title bar; the difference to the bar height is
-    /// the top inset that lets the active tab rise like a browser tab.
-    const TAB_HEIGHT_PX: f32 = 34.0;
     /// Bottom padding matching the title bar's top inset. The tab is fused to
     /// the bar's bottom edge, so without this its label would sit below the
     /// bar midline that the title bar icons center on.
@@ -23,7 +24,7 @@ impl Tab {
     const TAB_HORIZONTAL_PADDING_PX: f32 = 10.0;
     const TAB_CONTENT_GAP_PX: f32 = 2.0;
     /// Tabs shrink no further than this before the strip scrolls.
-    const TAB_MIN_WIDTH_PX: f32 = 96.0;
+    const TAB_MIN_WIDTH_PX: f32 = 100.0;
     /// Long repository names truncate rather than widening the tab past this.
     const TAB_MAX_WIDTH_PX: f32 = 180.0;
 
@@ -99,7 +100,7 @@ impl Tab {
         let mut base = self
             .div
             .group("tab")
-            .h(scaled_px(Self::TAB_HEIGHT_PX))
+            .h(scaled_px(TAB_HEIGHT_PX))
             .min_w(scaled_px(Self::TAB_MIN_WIDTH_PX))
             .max_w(scaled_px(Self::TAB_MAX_WIDTH_PX))
             .mx(scaled_px(3.0))
@@ -116,6 +117,7 @@ impl Tab {
             .border_color(gpui::transparent_black())
             .text_color(text_color)
             .cursor_pointer()
+            .block_mouse_except_scroll()
             .children(self.children)
             .child(end_slot);
 

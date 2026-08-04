@@ -3918,6 +3918,98 @@ fn scroll_over(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, 
 }
 
 #[gpui::test]
+fn titlebar_only_reserves_visible_repository_controls_from_window_drag(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_ids = open_repo_tabs(
+        cx,
+        &store_for_test,
+        view.clone(),
+        "titlebar_visible_hitboxes",
+        30,
+    );
+
+    let drag_surface = cx
+        .debug_bounds("titlebar_drag")
+        .expect("expected the shared title-bar drag surface");
+    let repo_tab_bounds = cx
+        .debug_bounds(repo_tab_selector(repo_ids[0]))
+        .expect("expected repository tab bounds");
+    let repo_tab_viewport = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+    assert_eq!(
+        (repo_tab_viewport.top(), repo_tab_viewport.bottom()),
+        (repo_tab_bounds.top(), repo_tab_bounds.bottom()),
+        "expected the scrollable tab strip hitbox to match the visible tab row"
+    );
+    let mut controls = vec![
+        (
+            "repository picker",
+            cx.debug_bounds("repo_picker_toggle")
+                .expect("expected repository picker bounds"),
+        ),
+        ("repository tab", repo_tab_bounds),
+        (
+            "left repository arrow",
+            cx.debug_bounds("tab_bar_scroll_left")
+                .expect("expected left repository arrow bounds"),
+        ),
+        (
+            "right repository arrow",
+            cx.debug_bounds("tab_bar_scroll_right")
+                .expect("expected right repository arrow bounds"),
+        ),
+        (
+            "add repository",
+            cx.debug_bounds("add_repo_menu")
+                .expect("expected add repository button bounds"),
+        ),
+    ];
+    if !cfg!(target_os = "macos") {
+        controls.push((
+            "application menu",
+            cx.debug_bounds("app_menu")
+                .expect("expected application menu bounds"),
+        ));
+    }
+
+    for (name, bounds) in controls {
+        let above = gpui::point(bounds.center().x, drag_surface.top() + px(1.0));
+        assert!(
+            above.y < bounds.top(),
+            "expected title chrome above the visible {name}"
+        );
+
+        cx.simulate_mouse_move(above, None, Modifiers::default());
+        cx.simulate_mouse_down(above, MouseButton::Left, Modifiers::default());
+        cx.update(|_window, app| {
+            assert!(
+                crate::view::test_support::titlebar_drag_is_armed(view.read(app), app),
+                "expected the area above the visible {name} to arm a window drag"
+            );
+        });
+        cx.simulate_mouse_up(above, MouseButton::Left, Modifiers::default());
+
+        cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+        cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+        cx.update(|_window, app| {
+            assert!(
+                !crate::view::test_support::titlebar_drag_is_armed(view.read(app), app),
+                "expected the visible {name} to keep its own interaction"
+            );
+        });
+        cx.simulate_mouse_up(above, MouseButton::Left, Modifiers::default());
+    }
+}
+
+#[gpui::test]
 fn repo_tabs_scroll_with_the_wheel_once_they_overflow(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_test = store.clone();
