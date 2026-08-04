@@ -1917,7 +1917,15 @@ impl MainPaneView {
                                                                 .id("conflict_resolver_output_surface")
                                                                 .h_full()
                                                                 .min_h(px(0.0))
-                                                                .p_2()
+                                                                // Unpadded, like the source columns: rows run to the
+                                                                // edges of the section instead of floating inside a
+                                                                // band of background, so the output's first and last
+                                                                // rows sit flush against the header and footer and
+                                                                // its gutter lines up with the columns' left edge.
+                                                                // The scrollbars position against the body rather
+                                                                // than this surface, so they do not need the space,
+                                                                // and the row that reserves the vertical scrollbar
+                                                                // gutter is the flex row below.
                                                                 .font_family(editor_font_family.clone())
                                                                 // Forward horizontal wheel input to the narrower diff
                                                                 // columns immediately; the normal bidirectional sync also
