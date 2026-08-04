@@ -5930,3 +5930,915 @@ fn conflict_resolver_current_only_then_full_keeps_mode_and_edited_worktree_outpu
         );
     });
 }
+
+/// Snapshot of every vertically synced conflict-resolver scroll offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ConflictScrollSnapshot {
+    base: Pixels,
+    ours: Pixels,
+    theirs: Pixels,
+    output: Pixels,
+    gutter: Pixels,
+}
+
+fn conflict_scroll_snapshot(pane: &MainPaneView) -> ConflictScrollSnapshot {
+    ConflictScrollSnapshot {
+        base: uniform_list_offset(&pane.conflict_resolver_diff_scroll).y,
+        ours: uniform_list_offset(&pane.conflict_preview_ours_scroll).y,
+        theirs: uniform_list_offset(&pane.conflict_preview_theirs_scroll).y,
+        output: scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll).y,
+        gutter: uniform_list_offset(&pane.conflict_resolved_preview_gutter_scroll).y,
+    }
+}
+
+fn read_conflict_scroll_snapshot(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> ConflictScrollSnapshot {
+    cx.update(|_window, app| conflict_scroll_snapshot(view.read(app).main_pane.read(app)))
+}
+
+/// Once a scroll gesture has settled, further idle frames must not move any
+/// pane. A jump here is the user-visible "the resolved output jumps after I
+/// scroll" bug: some pane is treated as freshly changed on a frame with no
+/// input, wins the master election, and drags the others onto it.
+#[gpui::test]
+fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(191);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_idle_frame_scroll_hold",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_idle_frame_scroll_hold.txt");
+    let abs_path = workdir.join(&file_rel);
+    let base_text = build_conflict_scroll_matrix_text("base", 'B');
+    let ours_text = build_conflict_scroll_matrix_text("ours", 'O');
+    let theirs_text = build_conflict_scroll_matrix_text("theirs", 'T');
+    let current_text = build_conflict_scroll_matrix_current_text(&ours_text, &theirs_text);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver idle-frame fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver idle-frame fixture");
+
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver idle-frame fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_visible_len() >= 4
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} three_way_visible={} resolved_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_visible_len(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver idle-frame vertical overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(400.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
+                    > px(400.0)
+        },
+        |pane| {
+            format!(
+                "view_mode={:?} base_max={:?} output_max={:?}",
+                pane.conflict_resolver.view_mode,
+                uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
+            )
+        },
+    );
+
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::Both);
+
+    // A wheel over the resolved output: the editor handle moves natively and
+    // the pane records the output as this gesture's master.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                set_scroll_handle_offset(
+                    &pane.conflict_resolved_output_editor_scroll,
+                    point(px(0.0), px(-240.0)),
+                );
+                pane.record_conflict_vertical_wheel_master(3);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let settled = read_conflict_scroll_snapshot(cx, &view);
+    for frame in 1..=3 {
+        draw_and_drain_test_window(cx);
+        let idle = read_conflict_scroll_snapshot(cx, &view);
+        assert_eq!(
+            idle, settled,
+            "idle frame {frame} moved the resolver panes after an output wheel",
+        );
+    }
+
+    // An overview click/drag: every source column gets a deferred
+    // `scroll_to_item_strict`, which lands during prepaint, after this frame's
+    // synchronizer already ran.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_scroll_all_columns(90, gpui::ScrollStrategy::Center);
+                cx.notify();
+            });
+        });
+    });
+    // Two frames: one for prepaint to consume the deferred scroll, one for the
+    // synchronizer to observe it and remap the output.
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    let settled = read_conflict_scroll_snapshot(cx, &view);
+    assert!(
+        settled.base < px(0.0),
+        "the overview jump should have scrolled the columns, got {settled:?}",
+    );
+    for frame in 1..=3 {
+        draw_and_drain_test_window(cx);
+        let idle = read_conflict_scroll_snapshot(cx, &view);
+        assert_eq!(
+            idle, settled,
+            "idle frame {frame} moved the resolver panes after an overview jump",
+        );
+    }
+
+    // Scrolling a source column: the columns drive, and the output is remapped
+    // through the conflict anchors rather than copied 1:1.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                set_uniform_list_offset(
+                    &pane.conflict_resolver_diff_scroll,
+                    point(px(0.0), px(-320.0)),
+                );
+                pane.record_conflict_vertical_wheel_master(0);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let settled = read_conflict_scroll_snapshot(cx, &view);
+    for frame in 1..=3 {
+        draw_and_drain_test_window(cx);
+        let idle = read_conflict_scroll_snapshot(cx, &view);
+        assert_eq!(
+            idle, settled,
+            "idle frame {frame} moved the resolver panes after a column wheel",
+        );
+    }
+
+    // The bottom boundary: the source columns carry comfort overscroll rows the
+    // resolved output does not, so the output clamps while the columns keep
+    // going. The clamped follower must not then be promoted to master.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let deep = uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height;
+                set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, point(px(0.0), -deep));
+                pane.record_conflict_vertical_wheel_master(0);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let settled = read_conflict_scroll_snapshot(cx, &view);
+    for frame in 1..=3 {
+        draw_and_drain_test_window(cx);
+        let idle = read_conflict_scroll_snapshot(cx, &view);
+        assert_eq!(
+            idle, settled,
+            "idle frame {frame} moved the resolver panes at the bottom clamp boundary",
+        );
+    }
+
+    // Collapsed context folds the line-number gutter's row space but not the
+    // editor's text, so the two are no longer the same number of rows.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                // Pre-match the persisted default so the toggle does not
+                // schedule a settings persist (which re-enters the view).
+                pane.mergetool_collapse_unchanged = true;
+                pane.conflict_resolver_toggle_collapse_context(cx);
+                reset_conflict_scroll_matrix_offsets(pane);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_scroll_handle_offset(
+                    &pane.conflict_resolved_output_editor_scroll,
+                    point(px(0.0), px(-240.0)),
+                );
+                pane.record_conflict_vertical_wheel_master(3);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let settled = read_conflict_scroll_snapshot(cx, &view);
+    for frame in 1..=3 {
+        draw_and_drain_test_window(cx);
+        let idle = read_conflict_scroll_snapshot(cx, &view);
+        assert_eq!(
+            idle, settled,
+            "idle frame {frame} moved the resolver panes with collapsed context",
+        );
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver idle-frame fixture");
+}
+
+/// A multi-conflict fixture whose two sides have different line counts per
+/// block, so the aligned column row space and the resolved output line space
+/// genuinely diverge and the conflict-anchored remap has real work to do.
+fn build_multi_conflict_sides() -> (String, String, String, String) {
+    let mut base = Vec::new();
+    let mut ours = Vec::new();
+    let mut theirs = Vec::new();
+    let mut current = Vec::new();
+    for block in 0..8 {
+        for ctx in 0..12 {
+            let line = format!("context {block:02}/{ctx:02} shared text");
+            base.push(line.clone());
+            ours.push(line.clone());
+            theirs.push(line.clone());
+            current.push(line);
+        }
+        // Asymmetric block sizes: ours grows with the block index, theirs
+        // shrinks, so no single global ratio maps the two row spaces.
+        let ours_len = 2 + block;
+        let theirs_len = 10 - block;
+        base.push(format!("base block {block:02}"));
+        current.push("<<<<<<< ours".to_string());
+        for line in 0..ours_len {
+            let text = format!("ours {block:02}/{line:02}");
+            ours.push(text.clone());
+            current.push(text);
+        }
+        current.push("=======".to_string());
+        for line in 0..theirs_len {
+            let text = format!("theirs {block:02}/{line:02}");
+            theirs.push(text.clone());
+            current.push(text);
+        }
+        current.push(">>>>>>> theirs".to_string());
+    }
+    let join = |lines: Vec<String>| format!("{}\n", lines.join("\n"));
+    (join(base), join(ours), join(theirs), join(current))
+}
+
+/// Scrolling steadily downwards must move the resolved output steadily
+/// downwards. A step that moves it back up is the visible "jump".
+#[gpui::test]
+fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(192);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_monotonic_output_scroll",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_monotonic_output_scroll.txt");
+    let abs_path = workdir.join(&file_rel);
+    let (base_text, ours_text, theirs_text, current_text) = build_multi_conflict_sides();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver monotonic fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver monotonic fixture");
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver monotonic fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_visible_len() >= 4
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} three_way_visible={} resolved_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_visible_len(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver monotonic vertical overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(400.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
+                    > px(400.0)
+        },
+        |pane| {
+            format!(
+                "view_mode={:?} base_max={:?} output_max={:?} conflicts={}",
+                pane.conflict_resolver.view_mode,
+                uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
+                pane.conflict_resolver_conflict_count(),
+            )
+        },
+    );
+
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::Both);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let column_max = cx.update(|_window, app| {
+        uniform_list_max_offset(
+            &view
+                .read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolver_diff_scroll,
+        )
+        .height
+    });
+
+    // Guard the fixture itself: with every conflict resolved there are no
+    // output markers, the anchor list collapses to the (0, 0) seed and the
+    // sync degenerates to a raw 1:1 copy, which would make the walk below
+    // prove nothing about the anchored remap.
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let anchors = pane.conflict_resolver.conflict_output_row_anchors.clone();
+        assert!(
+            anchors.len() > 2,
+            "fixture must produce a real anchor list, got {anchors:?}",
+        );
+        assert!(
+            anchors
+                .iter()
+                .any(|(aligned, output)| (aligned - output).abs() > 1.0),
+            "fixture must make the aligned and output row spaces diverge, got {anchors:?}",
+        );
+    });
+
+    // Walk the base column down one 20px row at a time, the way a wheel gesture
+    // does, and watch where the output lands on each step.
+    let mut previous_output = px(0.0);
+    let mut row = 0.0f32;
+    while px(row * 20.0) < column_max {
+        let target = point(px(0.0), px(-row * 20.0));
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    set_uniform_list_offset(&pane.conflict_resolver_diff_scroll, target);
+                    pane.record_conflict_vertical_wheel_master(0);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        let output = cx.update(|_window, app| {
+            scroll_handle_offset(
+                &view
+                    .read(app)
+                    .main_pane
+                    .read(app)
+                    .conflict_resolved_output_editor_scroll,
+            )
+            .y
+        });
+        assert!(
+            output <= previous_output,
+            "scrolling the base column down to row {row} moved the resolved output back up, \
+             from {previous_output:?} to {output:?}",
+        );
+        // One row of column scroll must not move the output by several rows.
+        // The anchored remap legitimately compresses and stretches between
+        // conflicts, but a step far larger than the gesture is a discontinuity
+        // in the mapping -- the visible "the output jumped a few lines".
+        let step = f32::from(previous_output) - f32::from(output);
+        assert!(
+            step <= 2.0 * 20.0,
+            "one row of base-column scroll at row {row} moved the resolved output {step}px \
+             ({:.1} lines)",
+            step / 20.0,
+        );
+        previous_output = output;
+        row += 1.0;
+    }
+
+    // The inverse direction: a wheel over the resolved output drives the
+    // columns through the same anchors, mapped output -> aligned.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let output_max = cx.update(|_window, app| {
+        scroll_handle_max_offset(
+            &view
+                .read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolved_output_editor_scroll,
+        )
+        .height
+    });
+
+    let mut previous_column = px(0.0);
+    let mut row = 0.0f32;
+    while px(row * 20.0) < output_max {
+        let target = point(px(0.0), px(-row * 20.0));
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    set_scroll_handle_offset(&pane.conflict_resolved_output_editor_scroll, target);
+                    pane.record_conflict_vertical_wheel_master(3);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        let column = cx.update(|_window, app| {
+            uniform_list_offset(
+                &view
+                    .read(app)
+                    .main_pane
+                    .read(app)
+                    .conflict_resolver_diff_scroll,
+            )
+            .y
+        });
+        assert!(
+            column <= previous_column,
+            "scrolling the resolved output down to row {row} moved the base column back up, \
+             from {previous_column:?} to {column:?}",
+        );
+        let step = f32::from(previous_column) - f32::from(column);
+        assert!(
+            step <= 2.0 * 20.0,
+            "one row of resolved-output scroll at row {row} moved the base column {step}px \
+             ({:.1} lines)",
+            step / 20.0,
+        );
+        previous_column = column;
+        row += 1.0;
+    }
+
+    // Alternating which pane drives must not drift: hand control back and forth
+    // at a fixed position and everything should stay put.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                set_uniform_list_offset(
+                    &pane.conflict_resolver_diff_scroll,
+                    point(px(0.0), px(-613.4)),
+                );
+                pane.record_conflict_vertical_wheel_master(0);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let settled = read_conflict_scroll_snapshot(cx, &view);
+    for round in 1..=60 {
+        // Re-assert the same offset from the other side, as a wheel that lands
+        // on the output after one that landed on a column would.
+        let output_y = settled.output;
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    set_scroll_handle_offset(
+                        &pane.conflict_resolved_output_editor_scroll,
+                        point(px(0.0), output_y),
+                    );
+                    pane.record_conflict_vertical_wheel_master(3);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+        let after = read_conflict_scroll_snapshot(cx, &view);
+        // Sub-pixel f32 error in the row-space round trip is expected and
+        // converges; anything visible is a drift bug.
+        let drift = f32::from(after.base) - f32::from(settled.base);
+        assert!(
+            drift.abs() < 1.0,
+            "round {round}: handing scroll mastery back to the output drifted the \
+             panes by {drift}px ({after:?} vs {settled:?})",
+        );
+    }
+
+    // Regenerating the resolved output from the session -- what every pick
+    // does -- must not move a view the user scrolled somewhere else. The
+    // rewrite goes in as a text replacement, and an implicit cursor autoscroll
+    // on that edit lands during paint, after any explicit reveal, dragging the
+    // output (and behind it the source columns, which follow the output) to
+    // the end of the replaced span.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_conflict_scroll_matrix_offsets(pane);
+                set_uniform_list_offset(
+                    &pane.conflict_resolver_diff_scroll,
+                    point(px(0.0), px(-600.0)),
+                );
+                pane.record_conflict_vertical_wheel_master(0);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let before_rewrite = read_conflict_scroll_snapshot(cx, &view);
+
+    // A whole-document rewrite, as "choose everywhere" produces: the changed
+    // span reaches the last line, so an autoscroll here goes to the bottom.
+    let rewritten = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let text = pane.conflict_resolver_input.read(app).text().to_string();
+        text.replace("context ", "CONTEXT ")
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_output(rewritten, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    let after_rewrite = read_conflict_scroll_snapshot(cx, &view);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let input = pane.conflict_resolver_input.read(app);
+        assert!(
+            input.text().contains("CONTEXT "),
+            "the rewrite must actually reach the output, or this proves nothing",
+        );
+    });
+    assert_eq!(
+        after_rewrite, before_rewrite,
+        "regenerating the resolved output threw the view to the end of the rewritten span",
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver monotonic fixture");
+}
+
+/// A freshly materialized resolved output must not leave the caret parked at
+/// end-of-document: the pane opens at the top, so the first arrow key would
+/// autoscroll the whole coupled group to the bottom of the file.
+#[gpui::test]
+fn conflict_resolver_materialized_output_parks_caret_at_the_start(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(193);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_caret_park",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_caret_park.txt");
+    let abs_path = workdir.join(&file_rel);
+    let (base_text, ours_text, theirs_text, current_text) = build_multi_conflict_sides();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver caret-park fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver caret-park fixture");
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver caret-park fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} resolved_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let input = pane.conflict_resolver_input.read(app);
+        assert!(
+            input.text().len() > 100,
+            "fixture should have materialized a multi-line output",
+        );
+        assert_eq!(
+            input.selected_range(),
+            0..0,
+            "a freshly materialized resolved output should park the caret at the start",
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver caret-park fixture");
+}
+
+/// Seed a conflict session with every region left unresolved, so the resolved
+/// output still renders conflict markers and the column/output anchor list is
+/// non-trivial.
+fn seed_unresolved_conflict_state(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &std::path::Path,
+    file_rel: &std::path::Path,
+    base_text: &str,
+    ours_text: &str,
+    theirs_text: &str,
+    current_text: &str,
+) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.to_path_buf(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.to_path_buf(),
+                base_text.to_string(),
+                ours_text.to_string(),
+                theirs_text.to_string(),
+                current_text.to_string(),
+            );
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.to_path_buf(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_text.to_string().into()),
+                ConflictPayload::Text(ours_text.to_string().into()),
+                ConflictPayload::Text(theirs_text.to_string().into()),
+                current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+}
+
+/// Conflict navigation centers the aligned row in the source columns and the
+/// output line in the resolved output, independently. Those two panes are the
+/// halves of the vsplit and therefore have different heights, while the
+/// column/output scroll sync aligns their *top* rows. Two centerings cannot
+/// both survive that, so the sync drags one onto the other and the loser jumps.
+#[gpui::test]
+fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(194);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_nav_center_jump",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_nav_center_jump.txt");
+    let abs_path = workdir.join(&file_rel);
+    let (base_text, ours_text, theirs_text, current_text) = build_multi_conflict_sides();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver nav-center fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver nav-center fixture");
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "resolver nav-center fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_visible_len() >= 4
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| {
+            format!(
+                "path={:?} visible={} lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_visible_len(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver nav-center overflow",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
+                && uniform_list_max_offset(&pane.conflict_resolver_diff_scroll).height > px(400.0)
+                && scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll).height
+                    > px(400.0)
+        },
+        |pane| {
+            format!(
+                "base_max={:?} output_max={:?}",
+                uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
+                scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
+            )
+        },
+    );
+
+    set_diff_scroll_sync_for_test(cx, &view, DiffScrollSync::Both);
+
+    for target in 1..5usize {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    reset_conflict_scroll_matrix_offsets(pane);
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_jump_to_nav_target(target, cx);
+                });
+            });
+        });
+        // Let the deferred item scrolls land and the synchronizer observe them.
+        draw_and_drain_test_window(cx);
+        draw_and_drain_test_window(cx);
+        let settled = read_conflict_scroll_snapshot(cx, &view);
+
+        for frame in 1..=3 {
+            draw_and_drain_test_window(cx);
+            let idle = read_conflict_scroll_snapshot(cx, &view);
+            let output_jump = f32::from(idle.output) - f32::from(settled.output);
+            let column_jump = f32::from(idle.base) - f32::from(settled.base);
+            assert!(
+                output_jump.abs() < 1.0 && column_jump.abs() < 1.0,
+                "target {target}, idle frame {frame}: navigation did not settle — output \
+                 moved {output_jump}px ({:.1} lines), columns moved {column_jump}px \
+                 ({:.1} lines); settled={settled:?} idle={idle:?}",
+                output_jump / 20.0,
+                column_jump / 20.0,
+            );
+        }
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver nav-center fixture");
+}

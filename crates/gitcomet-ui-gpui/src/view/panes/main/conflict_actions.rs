@@ -2549,7 +2549,14 @@ impl MainPaneView {
             let replacement = next_text
                 .get(prefix..new_len.saturating_sub(suffix))
                 .unwrap_or("");
-            input.replace_utf8_range(old_range, replacement, cx);
+            // Regenerating the output from the session is not an edit the user
+            // typed here, so it must not steal their scroll position. Every
+            // caller below decides for itself whether to reveal the changed
+            // block; an implicit autoscroll would run later (during paint) and
+            // override that decision — sending the view to the end of the
+            // replaced span, which for a whole-document rewrite is the bottom
+            // of the file.
+            input.replace_utf8_range_preserving_view(old_range, replacement, cx);
         });
         let (snapshot, edit_deltas) = self.conflict_resolver_input.update(cx, |input, _| {
             (input.text_snapshot(), input.drain_recent_utf8_edit_deltas())

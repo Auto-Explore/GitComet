@@ -1705,8 +1705,42 @@ impl TextInput {
         new_text: &str,
         cx: &mut Context<Self>,
     ) -> Range<usize> {
+        self.replace_utf8_range_internal_with_view(range, new_text, false, cx)
+    }
+
+    /// Shift one caret/selection endpoint across an edit that replaced
+    /// `range` with `inserted`, so it keeps pointing at the same text.
+    fn shift_offset_across_edit(
+        offset: usize,
+        range: &Range<usize>,
+        inserted: &Range<usize>,
+    ) -> usize {
+        if offset <= range.start {
+            offset
+        } else if offset >= range.end {
+            // Past the edit: move by the length delta, computed without
+            // signed arithmetic so a shrinking edit cannot underflow.
+            offset
+                .saturating_sub(range.end)
+                .saturating_add(inserted.end)
+        } else {
+            // Inside the replaced span, which no longer exists: the end of the
+            // replacement is the closest surviving position.
+            inserted.end
+        }
+    }
+
+    fn replace_utf8_range_internal_with_view(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        preserve_view: bool,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
         let undo_snapshot = self.current_undo_snapshot();
         let range = self.normalized_utf8_range(range);
+        let previous_selection = self.selection.range.clone();
+        let previous_reversed = self.selection.reversed;
         let inserted = self.replace_content_range(range.clone(), new_text);
         self.push_undo_snapshot(undo_snapshot);
         self.selection.redo_stack.clear();
@@ -1714,15 +1748,30 @@ impl TextInput {
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
         let cursor = inserted.end;
-        self.mark_wrap_dirty_from_edit(range, inserted.clone());
-        self.selection.range = cursor..cursor;
-        self.selection.reversed = false;
+        self.mark_wrap_dirty_from_edit(range.clone(), inserted.clone());
+        if preserve_view {
+            let start = self.clamp_to_char_boundary(
+                Self::shift_offset_across_edit(previous_selection.start, &range, &inserted)
+                    .min(self.content.len()),
+            );
+            let end = self.clamp_to_char_boundary(
+                Self::shift_offset_across_edit(previous_selection.end, &range, &inserted)
+                    .min(self.content.len()),
+            );
+            self.selection.range = start.min(end)..start.max(end);
+            self.selection.reversed = previous_reversed;
+        } else {
+            self.selection.range = cursor..cursor;
+            self.selection.reversed = false;
+        }
         self.selection.marked_range.take();
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
         self.invalidate_provider_highlights_for_text_change();
-        self.queue_cursor_autoscroll();
+        if !preserve_view {
+            self.queue_cursor_autoscroll();
+        }
         cx.notify();
         inserted
     }
@@ -1745,6 +1794,37 @@ impl TextInput {
             return cursor..cursor;
         };
         self.replace_utf8_range_internal(range, &new_text, cx)
+    }
+
+    /// Replace a UTF-8 byte range without moving the caret or scrolling to the
+    /// edit, for rewrites the user did not type.
+    ///
+    /// [`replace_utf8_range`](Self::replace_utf8_range) parks the caret at the
+    /// end of the replacement and queues a cursor autoscroll, which is right
+    /// for an edit the user just made at that spot. It is wrong when the
+    /// document is regenerated from state the user changed elsewhere — the
+    /// merge tool rebuilds its whole resolved output on every pick — because
+    /// the autoscroll runs during paint and therefore overrides whatever the
+    /// caller scrolled to itself. Callers that do want the view to follow the
+    /// edit scroll explicitly after calling this.
+    ///
+    /// The caret and selection are shifted across the edit so they keep
+    /// pointing at the same text. Returns the inserted byte range.
+    pub fn replace_utf8_range_preserving_view(
+        &mut self,
+        range: Range<usize>,
+        new_text: &str,
+        cx: &mut Context<Self>,
+    ) -> Range<usize> {
+        if self.read_only {
+            let cursor = self.cursor_offset();
+            return cursor..cursor;
+        }
+        let Some(new_text) = self.sanitize_insert_text(new_text) else {
+            let cursor = self.cursor_offset();
+            return cursor..cursor;
+        };
+        self.replace_utf8_range_internal_with_view(range, &new_text, true, cx)
     }
 
     /// Replace the current selection range with `new_text`.

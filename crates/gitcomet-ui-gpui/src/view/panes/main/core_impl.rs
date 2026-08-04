@@ -1003,6 +1003,32 @@ fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
     *last_synced = targets;
 }
 
+/// Reduce `(aligned_row, output_row)` anchors, already sorted by aligned row,
+/// to a subsequence that strictly increases in *both* coordinates.
+///
+/// [`interpolated_anchor_shift`] brackets `pos` by scanning whichever
+/// coordinate it was asked to map from, so the same array is walked by aligned
+/// row in one direction and by output row in the other. Sorting alone only
+/// orders one of them: an anchor whose output row goes backwards is skipped by
+/// the output-direction scan, which then interpolates across the anchor that
+/// follows it and lands rows away from the truth — a mapping that jumps
+/// instead of tracking the scroll.
+///
+/// The conflict-to-output-line lookup that feeds these anchors is rebuilt
+/// incrementally and can lag an edit, so an inverted pair is possible. Drop it:
+/// the surrounding anchors still bracket the region, and a slightly coarser
+/// map is far better than a discontinuous one.
+fn strictly_increasing_anchors(anchors: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    let mut kept: Vec<(f32, f32)> = Vec::with_capacity(anchors.len());
+    for anchor in anchors {
+        match kept.last() {
+            Some((aligned, output)) if anchor.0 <= *aligned || anchor.1 <= *output => continue,
+            _ => kept.push(anchor),
+        }
+    }
+    kept
+}
+
 /// Continuous row shift `follower_row - master_row` between conflict anchors.
 /// `by_aligned` selects whether `pos` is in aligned-column space (a column is
 /// master) or output space. Outside the anchor range the nearest endpoint's
@@ -2274,6 +2300,12 @@ impl MainPaneView {
             input.set_theme(theme, cx);
             input.set_line_ending(line_ending);
             input.set_text(resolved.clone(), cx);
+            // `set_text` leaves the caret at end-of-document. The pane opens
+            // scrolled to the top, so a caret parked at the far end means the
+            // first arrow key (or undo) autoscrolls to the bottom of a file the
+            // user was reading from the top. Park it where the view actually
+            // is; the user has not placed a caret yet.
+            input.set_selected_range(0..0, false, cx);
         });
         self.conflict_resolved_preview_source_revision =
             Some(self.conflict_resolver_input.read_with(cx, |input, _| {
@@ -5855,7 +5887,8 @@ impl MainPaneView {
             anchors.push((aligned as f32, output as f32));
         }
         anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
-        self.conflict_resolver.conflict_output_row_anchors = anchors.into();
+        self.conflict_resolver.conflict_output_row_anchors =
+            strictly_increasing_anchors(anchors).into();
         self.conflict_resolver.conflict_output_row_anchors_dirty = false;
         Arc::clone(&self.conflict_resolver.conflict_output_row_anchors)
     }
@@ -6195,6 +6228,67 @@ mod tests {
         );
 
         assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
+    }
+
+    #[test]
+    fn anchors_are_reduced_to_a_strictly_increasing_subsequence() {
+        // Sorted by aligned row, but the output row goes backwards at (20, 15).
+        let anchors = vec![(0.0, 0.0), (10.0, 30.0), (20.0, 15.0), (30.0, 40.0)];
+        assert_eq!(
+            strictly_increasing_anchors(anchors),
+            vec![(0.0, 0.0), (10.0, 30.0), (30.0, 40.0)],
+        );
+        // A duplicate aligned row cannot bracket anything either.
+        assert_eq!(
+            strictly_increasing_anchors(vec![(0.0, 0.0), (5.0, 3.0), (5.0, 9.0)]),
+            vec![(0.0, 0.0), (5.0, 3.0)],
+        );
+    }
+
+    #[test]
+    fn sanitized_anchors_map_both_directions_without_jumping() {
+        // The raw list inverts, which makes the output-direction scan skip an
+        // anchor and interpolate across the wrong bracket.
+        let raw = vec![(0.0, 0.0), (10.0, 30.0), (20.0, 15.0), (30.0, 40.0)];
+        let mapped_raw = |pos: f32| pos + interpolated_anchor_shift(&raw, pos, false);
+        // Scrolling the output down 5 rows yanks the columns far further,
+        // because the inverted anchor is skipped and the scan interpolates
+        // across the wrong bracket.
+        let raw_step = mapped_raw(35.0) - mapped_raw(30.0);
+        assert!(
+            raw_step > 3.0 * 5.0,
+            "expected the unsanitized map to jump, got {raw_step}",
+        );
+
+        let anchors = strictly_increasing_anchors(raw);
+        let to_column = |pos: f32| pos + interpolated_anchor_shift(&anchors, pos, false);
+        let to_output = |pos: f32| pos + interpolated_anchor_shift(&anchors, pos, true);
+
+        // Both directions advance monotonically, in steps bounded by the
+        // gesture rather than jumping across a skipped anchor.
+        for direction in [&to_column as &dyn Fn(f32) -> f32, &to_output] {
+            let mut previous = direction(0.0);
+            let mut pos = 1.0f32;
+            while pos <= 60.0 {
+                let mapped = direction(pos);
+                assert!(
+                    mapped >= previous - 1e-3,
+                    "mapping went backwards at {pos}: {previous} -> {mapped}",
+                );
+                assert!(
+                    mapped - previous <= 4.0,
+                    "mapping jumped at {pos}: {previous} -> {mapped}",
+                );
+                previous = mapped;
+                pos += 1.0;
+            }
+        }
+
+        // And the two directions still invert each other at the anchors.
+        for (aligned, output) in anchors.iter().copied() {
+            assert!((to_output(aligned) - output).abs() < 1e-3);
+            assert!((to_column(output) - aligned).abs() < 1e-3);
+        }
     }
 
     #[test]
