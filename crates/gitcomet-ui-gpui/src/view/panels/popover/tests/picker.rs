@@ -243,6 +243,23 @@ fn repo_picker_lists_recently_closed_repositories_subprocess(cx: &mut gpui::Test
         !recently_closed.contains(&open_workdir),
         "an open repository must not also appear under recently closed"
     );
+
+    let expected_badge_size = gpui::size(
+        gpui::px(components::REPOSITORY_BADGE_SIZE_PX),
+        gpui::px(components::REPOSITORY_BADGE_SIZE_PX),
+    );
+    assert_eq!(
+        cx.debug_bounds("picker_prompt_repository_badge_0")
+            .expect("expected an initials badge for the open repository")
+            .size,
+        expected_badge_size,
+    );
+    assert_eq!(
+        cx.debug_bounds("picker_prompt_repository_badge_1")
+            .expect("expected an initials badge for the recently closed repository")
+            .size,
+        expected_badge_size,
+    );
 }
 
 /// Drives the picker's sort menu over a seeded set of closed repositories.

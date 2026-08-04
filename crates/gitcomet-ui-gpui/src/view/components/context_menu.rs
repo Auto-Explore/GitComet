@@ -285,15 +285,7 @@ fn context_menu_entry<V: 'static>(
         ContextMenuIconSlot::Reserved | ContextMenuIconSlot::None => None,
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
-    let text_color = if disabled {
-        theme.colors.text_muted
-    } else if icon_color == theme.colors.danger {
-        // Destructive entries carry the danger tint on the label too, not
-        // just the icon.
-        theme.colors.danger
-    } else {
-        theme.colors.text
-    };
+    let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
     // Text-alpha overlays stay visible on the elevated popover surface, where
     // the `hover` token (tuned for the darker canvas) has no contrast.
     let hover_overlay = theme.hover_overlay();
@@ -386,6 +378,21 @@ fn context_menu_entry<V: 'static>(
     row
 }
 
+fn context_menu_entry_text_color(
+    theme: AppTheme,
+    disabled: bool,
+    icon_color: gpui::Rgba,
+) -> gpui::Rgba {
+    if disabled {
+        theme.colors.text_muted
+    } else if icon_color == theme.colors.danger {
+        // Destructive entries carry the danger tint on both icon and label.
+        theme.colors.danger
+    } else {
+        theme.colors.text
+    }
+}
+
 fn context_menu_icon_color(
     theme: AppTheme,
     disabled: bool,
@@ -394,6 +401,10 @@ fn context_menu_icon_color(
 ) -> gpui::Rgba {
     if disabled {
         return theme.colors.text_muted;
+    }
+
+    if label == "Close" && icon_path == Some("icons/repo_tab_close.svg") {
+        return theme.colors.accent;
     }
 
     // Semantic-ish mapping for common actions.
@@ -624,11 +635,29 @@ mod tests {
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg")),
-            theme.colors.danger
+            theme.colors.accent
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),
             theme.colors.warning
+        );
+    }
+
+    #[test]
+    fn context_menu_close_uses_normal_text_and_standard_icon_color() {
+        let theme = AppTheme::gitcomet_dark();
+        let close_icon =
+            context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg"));
+
+        assert_eq!(close_icon, theme.colors.accent);
+        assert_eq!(
+            context_menu_entry_text_color(theme, false, close_icon),
+            theme.colors.text
+        );
+        assert_eq!(
+            context_menu_entry_text_color(theme, false, theme.colors.danger),
+            theme.colors.danger,
+            "other destructive entries should retain their danger text"
         );
     }
 

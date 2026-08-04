@@ -98,6 +98,12 @@ fn fade_gradient(bg: Rgba) -> Background {
     )
 }
 
+/// Standalone version of the same trailing ramp, used when an overlay sits on
+/// top of text rather than the text itself overflowing its layout box.
+pub fn trailing_fade(bg: Rgba, width: gpui::Pixels) -> Div {
+    div().flex_none().w(width).h_full().bg(fade_gradient(bg))
+}
+
 struct ProbeLayout {
     child: AnyElement,
     child_layout_id: LayoutId,

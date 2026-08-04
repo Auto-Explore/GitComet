@@ -25,6 +25,27 @@ fn mergetool_settings_menu_is_wider_than_diff_actions() {
 }
 
 #[test]
+fn repository_tab_menu_has_dedicated_wider_layout() {
+    let scale = ui_scale::UiScale::from_percent(100);
+    let repo_tab = popover_width_spec(&PopoverKind::RepoTabMenu { repo_id: RepoId(1) })
+        .expect("repository tab menu width");
+
+    assert_eq!(repo_tab.preferred_px(scale), px(360.0));
+    assert_eq!(repo_tab.min_px(scale), px(360.0));
+    assert!(repo_tab.preferred_px(scale) > DEFAULT_CONTEXT_MENU_WIDTH.preferred_px(scale));
+}
+
+#[test]
+fn application_menu_is_wide_enough_for_editor_action_and_shortcut() {
+    let scale = ui_scale::UiScale::from_percent(100);
+    let app_menu = popover_width_spec(&PopoverKind::AppMenu).expect("application menu width");
+
+    assert_eq!(app_menu.preferred_px(scale), px(320.0));
+    assert_eq!(app_menu.min_px(scale), px(320.0));
+    assert!(app_menu.preferred_px(scale) > DEFAULT_CONTEXT_MENU_WIDTH.preferred_px(scale));
+}
+
+#[test]
 fn choose_popover_anchor_corner_prefers_side_with_more_space() {
     assert_eq!(
         choose_popover_anchor_corner(Anchor::TopRight, px(260.0), px(640.0), px(420.0),),

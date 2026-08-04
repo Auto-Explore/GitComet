@@ -8,15 +8,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static WRITING_CRASH_LOG: AtomicBool = AtomicBool::new(false);
 static SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
+static SESSION_LIFECYCLE: Mutex<()> = Mutex::new(());
 static WRITING_RUNTIME_ERROR_LOG: Mutex<()> = Mutex::new(());
 static CRASH_LOGGER: CrashLogger = CrashLogger;
 const CRASH_ISSUE_URL: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/issues/new");
 const CRASH_ISSUE_TEMPLATE: &str = "crash_report.md";
 const PENDING_REPORT_FILE: &str = "pending-report-path.txt";
 const STARTUP_REPORT_FILE: &str = "pending-startup-report.log";
-const SESSION_MARKER_FILE: &str = "session-in-progress.log";
-const LAST_OPERATION_FILE: &str = "last-operation.log";
-const RUNTIME_ERROR_FILE: &str = "last-runtime-error.log";
+const SESSION_MARKER_FILE_PREFIX: &str = "session-in-progress";
+const LAST_OPERATION_FILE_PREFIX: &str = "last-operation";
+const RUNTIME_ERROR_FILE_PREFIX: &str = "last-runtime-error";
 const MAX_TITLE_CHARS: usize = 96;
 const MAX_BACKTRACE_CHARS: usize = 2_400;
 #[cfg(windows)]
@@ -39,6 +40,11 @@ struct AbnormalExitLog {
 pub fn install() {
     if log::set_logger(&CRASH_LOGGER).is_ok() {
         log::set_max_level(log::LevelFilter::Error);
+    }
+
+    #[cfg(unix)]
+    if let Err(err) = install_terminal_interrupt_handler() {
+        eprintln!("Failed to install GitComet terminal interrupt handler: {err}");
     }
 
     let previous = std::panic::take_hook();
@@ -80,7 +86,51 @@ fn should_record_runtime_error(target: &str, message: &str) -> bool {
     // removed from App. Its callback logs the failed handle lookup even though
     // teardown is proceeding normally. Treating that diagnostic as evidence of
     // a crash causes the next launch to report a false abnormal exit.
-    !(target == "gpui::window" && message.trim() == "window not found")
+    if target == "gpui::window" && message.trim() == "window not found" {
+        return false;
+    }
+
+    // Some EGL drivers emit this validation message through wgpu's debug
+    // callback while the application continues normally. It is not evidence
+    // that GitComet itself failed and can otherwise obscure a later exit's
+    // actual cause in the recovered report.
+    if target == "wgpu_hal::gles::egl"
+        && message.contains("eglCreateSyncKHR")
+        && message.contains("EGL_BAD_ATTRIBUTE")
+        && message.contains("EGL_SYNC_NATIVE_FENCE_FD_ANDROID")
+        && message.contains("EGL_SYNC_STATUS")
+    {
+        return false;
+    }
+
+    true
+}
+
+#[cfg(unix)]
+fn install_terminal_interrupt_handler() -> std::io::Result<()> {
+    use signal_hook::consts::signal::SIGINT;
+    use signal_hook::iterator::Signals;
+
+    let mut signals = Signals::new([SIGINT])?;
+    std::thread::Builder::new()
+        .name("gitcomet-sigint".to_string())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                // SIGINT is the user's explicit request to stop a terminal
+                // launch. Retire only this process's active recovery marker,
+                // then preserve the conventional shell exit status (130).
+                let _lifecycle = SESSION_LIFECYCLE
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if SESSION_ACTIVE.swap(false, Ordering::SeqCst)
+                    && let Some(dir) = crash_dir()
+                {
+                    let _ = finish_session_in_dir(&dir);
+                }
+                std::process::exit(128 + SIGINT);
+            }
+        })?;
+    Ok(())
 }
 
 fn write_runtime_error_log(record: &log::Record<'_>) {
@@ -154,10 +204,18 @@ fn write_runtime_error_log_in_dir(
 }
 
 /// Records entry to the UI event loop. A stale marker lets the next launch
-/// report native aborts and signals without attempting I/O in a signal handler.
+/// report native aborts and unexpected signals. Terminal SIGINT is handled on
+/// a dedicated thread and removes the marker before exiting.
 pub fn begin_session() -> std::io::Result<()> {
     let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
-    begin_session_in_dir(&dir)?;
+    let _lifecycle = SESSION_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Err(err) = begin_session_in_dir(&dir) {
+        SESSION_ACTIVE.store(false, Ordering::SeqCst);
+        let _ = finish_session_in_dir(&dir);
+        return Err(err);
+    }
     SESSION_ACTIVE.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -199,9 +257,13 @@ fn begin_session_in_dir(dir: &Path) -> std::io::Result<()> {
 
 /// Clears the current session marker after the UI event loop returns normally.
 pub fn finish_session() -> std::io::Result<()> {
-    SESSION_ACTIVE.store(false, Ordering::SeqCst);
     let dir = crash_dir().ok_or_else(crash_directory_unavailable_error)?;
-    finish_session_in_dir(&dir)
+    let _lifecycle = SESSION_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let result = finish_session_in_dir(&dir);
+    SESSION_ACTIVE.store(false, Ordering::SeqCst);
+    result
 }
 
 fn finish_session_in_dir(dir: &Path) -> std::io::Result<()> {
@@ -266,10 +328,18 @@ fn record_session_failure_in_dir_with_diagnostics(
 
 pub fn take_startup_report() -> Option<StartupCrashReport> {
     let dir = crash_dir()?;
-    take_startup_report_from_crash_dir(&dir)
+    take_startup_report_from_crash_dir_with_process_check(&dir, process_is_running)
 }
 
+#[cfg(test)]
 fn take_startup_report_from_crash_dir(dir: &Path) -> Option<StartupCrashReport> {
+    take_startup_report_from_crash_dir_with_process_check(dir, |_| false)
+}
+
+fn take_startup_report_from_crash_dir_with_process_check(
+    dir: &Path,
+    process_is_running: impl FnMut(u32) -> bool,
+) -> Option<StartupCrashReport> {
     let report_path = startup_report_path(dir);
     let mut report_log = match std::fs::read_to_string(&report_path) {
         Ok(report_log) => report_log,
@@ -282,17 +352,7 @@ fn take_startup_report_from_crash_dir(dir: &Path) -> Option<StartupCrashReport> 
             return None;
         }
     };
-    let session_log = read_abnormal_exit_log(
-        &session_marker_path(dir),
-        &last_operation_path(dir),
-        &runtime_error_path(dir),
-    )
-    .map(|contents| AbnormalExitLog {
-        marker_path: session_marker_path(dir),
-        last_operation_path: last_operation_path(dir),
-        runtime_error_path: runtime_error_path(dir),
-        contents,
-    });
+    let session_logs = stale_abnormal_exit_logs(dir, process_is_running);
     let pending_path = pending_report_path(dir);
     let (panic_log, pending_panic_read_failed) = match read_pending_panic_log(&pending_path) {
         Ok(panic_log) => (panic_log, false),
@@ -308,12 +368,12 @@ fn take_startup_report_from_crash_dir(dir: &Path) -> Option<StartupCrashReport> 
         let _ = std::fs::remove_file(&pending_path);
     }
 
-    if session_log.is_none() && panic_log.is_none() {
+    if session_logs.is_empty() && panic_log.is_none() {
         return (!report_log.trim().is_empty())
             .then(|| build_startup_report(report_path, &report_log));
     }
 
-    if let Some(session_log) = &session_log {
+    for session_log in &session_logs {
         append_report_log(&mut report_log, &session_log.contents);
     }
     // Preserve the existing panic-over-session priority when both reports are
@@ -329,7 +389,7 @@ fn take_startup_report_from_crash_dir(dir: &Path) -> Option<StartupCrashReport> 
             return None;
         }
     };
-    if let Some(session_log) = &session_log {
+    for session_log in &session_logs {
         if let Err(err) = remove_file_if_exists(&session_log.marker_path) {
             eprintln!(
                 "Failed to clear recovered GitComet session marker {}: {err}",
@@ -360,6 +420,59 @@ fn take_startup_report_from_crash_dir(dir: &Path) -> Option<StartupCrashReport> 
         }
     }
     Some(build_startup_report(report_path, &report_log))
+}
+
+fn stale_abnormal_exit_logs(
+    dir: &Path,
+    mut process_is_running: impl FnMut(u32) -> bool,
+) -> Vec<AbnormalExitLog> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) => {
+            eprintln!(
+                "Failed to enumerate GitComet session markers in {}: {err}",
+                dir.display()
+            );
+            return Vec::new();
+        }
+    };
+
+    let mut markers = entries
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            session_marker_pid(&path).map(|pid| (pid, path))
+        })
+        .collect::<Vec<_>>();
+    markers.sort_unstable_by_key(|(pid, _)| *pid);
+
+    markers
+        .into_iter()
+        .filter(|(pid, _)| !process_is_running(*pid))
+        .filter_map(|(pid, marker_path)| {
+            let last_operation_path = last_operation_path_for_pid(dir, pid);
+            let runtime_error_path = runtime_error_path_for_pid(dir, pid);
+            read_abnormal_exit_log(&marker_path, &last_operation_path, &runtime_error_path).map(
+                |contents| AbnormalExitLog {
+                    marker_path,
+                    last_operation_path,
+                    runtime_error_path,
+                    contents,
+                },
+            )
+        })
+        .collect()
+}
+
+fn process_is_running(pid: u32) -> bool {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing(),
+    );
+    system.process(pid).is_some()
 }
 
 fn read_abnormal_exit_log(
@@ -613,15 +726,41 @@ fn startup_report_path(dir: &Path) -> PathBuf {
 }
 
 fn session_marker_path(dir: &Path) -> PathBuf {
-    dir.join(SESSION_MARKER_FILE)
+    session_marker_path_for_pid(dir, std::process::id())
 }
 
 fn last_operation_path(dir: &Path) -> PathBuf {
-    dir.join(LAST_OPERATION_FILE)
+    last_operation_path_for_pid(dir, std::process::id())
 }
 
 fn runtime_error_path(dir: &Path) -> PathBuf {
-    dir.join(RUNTIME_ERROR_FILE)
+    runtime_error_path_for_pid(dir, std::process::id())
+}
+
+fn session_marker_path_for_pid(dir: &Path, pid: u32) -> PathBuf {
+    process_diagnostic_path(dir, SESSION_MARKER_FILE_PREFIX, pid)
+}
+
+fn last_operation_path_for_pid(dir: &Path, pid: u32) -> PathBuf {
+    process_diagnostic_path(dir, LAST_OPERATION_FILE_PREFIX, pid)
+}
+
+fn runtime_error_path_for_pid(dir: &Path, pid: u32) -> PathBuf {
+    process_diagnostic_path(dir, RUNTIME_ERROR_FILE_PREFIX, pid)
+}
+
+fn process_diagnostic_path(dir: &Path, prefix: &str, pid: u32) -> PathBuf {
+    dir.join(format!("{prefix}-{pid}.log"))
+}
+
+fn session_marker_pid(path: &Path) -> Option<u32> {
+    let filename = path.file_name()?.to_str()?;
+    filename
+        .strip_prefix(SESSION_MARKER_FILE_PREFIX)?
+        .strip_prefix('-')?
+        .strip_suffix(".log")?
+        .parse()
+        .ok()
 }
 
 fn env_value(name: &str) -> String {
@@ -1122,6 +1261,16 @@ mod tests {
     }
 
     #[test]
+    fn ignores_non_fatal_egl_native_fence_validation_error() {
+        assert!(!should_record_runtime_error(
+            "wgpu_hal::gles::egl",
+            "EGL 'eglCreateSyncKHR' code 0x3004: EGL_BAD_ATTRIBUTE error: In \
+             eglCreateSyncKHR: EGL_SYNC_NATIVE_FENCE_FD_ANDROID specified valid fd butEGL_SYNC_STATUS \
+             is also being set"
+        ));
+    }
+
+    #[test]
     fn retains_other_runtime_errors() {
         assert!(should_record_runtime_error(
             "gpui::window",
@@ -1575,7 +1724,7 @@ new frame
     }
 
     #[test]
-    fn startup_recovery_consumes_the_previous_session_marker() {
+    fn startup_recovery_consumes_a_stale_session_marker() {
         let dir = tempdir().expect("temp dir");
         let marker = session_marker_path(dir.path());
         std::fs::write(&marker, "message=GitComet did not exit cleanly\n")
@@ -1586,7 +1735,62 @@ new frame
         assert!(report.summary.contains("did not exit cleanly"));
         assert!(
             !marker.exists(),
-            "recovery should not use PID liveness checks"
+            "stale recovery state should be removed after it is snapshotted"
+        );
+    }
+
+    #[test]
+    fn startup_recovery_ignores_live_process_markers() {
+        let dir = tempdir().expect("temp dir");
+        let live_pid = 41;
+        let stale_pid = 42;
+        let live_marker = session_marker_path_for_pid(dir.path(), live_pid);
+        let live_operation = last_operation_path_for_pid(dir.path(), live_pid);
+        let live_runtime_error = runtime_error_path_for_pid(dir.path(), live_pid);
+        let stale_marker = session_marker_path_for_pid(dir.path(), stale_pid);
+        let stale_operation = last_operation_path_for_pid(dir.path(), stale_pid);
+
+        std::fs::write(&live_marker, "message=live GitComet session\n").expect("write live marker");
+        std::fs::write(&live_operation, "copy_source=live-instance\n")
+            .expect("write live operation diagnostics");
+        std::fs::write(&live_runtime_error, "message=live runtime error\n")
+            .expect("write live runtime diagnostics");
+        std::fs::write(&stale_marker, "message=stale GitComet session\n")
+            .expect("write stale marker");
+        std::fs::write(&stale_operation, "copy_source=stale-instance\n")
+            .expect("write stale operation diagnostics");
+
+        let report = take_startup_report_from_crash_dir_with_process_check(dir.path(), |pid| {
+            pid == live_pid
+        })
+        .expect("the stale marker should produce a report");
+
+        let persisted =
+            std::fs::read_to_string(report.crash_log_path).expect("read startup report");
+        assert!(persisted.contains("stale GitComet session"));
+        assert!(persisted.contains("copy_source=stale-instance"));
+        assert!(!persisted.contains("live GitComet session"));
+        assert!(live_marker.exists());
+        assert!(live_operation.exists());
+        assert!(live_runtime_error.exists());
+        assert!(!stale_marker.exists());
+        assert!(!stale_operation.exists());
+    }
+
+    #[test]
+    fn session_diagnostic_paths_include_the_owning_pid() {
+        let dir = Path::new("/tmp/gitcomet-crash-path-test");
+        assert_eq!(
+            session_marker_path_for_pid(dir, 123),
+            dir.join("session-in-progress-123.log")
+        );
+        assert_eq!(
+            last_operation_path_for_pid(dir, 123),
+            dir.join("last-operation-123.log")
+        );
+        assert_eq!(
+            runtime_error_path_for_pid(dir, 123),
+            dir.join("last-runtime-error-123.log")
         );
     }
 
@@ -1607,6 +1811,44 @@ new frame
         assert!(!marker.exists());
         assert!(!last_operation.exists());
         assert!(!runtime_error.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_interrupt_clears_active_session_state() {
+        const CHILD_PROCESS: &str = "GITCOMET_SIGINT_CLEANUP_TEST_CHILD";
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            install_terminal_interrupt_handler().expect("install SIGINT handler");
+            begin_session().expect("begin child session");
+            let dir = crash_dir().expect("child crash directory");
+            std::fs::write(last_operation_path(&dir), "copy_source=test\n")
+                .expect("write child operation diagnostics");
+            std::fs::write(runtime_error_path(&dir), "message=test runtime error\n")
+                .expect("write child runtime diagnostics");
+            signal_hook::low_level::raise(signal_hook::consts::signal::SIGINT)
+                .expect("raise SIGINT");
+            loop {
+                std::thread::park();
+            }
+        }
+
+        let state_root = tempdir().expect("temporary state root");
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .arg("terminal_interrupt_clears_active_session_state")
+                .env(CHILD_PROCESS, "1")
+                .env("XDG_STATE_HOME", state_root.path())
+                .spawn()
+                .expect("run SIGINT cleanup child");
+        let child_pid = child.id();
+        let status = child.wait().expect("wait for SIGINT cleanup child");
+
+        assert_eq!(status.code(), Some(130));
+        let dir = state_root.path().join("gitcomet").join("crashes");
+        assert!(!session_marker_path_for_pid(&dir, child_pid).exists());
+        assert!(!last_operation_path_for_pid(&dir, child_pid).exists());
+        assert!(!runtime_error_path_for_pid(&dir, child_pid).exists());
     }
 
     #[test]

@@ -771,6 +771,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", SwitchRepository, None),
+        KeyBinding::new("secondary-shift-a", SwitchRepository, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-w", Close, None),
@@ -1692,7 +1693,7 @@ fn bind_terminal_keys(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-v", TerminalPaste, Some("Terminal")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-shift-a", TerminalSelectAll, Some("Terminal")),
+        KeyBinding::new("secondary-shift-a", TerminalSelectAll, Some("Terminal")),
     ]);
 }
 
@@ -2138,6 +2139,7 @@ mod tests {
 
         cx.update(|window, app| {
             app.clear_key_bindings();
+            bind_app_keys(app);
             bind_terminal_keys_for_test(app);
             let focus = view.update(app, |view, _cx| view.focus_handle());
             window.focus(&focus, app);
@@ -2155,7 +2157,7 @@ mod tests {
         let cases = [
             ("ctrl-shift-c", TerminalCopy.name()),
             ("ctrl-shift-v", TerminalPaste.name()),
-            ("ctrl-shift-a", TerminalSelectAll.name()),
+            ("secondary-shift-a", TerminalSelectAll.name()),
         ];
 
         for (keystroke, expected_action) in cases {
@@ -2343,6 +2345,7 @@ mod tests {
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
             ("secondary-shift-o", SwitchRepository.name()),
+            ("secondary-shift-a", SwitchRepository.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-p", crate::view::ToggleCommandPalette.name()),
             ("secondary-w", Close.name()),
@@ -2543,7 +2546,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn recent_picker_shortcut_opens_the_popover(cx: &mut gpui::TestAppContext) {
+    fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
         let (store, events) = AppStore::new(Arc::clone(&backend));
@@ -2559,12 +2562,22 @@ mod tests {
         });
         seed_workspace_repo(cx, &store, view);
 
-        cx.simulate_keystrokes("secondary-shift-o");
+        cx.simulate_keystrokes("secondary-shift-a");
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
 
         assert!(cx.debug_bounds("app_popover").is_some());
+
+        cx.simulate_keystrokes("secondary-shift-a");
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            cx.debug_bounds("app_popover").is_none(),
+            "pressing the shortcut again should close the repository picker"
+        );
     }
 
     #[gpui::test]

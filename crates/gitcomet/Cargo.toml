@@ -13,7 +13,7 @@ workspace = true
 [features]
 default = ["ui-gpui", "gix"]
 ui = ["ui-gpui"]
-ui-gpui-runtime = ["dep:gitcomet-ui-gpui"]
+ui-gpui-runtime = ["dep:gitcomet-ui-gpui", "dep:sysinfo"]
 ui-gpui = ["ui-gpui-runtime", "gitcomet-ui-gpui/syntax-all"]
 ui-gpui-syntax-common = [
     "ui-gpui-runtime",
@@ -37,10 +37,14 @@ mimalloc = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sysinfo = { workspace = true, optional = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3"

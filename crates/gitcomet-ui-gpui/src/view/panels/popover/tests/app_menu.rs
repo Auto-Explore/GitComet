@@ -44,6 +44,22 @@ fn app_menu_offers_close_window_rather_than_a_dismiss_entry(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+fn app_menu_places_quit_after_close_window(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = open_app_menu(cx);
+    let close_window = cx
+        .debug_bounds("app_menu_close_window")
+        .expect("app menu should offer Close Window");
+    let quit = cx
+        .debug_bounds("app_menu_quit")
+        .expect("app menu should offer Quit");
+
+    assert!(
+        quit.top() >= close_window.bottom(),
+        "Quit should be the final row after Close Window"
+    );
+}
+
+#[gpui::test]
 fn app_menu_hides_desktop_integration_on_unsupported_platforms(cx: &mut gpui::TestAppContext) {
     let (_view, cx) = open_app_menu(cx);
 
@@ -83,8 +99,8 @@ fn app_menu_owns_keyboard_focus_and_escape_dismisses_it(cx: &mut gpui::TestAppCo
         );
         assert_eq!(
             host.context_menu_selected_ix,
-            Some(1),
-            "the first selectable row follows the Application header"
+            Some(0),
+            "the first application action should be selected"
         );
     });
 
@@ -95,7 +111,7 @@ fn app_menu_owns_keyboard_focus_and_escape_dismisses_it(cx: &mut gpui::TestAppCo
                 .popover_host
                 .read(app)
                 .context_menu_selected_ix,
-            Some(2),
+            Some(1),
             "Tab should select Settings"
         );
     });
@@ -107,7 +123,7 @@ fn app_menu_owns_keyboard_focus_and_escape_dismisses_it(cx: &mut gpui::TestAppCo
                 .popover_host
                 .read(app)
                 .context_menu_selected_ix,
-            Some(1),
+            Some(0),
             "Shift+Tab should select Command Palette"
         );
     });
