@@ -188,8 +188,7 @@ impl GitCometView {
         if prev_submodule_trust_check != self.state.submodule_trust_check_pending {
             // A newly-started check opens the spinner popover on the next render.
             if self.state.submodule_trust_check_pending.is_some() {
-                self.pending_submodule_trust_check =
-                    self.state.submodule_trust_check_pending;
+                self.pending_submodule_trust_check = self.state.submodule_trust_check_pending;
             } else if let Some(prev) = prev_submodule_trust_check.as_ref()
                 && self.state.submodule_trust_prompt.is_none()
             {
