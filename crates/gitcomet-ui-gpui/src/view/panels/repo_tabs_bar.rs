@@ -86,6 +86,9 @@ const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
 const REPO_TAB_CLOSE_FADE_WIDTH_PX: f32 = 16.0;
 const REPO_TAB_SIDE_PADDING_PX: f32 = 10.0;
+const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
+const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
+const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
 
 fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Window) -> Pixels {
     if label.is_empty() {
@@ -801,12 +804,27 @@ impl Render for RepoTabsBarView {
                 status_color
             };
             let tab_label = div()
+                .relative()
                 .flex()
                 .flex_1()
                 .items_center()
                 .h(scaled_px(REPO_TAB_CONTENT_HEIGHT_PX))
                 .gap(scaled_px(REPO_TAB_LABEL_GAP_PX))
                 .min_w(px(0.0))
+                // Idle tabs highlight only their compact content box. The
+                // plate overhang adds breathing room around the initials and
+                // label without changing tab measurement or hit geometry.
+                .child(
+                    div()
+                        .debug_selector(move || format!("repo_tab_hover_box_{}", repo_id.0))
+                        .absolute()
+                        .top(scaled_px(-REPO_TAB_HOVER_BOX_Y_OVERHANG_PX))
+                        .bottom(scaled_px(-REPO_TAB_HOVER_BOX_Y_OVERHANG_PX))
+                        .left(scaled_px(-REPO_TAB_HOVER_BOX_X_OVERHANG_PX))
+                        .right(scaled_px(-REPO_TAB_HOVER_BOX_X_OVERHANG_PX))
+                        .rounded(scaled_px(REPO_TAB_HOVER_BOX_RADIUS_PX))
+                        .bg(label_bg),
+                )
                 .child(
                     div()
                         .size(scaled_px(REPO_TAB_STATUS_SIZE_PX))
@@ -877,14 +895,17 @@ impl Render for RepoTabsBarView {
                                 format!("repo_tab_separator_after_{}", repo_id.0)
                             })
                             .absolute()
-                            // Each tab has 3px horizontal margins. Paint in
+                            // Each tab has 4px horizontal margins. Paint in
                             // their shared gap so the divider sits between the
                             // two idle tab shapes rather than on either one.
-                            .right(scaled_px(-3.0))
+                            .right(scaled_px(-4.0))
                             .top(scaled_px(7.0))
                             .w(px(1.0))
                             .h(scaled_px(16.0))
-                            .bg(theme.colors.border_variant),
+                            .bg(with_alpha(
+                                components::Tab::outline_color(theme),
+                                if theme.is_dark { 0.55 } else { 0.50 },
+                            )),
                     )
                 })
                 .debug_selector(move || format!("repo_tab_{}", repo_id.0))

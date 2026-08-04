@@ -3226,6 +3226,20 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
         let _ = window.draw(app);
     });
 
+    let popover_bounds = cx
+        .debug_bounds("app_popover")
+        .expect("expected repository picker popover bounds");
+    assert_eq!(
+        popover_bounds.left(),
+        picker_bounds.left(),
+        "expected repository picker to stay aligned to the chevron's left edge"
+    );
+    assert_eq!(
+        popover_bounds.top(),
+        picker_bounds.bottom() + px(1.0),
+        "expected repository picker to stay attached below the chevron"
+    );
+
     let close_bounds = cx
         .debug_bounds("repo_popover_close")
         .expect("expected repo_popover_close in debug bounds");

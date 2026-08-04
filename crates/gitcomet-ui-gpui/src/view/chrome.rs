@@ -406,6 +406,18 @@ impl TitleBarView {
             root.open_popover_at(kind, anchor, window, cx);
         });
     }
+
+    fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
+        });
+    }
 }
 
 impl Render for TitleBarView {
@@ -468,13 +480,14 @@ impl Render for TitleBarView {
         // (and the repo tabs) that opens the repository picker. Replaces the old
         // labelled "Repositories" button that used to sit in the action bar.
         let repo_picker_open = self.repo_picker_open;
-        let repo_picker_toggle_bounds = Rc::clone(&self.repo_picker_toggle_bounds);
+        let repo_picker_toggle_bounds_for_prepaint = Rc::clone(&self.repo_picker_toggle_bounds);
+        let repo_picker_toggle_bounds_for_click = Rc::clone(&self.repo_picker_toggle_bounds);
         let repo_picker_toggle = div()
             .h_full()
             .flex()
             .items_center()
             .on_children_prepainted(move |children_bounds, _window, _cx| {
-                repo_picker_toggle_bounds.set(children_bounds.first().copied());
+                repo_picker_toggle_bounds_for_prepaint.set(children_bounds.first().copied());
             })
             .child(
                 div()
@@ -510,8 +523,18 @@ impl Render for TitleBarView {
                         scaled_px(16.0),
                     ))
                     .block_mouse_except_scroll()
-                    .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
-                        this.open_popover_at(PopoverKind::RepoPicker, e.position(), window, cx);
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        let anchor_bounds = repo_picker_toggle_bounds_for_click
+                            .get()
+                            .unwrap_or_else(|| {
+                                Bounds::new(e.position(), gpui::size(px(0.0), px(0.0)))
+                            });
+                        this.open_popover_for_bounds(
+                            PopoverKind::RepoPicker,
+                            anchor_bounds,
+                            window,
+                            cx,
+                        );
                     }))
                     .gitcomet_tooltip(theme, "Switch repository".into()),
             );
@@ -761,7 +784,7 @@ impl Render for TitleBarView {
                         .left_0()
                         .right_0()
                         .h(px(1.0))
-                        .bg(theme.colors.border),
+                        .bg(components::Tab::outline_color(theme)),
                 )
             })
             .child(drag_surface)
